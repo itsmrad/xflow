@@ -24,9 +24,14 @@ pub async fn run_desktop_bridge(mut events: broadcast::Receiver<DesktopEvent>) -
         match events.recv().await {
             Ok(event) => DaemonBridge::event(&context, &serde_json::to_string(&event)?).await?,
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(broadcast::error::RecvError::Closed) => return Ok(()),
+            Err(broadcast::error::RecvError::Closed) => break,
         }
     }
+    // Dropping the connection leaves its socket reader alive briefly. Release
+    // the well-known name on the bus before reporting bridge shutdown.
+    connection.release_name("org.xflow.Daemon").await?;
+    connection.close().await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -40,8 +45,29 @@ mod tests {
     #[ignore = "requires an isolated session bus: dbus-run-session cargo test -p xflow-platform -- --ignored"]
     async fn bridge_emits_json_and_exits_when_channel_closes() {
         let (send, receive) = broadcast::channel(8);
-        let bridge = tokio::spawn(run_desktop_bridge(receive));
         let connection = zbus::Connection::session().await.unwrap();
+        let bus = zbus::Proxy::new(
+            &connection,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .await
+        .unwrap();
+        let mut owners = bus.receive_signal("NameOwnerChanged").await.unwrap();
+        let bridge = tokio::spawn(run_desktop_bridge(receive));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let signal = owners.next().await.unwrap();
+                let (name, _old, new): (String, String, String) =
+                    signal.body().deserialize().unwrap();
+                if name == "org.xflow.Daemon" && !new.is_empty() {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
         let proxy = zbus::Proxy::new(
             &connection,
             "org.xflow.Daemon",
@@ -51,24 +77,16 @@ mod tests {
         .await
         .unwrap();
         let mut signals = proxy.receive_signal("Event").await.unwrap();
-        // The proxy subscribes before the asynchronous bridge claims its name.
-        // Repeated active test events avoid imposing an arbitrary startup sleep.
-        let signal = tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                send.send(DesktopEvent {
-                    state: State::Listening,
-                    level: 0.25,
-                    message: None,
-                })
-                .unwrap();
-                tokio::select! {
-                    signal = signals.next() => break signal.unwrap(),
-                    _ = tokio::time::sleep(Duration::from_millis(10)) => {},
-                }
-            }
+        send.send(DesktopEvent {
+            state: State::Listening,
+            level: 0.25,
+            message: None,
         })
-        .await
         .unwrap();
+        let signal = tokio::time::timeout(Duration::from_secs(3), signals.next())
+            .await
+            .unwrap()
+            .unwrap();
         let (json,): (String,) = signal.body().deserialize().unwrap();
         let event: DesktopEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event.state, State::Listening);
@@ -79,14 +97,6 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        let bus = zbus::Proxy::new(
-            &connection,
-            "org.freedesktop.DBus",
-            "/org/freedesktop/DBus",
-            "org.freedesktop.DBus",
-        )
-        .await
-        .unwrap();
         let owned: bool = bus
             .call("NameHasOwner", &("org.xflow.Daemon",))
             .await
