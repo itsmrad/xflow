@@ -1,6 +1,10 @@
 # XFlow product requirements
 
-Revision: 2026-09-30. This document defines the intended product and release gates. It does not certify that every gate has passed. See [README.md](README.md) for current setup/support and [PERFORMANCE.md](PERFORMANCE.md) for measurement rules. Research and source provenance are in [docs/RESEARCH.md](docs/RESEARCH.md).
+Revision: 2026-09-30. This document defines intended product behavior and release gates; it does not certify that every gate has passed. The current checked-in implementation baseline is the contracts crate at [crates/xflow-core](crates/xflow-core/src/lib.rs), with companion provider/platform/app work reviewed in sibling worktrees and not yet integrated into this branch. See [PERFORMANCE.md](PERFORMANCE.md) for measurement rules and [docs/RESEARCH.md](docs/RESEARCH.md) for source provenance.
+
+## Implementation status (2026-09-30)
+
+Implemented in the current MVP work across the parent and sibling worktrees: shared Rust contracts/configuration, batch Groq/OpenRouter/custom OpenAI-compatible provider adapters, bounded cpal capture, GNOME bridge/extension scaffold, clipboard/paste adapter, event-driven CLI/TUI state updates, SQLite history in WAL mode (default retention 500; configurable up to 100,000), and cancellation that aborts the active job and rejects stale completions with a generation guard. These are implementation facts, not desktop acceptance results. The current GNOME shortcut binding is toggle-oriented; true press-and-release push-to-talk is not implemented. Provider credentials have not been validated against live accounts, and physical microphone capture, direct uinput operation and end-to-end paste remain pending desktop validation. No performance metric in this document is a measured result.
 
 ## Outcome and users
 
@@ -12,17 +16,17 @@ Success is a reliable, measured microphone-to-text vertical slice with a CLI, ke
 
 | Requirement | MVP behavior | Acceptance evidence |
 | --- | --- | --- |
-| Recording | CLI start/stop/toggle/cancel; global toggle when GNOME integration is available; push-to-talk only through an adapter that supplies release events | Real mic sessions, quick taps, repeated commands, permission loss, cancellation in listening and processing |
+| Recording | CLI start/stop/toggle/cancel and GNOME toggle path exist in the development implementation; release-aware push-to-talk is not implemented | Real mic sessions, quick taps, repeated commands, permission loss, cancellation in listening and processing |
 | Recognition | Groq and OpenRouter batch adapters, BYOK; custom OpenAI-compatible REST endpoint; explicit model/language configuration | Request-contract tests plus one authorized live transcription per advertised cloud backend |
 | Cleanup | Raw default; optional independent LLM transformation with light/polished policies; retain raw output when optional cleanup fails | Cleanup failure, timeout and blank-output tests; review examples for meaning/technical-term preservation |
 | Audio | Native cpal capture with bounded duration/memory, basic silence gating and audio levels | Built-in and USB input; native sample-rate/channel negotiation; silence avoids a paid request |
 | Insertion | Clipboard paste using an available desktop utility; clipboard-only fallback and copy/paste-last recovery | Text editor/browser/terminal checks, missing-tool failures, Unicode, multiline text and changed focus |
 | Feedback | Hidden idle native pill; listening, processing, success and error; audio-reactive waveform; keyboard-accessible TUI | GNOME extension install/disable/reenable, daemon restart, no focus theft, idle animation/timer inspection |
-| History | Local SQLite, bounded retention, list/clear, disable persistence | Retention boundary, no-history behavior, restart and filesystem permissions |
+| History | Local SQLite WAL, default retention of 500 entries (configurable up to 100,000), list/clear and disable persistence | Retention boundary, no-history behavior, restart and filesystem permissions |
 | Security | OS credential storage where available, environment credentials for CLI/headless use, no keys in TOML, no default secret/audio/transcript logs | Dummy-secret redaction, socket/data modes, keyring-unavailable behavior, offline rejection |
 | Performance | Establish reproducible measurements for all seven requested metrics | Report environment, build profile, sample size and distributions; label unmeasured desktop metrics |
 
-Physical capture and paste are desktop release gates. Passing mocked HTTP, fixture capture or clipboard-disabled tests establishes software behavior, not end-to-end desktop support. A failed provider request must not trigger silent provider switching or send the recording to a different service.
+Physical capture, direct uinput and paste are desktop release gates. Provider adapters and credential resolution exist, but credentials have not been validated against live provider accounts. Passing mocked HTTP, fixture capture or clipboard-disabled tests establishes software behavior, not end-to-end desktop support. A failed provider request must not trigger silent provider switching or send the recording to a different service.
 
 ## Session behavior
 

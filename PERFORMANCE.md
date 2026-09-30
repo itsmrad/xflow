@@ -1,10 +1,10 @@
 # Performance methodology and budgets
 
-Revision: 2026-09-30. Performance is a release criterion. Numbers in the target table are provisional engineering budgets, not measured claims or user guarantees. Only reports containing an actual command, build/environment, sample count and result count as measurements. Current benchmark artifacts and setup are linked from [README.md](README.md).
+Revision: 2026-09-30. Performance is a release criterion. Numbers in the target table are provisional engineering budgets, not measured claims or user guarantees. No desktop or provider performance metric has been measured for this work; the entries below are targets and the prescribed collection methodology. Only reports containing an actual command, build/environment, sample count and result count as measurements. No benchmark report artifact is checked in yet; see [ROADMAP.md](ROADMAP.md) for the acceptance gate.
 
 ## Reference workload
 
-First desktop baseline: Ubuntu GNOME Wayland on a declared four-core-or-better machine with 8 GiB or more RAM, an actual built-in or USB microphone, and release binaries. Record CPU/model/RAM, kernel, Ubuntu/GNOME version, audio server/backend, device format, power profile, selected model, network location and build commit/features. This is a planned baseline; replace it with the actual measurement host details in every report.
+First desktop baseline (target workload, not an observed environment): Ubuntu GNOME Wayland on a declared four-core-or-better machine with 8 GiB or more RAM, an actual built-in or USB microphone, and release binaries. Record CPU/model/RAM, kernel, Ubuntu/GNOME version, audio server/backend, device format, power profile, selected model, network location and build commit/features. Actual microphone and provider credential validation remain pending. This is a planned baseline; report actual measurement host details for each measured result.
 
 Default cloud daemon, no optional local model, hidden idle overlay, closed TUI: the steady-state baseline. Also report daemon with active TUI and extension, recording, processing and optional sidecars as separate workloads. GNOME renderer cost belongs partly to the Shell process; daemon-only RSS does not measure total UI cost.
 

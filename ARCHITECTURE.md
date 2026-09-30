@@ -1,13 +1,13 @@
 # Architecture
 
-Revision: 2026-09-30. The Rust workspace implements an Ubuntu GNOME development slice and keeps later platform/provider work behind explicit contracts. This document distinguishes current contracts from intended extensions; [README.md](README.md) remains the current runtime setup guide. Research supporting these choices is in [docs/RESEARCH.md](docs/RESEARCH.md).
+Revision: 2026-09-30. The parent worktree contains the shared contract crate; provider, platform and app implementation is present in sibling worktrees and remains subject to integration and desktop acceptance. This document distinguishes implemented behavior from proposed architecture. Research supporting these choices is in [docs/RESEARCH.md](docs/RESEARCH.md), and release stages are in [ROADMAP.md](ROADMAP.md).
 
 ## Process and crate boundaries
 
 ```mermaid
 flowchart LR
   CLI[clap CLI] -->|Unix IPC| D[Async daemon state owner]
-  TUI[ratatui / crossterm TUI] -->|Commands + subscription| D
+  TUI[ratatui / crossterm TUI] -->|Commands + event subscription| D
   H[Platform hotkey adapter] -->|Actions| D
   D --> A[Dedicated cpal capture thread]
   D --> P[Speech-to-text provider]
@@ -18,15 +18,15 @@ flowchart LR
   O --> G[GNOME Shell pill]
 ```
 
-The CLI and TUI are clients. Closing either must not terminate an active daemon. The daemon owns session state, capture lifecycle and finalized output. Heavy optional engines and compositor rendering must not enter the core contract crate. A native Shell extension is a small GNOME-specific renderer, not a WebView.
+The CLI and TUI are clients and consume event-driven state updates; they do not poll the daemon for UI state. Closing either must not terminate an active daemon. The daemon owns session state, capture lifecycle and finalized output. Heavy optional engines and compositor rendering must not enter the core contract crate. A native Shell extension is a small GNOME-specific renderer, not a WebView. The CLI/TUI and integrations are development-slice work, not evidence of a validated desktop release.
 
 | Crate | Responsibility |
 | --- | --- |
-| `xflow-core` | Serializable state/config/IPC contracts and platform/provider traits |
-| `xflow-providers` | WAV encoding, batch STT adapters, optional text cleanup and credentials |
-| `xflow-platform` | cpal capture, desktop copy/paste and native integration |
-| `xflow-daemon` | State ownership, bounded sessions, provider jobs, history and IPC service |
-| `xflow-cli` | clap commands and terminal UI |
+| `xflow-core` | Implemented shared serializable state/config/IPC contracts and platform/provider traits |
+| `xflow-providers` | Provider-side implementation in sibling worktree: WAV encoding, batch STT adapters, optional text cleanup and credential resolution; live credentials unvalidated |
+| `xflow-platform` | Platform-side implementation in sibling worktree: cpal capture, desktop copy/paste and GNOME integration scaffold; physical-device path unvalidated |
+| `xflow-app` | App/CLI/TUI development work; event-driven state updates; integration and desktop acceptance remain open |
+| `xflow-daemon`, `xflow-cli` | Proposed split only; these crate names are not current workspace members |
 
 No Electron, embedded browser or default local model runtime. Reuse native capture/IPC/overlay ideas from whisrs while keeping this implementation independent; any future source reuse requires the upstream MIT notices.
 
@@ -52,7 +52,7 @@ The canonical declarations are in `crates/xflow-core/src/lib.rs`:
 
 States are `Idle`, `Listening`, `Processing`, `Success`, `Error`. The single state owner serializes commands and session completions. Capture and HTTP work run outside command dispatch so status/cancel stay responsive. A session identity or equivalent stale-result guard ensures that completion from a cancelled recording cannot affect a newer session.
 
-Start creates one capture session. Stop takes ownership of its finalized clip and starts transcription. Toggle maps to start/stop by state; conflicting starts during processing must report busy. Cancel stops capture, abandons network/cleanup results and prevents insertion/history for that session. Resource cleanup must complete even when an optional overlay or client disconnects. Success/error feedback eventually settles to idle; a new deliberate action may begin a session according to the state owner's rules.
+Start creates one capture session. Stop takes ownership of its finalized clip and starts transcription. Toggle maps to start/stop by state; conflicting starts during processing must report busy. Cancel aborts the active job and stops capture; a generation guard prevents stale completions from a canceled job from inserting text or entering history. Resource cleanup must complete even when an optional overlay or client disconnects. Success/error feedback eventually settles to idle; a new deliberate action may begin a session according to the state owner's rules.
 
 Silent/empty recordings produce no upload. The lightweight energy gate is not a neural speech classifier: quiet speech and noise still require hardware evaluation. Maximum duration and a hard sample/memory budget cap capture. Callback work must avoid blocking operations and must surface overflow/device errors instead of returning plausible but truncated audio.
 
@@ -60,7 +60,7 @@ Later streaming uses bounded audio queues and separates partial preview from com
 
 ## IPC and UI events
 
-Unix domain IPC is used on Linux/macOS. A future Windows transport may use a named pipe with the same serialized request/response contracts. `xflow-core::ipc` includes status/start/stop/toggle/cancel, last/copy/paste-last, history/clear-history, subscribe and shutdown requests, with a 64 KiB maximum message contract. The transport implementation must enforce that cap before allocating unbounded input and limit slow clients.
+The app IPC path uses event-driven subscription for UI state, rather than polling. Unix domain IPC is used on Linux/macOS. A future Windows transport may use a named pipe with the same serialized request/response contracts. `xflow-core::ipc` includes status/start/stop/toggle/cancel, last/copy/paste-last, history/clear-history, subscribe and shutdown requests, with a 64 KiB maximum message contract. The transport implementation must enforce that cap before allocating unbounded input and limit slow clients.
 
 Place the socket in a user-private runtime directory and restrict permissions. A fallback directory must be private and validate ownership; never trust a publicly writable predictable socket path. Reject malformed/oversized requests and bound read/write time. Subscription clients get current state then events without polling. Slow or disconnected subscribers must not block audio or command handling.
 
@@ -78,7 +78,7 @@ Offline is a policy boundary. Before a local backend exists, selecting offline f
 
 ## Storage and retention
 
-SQLite stores bounded local transcript history. Queries apply limits before returning rows; preferences/configuration remain local. Proposed later migrations add dictionary, snippets and per-app preferences only when those features exist. Do not represent a placeholder table as a functioning dictionary.
+SQLite WAL stores bounded local transcript history. The default retention is 500 entries; configuration permits up to 100,000. Queries apply limits before returning rows; preferences/configuration remain local. Proposed later migrations add dictionary, snippets and per-app preferences only when those features exist. Do not represent a placeholder table as a functioning dictionary.
 
 History-disabled sessions must not write transcript text, although copy-last may retain a transient in-memory result for recovery. Clearing history must also be clear about transient last-result state and backups. Private directory/file permissions protect against other users, not arbitrary processes running under the same account. No audio files by default, no telemetry sender, and no secret/transcript content in routine logging.
 
@@ -88,7 +88,7 @@ SQLite writes are serialized and bounded; blocking database operations stay outs
 
 | Platform/session | Initial approach | Release status / later work |
 | --- | --- | --- |
-| Ubuntu GNOME Wayland | cpal audio; session-bus bridge + native Shell pill; configured desktop shortcuts; `wl-copy` clipboard with `ydotool` paste where usable | Primary integration target; extension, input-device permissions and actual paste require desktop acceptance |
+| Ubuntu GNOME Wayland | cpal audio; session-bus bridge + native Shell pill; configured toggle shortcut; clipboard and `ydotool` paste path where usable | Primary integration target; physical microphone, live provider credentials, actual paste and input-device/uinput operation require desktop acceptance; release-aware GNOME push-to-talk is not implemented |
 | GNOME X11 | Same core; X11 utilities can provide paste | Basic adapter path is not tested-desktop certification; dedicated hotkey/overlay acceptance later |
 | Fedora GNOME | Reuse GNOME design, verify packages, security policy and Shell compatibility | Later distro gate |
 | wlroots compositors | Compositor bindings; native layer-shell overlay; virtual-keyboard protocol when exposed, uinput/paste fallback | Separate adapter and verification later |
@@ -97,7 +97,7 @@ SQLite writes are serialized and bounded; blocking database operations stay outs
 | macOS | Accessibility focus/selection, CGEvent input, native nonactivating panel, Keychain | Design only; permission and signing/package validation later |
 | Windows | UI Automation/SendInput, native overlay, credential manager, named-pipe IPC | Architectural possibility; no shipped support claim |
 
-The [GlobalShortcuts portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html) specifies activation/release signals, but every runtime must probe actual backend support. GNOME toggle bindings do not automatically supply push-to-talk. Direct uinput/evdev permissions should be minimal and explicit; the daemon must not run as root to obtain them. `ydotool` and `xdotool` success indicates an attempted key action, not a verified editable target.
+The [GlobalShortcuts portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html) specifies activation/release signals, but every runtime must probe actual backend support. GNOME's current toggle binding does not supply push-to-talk, and true press-and-release handling remains unimplemented. Direct uinput/evdev permissions should be minimal and explicit; the daemon must not run as root to obtain them. The current paste path invokes `ydotool` where configured; direct uinput operation and actual destination delivery remain unvalidated. `ydotool` and `xdotool` success indicates an attempted key action, not a verified editable target.
 
 Clipboard transport overwrites current clipboard content unless restoration is implemented. Report this plainly; future restoration must preserve MIME types and skip restoring if the user copied something newer. Missing paste capability produces clipboard-only recovery rather than a false pasted result. Focus/context discovery can be unknown in the MVP, so original-window guarantees and per-app styles are deferred.
 
