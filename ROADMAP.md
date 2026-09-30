@@ -1,6 +1,6 @@
 # Roadmap
 
-Revision: 2026-09-30. Milestones are completion gates, not a list of already shipped capabilities. Current runnable behavior and limitations belong in [README.md](README.md); measured results belong in checked-in benchmark reports described by [PERFORMANCE.md](PERFORMANCE.md). The complete product direction is in [PRD.md](PRD.md).
+Revision: 2026-09-30. Milestones are completion gates, not a list of already shipped capabilities. The parent branch currently holds the shared contracts; provider, platform and app slices are in sibling worktrees and require integration and desktop acceptance. Measured results belong in checked-in benchmark reports described by [PERFORMANCE.md](PERFORMANCE.md). The complete product direction is in [PRD.md](PRD.md).
 
 ## Dependency order
 
@@ -25,15 +25,15 @@ Deliver PRD, architecture, roadmap, performance methodology and dated research. 
 
 ## 1. Ubuntu GNOME development slice
 
-Build the Rust contracts/workspace, small asynchronous daemon, CLI/TUI, native cpal capture, Groq/OpenRouter batch STT and custom OpenAI-compatible REST, optional independent cleanup, bounded SQLite history, clipboard/paste fallback, and native GNOME pill. Global toggle is the first shortcut path; release-aware push-to-talk remains gated by actual adapter capability.
+Integrate the already-developed Rust contracts, provider, platform and app slices: async daemon, event-driven CLI/TUI state updates, native cpal capture, Groq/OpenRouter batch STT and custom OpenAI-compatible REST, optional independent cleanup, SQLite WAL history (default 500 entries), clipboard/paste fallback, and native GNOME pill. This remains a development slice, not a desktop-validated release. Global toggle is the first shortcut path; true release-aware GNOME push-to-talk is not implemented and requires new work, then adapter and desktop validation.
 
 Automated verification must cover configuration validation, wire format/error bounds, secrets not leaking, silence/length limits, serialized state transitions, cancelled/stale completion rejection, history retention/no-history and IPC framing. Fixture audio and mock HTTP enable reproducible software checks. They do not replace physical microphone/live API/destination checks.
 
-Exit: the implementation can run as a local development slice, errors are recoverable, missing optional integrations are visible, and no later feature is described as complete. Publish smoke results with their limitations. Until desktop checks pass, label the result a development scaffold, not a production-ready release.
+Exit: the integrated implementation can run as a local development slice, errors are recoverable, missing optional integrations are visible, and no later feature is described as complete. Publish smoke results with their limitations. Until desktop checks pass, label the result a development scaffold, not a production-ready release.
 
 ## 2. Ubuntu desktop acceptance and release hardening
 
-Use a declared Ubuntu/GNOME release and actual desktop session. Record mic capture for built-in/USB devices, permission/device failure, short/long/silent recordings, live provider contracts with authorized credentials, editor/browser/terminal paste, Unicode, changed focus, clipboard-only recovery, shortcut conflicts and GNOME extension disable/reenable/daemon restart.
+Use a declared Ubuntu/GNOME release and actual desktop session. Physical microphone capture, provider credential validation using authorized live accounts, direct uinput operation, and confirmed paste into editor/browser/terminal remain pending. Record built-in/USB device permissions and failure, short/long/silent recordings, live provider contracts, Unicode, changed focus, clipboard-only recovery, shortcut conflicts and GNOME extension disable/reenable/daemon restart. Add and validate release-aware PTT separately; the current GNOME shortcut is toggle-only.
 
 Measure idle RSS/CPU, startup, hotkey-to-first-sample, stop-to-final-transcript, injection and overlay frame cost with the documented methodology. Profile regressions before optimizing. Test provider timeout/rate-limit/offline error, cancel during processing and recovery without duplicate paste. Harden private IPC, bounded clients, settings/history lifecycle, service startup/shutdown and diagnostics.
 
