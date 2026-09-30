@@ -1,10 +1,10 @@
 # Performance methodology and budgets
 
-Revision: 2026-09-30. Performance is a release criterion. Numbers in the target table are provisional engineering budgets, not measured claims or user guarantees. No desktop or provider performance metric has been measured for this work; the entries below are targets and the prescribed collection methodology. Only reports containing an actual command, build/environment, sample count and result count as measurements. No benchmark report artifact is checked in yet; see [ROADMAP.md](ROADMAP.md) for the acceptance gate.
+Revision: 2026-09-30. Performance is a release criterion. Numbers in the target table are provisional engineering budgets, not measured claims or user guarantees. The recorded headless smoke observations below measure only their stated limited workload; they do not satisfy desktop/provider release criteria. Only reports containing an actual command, build/environment, sample count and result count as measurements. See [ROADMAP.md](ROADMAP.md) for the release gate.
 
 ## Reference workload
 
-First desktop baseline (target workload, not an observed environment): Ubuntu GNOME Wayland on a declared four-core-or-better machine with 8 GiB or more RAM, an actual built-in or USB microphone, and release binaries. Record CPU/model/RAM, kernel, Ubuntu/GNOME version, audio server/backend, device format, power profile, selected model, network location and build commit/features. Actual microphone and provider credential validation remain pending. This is a planned baseline; report actual measurement host details for each measured result.
+First desktop baseline (target workload, not an observed environment): Ubuntu GNOME Wayland on a declared four-core-or-better machine with 8 GiB or more RAM, an actual built-in or USB microphone, and release binaries. Record CPU/model/RAM, kernel, Ubuntu/GNOME version, audio server/backend, device format, power profile, selected model, network location and build commit/features. The current headless report does not record RAM, GNOME session, audio backend or selected provider/model. Physical microphone and provider credential validation remain pending. Report actual measurement host details for every result.
 
 Default cloud daemon, no optional local model, hidden idle overlay, closed TUI: the steady-state baseline. Also report daemon with active TUI and extension, recording, processing and optional sidecars as separate workloads. GNOME renderer cost belongs partly to the Shell process; daemon-only RSS does not measure total UI cost.
 
@@ -21,6 +21,19 @@ Default cloud daemon, no optional local model, hidden idle overlay, closed TUI: 
 | Daemon startup | Process spawn to successful IPC status response | Warm p95 ≤ 100 ms, cold goal ≤ 250 ms | 30 launches with independent runtime/data dirs; cold/warm cache definitions recorded |
 
 Cloud goals depend on provider, network and audio duration. Missing the cloud goal is not evidence of a Rust CPU bottleneck. No performance comparison to Wispr or whisrs is claimed without running an equivalent controlled workload.
+
+## Recorded headless smoke result
+
+[linux-headless.json](docs/benchmarks/linux-headless.json) records one successful status-only smoke run. It reports daemon startup of 0.0509 s for one launch, idle RSS of 10,212 KiB (about 9.97 MiB), idle CPU of 0.0% over 10 seconds, and status IPC p50/p95 of 0.0658/0.0765 ms across 100 samples. The host was Ubuntu 26.04.1 LTS, Linux 7.0.0-34-generic, x86_64, AMD Ryzen 5 3600X, with rustc 1.98.1; the release workspace was built locked and offline. Startup has one observation; zero CPU ticks were observed over the short idle interval, which does not establish the five-minute CPU budget. Status IPC latency is not one of the seven UX metrics.
+
+The report used:
+
+```sh
+CARGO_HOME=/tmp/xflow-cargo RUSTC=/home/mrad/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/rustc RUSTDOC=/home/mrad/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/rustdoc /home/mrad/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo build --release --workspace --locked --offline
+python3 scripts/benchmark.py --daemon target/release/xflowd --cli target/release/xflow --output docs/benchmarks/linux-headless.json
+```
+
+The harness used temporary config/data/runtime directories with history disabled and clipboard-only configured. It exercised daemon startup, status IPC, RSS and CPU only; it did not access the microphone, call a provider, exercise a hotkey, inject text or render the overlay. The artifact records those unavailable metrics as null. It is not evidence for the hotkey-to-recording, stop-to-transcript, text-injection or overlay targets above.
 
 ## Report measurements honestly
 

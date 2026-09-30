@@ -1,10 +1,10 @@
 # XFlow product requirements
 
-Revision: 2026-09-30. This document defines intended product behavior and release gates; it does not certify that every gate has passed. The current checked-in implementation baseline is the contracts crate at [crates/xflow-core](crates/xflow-core/src/lib.rs), with companion provider/platform/app work reviewed in sibling worktrees and not yet integrated into this branch. See [PERFORMANCE.md](PERFORMANCE.md) for measurement rules and [docs/RESEARCH.md](docs/RESEARCH.md) for source provenance.
+Revision: 2026-09-30. This document defines intended product behavior and release gates; it does not certify that every gate has passed. The current workspace contains `xflow-core`, `xflow-providers`, `xflow-platform`, and `xflow-app`; the latter builds the `xflow` CLI and `xflowd` daemon. See [PERFORMANCE.md](PERFORMANCE.md) for measured smoke results and targets, and [docs/RESEARCH.md](docs/RESEARCH.md) for source provenance.
 
 ## Implementation status (2026-09-30)
 
-Implemented in the current MVP work across the parent and sibling worktrees: shared Rust contracts/configuration, batch Groq/OpenRouter/custom OpenAI-compatible provider adapters, bounded cpal capture, GNOME bridge/extension scaffold, clipboard/paste adapter, event-driven CLI/TUI state updates, SQLite history in WAL mode (default retention 500; configurable up to 100,000), and cancellation that aborts the active job and rejects stale completions with a generation guard. These are implementation facts, not desktop acceptance results. The current GNOME shortcut binding is toggle-oriented; true press-and-release push-to-talk is not implemented. Provider credentials have not been validated against live accounts, and physical microphone capture, direct uinput operation and end-to-end paste remain pending desktop validation. No performance metric in this document is a measured result.
+The integrated MVP implements shared Rust contracts/configuration, batch Groq/OpenRouter/custom OpenAI-compatible provider adapters, bounded cpal capture, a GNOME bridge/extension, clipboard/paste adapter, event-driven CLI/TUI updates, and SQLite WAL history (default retention 500; configurable up to 100,000). Daemon cancel aborts an active job and uses a generation guard to reject stale completion. These implementation facts do not establish desktop acceptance. The GNOME shortcut is toggle-oriented; true press-and-release GNOME push-to-talk is not implemented. Provider credentials have not been validated against live accounts, and physical microphone capture, paste delivery, overlay lifecycle and direct uinput remain pending desktop validation. Headless smoke measurements are recorded in [PERFORMANCE.md](PERFORMANCE.md); desktop and live-provider performance remain unmeasured.
 
 ## Outcome and users
 
@@ -16,7 +16,7 @@ Success is a reliable, measured microphone-to-text vertical slice with a CLI, ke
 
 | Requirement | MVP behavior | Acceptance evidence |
 | --- | --- | --- |
-| Recording | CLI start/stop/toggle/cancel and GNOME toggle path exist in the development implementation; release-aware push-to-talk is not implemented | Real mic sessions, quick taps, repeated commands, permission loss, cancellation in listening and processing |
+| Recording | CLI start/stop/toggle/cancel and GNOME toggle path are implemented; start/stop can be bound to press/release events where a compositor provides them, but the GNOME shortcut is not true PTT | Real mic sessions, quick taps, repeated commands, permission loss, cancellation in listening and processing |
 | Recognition | Groq and OpenRouter batch adapters, BYOK; custom OpenAI-compatible REST endpoint; explicit model/language configuration | Request-contract tests plus one authorized live transcription per advertised cloud backend |
 | Cleanup | Raw default; optional independent LLM transformation with light/polished policies; retain raw output when optional cleanup fails | Cleanup failure, timeout and blank-output tests; review examples for meaning/technical-term preservation |
 | Audio | Native cpal capture with bounded duration/memory, basic silence gating and audio levels | Built-in and USB input; native sample-rate/channel negotiation; silence avoids a paid request |
@@ -26,16 +26,16 @@ Success is a reliable, measured microphone-to-text vertical slice with a CLI, ke
 | Security | OS credential storage where available, environment credentials for CLI/headless use, no keys in TOML, no default secret/audio/transcript logs | Dummy-secret redaction, socket/data modes, keyring-unavailable behavior, offline rejection |
 | Performance | Establish reproducible measurements for all seven requested metrics | Report environment, build profile, sample size and distributions; label unmeasured desktop metrics |
 
-Physical capture, direct uinput and paste are desktop release gates. Provider adapters and credential resolution exist, but credentials have not been validated against live provider accounts. Passing mocked HTTP, fixture capture or clipboard-disabled tests establishes software behavior, not end-to-end desktop support. A failed provider request must not trigger silent provider switching or send the recording to a different service.
+Physical capture, direct uinput, confirmed paste and overlay lifecycle are desktop release gates. Provider adapters and credential resolution exist, but credentials have not been validated against live provider accounts. Passing mocked HTTP, fixture capture or clipboard-disabled tests establishes software behavior, not end-to-end desktop support. A failed provider request must not trigger silent provider switching or send the recording to a different service.
 
 ## Session behavior
 
 1. The user chooses a provider/model and credentials, then starts the daemon. Settings contain references to secrets, not secret values.
 2. A configured shortcut or CLI action starts capture. The pill appears without becoming the focused app. Missing mic or permission produces a visible, recoverable error.
 3. Stop finalizes audio and transcribes. Raw audio remains transient; basic silence gating can end without upload. Only one session is active.
-4. Optional cleanup runs after STT. Cancellation prevents later output from the abandoned session; recording and network work must release their resources.
+4. Optional cleanup runs after STT. Cancel aborts a pending capture/provider job and rejects stale completions. If transcription has already finalized and been saved, cancel cannot undo that history entry or the `last` recovery text; a queued cancel is handled before injection starts when possible. `clear-history` cancels active work and clears both history and the in-memory last transcript.
 5. Final text is pasted or copied. The TUI/CLI distinguish those outcomes. Automatic paste cannot prove the target app accepted text; copy-last remains available after uncertain delivery.
-6. Success/error feedback settles back to idle. History follows the explicit retention preference. Cancelled content is never inserted or persisted as a successful transcript.
+6. Daemon `Success`/`Error` state persists until the next recording or cancel. The GNOME pill hides success feedback after 1.5 seconds and error feedback after 4 seconds without changing daemon state. History follows the explicit retention preference.
 
 Do not automatically execute dictated commands. In terminals, newline/paste behavior and terminal-specific shortcuts must be documented and tested. Until app/focus identity is available, the MVP cannot guarantee insertion into the original app if the user changes focus during transcription.
 

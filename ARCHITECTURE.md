@@ -1,6 +1,6 @@
 # Architecture
 
-Revision: 2026-09-30. The parent worktree contains the shared contract crate; provider, platform and app implementation is present in sibling worktrees and remains subject to integration and desktop acceptance. This document distinguishes implemented behavior from proposed architecture. Research supporting these choices is in [docs/RESEARCH.md](docs/RESEARCH.md), and release stages are in [ROADMAP.md](ROADMAP.md).
+Revision: 2026-09-30. The integrated Rust workspace contains `xflow-core`, `xflow-providers`, `xflow-platform`, and `xflow-app`; the app crate builds the `xflow` CLI/TUI and `xflowd` daemon. The current design distinguishes implemented behavior from proposed extensions; desktop acceptance remains incomplete. Research supporting these choices is in [docs/RESEARCH.md](docs/RESEARCH.md), and release stages are in [ROADMAP.md](ROADMAP.md).
 
 ## Process and crate boundaries
 
@@ -22,11 +22,10 @@ The CLI and TUI are clients and consume event-driven state updates; they do not 
 
 | Crate | Responsibility |
 | --- | --- |
-| `xflow-core` | Implemented shared serializable state/config/IPC contracts and platform/provider traits |
-| `xflow-providers` | Provider-side implementation in sibling worktree: WAV encoding, batch STT adapters, optional text cleanup and credential resolution; live credentials unvalidated |
-| `xflow-platform` | Platform-side implementation in sibling worktree: cpal capture, desktop copy/paste and GNOME integration scaffold; physical-device path unvalidated |
-| `xflow-app` | App/CLI/TUI development work; event-driven state updates; integration and desktop acceptance remain open |
-| `xflow-daemon`, `xflow-cli` | Proposed split only; these crate names are not current workspace members |
+| `xflow-core` | Shared serializable state/config/IPC contracts and platform/provider traits |
+| `xflow-providers` | WAV encoding, batch STT adapters, optional text cleanup and credential resolution; live credentials unvalidated |
+| `xflow-platform` | cpal capture, desktop copy/paste and GNOME integration; physical-device path unvalidated |
+| `xflow-app` | Daemon state owner/storage/IPC plus `xflow` CLI/TUI and `xflowd` daemon binaries; UI state updates are event-driven |
 
 No Electron, embedded browser or default local model runtime. Reuse native capture/IPC/overlay ideas from whisrs while keeping this implementation independent; any future source reuse requires the upstream MIT notices.
 
@@ -52,7 +51,7 @@ The canonical declarations are in `crates/xflow-core/src/lib.rs`:
 
 States are `Idle`, `Listening`, `Processing`, `Success`, `Error`. The single state owner serializes commands and session completions. Capture and HTTP work run outside command dispatch so status/cancel stay responsive. A session identity or equivalent stale-result guard ensures that completion from a cancelled recording cannot affect a newer session.
 
-Start creates one capture session. Stop takes ownership of its finalized clip and starts transcription. Toggle maps to start/stop by state; conflicting starts during processing must report busy. Cancel aborts the active job and stops capture; a generation guard prevents stale completions from a canceled job from inserting text or entering history. Resource cleanup must complete even when an optional overlay or client disconnects. Success/error feedback eventually settles to idle; a new deliberate action may begin a session according to the state owner's rules.
+Start creates one capture session. Stop takes ownership of its finalized clip and starts transcription. Toggle maps to start/stop by state; conflicting starts during processing report busy. Cancel aborts the active job, stops capture, and advances a generation guard that rejects stale completions. If the transcript was already finalized and saved, cancel cannot undo its history entry or `last` recovery text; queued cancellation is processed before injection starts when possible. `clear-history` cancels active work, clears the database and clears `last`. Daemon `Success`/`Error` persists until a new recording or cancel; the GNOME overlay independently hides success/error after 1.5/4 seconds.
 
 Silent/empty recordings produce no upload. The lightweight energy gate is not a neural speech classifier: quiet speech and noise still require hardware evaluation. Maximum duration and a hard sample/memory budget cap capture. Callback work must avoid blocking operations and must surface overflow/device errors instead of returning plausible but truncated audio.
 
