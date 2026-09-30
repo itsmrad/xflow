@@ -38,8 +38,12 @@ export default class XFlowExtension extends Extension {
         this._pill.add_child(this._wave);
         this._pill.add_child(this._label);
         Main.layoutManager.addChrome(this._pill, {affectsInputRegion: false, trackFullscreen: false});
-        this._settingsSignal = this._settings.connect('changed', () => this._configure());
+        this._settingsSignal = this._settings.connect('changed', (_settings, key) => {
+            if (Object.hasOwn(ACTIONS, key)) this._bind(key, ACTIONS[key]);
+            else this._configure();
+        });
         this._monitorSignal = Main.layoutManager.connect('monitors-changed', () => this._position());
+        for (const [name, action] of Object.entries(ACTIONS)) this._bind(name, action);
         this._configure();
         // Return only app/window identity. No surrounding text is read.
         this._context = Gio.DBusExportedObject.wrapJSObject(CONTEXT_XML, {
@@ -67,12 +71,14 @@ export default class XFlowExtension extends Extension {
             null, () => this._update({state: 'idle'}));
     }
 
+    _bind(name, action) {
+        Main.wm.removeKeybinding(name);
+        Main.wm.addKeybinding(name, this._settings,
+            Meta.KeyBindingFlags.IGNORE_AUTOREPEAT ?? Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL, () => this._command(action));
+    }
+
     _configure() {
-        for (const [name, action] of Object.entries(ACTIONS)) {
-            Main.wm.removeKeybinding(name);
-            Main.wm.addKeybinding(name, this._settings, Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL,
-                () => this._command(action));
-        }
         this._pill.set_width(this._settings.get_int('width'));
         this._pill.set_height(this._settings.get_int('height'));
         this._pill.opacity = Math.round(this._settings.get_double('opacity') * 255);
@@ -109,6 +115,7 @@ export default class XFlowExtension extends Extension {
     }
 
     _update(event) {
+        if (!this._enabled) return;
         if (!['idle', 'listening', 'processing', 'success', 'error'].includes(event.state)) return;
         const changed = this._state !== event.state;
         this._state = event.state;

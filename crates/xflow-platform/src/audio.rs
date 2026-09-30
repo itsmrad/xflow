@@ -13,8 +13,8 @@ enum Command {
     Start(oneshot::Sender<Result<()>>),
     Stop(oneshot::Sender<Result<AudioClip>>),
     Cancel(oneshot::Sender<Result<()>>),
-    Limit,
-    Failed(String),
+    Limit(u64),
+    Failed(u64, String),
     Shutdown,
 }
 
@@ -36,12 +36,17 @@ struct Recording {
     error: Option<String>,
 }
 
+// Bound allocation even if a device advertises an unusually high rate or
+// channel count. The duration remains an upper bound, never a memory promise.
+const MAX_SAMPLES: usize = 16 * 1024 * 1024;
+
 impl Recording {
     fn new(sample_rate: u32, channels: u16, config: &RecordingConfig) -> Result<Self> {
-        let limit = (sample_rate as usize)
+        let duration_samples = (sample_rate as usize)
             .checked_mul(channels as usize)
             .and_then(|n| n.checked_mul(config.max_seconds as usize))
             .context("recording size overflow")?;
+        let limit = duration_samples.min(MAX_SAMPLES);
         if limit == 0 {
             bail!("invalid audio stream configuration");
         }
@@ -124,26 +129,39 @@ impl CpalCapture {
             .spawn(move || {
                 let mut stream = None;
                 let mut recording: Option<Arc<Mutex<Recording>>> = None;
+                let mut generation = 0_u64;
+                let mut active_generation = None;
                 while let Ok(command) = receiver.recv() {
                     match command {
                         Command::Start(reply) => {
                             let result = if recording.is_some() {
                                 Err(anyhow!("already recording"))
                             } else {
-                                open_stream(&config, callback_sender.clone(), thread_level.clone())
-                                    .map(|(new_stream, buffer)| {
-                                        stream = Some(new_stream);
-                                        recording = Some(buffer);
-                                    })
+                                generation = generation.wrapping_add(1);
+                                open_stream(
+                                    &config,
+                                    callback_sender.clone(),
+                                    thread_level.clone(),
+                                    generation,
+                                )
+                                .map(|(new_stream, buffer)| {
+                                    stream = Some(new_stream);
+                                    recording = Some(buffer);
+                                    active_generation = Some(generation);
+                                })
                             };
                             // A cancelled start request must not leave the microphone open.
-                            if reply.send(result).is_err() {
+                            let started = result.is_ok();
+                            if reply.send(result).is_err() && started {
                                 stream = None;
                                 recording = None;
+                                active_generation = None;
+                                thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
                             }
                         }
                         Command::Stop(reply) => {
                             stream = None;
+                            active_generation = None;
                             thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
                             let result =
                                 recording
@@ -161,21 +179,28 @@ impl CpalCapture {
                         Command::Cancel(reply) => {
                             stream = None;
                             recording = None;
+                            active_generation = None;
                             thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
                             let _ = reply.send(Ok(()));
                         }
-                        Command::Limit => {
-                            stream = None;
-                            thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
-                        }
-                        Command::Failed(error) => {
-                            stream = None;
-                            if let Some(buffer) = &recording {
-                                if let Ok(mut buffer) = buffer.lock() {
-                                    buffer.error = Some(error);
-                                }
+                        Command::Limit(source) => {
+                            if active_generation == Some(source) {
+                                stream = None;
+                                active_generation = None;
+                                thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
                             }
-                            thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
+                        }
+                        Command::Failed(source, error) => {
+                            if active_generation == Some(source) {
+                                stream = None;
+                                active_generation = None;
+                                if let Some(buffer) = &recording {
+                                    if let Ok(mut buffer) = buffer.lock() {
+                                        buffer.error = Some(error);
+                                    }
+                                }
+                                thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
+                            }
                         }
                         Command::Shutdown => break,
                     }
@@ -190,6 +215,7 @@ fn open_stream(
     config: &RecordingConfig,
     sender: mpsc::Sender<Command>,
     level: Arc<AtomicU32>,
+    generation: u64,
 ) -> Result<(cpal::Stream, Arc<Mutex<Recording>>)> {
     let device = cpal::default_host()
         .default_input_device()
@@ -205,7 +231,14 @@ fn open_stream(
     let stream_config = supported.config();
     macro_rules! build {
         ($sample:ty) => {
-            build_stream::<$sample>(&device, &stream_config, buffer.clone(), sender, level)
+            build_stream::<$sample>(
+                &device,
+                &stream_config,
+                buffer.clone(),
+                sender,
+                level,
+                generation,
+            )
         };
     }
     let stream = match supported.sample_format() {
@@ -231,6 +264,7 @@ fn build_stream<T: SizedSample>(
     buffer: Arc<Mutex<Recording>>,
     sender: mpsc::Sender<Command>,
     level: Arc<AtomicU32>,
+    generation: u64,
 ) -> Result<cpal::Stream>
 where
     f32: FromSample<T>,
@@ -244,12 +278,12 @@ where
                     let (rms, reached_limit) = buffer.push(input);
                     level.store(rms.to_bits(), Ordering::Relaxed);
                     if reached_limit {
-                        let _ = sender.send(Command::Limit);
+                        let _ = sender.send(Command::Limit(generation));
                     }
                 }
             },
             move |error| {
-                let _ = error_sender.send(Command::Failed(error.to_string()));
+                let _ = error_sender.send(Command::Failed(generation, error.to_string()));
             },
             Some(std::time::Duration::from_secs(3)),
         )
@@ -334,5 +368,20 @@ mod tests {
         assert_eq!(clip.samples[0], -1.0);
         assert_eq!(clip.samples[1], 0.0);
         assert!(clip.samples[2] > 0.99);
+    }
+
+    #[test]
+    fn high_rate_capture_has_a_memory_ceiling() {
+        let recording = Recording::new(
+            192_000,
+            32,
+            &RecordingConfig {
+                max_seconds: 600,
+                silence_threshold: 0.1,
+            },
+        )
+        .unwrap();
+        assert_eq!(recording.limit, MAX_SAMPLES);
+        assert_eq!(recording.samples.capacity(), MAX_SAMPLES);
     }
 }
