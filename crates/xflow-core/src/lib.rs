@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 pub mod config;
 pub mod ipc;
 
+/// Maximum uploadable mono 16-bit PCM WAV: 25 MB including the 44-byte header.
+pub const MAX_UPLOAD_WAV_BYTES: usize = 25_000_000;
+pub const MAX_UPLOAD_FRAMES: usize = (MAX_UPLOAD_WAV_BYTES - 44) / 2;
+
 #[derive(Clone, Debug)]
 pub struct AudioClip {
     /// Interleaved normalized PCM. Providers must encode/downmix explicitly.

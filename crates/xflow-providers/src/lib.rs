@@ -11,11 +11,10 @@ use std::{net::IpAddr, sync::Arc, time::Duration};
 use xflow_core::{
     config::{CleanupConfig, SttConfig},
     AppContext, AudioClip, CleanupMode, SpeechToText, TextTransformer, Transcript,
-    TranscriptionOptions,
+    TranscriptionOptions, MAX_UPLOAD_FRAMES,
 };
 use zeroize::Zeroizing;
 
-const MAX_WAV_BYTES: usize = 25_000_000;
 const MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_TEXT_BYTES: usize = 262_144;
 const KEYRING_SERVICE: &str = "xflow";
@@ -25,6 +24,35 @@ static KEYRING_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 enum Protocol {
     Multipart,
     Router,
+}
+
+fn validate_options<'a>(
+    language: Option<&str>,
+    hints: impl Iterator<Item = &'a String> + Clone,
+    protocol: Protocol,
+) -> Result<()> {
+    if let Some(code) = language {
+        if code.len() != 2 || !code.bytes().all(|b| b.is_ascii_lowercase()) {
+            bail!("STT language must be a lowercase ISO-639-1 code");
+        }
+    }
+    // A byte is at most one token for Whisper; this conservative cap stays
+    // within the documented 224-token budget without a tokenizer dependency.
+    let hint_bytes = hints
+        .clone()
+        .map(String::len)
+        .try_fold(0usize, |total, size| {
+            size.checked_add(2)?.checked_add(total)
+        });
+    if hint_bytes.is_none_or(|n| n.saturating_sub(2) > 224) {
+        bail!("vocabulary hints exceed the conservative 224-byte prompt limit");
+    }
+    if matches!(protocol, Protocol::Router) && hints.clone().next().is_some() {
+        bail!(
+            "OpenRouter vocabulary keyterms require model support; this adapter does not send them"
+        );
+    }
+    Ok(())
 }
 
 struct HttpProvider {
@@ -47,6 +75,11 @@ pub fn build_stt(config: &SttConfig, offline: bool) -> Result<Arc<dyn SpeechToTe
         "custom" => ("", "", None, Protocol::Multipart),
         _ => bail!("unsupported STT provider; use groq, openrouter, openai or custom (streaming and local engines are not implemented)"),
     };
+    validate_options(
+        config.language.as_deref(),
+        config.vocabulary.iter(),
+        protocol,
+    )?;
     let endpoint = endpoint(
         config.endpoint.as_deref().unwrap_or(default_endpoint),
         offline,
@@ -295,7 +328,7 @@ pub fn encode_wav(audio: &AudioClip) -> Result<Vec<u8>> {
         bail!("invalid or empty PCM audio");
     }
     let frames = audio.samples.len() / channels;
-    if frames > (MAX_WAV_BYTES - 44) / 2 || audio.samples.len() > 32_000_000 {
+    if frames > MAX_UPLOAD_FRAMES || audio.samples.len() > 32_000_000 {
         bail!("audio exceeds provider upload limit");
     }
     if audio.samples.iter().any(|s| !s.is_finite()) {
@@ -353,23 +386,7 @@ impl HttpProvider {
     ) -> Result<Transcript> {
         let language = options.language.or_else(|| self.options.language.clone());
         let hints = self.options.vocabulary.iter().chain(&options.vocabulary);
-        if let Some(code) = &language {
-            if code.len() != 2 || !code.bytes().all(|b| b.is_ascii_lowercase()) {
-                bail!("STT language must be a lowercase ISO-639-1 code");
-            }
-        }
-        // A byte is at most one token for Whisper; this conservative cap stays
-        // within the documented 224-token budget without a tokenizer dependency.
-        let hint_bytes = hints
-            .clone()
-            .map(String::len)
-            .try_fold(0usize, |total, size| total.checked_add(size + 2));
-        if hint_bytes.is_none_or(|n| n.saturating_sub(2) > 224) {
-            bail!("vocabulary hints exceed the conservative 224-byte prompt limit");
-        }
-        if matches!(self.protocol, Protocol::Router) && hints.clone().next().is_some() {
-            bail!("OpenRouter vocabulary keyterms require model support; this adapter does not send them");
-        }
+        validate_options(language.as_deref(), hints.clone(), self.protocol)?;
         let vocabulary: Vec<&str> = hints.map(String::as_str).collect();
         let wav = tokio::task::spawn_blocking(move || encode_wav(&audio))
             .await
@@ -680,6 +697,61 @@ mod tests {
             cleanup_env("cleanup", "CUSTOM_KEY").as_deref(),
             Some("CUSTOM_KEY")
         );
+    }
+    #[test]
+    fn configured_options_fail_at_construction() {
+        let mut cfg = config("groq", "http://127.0.0.1:9/x".into());
+        for language in ["EN", "en-US", ""] {
+            cfg.language = Some(language.into());
+            let error = build_stt(&cfg, true).err().unwrap();
+            assert!(error.to_string().contains("language"), "{language}");
+        }
+        cfg.language = Some("en".into());
+        cfg.vocabulary = vec!["a".repeat(224)];
+        assert!(build_stt(&cfg, true).is_ok());
+        cfg.vocabulary = vec!["a".repeat(225)];
+        assert!(build_stt(&cfg, true)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("224-byte"));
+        cfg.provider = "openrouter".into();
+        cfg.vocabulary = vec!["Postgres".into()];
+        assert!(build_stt(&cfg, true)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("OpenRouter vocabulary"));
+    }
+    #[tokio::test]
+    async fn merged_request_options_are_validated_before_network() {
+        let mut cfg = config("groq", "http://127.0.0.1:9/x".into());
+        cfg.vocabulary = vec!["a".repeat(120)];
+        let stt = build_stt(&cfg, true).unwrap();
+        let error = stt
+            .transcribe(
+                clip(),
+                TranscriptionOptions {
+                    language: Some("EN".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("language"));
+        let error = stt
+            .transcribe(
+                clip(),
+                TranscriptionOptions {
+                    vocabulary: vec!["b".repeat(103)],
+                    ..Default::default()
+                },
+            )
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("224-byte"));
     }
     #[tokio::test]
     async fn named_provider_loopback_override_does_not_send_default_key() {

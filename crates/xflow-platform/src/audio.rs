@@ -7,7 +7,7 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 use tokio::sync::oneshot;
-use xflow_core::{config::RecordingConfig, AudioCapture, AudioClip};
+use xflow_core::{config::RecordingConfig, AudioCapture, AudioClip, MAX_UPLOAD_FRAMES};
 
 enum Command {
     Start(oneshot::Sender<Result<()>>),
@@ -41,15 +41,25 @@ struct Recording {
 const MAX_SAMPLES: usize = 16 * 1024 * 1024;
 
 impl Recording {
-    fn new(sample_rate: u32, channels: u16, config: &RecordingConfig) -> Result<Self> {
-        let duration_samples = (sample_rate as usize)
-            .checked_mul(channels as usize)
-            .and_then(|n| n.checked_mul(config.max_seconds as usize))
-            .context("recording size overflow")?;
-        let limit = duration_samples.min(MAX_SAMPLES);
-        if limit == 0 {
+    fn sample_limit(sample_rate: u32, channels: u16, max_seconds: u32) -> Result<usize> {
+        let channels = usize::from(channels);
+        if channels == 0 {
             bail!("invalid audio stream configuration");
         }
+        let duration_frames = (sample_rate as usize)
+            .checked_mul(max_seconds as usize)
+            .context("recording size overflow")?;
+        let frames = duration_frames
+            .min(MAX_SAMPLES / channels)
+            .min(MAX_UPLOAD_FRAMES);
+        if frames == 0 {
+            bail!("invalid audio stream configuration");
+        }
+        Ok(frames * channels)
+    }
+
+    fn new(sample_rate: u32, channels: u16, config: &RecordingConfig) -> Result<Self> {
+        let limit = Self::sample_limit(sample_rate, channels, config.max_seconds)?;
         let mut samples = Vec::new();
         samples
             .try_reserve_exact(limit)
@@ -371,17 +381,26 @@ mod tests {
     }
 
     #[test]
-    fn high_rate_capture_has_a_memory_ceiling() {
-        let recording = Recording::new(
-            192_000,
-            32,
-            &RecordingConfig {
-                max_seconds: 600,
-                silence_threshold: 0.1,
-            },
-        )
-        .unwrap();
-        assert_eq!(recording.limit, MAX_SAMPLES);
-        assert_eq!(recording.samples.capacity(), MAX_SAMPLES);
+    fn high_rate_capture_stays_within_upload_memory_and_whole_frame_limits() {
+        assert_eq!(
+            Recording::sample_limit(192_000, 1, 120).unwrap(),
+            MAX_UPLOAD_FRAMES
+        );
+        assert_eq!(
+            Recording::sample_limit(48_000, 1, 600).unwrap(),
+            MAX_UPLOAD_FRAMES
+        );
+        assert_eq!(
+            Recording::sample_limit(48_000, 2, 120).unwrap(),
+            48_000 * 2 * 120
+        );
+        assert_eq!(
+            Recording::sample_limit(192_000, 32, 600).unwrap(),
+            MAX_SAMPLES
+        );
+        let three_channel_limit = Recording::sample_limit(192_000, 3, 600).unwrap();
+        assert_eq!(three_channel_limit, (MAX_SAMPLES / 3) * 3);
+        assert_eq!(three_channel_limit % 3, 0);
+        assert!(Recording::sample_limit(48_000, 0, 120).is_err());
     }
 }
