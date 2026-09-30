@@ -4,7 +4,8 @@ The Ubuntu MVP uses CPAL/ALSA for capture and a GNOME Shell extension for shortc
 the floating pill, and focused-window identity. The daemon does not depend on GTK,
 Electron, a WebView, or a local model runtime. The microphone opens on `start` and
 closes on `stop`, `cancel`, capture error, or the recording duration limit. The
-recording buffer is bounded by `recording.max_seconds`; a lightweight RMS detector
+recording buffer is bounded by `recording.max_seconds` and a ceiling of 16 Mi
+samples (64 MiB PCM); a lightweight RMS detector
 rejects silence while preserving internal pauses. It does not automatically stop
 after a pause or classify noise versus speech.
 
@@ -45,6 +46,8 @@ The same `gsettings --schemadir …` prefix configures `toggle-shortcut`,
 `opacity`, and `animation`. Defaults are Super+Alt+Space to toggle,
 Super+Alt+Escape to cancel, Super+Alt+C to copy, and Super+Alt+V to paste last.
 Shortcut bindings apply in the normal desktop session, outside the lock screen.
+Shortcut registration requests Mutter to ignore key autorepeat; changing pill appearance does not
+re-register shortcuts.
 
 The extension uses the GNOME 45+ ES module API. Its metadata lists 45–51 as
 candidate versions using that API; this development environment validates JS
@@ -52,9 +55,11 @@ syntax and GSettings schemas, not behavior in all those GNOME sessions. Validate
 on the target desktop before release.
 
 The current GNOME adapter provides toggle and explicit start/stop shortcuts.
-It does **not** provide verified press-and-release push-to-talk. Mutter's newer
-`TRIGGER_RELEASE` flag exposes both transitions, but reliable integration must
-identify callback event types and be tested across versions before enabling it.
+It does **not** provide verified press-and-release push-to-talk. Mutter's
+`TRIGGER_RELEASE` flag exposes both transitions and its key handler receives a
+Clutter event. Release handling still needs live Shell verification, including
+modifier release, shortcuts changing while held, and ordering of the start and
+stop CLI processes, before enabling it.
 Do not label a press-only binding push-to-talk. A compositor with independent
 press/release bindings can bind `xflow start` and `xflow stop` to those events.
 
@@ -72,7 +77,7 @@ Export the same `YDOTOOL_SOCKET` in the environment that starts the XFlow daemon
 if your service uses a different path. Successful keyboard dispatch reports
 `pasted`; it is not an accessibility acknowledgement that an application
 accepted the text. Missing tools, unavailable daemon, failed keyboard commands,
-changed focus, or undiscoverable original focus report `clipboard_only` after
+changed focus, or undiscoverable original app/window identity report `clipboard_only` after
 copy succeeds. Failed clipboard ownership reports an error, preserving the
 transcript for `xflow last` and later copy.
 
@@ -80,7 +85,7 @@ GNOME focus identity comes from the extension's `org.xflow.Shell.Context` method
 without it, automatic paste is intentionally disabled. Text is passed to
 clipboard helpers over stdin, never interpolated into shell commands. XFlow
 does not refocus windows. Single-line terminals use Shift+Insert; multiline
-terminal text and multiline text with unknown app identity remain clipboard
+terminal text and any text with unknown app identity remain clipboard
 only so pasting cannot silently execute a newline. Focus is checked immediately
 before keyboard dispatch, but another focus change can still race with synthetic
 keys; use `injection.clipboard_only = true` when that residual risk matters.
@@ -131,5 +136,6 @@ Primary API references:
 - [CPAL 0.15.3](https://docs.rs/cpal/0.15.3/cpal/) (the implementation's pinned major/minor line).
 - [GNOME extension module API](https://gjs.guide/extensions/topics/extension.html).
 - [Mutter keybinding flags](https://gnome.pages.gitlab.gnome.org/mutter/meta/flags.KeyBindingFlags.html).
+- [Mutter key handler callback](https://gnome.pages.gitlab.gnome.org/mutter/meta/callback.KeyHandlerFunc.html).
 - [Layer-shell supported desktops](https://github.com/wmww/gtk-layer-shell#supported-desktops).
 - [ydotool key and daemon socket manpage](https://github.com/ReimuNotMoe/ydotool/blob/master/manpage/ydotool.1.scd).

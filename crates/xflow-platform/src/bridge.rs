@@ -79,5 +79,18 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+        let bus = zbus::Proxy::new(
+            &connection,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .await
+        .unwrap();
+        let owned: bool = bus
+            .call("NameHasOwner", &("org.xflow.Daemon",))
+            .await
+            .unwrap();
+        assert!(!owned, "bridge must release its bus name at shutdown");
     }
 }

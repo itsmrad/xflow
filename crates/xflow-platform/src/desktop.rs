@@ -43,6 +43,7 @@ fn is_terminal(app: Option<&str>) -> bool {
 fn safe_target(text: &str, target: &AppContext, current: &AppContext) -> bool {
     // No attempt to refocus a window: typing must still target the original app.
     if target.window_id.is_none()
+        || target.app_id.is_none()
         || target.window_id != current.window_id
         || target.app_id != current.app_id
     {
@@ -258,6 +259,11 @@ mod tests {
         ));
         assert!(!safe_target(
             "text",
+            &target(None, Some("1")),
+            &target(None, Some("1"))
+        ));
+        assert!(!safe_target(
+            "text",
             &target(Some("editor"), Some("1")),
             &target(Some("editor"), Some("2"))
         ));
@@ -278,7 +284,7 @@ mod tests {
             let context = target(app, Some("1"));
             assert!(!safe_target("echo hi\n", &context, &context));
             assert!(!safe_target("echo hi\r", &context, &context));
-            assert!(safe_target("echo hi", &context, &context));
+            assert_eq!(safe_target("echo hi", &context, &context), app.is_some());
         }
         let editor = target(Some("code"), Some("2"));
         assert!(safe_target("line one\nline two", &editor, &editor));
