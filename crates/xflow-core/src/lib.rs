@@ -70,8 +70,14 @@ pub struct DesktopEvent {
 #[async_trait]
 pub trait SpeechToText: Send + Sync {
     fn name(&self) -> &str;
-    fn supports_streaming(&self) -> bool { false }
-    async fn transcribe(&self, audio: AudioClip, options: TranscriptionOptions) -> Result<Transcript>;
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+    async fn transcribe(
+        &self,
+        audio: AudioClip,
+        options: TranscriptionOptions,
+    ) -> Result<Transcript>;
 }
 
 /// Streaming providers finalize before injection; partial text is preview-only.
@@ -85,7 +91,12 @@ pub trait StreamingSpeechSession: Send {
 
 #[async_trait]
 pub trait TextTransformer: Send + Sync {
-    async fn transform(&self, text: &str, mode: CleanupMode, context: &AppContext) -> Result<String>;
+    async fn transform(
+        &self,
+        text: &str,
+        mode: CleanupMode,
+        context: &AppContext,
+    ) -> Result<String>;
 }
 
 #[async_trait]
@@ -105,7 +116,13 @@ pub trait Desktop: Send + Sync {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HotkeyAction { Start, Stop, Toggle, Cancel, PasteLast }
+pub enum HotkeyAction {
+    Start,
+    Stop,
+    Toggle,
+    Cancel,
+    PasteLast,
+}
 
 #[async_trait]
 pub trait GlobalHotkeys: Send {

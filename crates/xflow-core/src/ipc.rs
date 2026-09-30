@@ -5,8 +5,18 @@ pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Request {
-    Status, Start, Stop, Toggle, Cancel, Last, CopyLast, PasteLast,
-    History { limit: usize }, ClearHistory, Subscribe, Shutdown,
+    Status,
+    Start,
+    Stop,
+    Toggle,
+    Cancel,
+    Last,
+    CopyLast,
+    PasteLast,
+    History { limit: usize },
+    ClearHistory,
+    Subscribe,
+    Shutdown,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryEntry {
@@ -31,12 +41,29 @@ pub struct Response {
 }
 impl Response {
     pub fn status(state: State, level: f32) -> Self {
-        Self { ok: true, state, message: None, text: None, history: vec![], injection: None, level }
+        Self {
+            ok: true,
+            state,
+            message: None,
+            text: None,
+            history: vec![],
+            injection: None,
+            level,
+        }
     }
     pub fn error(state: State, message: impl Into<String>) -> Self {
         let mut response = Self::status(state, 0.0);
         response.ok = false;
-        response.message = Some(message.into());
+        let message = message.into();
+        let mut end = message.len().min(4093);
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        response.message = Some(if end < message.len() {
+            format!("{}...", &message[..end])
+        } else {
+            message
+        });
         response
     }
 }
