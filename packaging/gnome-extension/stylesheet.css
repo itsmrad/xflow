@@ -1,0 +1,11 @@
+.xflow-pill {
+    padding: 6px 12px;
+    spacing: 10px;
+    border-radius: 22px;
+    background-color: rgba(24, 24, 28, 0.96);
+    border: 1px solid #78aeed;
+    color: #ffffff;
+    font-size: 11pt;
+}
+.xflow-wave { spacing: 3px; }
+.xflow-bar { background-color: #78aeed; border-radius: 2px; }
