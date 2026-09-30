@@ -1,6 +1,6 @@
 # Roadmap
 
-Revision: 2026-09-30. Milestones are completion gates, not a list of already shipped capabilities. The parent branch currently holds the shared contracts; provider, platform and app slices are in sibling worktrees and require integration and desktop acceptance. Measured results belong in checked-in benchmark reports described by [PERFORMANCE.md](PERFORMANCE.md). The complete product direction is in [PRD.md](PRD.md).
+Revision: 2026-09-30. Milestones are completion gates, not a list of already shipped capabilities. The integrated workspace contains core, provider, platform and app crates; desktop acceptance remains incomplete. The [headless benchmark report](docs/benchmarks/linux-headless.json) provides limited smoke observations, while [PERFORMANCE.md](PERFORMANCE.md) defines the seven release metrics and their targets. The complete product direction is in [PRD.md](PRD.md).
 
 ## Dependency order
 
@@ -25,11 +25,11 @@ Deliver PRD, architecture, roadmap, performance methodology and dated research. 
 
 ## 1. Ubuntu GNOME development slice
 
-Integrate the already-developed Rust contracts, provider, platform and app slices: async daemon, event-driven CLI/TUI state updates, native cpal capture, Groq/OpenRouter batch STT and custom OpenAI-compatible REST, optional independent cleanup, SQLite WAL history (default 500 entries), clipboard/paste fallback, and native GNOME pill. This remains a development slice, not a desktop-validated release. Global toggle is the first shortcut path; true release-aware GNOME push-to-talk is not implemented and requires new work, then adapter and desktop validation.
+The integrated development slice includes Rust contracts/workspace, asynchronous daemon, CLI/TUI, native cpal capture, Groq/OpenRouter batch STT and custom OpenAI-compatible REST, optional independent cleanup, SQLite WAL history (default 500 entries), clipboard/paste fallback, and GNOME pill. The TUI and `watch` consume events rather than polling. The headless smoke report establishes only startup, idle process and status IPC observations; true GNOME press/release push-to-talk and desktop/provider validation are not complete.
 
 Automated verification must cover configuration validation, wire format/error bounds, secrets not leaking, silence/length limits, serialized state transitions, cancelled/stale completion rejection, history retention/no-history and IPC framing. Fixture audio and mock HTTP enable reproducible software checks. They do not replace physical microphone/live API/destination checks.
 
-Exit: the integrated implementation can run as a local development slice, errors are recoverable, missing optional integrations are visible, and no later feature is described as complete. Publish smoke results with their limitations. Until desktop checks pass, label the result a development scaffold, not a production-ready release.
+Exit: retain the integrated development slice, complete deterministic software verification, make missing optional integrations visible, and keep later features labeled as planned. Publish smoke results with their limitations. Until desktop checks pass, label the result a development scaffold, not a production-ready release.
 
 ## 2. Ubuntu desktop acceptance and release hardening
 
