@@ -1,0 +1,7 @@
+/target/
+/.worktrees/
+/.firecrawl/
+*.db
+*.db-shm
+*.db-wal
+.env
