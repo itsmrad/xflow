@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.xflow" path="/org/gnome/shell/extensions/xflow/">
+    <key name="command-path" type="s"><default>'xflow'</default><summary>XFlow executable path</summary></key>
+    <key name="toggle-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;space']</default><summary>Toggle recording</summary></key>
+    <key name="start-shortcut" type="as"><default>[]</default><summary>Start recording</summary></key>
+    <key name="stop-shortcut" type="as"><default>[]</default><summary>Stop recording</summary></key>
+    <key name="cancel-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;Escape']</default><summary>Cancel recording</summary></key>
+    <key name="copy-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;c']</default><summary>Copy last transcript</summary></key>
+    <key name="paste-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;v']</default><summary>Paste last transcript</summary></key>
+    <key name="width" type="i"><range min="120" max="480"/><default>200</default><summary>Pill width</summary></key>
+    <key name="height" type="i"><range min="28" max="80"/><default>40</default><summary>Pill height</summary></key>
+    <key name="margin" type="i"><range min="0" max="300"/><default>32</default><summary>Distance from screen edge</summary></key>
+    <key name="position" type="s"><choices><choice value="top"/><choice value="bottom"/></choices><default>'bottom'</default><summary>Pill position</summary></key>
+    <key name="opacity" type="d"><range min="0.2" max="1.0"/><default>0.95</default><summary>Pill opacity</summary></key>
+    <key name="animation" type="b"><default>true</default><summary>Animate waveform</summary></key>
+  </schema>
+</schemalist>

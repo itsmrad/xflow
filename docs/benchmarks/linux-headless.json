@@ -1,0 +1,53 @@
+{
+  "environment": {
+    "architecture": "x86_64",
+    "benchmark_command": "python3 scripts/benchmark.py --daemon target/release/xflowd --cli target/release/xflow --output docs/benchmarks/linux-headless.json",
+    "build_command": "CARGO_HOME=/tmp/xflow-cargo RUSTC=/home/mrad/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/rustc RUSTDOC=/home/mrad/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/rustdoc /home/mrad/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo build --release --workspace --locked --offline",
+    "build_profile": "release (workspace, locked, offline)",
+    "cli_binary": "/home/mrad/code/projects/xflow/target/release/xflow",
+    "cpu_model": "AMD Ryzen 5 3600X 6-Core Processor",
+    "daemon_binary": "/home/mrad/code/projects/xflow/target/release/xflowd",
+    "kernel": "7.0.0-34-generic",
+    "os_release": "Ubuntu 26.04.1 LTS",
+    "python": "3.12.14",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "system": "Linux"
+  },
+  "error": null,
+  "measurements": {
+    "audio": {
+      "reason": "not measured; benchmark never accesses microphone",
+      "value": null
+    },
+    "hotkey": {
+      "reason": "requires desktop keyboard integration",
+      "value": null
+    },
+    "idle_cpu_percent": 0.0,
+    "idle_rss_kib": 10212,
+    "overlay": {
+      "reason": "requires desktop UI integration",
+      "value": null
+    },
+    "provider": {
+      "reason": "not measured; benchmark makes no provider requests",
+      "value": null
+    },
+    "startup_seconds": 0.05087736199857318,
+    "status_latency_ms": {
+      "p50": 0.06584400034626015,
+      "p95": 0.07645400182809681,
+      "samples": 100
+    },
+    "text_injection": {
+      "reason": "not measured; benchmark sends status only",
+      "value": null
+    }
+  },
+  "parameters": {
+    "idle_seconds": 10,
+    "samples": 100
+  },
+  "schema_version": 1,
+  "scope": "Headless status-only benchmark. No microphone, provider, hotkey, text injection, or overlay was exercised; physical UX latencies are unavailable."
+}

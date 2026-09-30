@@ -1,0 +1,27 @@
+# Secrets are read from OS credential storage or environment variables, never this file.
+[stt]
+provider = "groq"
+# endpoint = "https://api.groq.com/openai/v1/audio/transcriptions"
+# model = "whisper-large-v3-turbo"
+# api_key_env = "GROQ_API_KEY"
+# language = "en" # omit for multilingual auto detection
+vocabulary = []
+timeout_secs = 30
+
+[cleanup]
+mode = "raw" # raw | light | polished; light/polished require endpoint and model
+# endpoint = "https://api.openai.com/v1/chat/completions"
+# model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+
+[privacy]
+history = true
+history_limit = 500
+offline = false # rejects remote endpoints; explicitly use a loopback STT sidecar
+
+[recording]
+max_seconds = 120
+silence_threshold = 0.005
+
+[injection]
+clipboard_only = false

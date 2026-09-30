@@ -1,0 +1,12 @@
+[Unit]
+Description=xflow voice typing daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/xflowd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
