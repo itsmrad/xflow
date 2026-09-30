@@ -33,6 +33,7 @@ struct HttpProvider {
     model: String,
     credential: Credentials,
     client: Client,
+    timeout: Duration,
     protocol: Protocol,
     options: TranscriptionOptions,
 }
@@ -55,18 +56,36 @@ pub fn build_stt(config: &SttConfig, offline: bool) -> Result<Arc<dyn SpeechToTe
         bail!("STT model is required");
     }
     let timeout = checked_timeout(config.timeout_secs)?;
+    let trusted_host = match config.provider.as_str() {
+        "groq" => Some("api.groq.com"),
+        "openrouter" => Some("openrouter.ai"),
+        "openai" => Some("api.openai.com"),
+        _ => None,
+    };
+    let canonical = trusted_host.is_some_and(|host| is_canonical_host(&endpoint, host));
     let env = config
         .api_key_env
         .as_deref()
-        .or(default_env)
+        .or(if canonical { default_env } else { None })
         .map(str::to_owned);
-    let credential = Credentials::new(&config.provider, env, is_loopback(&endpoint))?;
+    if trusted_host.is_some() && !canonical && !is_loopback(&endpoint) && env.is_none() {
+        bail!(
+            "an explicit API key environment variable is required for a non-provider STT endpoint"
+        );
+    }
+    let credential = Credentials::new(
+        &config.provider,
+        env,
+        is_loopback(&endpoint),
+        canonical || trusted_host.is_none(),
+    )?;
     Ok(Arc::new(HttpProvider {
         name: config.provider.clone(),
         endpoint,
         model: model.to_owned(),
         credential,
         client: client(timeout)?,
+        timeout,
         protocol,
         options: TranscriptionOptions {
             language: config.language.clone(),
@@ -96,24 +115,34 @@ pub fn build_transformer(
         .filter(|m| !m.trim().is_empty())
         .ok_or_else(|| anyhow!("cleanup.model is required"))?
         .clone();
-    let provider = match endpoint.host_str() {
-        Some("openrouter.ai") => "openrouter",
-        Some("api.groq.com") => "groq",
-        Some("api.openai.com") => "openai",
-        _ => "cleanup",
-    };
-    let env = if config.api_key_env.is_empty() {
-        None
+    let provider = if is_canonical_host(&endpoint, "openrouter.ai") {
+        "openrouter"
+    } else if is_canonical_host(&endpoint, "api.groq.com") {
+        "groq"
+    } else if is_canonical_host(&endpoint, "api.openai.com") {
+        "openai"
     } else {
-        Some(config.api_key_env.clone())
+        "cleanup"
     };
-    let credential = Credentials::new(provider, env, is_loopback(&endpoint))?;
+    // The core config's OPENAI_API_KEY default is not consent to send that key
+    // to a different service. Match the canonical host when no key was chosen.
+    let env = cleanup_env(provider, &config.api_key_env);
+    let credential = Credentials::new(provider, env, is_loopback(&endpoint), true)?;
     Ok(Some(Arc::new(HttpTransformer {
         endpoint,
         model,
         credential,
         client: client(Duration::from_secs(30))?,
     })))
+}
+
+fn cleanup_env(provider: &str, configured: &str) -> Option<String> {
+    match (provider, configured) {
+        ("groq", "OPENAI_API_KEY") => Some("GROQ_API_KEY".to_owned()),
+        ("openrouter", "OPENAI_API_KEY") => Some("OPENROUTER_API_KEY".to_owned()),
+        ("cleanup", "OPENAI_API_KEY" | "") | (_, "") => None,
+        (_, name) => Some(name.to_owned()),
+    }
 }
 
 fn checked_timeout(seconds: u64) -> Result<Duration> {
@@ -136,6 +165,11 @@ fn is_loopback(url: &Url) -> bool {
     url.host_str()
         .and_then(|host| host.trim_matches(['[', ']']).parse::<IpAddr>().ok())
         .is_some_and(|ip| ip.is_loopback())
+}
+fn is_canonical_host(url: &Url, host: &str) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some(host)
+        && url.port_or_known_default() == Some(443)
 }
 fn endpoint(value: &str, offline: bool) -> Result<Url> {
     let url = Url::parse(value).map_err(|_| anyhow!("invalid provider endpoint URL"))?;
@@ -162,9 +196,10 @@ struct Credentials {
     provider: String,
     env: Option<String>,
     allow_anonymous: bool,
+    allow_keyring: bool,
 }
 impl Credentials {
-    fn new(provider: &str, env: Option<String>, local: bool) -> Result<Self> {
+    fn new(provider: &str, env: Option<String>, local: bool, allow_keyring: bool) -> Result<Self> {
         validate_provider(provider)?;
         if let Some(name) = &env {
             if name.is_empty()
@@ -178,6 +213,7 @@ impl Credentials {
         Ok(Self {
             provider: provider.to_owned(),
             allow_anonymous: local && env.is_none(),
+            allow_keyring,
             env,
         })
     }
@@ -193,6 +229,9 @@ impl Credentials {
         }
         if self.allow_anonymous {
             return Ok(None);
+        }
+        if !self.allow_keyring {
+            bail!("API key unavailable in the configured environment variable");
         }
         let _lock = KEYRING_LOCK.lock().await;
         let provider = self.provider.clone();
@@ -300,14 +339,20 @@ impl SpeechToText for HttpProvider {
         audio: AudioClip,
         options: TranscriptionOptions,
     ) -> Result<Transcript> {
+        tokio::time::timeout(self.timeout, self.transcribe_inner(audio, options))
+            .await
+            .map_err(|_| anyhow!("provider request timed out; it was not retried"))?
+    }
+}
+
+impl HttpProvider {
+    async fn transcribe_inner(
+        &self,
+        audio: AudioClip,
+        options: TranscriptionOptions,
+    ) -> Result<Transcript> {
         let language = options.language.or_else(|| self.options.language.clone());
-        let vocabulary: Vec<_> = self
-            .options
-            .vocabulary
-            .iter()
-            .chain(&options.vocabulary)
-            .cloned()
-            .collect();
+        let hints = self.options.vocabulary.iter().chain(&options.vocabulary);
         if let Some(code) = &language {
             if code.len() != 2 || !code.bytes().all(|b| b.is_ascii_lowercase()) {
                 bail!("STT language must be a lowercase ISO-639-1 code");
@@ -315,12 +360,17 @@ impl SpeechToText for HttpProvider {
         }
         // A byte is at most one token for Whisper; this conservative cap stays
         // within the documented 224-token budget without a tokenizer dependency.
-        if vocabulary.join(", ").len() > 224 {
+        let hint_bytes = hints
+            .clone()
+            .map(String::len)
+            .try_fold(0usize, |total, size| total.checked_add(size + 2));
+        if hint_bytes.is_none_or(|n| n.saturating_sub(2) > 224) {
             bail!("vocabulary hints exceed the conservative 224-byte prompt limit");
         }
-        if matches!(self.protocol, Protocol::Router) && !vocabulary.is_empty() {
-            bail!("OpenRouter transcription does not document vocabulary hints; use Groq or OpenAI-compatible STT for vocabulary");
+        if matches!(self.protocol, Protocol::Router) && hints.clone().next().is_some() {
+            bail!("OpenRouter vocabulary keyterms require model support; this adapter does not send them");
         }
+        let vocabulary: Vec<&str> = hints.map(String::as_str).collect();
         let wav = tokio::task::spawn_blocking(move || encode_wav(&audio))
             .await
             .map_err(|_| anyhow!("audio encoding task failed"))??;
@@ -416,6 +466,14 @@ impl TextTransformer for HttpTransformer {
         if mode == CleanupMode::Raw {
             return Ok(text.to_owned());
         }
+        tokio::time::timeout(Duration::from_secs(30), self.transform_inner(text, mode))
+            .await
+            .map_err(|_| anyhow!("provider request timed out; it was not retried"))?
+    }
+}
+
+impl HttpTransformer {
+    async fn transform_inner(&self, text: &str, mode: CleanupMode) -> Result<String> {
         if text.len() > MAX_TEXT_BYTES {
             bail!("cleanup input exceeds text limit");
         }
@@ -597,6 +655,72 @@ mod tests {
         assert!(build_transformer(&CleanupConfig::default(), true)
             .unwrap()
             .is_none());
+    }
+    #[test]
+    fn provider_overrides_require_explicit_remote_credentials() {
+        for provider in ["groq", "openrouter", "openai"] {
+            let cfg = config(provider, "https://example.com/audio/transcriptions".into());
+            assert!(build_stt(&cfg, false).is_err());
+        }
+        let cfg = config(
+            "groq",
+            "https://api.groq.com:8443/audio/transcriptions".into(),
+        );
+        assert!(build_stt(&cfg, false).is_err());
+        assert_eq!(
+            cleanup_env("groq", "OPENAI_API_KEY").as_deref(),
+            Some("GROQ_API_KEY")
+        );
+        assert_eq!(
+            cleanup_env("openrouter", "OPENAI_API_KEY").as_deref(),
+            Some("OPENROUTER_API_KEY")
+        );
+        assert_eq!(cleanup_env("cleanup", "OPENAI_API_KEY"), None);
+        assert_eq!(
+            cleanup_env("cleanup", "CUSTOM_KEY").as_deref(),
+            Some("CUSTOM_KEY")
+        );
+    }
+    #[tokio::test]
+    async fn named_provider_loopback_override_does_not_send_default_key() {
+        let (url, rx) = server("200 OK", br#"{"text":"hello"}"#, Duration::ZERO, "").await;
+        let cfg = config("groq", url);
+        build_stt(&cfg, true)
+            .unwrap()
+            .transcribe(clip(), Default::default())
+            .await
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&rx.await.unwrap()).contains("authorization:"));
+    }
+    #[tokio::test]
+    async fn missing_override_key_does_not_fall_back_to_keyring() {
+        let credential = Credentials::new(
+            "groq",
+            Some("XFLOW_MISSING_OVERRIDE_KEY".into()),
+            false,
+            false,
+        )
+        .unwrap();
+        let error = credential.header().await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("configured environment variable"));
+    }
+    #[tokio::test]
+    async fn deadline_includes_credential_wait() {
+        let lock = KEYRING_LOCK.lock().await;
+        let cfg = SttConfig {
+            api_key_env: Some("XFLOW_MISSING_TIMEOUT_KEY".into()),
+            timeout_secs: 1,
+            ..SttConfig::default()
+        };
+        let error = build_stt(&cfg, false)
+            .unwrap()
+            .transcribe(clip(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        drop(lock);
     }
     #[tokio::test]
     async fn groq_multipart_contract_auth_and_language() {
@@ -819,6 +943,6 @@ mod tests {
             .is_sensitive());
         let error = secret_header(Zeroizing::new("private\nsecret".into())).unwrap_err();
         assert!(!format!("{error:?}").contains("private"));
-        assert!(Credentials::new("groq", Some("KEY=$secret".into()), false).is_err());
+        assert!(Credentials::new("groq", Some("KEY=$secret".into()), false, true).is_err());
     }
 }
