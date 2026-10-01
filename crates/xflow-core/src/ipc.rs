@@ -6,6 +6,20 @@ pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Bumped when a request or response changes incompatibly; reported by Status.
 pub const PROTOCOL_VERSION: u32 = 2;
 
+/// Where a finished transcript goes.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    /// Insert into the focused app per `[injection]` (normal dictation).
+    #[default]
+    Inject,
+    /// Copy to the clipboard only.
+    Clipboard,
+    /// Do not touch the desktop; the requesting client reads the final event
+    /// (`xflow listen` prints it to stdout).
+    None,
+}
+
 /// One daemon request plus the channel for its single reply. Shared by the
 /// Unix-socket server and the D-Bus bridge.
 pub struct Command {
@@ -27,6 +41,8 @@ pub enum Request {
         context: Option<AppContext>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         t0_us: Option<u64>,
+        #[serde(default)]
+        delivery: Delivery,
     },
     Stop,
     /// Start when idle, stop when listening; same fields as Start.
@@ -37,6 +53,8 @@ pub enum Request {
         context: Option<AppContext>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         t0_us: Option<u64>,
+        #[serde(default)]
+        delivery: Delivery,
     },
     Cancel,
     Last,
@@ -76,6 +94,7 @@ impl Request {
             mode: Mode::Dictation,
             context: None,
             t0_us: None,
+            delivery: Delivery::Inject,
         }
     }
     pub fn toggle() -> Self {
@@ -83,6 +102,7 @@ impl Request {
             mode: Mode::Dictation,
             context: None,
             t0_us: None,
+            delivery: Delivery::Inject,
         }
     }
 }
@@ -240,7 +260,8 @@ mod tests {
             Request::Toggle {
                 mode: Mode::Command,
                 context: Some(_),
-                t0_us: Some(42)
+                t0_us: Some(42),
+                delivery: Delivery::Inject
             }
         ));
     }

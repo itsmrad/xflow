@@ -39,7 +39,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | Request (`"command"`) | Fields | Reply / semantics |
 | --- | --- | --- |
 | `status` | — | state, level, version, protocol, provider, model, mode (while active) |
-| `start`, `toggle` | `mode` ("dictation"/"command", default dictation), `context` (AppContext captured by the caller), `t0_us` (caller CLOCK_MONOTONIC µs at hotkey) | Mic opens **before** any focus query; provider connection is warmed in the background |
+| `start`, `toggle` | `mode` ("dictation"/"command", default dictation), `context` (AppContext captured by the caller), `t0_us` (caller CLOCK_MONOTONIC µs at hotkey), `delivery` ("inject" default / "clipboard" / "none" — none leaves the desktop untouched so a subscribed client such as `xflow listen` can print the text) | Mic opens **before** any focus query; provider connection is warmed in the background |
 | `stop`, `cancel` | — | unchanged |
 | `last`, `copy_last`, `paste_last` | — | unchanged |
 | `history` | `limit`, `offset` (default 0), `query` (case-insensitive substring) | `history` rows newest first, `total` = matching rows |
