@@ -50,9 +50,19 @@ fn folded(text: &str) -> String {
 /// Match original input once, longest phrase first. Inserted text is never scanned.
 fn replace(text: &str, pairs: &[(&str, &str)], punctuation_insensitive: bool) -> String {
     let input = words(text);
+    let lower: Vec<_> = input.iter().map(|w| w.text.to_lowercase()).collect();
     let mut patterns: Vec<_> = pairs
         .iter()
-        .map(|(from, to)| (words(from), *from, *to))
+        .map(|(from, to)| {
+            (
+                words(from)
+                    .iter()
+                    .map(|w| w.text.to_lowercase())
+                    .collect::<Vec<_>>(),
+                folded(from),
+                *to,
+            )
+        })
         .filter(|(w, _, _)| !w.is_empty())
         .collect();
     patterns.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then(b.1.len().cmp(&a.1.len())));
@@ -62,18 +72,23 @@ fn replace(text: &str, pairs: &[(&str, &str)], punctuation_insensitive: bool) ->
         let matched = patterns.iter().find(|(pattern, from, _)| {
             let end = i + pattern.len();
             end <= input.len()
-                && pattern
-                    .iter()
-                    .zip(&input[i..end])
-                    .all(|(a, b)| a.text.to_lowercase() == b.text.to_lowercase())
+                && pattern.iter().zip(&lower[i..end]).all(|(a, b)| a == b)
                 && (punctuation_insensitive
-                    || folded(&text[input[i].start..input[end - 1].end]) == folded(from))
+                    || folded(&text[input[i].start..input[end - 1].end]) == *from)
         });
         if let Some((pattern, _, to)) = matched {
             output.push_str(&text[cursor..input[i].start]);
             output.push_str(to);
             i += pattern.len();
             cursor = input[i - 1].end;
+            if to.is_empty() {
+                for (offset, c) in text[cursor..].char_indices() {
+                    if !matches!(c, ',' | ';' | ':') {
+                        break;
+                    }
+                    cursor = input[i - 1].end + offset + c.len_utf8();
+                }
+            }
         } else {
             i += 1;
         }
@@ -133,32 +148,7 @@ pub fn before_cleanup(text: &str, config: &Config) -> String {
             .iter()
             .map(|s| (s.as_str(), ""))
             .collect();
-        // Remove a filler's immediately adjacent separator, avoiding a leading comma.
-        let input = words(&text);
-        let mut ranges = Vec::new();
-        for w in input {
-            if pairs
-                .iter()
-                .any(|(s, _)| s.to_lowercase() == w.text.to_lowercase())
-            {
-                let mut end = w.end;
-                for (i, c) in text[end..].char_indices() {
-                    if !matches!(c, ',' | ';' | ':') {
-                        break;
-                    }
-                    end = w.end + i + c.len_utf8();
-                }
-                ranges.push((w.start, end));
-            }
-        }
-        let mut out = String::new();
-        let mut cursor = 0;
-        for (start, end) in ranges {
-            out.push_str(&text[cursor..start]);
-            cursor = end;
-        }
-        out.push_str(&text[cursor..]);
-        text = out;
+        text = replace(&text, &pairs, false);
     }
     text = tidy(&text);
     let pairs: Vec<_> = config
@@ -270,5 +260,47 @@ mod tests {
     fn empty_text_never_becomes_a_space() {
         assert_eq!(after_cleanup("   ", &Config::default()), "");
         assert_eq!(before_cleanup("um uh", &Config::default()), "");
+    }
+    #[test]
+    fn configurable_phrase_fillers_and_opt_out() {
+        let mut c = Config::default();
+        c.formatting.fillers = vec!["you know".into(), "um".into()];
+        assert_eq!(
+            before_cleanup("YOU KNOW, hello um, world", &c),
+            "hello world"
+        );
+        c.formatting.remove_fillers = false;
+        assert_eq!(before_cleanup("um, you know", &c), "um, you know");
+    }
+    #[test]
+    fn combining_marks_stay_inside_word_boundaries() {
+        let mut c = Config::default();
+        c.dictionary.replacements = vec![Replacement {
+            from: "cafe".into(),
+            to: "coffee".into(),
+        }];
+        assert_eq!(before_cleanup("cafe\u{301} cafe", &c), "cafe\u{301} coffee");
+    }
+    #[test]
+    fn first_app_style_wins() {
+        let c = Config {
+            styles: vec![
+                Style {
+                    name: "first".into(),
+                    apps: vec!["editor".into()],
+                    mode: None,
+                    prompt: None,
+                },
+                Style {
+                    name: "second".into(),
+                    apps: vec!["editor".into()],
+                    mode: None,
+                    prompt: None,
+                },
+            ],
+            ..Config::default()
+        };
+        assert_eq!(style(&c, Some("Org.EDITOR")).unwrap().name, "first");
+        assert!(style(&c, None).is_none());
     }
 }

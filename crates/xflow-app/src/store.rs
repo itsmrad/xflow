@@ -34,15 +34,19 @@ impl Store {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt;
-                std::fs::OpenOptions::new()
+                let file = std::fs::OpenOptions::new()
                     .write(true)
                     .create(true)
                     .truncate(false)
                     .mode(0o600)
-                    .custom_flags(libc::O_NOFOLLOW)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
                     .open(path)?;
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+                use std::os::unix::fs::{MetadataExt, PermissionsExt};
+                let metadata = file.metadata()?;
+                if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } {
+                    bail!("unsafe history database file");
+                }
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
             }
             Connection::open_with_flags(
                 path,
@@ -613,5 +617,45 @@ mod tests {
             "INSERT INTO history (created_at, text, provider) VALUES (unixepoch() - 3 * 86400, 'x', 'p')", [],
         ).unwrap();
         assert_eq!(old.stats().await.unwrap().streak_days, 0);
+    }
+    #[tokio::test]
+    async fn canceled_generation_cannot_save_and_latency_does_not_resurrect_deleted_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let epoch = Arc::new(AtomicU64::new(2));
+        assert!(store
+            .append_current(entry("stale"), epoch.clone(), 1)
+            .await
+            .unwrap()
+            .is_none());
+        let saved = store
+            .append_current(entry("current"), epoch, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        store.set_latency(saved.id, 99).await.unwrap();
+        assert_eq!(
+            store.get(saved.id).await.unwrap().unwrap().latency_ms,
+            Some(99)
+        );
+        store.delete(saved.id).await.unwrap();
+        store.set_latency(saved.id, 100).await.unwrap();
+        assert!(store.get(saved.id).await.unwrap().is_none());
+    }
+    #[test]
+    fn refuses_database_symlinks_without_changing_target_permissions() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.db");
+        std::fs::write(&target, "keep").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let path = dir.path().join("link.db");
+        symlink(&target, &path).unwrap();
+        assert!(Store::open(&path, true, 10).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
     }
 }

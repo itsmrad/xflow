@@ -80,6 +80,7 @@ pub struct Engine {
     context_job: Option<JoinHandle<AppContext>>,
     context_abort: Option<tokio::task::AbortHandle>,
     warm_job: Option<JoinHandle<()>>,
+    notifications: tokio::task::JoinSet<()>,
     started: Option<Instant>,
     silent_since: Option<Instant>,
     timings: Timings,
@@ -112,6 +113,7 @@ impl Engine {
             context_job: None,
             context_abort: None,
             warm_job: None,
+            notifications: tokio::task::JoinSet::new(),
             started: None,
             silent_since: None,
             timings: Timings::default(),
@@ -162,6 +164,24 @@ impl Engine {
         self.publish();
         if state == State::Error {
             log("error", "session failed; see IPC status");
+            self.cue(xflow_platform::Cue::Error);
+            self.notify(
+                "XFlow error",
+                "Dictation failed; check xflow status for details.",
+            );
+        }
+    }
+    fn cue(&self, cue: xflow_platform::Cue) {
+        // Actor fixtures must never play audio on the user's desktop.
+        if !cfg!(test) {
+            xflow_platform::play(cue, &self.config.sounds);
+        }
+    }
+    fn notify(&mut self, summary: &'static str, body: &'static str) {
+        if !cfg!(test) && self.config.notifications.enabled && self.notifications.len() < 4 {
+            self.notifications.spawn(async move {
+                let _ = xflow_platform::notify(summary, body).await;
+            });
         }
     }
     fn advance(&mut self) {
@@ -237,6 +257,7 @@ impl Engine {
         self.context_abort = Some(task.abort_handle());
         self.context_job = Some(task);
         self.set_state(State::Listening, None);
+        self.cue(xflow_platform::Cue::Start);
         Ok(())
     }
     async fn stop(&mut self, completion: mpsc::Sender<Completion>) -> Result<()> {
@@ -262,6 +283,7 @@ impl Engine {
             return Ok(());
         }
         self.timings.audio_ms = audio_ms;
+        self.cue(xflow_platform::Cue::Stop);
         self.set_state(State::Processing, None);
         self.transcribe(audio, stopped, completion);
         Ok(())
@@ -282,15 +304,14 @@ impl Engine {
         let mut timings = self.timings.clone();
         self.job = Some(tokio::spawn(async move {
             let result = async {
-                let stt_start = Instant::now();
                 let options = TranscriptionOptions {
-                    vocabulary: config.dictionary.words.clone(),
+                    vocabulary: vocabulary(&config),
                     ..TranscriptionOptions::default()
                 };
                 let transcript = services.stt.transcribe(audio, options).await?;
-                timings.stt_ms = ms(stt_start.elapsed());
-                let raw = transcript.text.trim().to_owned();
-                if raw.is_empty() {
+                timings.stt_ms = ms(stopped.elapsed());
+                let raw = transcript.text;
+                if raw.trim().is_empty() {
                     bail!("no speech recognized");
                 }
                 if raw.len() > 32 * 1024 {
@@ -512,6 +533,7 @@ impl Engine {
                         self.job = None; self.abort_context();
                         match result {
                             Ok(outcome) => {
+                                if outcome == Some(InjectionOutcome::ClipboardOnly) { self.notify("XFlow transcript copied", "Paste manually to insert your dictation."); }
                                 let message = if outcome == Some(InjectionOutcome::ClipboardOnly) { Some("Transcript copied; paste manually".into()) } else { processed.warning.take() };
                                 // One final success event: subscribers can trust its complete payload.
                                 self.state = State::Success; self.message = message; let mut r = self.status();
@@ -544,6 +566,7 @@ impl Engine {
                     }));
                 }
                 _ = queries.join_next(), if !queries.is_empty() => (),
+                _ = self.notifications.join_next(), if !self.notifications.is_empty() => (),
                 _ = levels.tick(), if self.state == State::Listening => {
                     self.publish(); let level = self.services.audio.level();
                     if level.is_finite() && level > self.config.recording.silence_threshold { self.silent_since = None; }
@@ -558,6 +581,7 @@ impl Engine {
             }
         }
         queries.abort_all();
+        self.notifications.abort_all();
         let _ = self.cancel().await;
     }
 }
@@ -675,6 +699,18 @@ fn audio_duration(audio: &AudioClip) -> Result<u32> {
             / audio.sample_rate as u64)
             .min(u32::MAX as u64) as u32,
     )
+}
+fn vocabulary(config: &Config) -> Vec<String> {
+    if config.dictionary.words.is_empty() {
+        return vec![];
+    }
+    let mut words = config.stt.vocabulary.clone();
+    for word in &config.dictionary.words {
+        if !words.iter().any(|old| old.eq_ignore_ascii_case(word)) {
+            words.push(word.clone());
+        }
+    }
+    words
 }
 fn ms(d: Duration) -> u32 {
     d.as_millis().min(u32::MAX as u128) as u32
@@ -1027,6 +1063,7 @@ mod tests {
         assert_eq!(ask(&tx, Request::Stop).await.state, State::Processing);
         called.notified().await;
         assert_eq!(ask(&tx, Request::Status).await.state, State::Processing);
+        assert!(!ask(&tx, Request::Reload).await.ok);
         assert_eq!(ask(&tx, Request::Cancel).await.state, State::Idle);
         release.notify_one();
         assert!(ask(&tx, Request::Last).await.text.is_none());
@@ -1217,6 +1254,7 @@ mod tests {
         copies: Mutex<Vec<String>>,
         injections: Mutex<Vec<String>>,
         block_context: Option<Arc<Notify>>,
+        empty_selection: bool,
     }
     #[async_trait]
     impl Desktop for RecordingDesktop {
@@ -1231,7 +1269,7 @@ mod tests {
             })
         }
         async fn selection(&self) -> Result<Option<String>> {
-            Ok(Some("selected draft".into()))
+            Ok((!self.empty_selection).then(|| "selected draft".into()))
         }
         async fn copy(&self, text: &str) -> Result<()> {
             self.copies.lock().unwrap().push(text.into());
@@ -1297,7 +1335,7 @@ mod tests {
         Arc<AtomicUsize>,
     ) {
         let (tx, rx) = mpsc::channel(8);
-        let (events, receiver) = broadcast::channel(32);
+        let (events, receiver) = broadcast::channel(128);
         let (desktop_events, _) = broadcast::channel(32);
         let calls = Arc::new(AtomicUsize::new(0));
         let engine = Engine::new(
@@ -1402,6 +1440,11 @@ mod tests {
         );
         assert_eq!(desktop.copies.lock().unwrap().len(), 1);
         assert_eq!(desktop.injections.lock().unwrap().len(), 2);
+        assert!(ask(&tx, Request::CopyLast).await.ok);
+        assert_eq!(
+            ask(&tx, Request::PasteLast).await.injection,
+            Some(InjectionOutcome::Pasted)
+        );
         assert_eq!(ask(&tx, Request::Stats).await.stats.unwrap().sessions, 1);
         assert!(ask(&tx, Request::HistoryDelete { id: entry.id }).await.ok);
         for r in [
@@ -1456,10 +1499,19 @@ mod tests {
     async fn reload_success_invalid_config_and_build_failure_keep_running_services() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        store
+            .append(HistoryEntry {
+                text: "previous session".into(),
+                provider: "fixture".into(),
+                ..HistoryEntry::default()
+            })
+            .await
+            .unwrap();
         let (mut engine, tx, rx, _, _) = fixture(
             Config::default(),
             Arc::new(RecordingDesktop::default()),
-            Store::open(&dir.path().join("h.db"), true, 10).unwrap(),
+            store,
         );
         engine.config_path = Some(path.clone());
         engine.reload_factory = Arc::new(|_, new, services| {
@@ -1598,6 +1650,186 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn silence_auto_stop_and_level_events_are_listening_only() {
+        let mut config = Config::default();
+        config.recording.auto_stop_secs = 1;
+        config.recording.silence_threshold = 0.5;
+        let (engine, tx, rx, mut events, calls) = fixture(
+            config,
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        let r = success(&mut events).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(r.level, 0.0);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), events.recv())
+                .await
+                .is_err()
+        );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn canceled_focus_cannot_override_a_new_session() {
+        let block = Arc::new(Notify::new());
+        let desktop = Arc::new(RecordingDesktop {
+            block_context: Some(block.clone()),
+            ..RecordingDesktop::default()
+        });
+        let (engine, tx, rx, mut events, _) = fixture(
+            Config::default(),
+            desktop.clone(),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        ask(&tx, Request::Cancel).await;
+        ask(
+            &tx,
+            Request::Start {
+                mode: Mode::Dictation,
+                context: Some(AppContext::default()),
+                t0_us: Some(u64::MAX),
+                delivery: Delivery::Inject,
+            },
+        )
+        .await;
+        ask(&tx, Request::Stop).await;
+        let r = success(&mut events).await;
+        assert_eq!(r.timings.unwrap().hotkey_ms, None);
+        block.notify_waiters();
+        assert_eq!(ask(&tx, Request::Last).await.text, r.text);
+        assert_eq!(desktop.injections.lock().unwrap().len(), 1);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn command_empty_selection_generates_and_failed_transform_never_injects() {
+        for fail in [false, true] {
+            let desktop = Arc::new(RecordingDesktop {
+                empty_selection: true,
+                ..RecordingDesktop::default()
+            });
+            let (mut engine, tx, rx, mut events, _) = fixture(
+                Config::default(),
+                desktop.clone(),
+                Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+            );
+            let transformer = Arc::new(RecordingTransformer::default());
+            engine.services.transformer = Some(if fail {
+                Arc::new(FailingCleanup)
+            } else {
+                transformer.clone()
+            });
+            let task = tokio::spawn(engine.run(rx));
+            ask(
+                &tx,
+                Request::Start {
+                    mode: Mode::Command,
+                    context: None,
+                    t0_us: None,
+                    delivery: Delivery::Inject,
+                },
+            )
+            .await;
+            ask(&tx, Request::Stop).await;
+            if fail {
+                let error = tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        let r = events.recv().await.unwrap();
+                        if r.state == State::Error {
+                            return r;
+                        }
+                    }
+                })
+                .await
+                .unwrap();
+                assert!(error.message.unwrap().contains("selection left untouched"));
+                assert!(desktop.injections.lock().unwrap().is_empty());
+                assert!(ask(&tx, Request::Last).await.text.is_none());
+            } else {
+                success(&mut events).await;
+                assert_eq!(transformer.0.lock().unwrap()[0].0, "");
+            }
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    struct LevelAudio(std::sync::atomic::AtomicU32);
+    #[async_trait]
+    impl AudioCapture for LevelAudio {
+        async fn start(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<AudioClip> {
+            Ok(AudioClip {
+                samples: vec![0.2; 8000],
+                sample_rate: 16000,
+                channels: 1,
+            })
+        }
+        async fn cancel(&self) -> Result<()> {
+            Ok(())
+        }
+        fn level(&self) -> f32 {
+            f32::from_bits(self.0.load(Ordering::SeqCst))
+        }
+    }
+    #[tokio::test]
+    async fn speech_resets_continuous_silence_deadline() {
+        let mut config = Config::default();
+        config.recording.auto_stop_secs = 1;
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            config,
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let audio = Arc::new(LevelAudio(std::sync::atomic::AtomicU32::new(
+            0.0_f32.to_bits(),
+        )));
+        engine.services.audio = audio.clone();
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        audio.0.store(0.2_f32.to_bits(), Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        audio.0.store(0.0_f32.to_bits(), Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(ask(&tx, Request::Status).await.state, State::Listening);
+        success(&mut events).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[test]
+    fn recognition_hints_include_stt_and_dictionary_words() {
+        let mut config = Config::default();
+        config.stt.vocabulary = vec!["Postgres".into(), "XFlow".into()];
+        config.dictionary.words = vec!["postgres".into(), "Éva".into()];
+        assert_eq!(vocabulary(&config), ["Postgres", "XFlow", "Éva"]);
+    }
+
+    #[test]
+    fn final_event_sheds_optional_metadata_to_fit_frame() {
+        let mut r = Response {
+            text: Some("x".repeat(32 * 1024)),
+            entry: Some(HistoryEntry {
+                text: "x".repeat(32 * 1024),
+                raw_text: Some("y".repeat(32 * 1024)),
+                ..HistoryEntry::default()
+            }),
+            timings: Some(Timings::default()),
+            ..Response::status(State::Success, 0.0)
+        };
+        fit_final(&mut r);
+        assert!(serde_json::to_vec(&r).unwrap().len() < MAX_MESSAGE_BYTES);
+        assert!(r.text.is_some() && r.timings.is_some());
     }
 
     #[test]
