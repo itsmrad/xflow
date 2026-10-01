@@ -51,9 +51,13 @@ Shortcut registration requests Mutter to ignore key autorepeat; changing pill ap
 re-register shortcuts.
 
 The extension uses the GNOME 45+ ES module API. Its metadata lists 45–51 as
-candidate versions using that API; this development environment validates JS
-syntax and GSettings schemas, not behavior in all those GNOME sessions. Validate
-on the target desktop before release.
+candidate versions using that API. JavaScript syntax, GSettings schemas, and
+startup/context-bridge enable-disable behavior were checked in an isolated
+headless GNOME 50.1 session; other versions and physical desktop behavior still
+need validation. GNOME 50 removed the X11 input-region option; the extension
+supplies it only on older Shell versions. After updating
+installed extension JavaScript, log out and back in to load the new module;
+disabling and enabling alone does not reload cached code.
 
 The current GNOME adapter provides toggle and explicit start/stop shortcuts.
 It does **not** provide verified press-and-release push-to-talk. Mutter's

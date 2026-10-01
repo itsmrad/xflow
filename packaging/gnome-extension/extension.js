@@ -6,6 +6,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 
 const ACTIONS = {
     'toggle-shortcut': 'toggle',
@@ -37,7 +38,12 @@ export default class XFlowExtension extends Extension {
         });
         this._pill.add_child(this._wave);
         this._pill.add_child(this._label);
-        Main.layoutManager.addChrome(this._pill, {affectsInputRegion: false, trackFullscreen: false});
+        const chromeParams = {trackFullscreen: false};
+        // GNOME 50 removed the X11 input-region option. Older Shells still
+        // need it so the noninteractive pill does not intercept pointer input.
+        if (Number.parseInt(Config.PACKAGE_VERSION, 10) < 50)
+            chromeParams.affectsInputRegion = false;
+        Main.layoutManager.addChrome(this._pill, chromeParams);
         this._settingsSignal = this._settings.connect('changed', (_settings, key) => {
             if (Object.hasOwn(ACTIONS, key)) this._bind(key, ACTIONS[key]);
             else this._configure();
