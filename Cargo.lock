@@ -3383,6 +3383,7 @@ dependencies = [
  "cpal",
  "serde_json",
  "tokio",
+ "tracing",
  "xflow-core",
  "zbus",
 ]

@@ -3,9 +3,10 @@ use async_trait::async_trait;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SizedSample};
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     mpsc, Arc, Mutex,
 };
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use xflow_core::{config::RecordingConfig, AudioCapture, AudioClip, MAX_UPLOAD_FRAMES};
 
@@ -13,15 +14,15 @@ enum Command {
     Start(oneshot::Sender<Result<()>>),
     Stop(oneshot::Sender<Result<AudioClip>>),
     Cancel(oneshot::Sender<Result<()>>),
-    Limit(u64),
     Failed(u64, String),
+    Limit(u64),
     Shutdown,
 }
 
 /// The native stream lives exclusively on a dedicated thread, including on
 /// platforms where CPAL streams cannot be sent between threads.
 pub struct CpalCapture {
-    sender: mpsc::Sender<Command>,
+    sender: mpsc::SyncSender<Command>,
     level: Arc<AtomicU32>,
 }
 
@@ -121,15 +122,92 @@ impl Recording {
     }
 }
 
+/// Names reported by the audio host; enumeration never opens a microphone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputDevice {
+    pub name: String,
+    pub default: bool,
+}
+
+pub fn input_devices() -> Result<Vec<InputDevice>> {
+    let host = cpal::default_host();
+    let default = host.default_input_device().and_then(|d| d.name().ok());
+    host.input_devices()
+        .context("cannot enumerate microphones")?
+        .map(|device| {
+            let name = device.name().context("cannot inspect microphone name")?;
+            Ok(InputDevice {
+                default: default.as_deref() == Some(&name),
+                name,
+            })
+        })
+        .collect()
+}
+
+fn device_index(requested: &str, names: &[String]) -> Result<usize> {
+    names
+        .iter()
+        .position(|name| name == requested)
+        .with_context(|| {
+            format!(
+                "microphone {requested:?} not found; available devices: {}",
+                names.join(", ")
+            )
+        })
+}
+
+struct CaptureBuffer {
+    recording: Mutex<Option<Recording>>,
+    active: AtomicBool,
+    limited: AtomicBool,
+    first_callback_us: AtomicU64,
+}
+
+impl CaptureBuffer {
+    fn take(&self) -> Result<Option<Recording>> {
+        self.active.store(false, Ordering::Release);
+        Ok(self
+            .recording
+            .lock()
+            .map_err(|_| anyhow!("audio buffer lock poisoned"))?
+            .take())
+    }
+
+    fn begin(&self, recording: Recording) -> Result<()> {
+        *self
+            .recording
+            .lock()
+            .map_err(|_| anyhow!("audio buffer lock poisoned"))? = Some(recording);
+        self.limited.store(false, Ordering::Relaxed);
+        self.active.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
+struct OpenStream {
+    // Keep the stream on its owner thread. Dropping closes capture immediately.
+    _stream: cpal::Stream,
+    buffer: Arc<CaptureBuffer>,
+    sample_rate: u32,
+    channels: u16,
+    generation: u64,
+}
+
+fn warm_deadline(config: &RecordingConfig, has_stream: bool, now: Instant) -> Option<Instant> {
+    (has_stream && config.keep_warm_secs > 0)
+        .then(|| now + Duration::from_secs(u64::from(config.keep_warm_secs)))
+}
+
 impl CpalCapture {
     pub fn new(config: &RecordingConfig) -> Result<Self> {
         if !(1..=600).contains(&config.max_seconds)
             || !config.silence_threshold.is_finite()
             || !(0.0..=1.0).contains(&config.silence_threshold)
+            || config.keep_warm_secs > 600
         {
             bail!("invalid recording configuration");
         }
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(16);
         let callback_sender = sender.clone();
         let level = Arc::new(AtomicU32::new(0_f32.to_bits()));
         let thread_level = level.clone();
@@ -137,82 +215,136 @@ impl CpalCapture {
         std::thread::Builder::new()
             .name("xflow-audio".into())
             .spawn(move || {
-                let mut stream = None;
-                let mut recording: Option<Arc<Mutex<Recording>>> = None;
+                let mut stream: Option<OpenStream> = None;
+                let mut completed: Option<Recording> = None;
                 let mut generation = 0_u64;
-                let mut active_generation = None;
-                while let Ok(command) = receiver.recv() {
+                let mut deadline: Option<Instant> = None;
+                loop {
+                    let command = match deadline {
+                        Some(until) => match receiver
+                            .recv_timeout(until.saturating_duration_since(Instant::now()))
+                        {
+                            Ok(command) => command,
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                stream = None;
+                                deadline = None;
+                                continue;
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        },
+                        None => match receiver.recv() {
+                            Ok(command) => command,
+                            Err(_) => break,
+                        },
+                    };
                     match command {
                         Command::Start(reply) => {
-                            let result = if recording.is_some() {
-                                Err(anyhow!("already recording"))
-                            } else {
-                                generation = generation.wrapping_add(1);
-                                open_stream(
-                                    &config,
-                                    callback_sender.clone(),
-                                    thread_level.clone(),
-                                    generation,
-                                )
-                                .map(|(new_stream, buffer)| {
-                                    stream = Some(new_stream);
-                                    recording = Some(buffer);
-                                    active_generation = Some(generation);
-                                })
-                            };
-                            // A cancelled start request must not leave the microphone open.
+                            let result = (|| {
+                                if completed.is_some()
+                                    || stream.as_ref().is_some_and(|s| {
+                                        s.buffer.active.load(Ordering::Acquire)
+                                            || s.buffer.limited.load(Ordering::Relaxed)
+                                    })
+                                {
+                                    bail!("already recording");
+                                }
+                                if let Some(open) = &stream {
+                                    open.buffer.begin(Recording::new(
+                                        open.sample_rate,
+                                        open.channels,
+                                        &config,
+                                    )?)?;
+                                } else {
+                                    generation = generation.wrapping_add(1);
+                                    stream = Some(open_stream(
+                                        &config,
+                                        callback_sender.clone(),
+                                        thread_level.clone(),
+                                        generation,
+                                    )?);
+                                }
+                                deadline = None;
+                                Ok(())
+                            })();
                             let started = result.is_ok();
                             if reply.send(result).is_err() && started {
                                 stream = None;
-                                recording = None;
-                                active_generation = None;
-                                thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
+                                completed = None;
+                                thread_level.store(0, Ordering::Relaxed);
                             }
                         }
                         Command::Stop(reply) => {
-                            stream = None;
-                            active_generation = None;
-                            thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
-                            let result =
-                                recording
-                                    .take()
-                                    .context("not recording")
-                                    .and_then(|buffer| {
-                                        Arc::try_unwrap(buffer)
-                                            .map_err(|_| anyhow!("audio callback did not stop"))?
-                                            .into_inner()
-                                            .map_err(|_| anyhow!("audio buffer lock poisoned"))?
-                                            .finish()
-                                    });
+                            let buffer = if let Some(open) = &stream {
+                                let us = open.buffer.first_callback_us.load(Ordering::Relaxed);
+                                tracing::debug!(
+                                    open_to_first_callback_us = us,
+                                    "microphone startup latency"
+                                );
+                                let result = open.buffer.take();
+                                open.buffer.limited.store(false, Ordering::Release);
+                                result
+                            } else {
+                                Ok(None)
+                            };
+                            let result = buffer
+                                .and_then(|buffer| {
+                                    buffer.or_else(|| completed.take()).context("not recording")
+                                })
+                                .and_then(Recording::finish);
+                            deadline = if result.is_ok() {
+                                warm_deadline(&config, stream.is_some(), Instant::now())
+                            } else {
+                                None
+                            };
+                            if deadline.is_none() {
+                                stream = None;
+                            }
+                            thread_level.store(0, Ordering::Relaxed);
                             let _ = reply.send(result);
                         }
                         Command::Cancel(reply) => {
                             stream = None;
-                            recording = None;
-                            active_generation = None;
-                            thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
+                            completed = None;
+                            deadline = None;
+                            thread_level.store(0, Ordering::Relaxed);
                             let _ = reply.send(Ok(()));
                         }
                         Command::Limit(source) => {
-                            if active_generation == Some(source) {
-                                stream = None;
-                                active_generation = None;
-                                thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
+                            if stream.as_ref().is_some_and(|s| {
+                                s.generation == source && s.buffer.limited.load(Ordering::Acquire)
+                            }) {
+                                if let Some(open) = stream.take() {
+                                    completed = open.buffer.take().ok().flatten();
+                                }
+                                deadline = None;
+                                thread_level.store(0, Ordering::Relaxed);
                             }
                         }
                         Command::Failed(source, error) => {
-                            if active_generation == Some(source) {
-                                stream = None;
-                                active_generation = None;
-                                if let Some(buffer) = &recording {
-                                    if let Ok(mut buffer) = buffer.lock() {
+                            if stream.as_ref().is_some_and(|s| s.generation == source) {
+                                if let Some(open) = stream.take() {
+                                    completed = open.buffer.take().ok().flatten();
+                                    if let Some(buffer) = &mut completed {
                                         buffer.error = Some(error);
                                     }
                                 }
-                                thread_level.store(0_f32.to_bits(), Ordering::Relaxed);
+                                deadline = None;
+                                thread_level.store(0, Ordering::Relaxed);
                             }
                         }
                         Command::Shutdown => break,
+                    }
+                    // Limit closure is signaled without allocating or queuing in the audio callback.
+                    if stream
+                        .as_ref()
+                        .is_some_and(|s| s.buffer.limited.load(Ordering::Acquire))
+                    {
+                        // Stop already owns the buffer if it was just requested.
+                        if let Some(open) = stream.take() {
+                            completed = open.buffer.take().ok().flatten();
+                        }
+                        deadline = None;
+                        thread_level.store(0, Ordering::Relaxed);
                     }
                 }
             })
@@ -223,21 +355,40 @@ impl CpalCapture {
 
 fn open_stream(
     config: &RecordingConfig,
-    sender: mpsc::Sender<Command>,
+    sender: mpsc::SyncSender<Command>,
     level: Arc<AtomicU32>,
     generation: u64,
-) -> Result<(cpal::Stream, Arc<Mutex<Recording>>)> {
-    let device = cpal::default_host()
-        .default_input_device()
-        .context("no default microphone")?;
+) -> Result<OpenStream> {
+    let opened = Instant::now();
+    let host = cpal::default_host();
+    let device = if let Some(requested) = &config.device {
+        let devices: Vec<_> = host
+            .input_devices()
+            .context("cannot enumerate microphones")?
+            .collect();
+        let names = devices
+            .iter()
+            .map(|d| d.name())
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        devices
+            .into_iter()
+            .nth(device_index(requested, &names)?)
+            .context("microphone disappeared")?
+    } else {
+        host.default_input_device()
+            .context("no default microphone; select recording.device from xflow devices")?
+    };
     let supported = device
         .default_input_config()
         .context("cannot inspect microphone")?;
-    let buffer = Arc::new(Mutex::new(Recording::new(
-        supported.sample_rate().0,
-        supported.channels(),
-        config,
-    )?));
+    let sample_rate = supported.sample_rate().0;
+    let channels = supported.channels();
+    let buffer = Arc::new(CaptureBuffer {
+        recording: Mutex::new(Some(Recording::new(sample_rate, channels, config)?)),
+        active: AtomicBool::new(true),
+        limited: AtomicBool::new(false),
+        first_callback_us: AtomicU64::new(0),
+    });
     let stream_config = supported.config();
     macro_rules! build {
         ($sample:ty) => {
@@ -248,6 +399,7 @@ fn open_stream(
                 sender,
                 level,
                 generation,
+                opened,
             )
         };
     }
@@ -265,37 +417,70 @@ fn open_stream(
         other => bail!("unsupported microphone sample format {other}"),
     }?;
     stream.play().context("cannot start microphone")?;
-    Ok((stream, buffer))
+    Ok(OpenStream {
+        _stream: stream,
+        buffer,
+        sample_rate,
+        channels,
+        generation,
+    })
+}
+
+fn smooth_level(previous: f32, rms: f32, seconds: f32) -> f32 {
+    let tau = if rms > previous { 0.025 } else { 0.12 };
+    previous + (rms - previous) * (1.0 - (-seconds / tau).exp())
 }
 
 fn build_stream<T: SizedSample>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    buffer: Arc<Mutex<Recording>>,
-    sender: mpsc::Sender<Command>,
+    buffer: Arc<CaptureBuffer>,
+    sender: mpsc::SyncSender<Command>,
     level: Arc<AtomicU32>,
     generation: u64,
+    opened: Instant,
 ) -> Result<cpal::Stream>
 where
     f32: FromSample<T>,
 {
-    let error_sender = sender.clone();
+    let samples_per_second = config.sample_rate.0 as f32 * f32::from(config.channels);
+    let limit_sender = sender.clone();
+    let mut first = true;
+    let mut smoothed = 0.0;
     device
         .build_input_stream(
             config,
             move |input: &[T], _| {
-                if let Ok(mut buffer) = buffer.lock() {
-                    let (rms, reached_limit) = buffer.push(input);
-                    level.store(rms.to_bits(), Ordering::Relaxed);
-                    if reached_limit {
-                        let _ = sender.send(Command::Limit(generation));
+                if first {
+                    buffer.first_callback_us.store(
+                        opened.elapsed().as_micros().max(1) as u64,
+                        Ordering::Relaxed,
+                    );
+                    first = false;
+                }
+                if !buffer.active.load(Ordering::Acquire) {
+                    smoothed = 0.0;
+                    return;
+                }
+                // Worker only takes this lock to swap buffers. The bounded limit queue never allocates.
+                if let Ok(mut guard) = buffer.recording.lock() {
+                    if let Some(recording) = guard.as_mut() {
+                        let (rms, limit) = recording.push(input);
+                        smoothed =
+                            smooth_level(smoothed, rms, input.len() as f32 / samples_per_second);
+                        level.store(smoothed.to_bits(), Ordering::Relaxed);
+                        if limit {
+                            buffer.active.store(false, Ordering::Release);
+                            buffer.limited.store(true, Ordering::Release);
+                            let _ = limit_sender.try_send(Command::Limit(generation));
+                        }
                     }
                 }
             },
             move |error| {
-                let _ = error_sender.send(Command::Failed(generation, error.to_string()));
+                let _ = sender.send(Command::Failed(generation, error.to_string()));
             },
-            Some(std::time::Duration::from_secs(3)),
+            Some(Duration::from_secs(3)),
         )
         .context("cannot open microphone stream")
 }
@@ -337,6 +522,69 @@ impl Drop for CpalCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn device_matching_is_exact_and_lists_available_names() {
+        let names = vec!["Default".into(), "USB Microphone".into()];
+        assert_eq!(device_index("USB Microphone", &names).unwrap(), 1);
+        let error = device_index("usb", &names).unwrap_err().to_string();
+        assert!(error.contains("USB Microphone") && error.contains("Default"));
+        assert!(device_index("missing", &[]).is_err());
+    }
+    #[test]
+    fn warm_buffers_discard_idle_samples_and_restart_cleanly() {
+        let buffer = CaptureBuffer {
+            recording: Mutex::new(None),
+            active: AtomicBool::new(false),
+            limited: AtomicBool::new(false),
+            first_callback_us: AtomicU64::new(0),
+        };
+        assert!(buffer.take().unwrap().is_none());
+        buffer
+            .begin(Recording::new(4, 1, &RecordingConfig::default()).unwrap())
+            .unwrap();
+        buffer
+            .recording
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .push(&[0.5_f32]);
+        assert_eq!(
+            buffer.take().unwrap().unwrap().finish().unwrap().samples,
+            vec![0.5]
+        );
+        assert!(!buffer.active.load(Ordering::Acquire));
+        assert!(buffer.recording.lock().unwrap().is_none());
+        buffer
+            .begin(Recording::new(4, 1, &RecordingConfig::default()).unwrap())
+            .unwrap();
+        assert!(buffer
+            .recording
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .samples
+            .is_empty());
+        let now = Instant::now();
+        assert_eq!(warm_deadline(&RecordingConfig::default(), true, now), None);
+        let config = RecordingConfig {
+            keep_warm_secs: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            warm_deadline(&config, true, now),
+            Some(now + Duration::from_secs(2))
+        );
+        assert_eq!(warm_deadline(&config, false, now), None);
+    }
+    #[test]
+    fn levels_attack_quickly_and_decay_smoothly() {
+        let attack = smooth_level(0.0, 0.5, 1.0 / 30.0);
+        assert!(attack > 0.3 && attack < 0.5);
+        let release = smooth_level(attack, 0.0, 1.0 / 30.0);
+        assert!(release > 0.0 && release < attack);
+    }
     #[test]
     fn recording_is_bounded_and_normalizes_nonfinite_samples() {
         let mut recording = Recording::new(
