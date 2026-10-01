@@ -114,3 +114,13 @@ test('a daemon event takes precedence over an older command reply', async () => 
     f.reply(0, {ok: true, state: 'listening'}); await f.x._queue;
     assert.equal(f.x._state, 'success');
 });
+
+test('failure releasing one modifier still attempts the others', async () => {
+    const f = fixture();
+    f.x._key = (code, down) => {
+        f.keys.push([code, down]);
+        if (code === 0x76 || code === 0xffe1 && !down) throw new Error('device failure');
+    };
+    assert.equal((await f.x._inject('text', {...options(f.target), terminal: true})).outcome, 'clipboard_only');
+    assert.deepEqual(f.keys.at(-1), [0xffe3, false], 'Control release must still be attempted');
+});

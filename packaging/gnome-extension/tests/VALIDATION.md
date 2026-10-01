@@ -6,20 +6,25 @@ Do not install the tests or their temporary artifacts.
 
 ## Automated checks
 
-- 35 focused JavaScript tests: waveform/theme/geometry, smart/hold/toggle,
+- 36 focused JavaScript tests: waveform/theme/geometry, smart/hold/toggle,
   physical modifier masks, boundary parsing, command ordering/stale replies,
   locked/disabled services, focus changes, modifier cleanup, Unicode IM typing,
   and generation-safe clipboard restoration.
 - Module syntax checks for every runtime JavaScript file.
 - Strict GSettings schema compilation.
-- `scripts/check.sh` through the shared Cargo gate passed on the original worker
-  base with a workspace-backed `TMPDIR`: format, Clippy, 31 enabled Rust tests.
+- `scripts/check.sh` through the shared Cargo gate passed after merging the
+  approved contract revision `f810583`, with workspace-backed `TMPDIR`: format,
+  Clippy, 46 enabled Rust tests (one desktop bridge test remains ignored). The
+  schema persistence/reset/range regression matches the v1 settings.
 - Isolated headless GNOME Shell 50.1: all states, screenshots, D-Bus
   Context/Version/Selection and unknown-target injection, queued start/stop,
-  actual virtual press/release push-to-talk, reduced motion, zero idle sources,
+  actual virtual trigger-release and modifier-first-release push-to-talk,
+  quick-tap latch/next-press stop, reduced motion, zero idle sources,
   and removal of all sources and accelerators on disable.
-- Preferences construction created an XFlow window without JavaScript errors;
-  visual mapping/rendering is still under investigation at this checkpoint.
+- Preferences construction and visual rendering passed in the isolated Shell
+  with `GSK_RENDERER=cairo`; the screenshot shows the native pages and preview.
+  The default GPU renderer did not map this window in the headless environment
+  within the test deadline, so physical GPU behavior remains manual acceptance.
 
 The isolated bus forbids unrelated service autostarts. It uses temporary XDG
 settings/data/runtime directories and a mock daemon, with no microphone,
@@ -44,12 +49,28 @@ Both motion controls must be enabled for animation. Transcripts are never logged
 
 A successful state/service/PTT run is under:
 
-`packaging/gnome-extension/tests/.runtime/smoke-9q9_05kf/`
+`target/overlay-smoke/smoke-hh_15ro1/`
 
 It includes `idle.png`, `listening.png`, `processing.png`, `success.png`,
 `error.png`, `command-dark.png`, `shell.log`, `prefs.log` and `results.json`.
-These are local validation artifacts, excluded from Git. The `prefs.png` from
-this run precedes window mapping and does not establish preferences appearance.
+These are local validation artifacts, excluded from Git. `prefs.png` shows the
+rendered window. The optional reproducible harness is `tests/gnome-smoke.py`: run
+`/usr/bin/python3 packaging/gnome-extension/tests/gnome-smoke.py`. It requires
+GNOME 50, GJS and system Python GI; artifacts are written under `target/overlay-smoke`.
+
+## Reproduce focused checks
+
+```sh
+node --test --test-isolation=none packaging/gnome-extension/tests/logic.test.mjs packaging/gnome-extension/tests/extension.test.mjs
+for file in packaging/gnome-extension/*.js; do node --input-type=module --check < "$file"; done
+glib-compile-schemas --strict --dry-run packaging/gnome-extension/schemas
+PATH=/home/mrad/.cache/xflow-dev/bin:$PATH sh scripts/check.sh
+```
+
+If shared temporary storage is constrained, set `TMPDIR` to a directory under
+this worktree’s `target/` before repository checks. Never bypass the Cargo gate.
+The research specs `wispr.md` and `platform.md` remained absent through final
+verification; implementation followed the assignment and the shared contract.
 
 ## Manual acceptance checklist
 

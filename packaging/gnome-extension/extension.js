@@ -468,7 +468,11 @@ export default class XFlowExtension extends Extension {
                         if (pressed) held.push(code);
                         else held.splice(held.indexOf(code), 1);
                     }
-                } finally { for (const code of held.reverse()) this._key(code, false, true); }
+                } finally {
+                    for (const code of held.reverse()) {
+                        try { this._key(code, false, true); } catch { /* Attempt every remaining release. */ }
+                    }
+                }
                 outcome = 'pasted';
             }
         } catch { return {outcome: 'clipboard_only', message: 'Desktop delivery failed; text copied'}; }
