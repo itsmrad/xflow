@@ -40,7 +40,7 @@ enum Update {
     Event(Response),
     Connection(bool, String),
     Overlay(Result<Vec<Setting>>),
-    Providers(Vec<integrations::Provider>),
+    Providers(bool, Vec<integrations::Provider>),
     Devices(Result<Vec<String>>),
     Doctor(Vec<String>),
     Notice(Result<String>),
@@ -209,7 +209,7 @@ pub async fn run() -> Result<()> {
                     },
                     Update::Connection(connected,message)=>{app.connected=connected;app.connection=message;if connected{effects=app.refresh();}},
                     Update::Overlay(result)=>match result{Ok(rows)=>app.overlay=rows,Err(e)=>app.toast=Some(format!("{e:#}"))},
-                    Update::Providers(rows)=>app.providers=rows,
+                    Update::Providers(cleanup, rows)=>if cleanup==app.cleanup{app.providers=rows;},
                     Update::Devices(result)=>match result{Ok(devices)=>app.devices(devices),Err(e)=>app.toast=Some(format!("{e:#}"))},
                     Update::Doctor(rows)=>app.diagnostics=rows,
                     Update::Notice(result)=>{app.toast=Some(match result{Ok(text)=>text,Err(e)=>format!("{e:#}")});if app.page==Page::Providers{effects=app.refresh();}},
@@ -295,7 +295,7 @@ fn dispatch(
                     .await,
                 ),
                 Effect::Providers(config, cleanup) => {
-                    Update::Providers(integrations::providers(&config, cleanup).await)
+                    Update::Providers(cleanup, integrations::providers(&config, cleanup).await)
                 }
                 Effect::SaveKey(id, secret) => Update::Notice(
                     xflow_providers::save_key(&id, &secret)

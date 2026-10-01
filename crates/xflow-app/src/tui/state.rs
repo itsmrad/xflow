@@ -198,7 +198,7 @@ pub enum EditTarget {
     Snippet(Option<usize>),
     Style(Option<usize>),
     Overlay(String),
-    Model,
+    Model(String, bool),
     Key(String),
     Export(HistoryEntry),
     Draft,
@@ -513,7 +513,10 @@ impl App {
                     Tag::Activity,
                 ),
             ],
-            Page::Providers => vec![Effect::Providers(self.config.clone(), self.cleanup)],
+            Page::Providers => {
+                self.providers = super::integrations::catalog(self.cleanup);
+                vec![Effect::Providers(self.config.clone(), self.cleanup)]
+            }
             Page::Overlay => vec![Effect::Overlay],
             Page::Doctor => vec![Effect::Doctor],
             _ => vec![Effect::Request(Request::Status, Tag::Ordinary)],
@@ -988,12 +991,18 @@ impl App {
             Action::Refresh => return self.refresh(),
             Action::ProviderKind => {
                 self.cleanup = !self.cleanup;
+                self.providers = super::integrations::catalog(self.cleanup);
                 self.selected[5] = 0;
                 self.page = Page::Providers;
                 return self.refresh();
             }
             Action::CheckProvider => {
-                return vec![Effect::CheckProvider(self.config.clone(), self.cleanup)]
+                if let Some(p) = self.providers.get(self.selected()) {
+                    match super::integrations::selection(&self.config, &p.id, self.cleanup, None) {
+                        Ok(config) => return vec![Effect::CheckProvider(config, self.cleanup)],
+                        Err(error) => self.toast = Some(error.to_string()),
+                    }
+                }
             }
             Action::Devices => return vec![Effect::Devices],
             Action::Theme => {
@@ -1017,14 +1026,17 @@ impl App {
             }
             Action::Model => {
                 if let Some(p) = self.providers.get(self.selected()) {
+                    let selected =
+                        super::integrations::selection(&self.config, &p.id, self.cleanup, None)
+                            .expect("catalog provider");
                     let current = if self.cleanup {
-                        self.config.cleanup.model.clone()
+                        selected.cleanup.model
                     } else {
-                        self.config.stt.model.clone()
+                        selected.stt.model
                     }
                     .unwrap_or_else(|| p.models.first().cloned().unwrap_or_default());
                     self.edit(
-                        EditTarget::Model,
+                        EditTarget::Model(p.id.clone(), self.cleanup),
                         vec![Field::choices(
                             "Model ←/→ or type custom id",
                             current,
@@ -1084,6 +1096,53 @@ impl App {
                 self.config = config;
             }
         }
+    }
+    fn choose_provider(&mut self, id: &str, cleanup: bool, model: Option<&str>) -> Result<()> {
+        if self.saving {
+            bail!("Wait for the current save to finish");
+        }
+        let config = super::integrations::selection(&self.config, id, cleanup, model)?;
+        let before = toml::Value::try_from(&self.config)?;
+        let after = toml::Value::try_from(&config)?;
+        let section = if cleanup { "cleanup" } else { "stt" };
+        let fields = if cleanup {
+            vec!["provider", "endpoint", "model", "api_key_env"]
+        } else {
+            vec!["provider", "endpoint", "model", "api_key_env", "protocol"]
+        };
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| anyhow!("Configuration unavailable"))?;
+        // Edit only changed leaves so existing comments and other settings survive.
+        let mut changed: Vec<(String, Option<String>)> = Vec::new();
+        for field in fields {
+            if before[section].get(field) == after[section].get(field) {
+                continue;
+            }
+            let key = format!("{section}.{field}");
+            let old = file.get(&key);
+            let result = match after[section].get(field) {
+                Some(value) => file.set_typed(&key, value),
+                None => file.unset(&key).map(|_| ()),
+            };
+            if let Err(error) = result {
+                for (key, old) in changed.into_iter().rev() {
+                    match old {
+                        Some(value) => file.set(&key, &value)?,
+                        None => {
+                            file.unset(&key)?;
+                        }
+                    }
+                }
+                return Err(error);
+            }
+            changed.push((key, old));
+        }
+        self.sync_config();
+        self.toast =
+            Some("Provider/model staged; Ctrl+S saves. Cleanup mode is set in Settings.".into());
+        Ok(())
     }
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if self.saving {
@@ -1214,13 +1273,8 @@ impl App {
             }
             Page::Providers => {
                 if let Some(p) = self.providers.get(pos) {
-                    let key = if self.cleanup {
-                        "cleanup.provider"
-                    } else {
-                        "stt.provider"
-                    };
                     let id = p.id.clone();
-                    match self.set(key, &id) {
+                    match self.choose_provider(&id, self.cleanup, None) {
                         Ok(()) => {
                             self.toast = Some("Provider selected; Ctrl+S saves and reloads".into())
                         }
@@ -1272,15 +1326,8 @@ impl App {
                 self.set("recording.device", value)?;
                 return Ok(vec![]);
             }
-            EditTarget::Model => {
-                self.set(
-                    if self.cleanup {
-                        "cleanup.model"
-                    } else {
-                        "stt.model"
-                    },
-                    value,
-                )?;
+            EditTarget::Model(id, cleanup) => {
+                self.choose_provider(id, *cleanup, Some(value))?;
                 return Ok(vec![]);
             }
             EditTarget::Key(id) => {

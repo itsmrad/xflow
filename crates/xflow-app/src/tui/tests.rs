@@ -328,3 +328,50 @@ fn mouse_hit_targets_follow_scroll_and_modal_blocks_background_clicks() {
     assert!(hits.tabs.is_empty());
     assert!(hits.actions.is_empty());
 }
+
+#[test]
+fn real_catalog_selection_resets_routes_and_models_without_losing_other_edits() {
+    let (_dir, mut app) = app();
+    app.set(
+        "stt.endpoint",
+        "http://127.0.0.1:8000/v1/audio/transcriptions",
+    )
+    .unwrap();
+    app.set("stt.model", "old-model").unwrap();
+    app.set("stt.protocol", "openai").unwrap();
+    app.set("stt.api_key_env", "OLD_KEY").unwrap();
+    app.set("recording.max_seconds", "123").unwrap();
+    app.page = Page::Providers;
+    app.refresh();
+    assert_eq!(app.providers.len(), xflow_providers::stt_providers().len());
+    app.selected[5] = app
+        .providers
+        .iter()
+        .position(|p| p.id == "deepgram")
+        .unwrap();
+    app.action(Action::Model);
+    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(app.config.stt.provider, "deepgram");
+    assert_eq!(app.config.stt.model.as_deref(), Some("nova-3"));
+    assert!(app.config.stt.endpoint.is_none());
+    assert!(app.config.stt.protocol.is_none());
+    assert!(app.config.stt.api_key_env.is_none());
+    assert_eq!(app.config.recording.max_seconds, 123);
+    assert!(app.dirty);
+    app.action(Action::ProviderKind);
+    assert_eq!(
+        app.providers.len(),
+        xflow_providers::cleanup_providers().len()
+    );
+    app.selected[5] = app.providers.iter().position(|p| p.id == "ollama").unwrap();
+    let effects = app.action(Action::CheckProvider);
+    assert!(
+        matches!(&effects[..],[Effect::CheckProvider(config,true)] if config.cleanup.provider.as_deref()==Some("ollama"))
+    );
+    assert!(app.config.cleanup.provider.is_none()); // A connection check doesn't activate.
+    app.action(Action::Edit);
+    assert_eq!(app.config.cleanup.provider.as_deref(), Some("ollama"));
+    assert!(
+        super::integrations::selection(&app.config, "ollama", true, Some("bad\nmodel")).is_err()
+    );
+}
