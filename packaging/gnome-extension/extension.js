@@ -25,6 +25,7 @@ const ACTIVE = new Set(['listening', 'processing']);
 
 export default class XFlowExtension extends Extension {
     enable() {
+        this._epoch = (this._epoch ?? 0) + 1;
         this._enabled = true;
         this._state = 'idle';
         this._mode = 'dictation';
@@ -36,6 +37,7 @@ export default class XFlowExtension extends Extension {
         this._frameSource = this._holdSource = this._releaseSource = this._restoreSource = 0;
         this._revision = 0;
         this._queue = Promise.resolve();
+        this._injectQueue = Promise.resolve();
         this._cancellable = new Gio.Cancellable();
         this._settings = this.getSettings();
         this._desktop = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
@@ -93,6 +95,7 @@ export default class XFlowExtension extends Extension {
                 }).catch(() => invocation.return_dbus_error('org.xflow.Shell.Failed', 'Selection unavailable'));
             },
             InjectAsync: ([text, optionsJson], invocation) => {
+                const epoch = this._epoch;
                 if (Main.sessionMode.isLocked) {
                     invocation.return_dbus_error('org.xflow.Shell.AccessDenied', 'Screen is locked');
                     return;
@@ -106,7 +109,10 @@ export default class XFlowExtension extends Extension {
                     return;
                 }
                 // Serialize clipboard ownership/restoration as well as key events.
-                this._injectQueue = (this._injectQueue ?? Promise.resolve()).then(() => this._inject(text, options));
+                this._injectQueue = (this._injectQueue ?? Promise.resolve()).then(() => {
+                    if (!this._enabled || this._epoch !== epoch) throw new Error();
+                    return this._inject(text, options);
+                });
                 this._injectQueue.then(result => this._returnJson(invocation, result)).catch(() => {
                     invocation.return_dbus_error('org.xflow.Shell.Failed', 'Desktop injection unavailable');
                 });
@@ -383,9 +389,10 @@ export default class XFlowExtension extends Extension {
         const state = L.optimisticState(command, this._state);
         if (state) this._update({state, mode, level: 0});
         const revision = this._revision;
+        const epoch = this._epoch;
         const request = L.commandRequest(command, {mode, context, t0Us});
         this._queue = this._queue.then(async () => {
-            if (!this._enabled) return;
+            if (!this._enabled || this._epoch !== epoch) return;
             if (!this._hasDaemon) throw new Error(L.NOT_RUNNING);
             const json = await new Promise((resolve, reject) => {
                 Gio.DBus.session.call('org.xflow.Daemon', '/org/xflow/Daemon', 'org.xflow.Daemon', 'Command',
@@ -396,11 +403,11 @@ export default class XFlowExtension extends Extension {
             });
             const response = L.parseResponse(json);
             if (!response) throw new Error('Invalid daemon response');
-            if (!this._enabled) return;
+            if (!this._enabled || this._epoch !== epoch) return;
             if (!response.ok) this._update({state: 'error', message: response.message ?? 'XFlow command failed'});
             else if (revision === this._revision && response.state) this._update({...response, mode: response.mode ?? mode});
-        }).catch(error => {
-            if (this._enabled) this._update({state: 'error', message: !this._hasDaemon ? L.NOT_RUNNING : 'XFlow command failed; check daemon'});
+        }).catch(() => {
+            if (this._enabled && this._epoch === epoch) this._update({state: 'error', message: !this._hasDaemon ? L.NOT_RUNNING : 'XFlow command failed; check daemon'});
         });
     }
 
@@ -417,10 +424,11 @@ export default class XFlowExtension extends Extension {
     }
 
     _getClipboard(type) {
+        const epoch = this._epoch;
         return new Promise((resolve, reject) => {
             if (!this._enabled || Main.sessionMode.isLocked) { reject(new Error()); return; }
             this._clipboard.get_text(type, (_clipboard, text) => {
-                if (!this._enabled || Main.sessionMode.isLocked) reject(new Error());
+                if (!this._enabled || this._epoch !== epoch || Main.sessionMode.isLocked) reject(new Error());
                 else resolve(text);
             });
         });
@@ -436,10 +444,11 @@ export default class XFlowExtension extends Extension {
 
     async _inject(text, options) {
         if (!this._enabled || Main.sessionMode.isLocked) throw new Error();
+        const epoch = this._epoch;
         const generation = this._injectGeneration = (this._injectGeneration ?? 0) + 1;
         this._cancelSource('_restoreSource');
         const before = options.restore_clipboard ? await this._getClipboard(St.ClipboardType.CLIPBOARD) : null;
-        if (!this._enabled || Main.sessionMode.isLocked) throw new Error();
+        if (!this._enabled || this._epoch !== epoch || Main.sessionMode.isLocked) throw new Error();
         this._clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
         const fallback = {outcome: 'clipboard_only', message: 'Focus changed or is unknown; text copied'};
         if (!L.focusMatches(options.target, this._context())) return fallback;
@@ -468,7 +477,11 @@ export default class XFlowExtension extends Extension {
                         if (pressed) held.push(code);
                         else held.splice(held.indexOf(code), 1);
                     }
-                } finally { for (const code of held.reverse()) this._key(code, false, true); }
+                } finally {
+                    for (const code of held.reverse()) {
+                        try { this._key(code, false, true); } catch { /* Attempt every remaining release. */ }
+                    }
+                }
                 outcome = 'pasted';
             }
         } catch { return {outcome: 'clipboard_only', message: 'Desktop delivery failed; text copied'}; }
@@ -486,6 +499,7 @@ export default class XFlowExtension extends Extension {
 
     disable() {
         this._enabled = false;
+        ++this._epoch;
         this._cancellable?.cancel();
         for (const action of this._grabs?.keys() ?? []) this._ungrab(action);
         for (const [object, id] of this._connections ?? []) object.disconnect(id);
