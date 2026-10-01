@@ -173,8 +173,8 @@ async fn playback(cue: Cue, config: &SoundsConfig, path: &std::ffi::OsStr) -> Re
     Ok(())
 }
 
-// aplay has no per-stream volume flag. Attenuate PCM16 WAV data locally rather
-// than changing a user's mixer. Other players accept arbitrary custom formats.
+// ponytail: aplay's fallback supports PCM16 WAV only and attenuates samples
+// without changing the mixer; pw-play/paplay handle other custom formats.
 fn scale_wav(data: &mut [u8], volume: f32) -> Result<()> {
     if data.len() < 12 || &data[..4] != b"RIFF" || &data[8..12] != b"WAVE" {
         bail!("ALSA cues must be PCM16 WAV files");

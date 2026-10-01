@@ -262,6 +262,17 @@ async fn copy_with(program: &str, args: &[&str], text: &str) -> Result<()> {
 #[cfg(unix)]
 fn ydotool_socket() -> Option<PathBuf> {
     use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::fs::PermissionsExt;
+    let available = std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| {
+            dir.join("ydotool")
+                .metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+    });
+    if !available {
+        return None;
+    }
     let mut candidates: Vec<PathBuf> = std::env::var_os("YDOTOOL_SOCKET")
         .map(PathBuf::from)
         .into_iter()
@@ -655,6 +666,9 @@ mod tests {
                 "pasted"
             };
             self.calls.lock().unwrap().push((text.to_owned(), options));
+            if text == "ambiguous reply" {
+                return "{}".into();
+            }
             serde_json::json!({"outcome":outcome,"message":null}).to_string()
         }
     }
@@ -711,9 +725,15 @@ mod tests {
             typed.inject("héllo", &context).await.unwrap(),
             InjectionOutcome::Typed
         );
+        assert!(desktop
+            .inject("ambiguous reply", &context)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("invalid Shell injection outcome"));
         {
             let calls = calls.lock().unwrap();
-            assert_eq!(calls.len(), 3);
+            assert_eq!(calls.len(), 4);
             assert_eq!(calls[0].1["terminal"], true);
             assert_eq!(calls[0].1["restore_delay_ms"], 300);
         }
