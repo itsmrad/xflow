@@ -16,6 +16,11 @@ impl DaemonBridge {
     /// Same JSON request/response as the Unix socket, limited to the controls
     /// the desktop shell needs. See docs/CONTRACTS.md.
     async fn command(&self, request: &str) -> fdo::Result<String> {
+        if request.len() > xflow_core::ipc::MAX_MESSAGE_BYTES {
+            return Err(fdo::Error::InvalidArgs(
+                "xflow request exceeds 64 KiB".into(),
+            ));
+        }
         let request: Request = serde_json::from_str(request)
             .map_err(|_| fdo::Error::InvalidArgs("invalid xflow request".into()))?;
         if !matches!(
