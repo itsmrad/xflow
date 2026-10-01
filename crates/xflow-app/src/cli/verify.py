@@ -16,6 +16,8 @@ import sys
 import tempfile
 import threading
 import time
+import http.server
+import wave
 
 
 class Daemon:
@@ -216,6 +218,67 @@ def main():
             assert not failure.stdout and json.loads(failure.stderr)["error"] == "mock failure"
         finally:
             daemon.close()
+
+        calls = []
+
+        class Provider(http.server.BaseHTTPRequestHandler):
+            def respond(self, value):
+                body = json.dumps(value).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                calls.append(("GET", self.path, b""))
+                self.respond({"data": [{"id": "mock-whisper"}]})
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                calls.append(("POST", self.path, body))
+                self.respond({"text": "file transcript", "language": "en"})
+
+            def log_message(self, *_):
+                pass
+
+        provider = http.server.HTTPServer(("127.0.0.1", 0), Provider)
+        thread = threading.Thread(target=provider.serve_forever)
+        thread.start()
+        try:
+            endpoint = f"http://127.0.0.1:{provider.server_port}/v1/audio/transcriptions"
+            env["XFLOW_CLI_TEST_KEY"] = "cli-mock-secret"
+            # The closed fake daemon socket is removed before local config edits.
+            (root / "run/xflow/daemon.sock").unlink()
+            providers = json.loads(run("providers", "--json").stdout)
+            assert len(providers) >= 10
+            assert json.loads(run("models", "groq", "--json").stdout)["provider"] == "groq"
+            run("providers", "use", "openai", "--model", "whisper-1")
+            run("config", "set", "stt.endpoint", endpoint)
+            run("config", "set", "stt.model", "mock-whisper")
+            run("config", "set", "stt.provider", "custom")
+            run("config", "set", "stt.api_key_env", "XFLOW_CLI_TEST_KEY")
+            run("config", "set", "privacy.offline", "true")
+            key = json.loads(run("key", "status", "custom", "--json").stdout)
+            assert key["source"] == "environment" and "cli-mock-secret" not in json.dumps(key)
+            assert json.loads(run("providers", "test", "--json").stdout)["ok"]
+            audio = root / "fixture.wav"
+            with wave.open(str(audio), "wb") as writer:
+                writer.setnchannels(1)
+                writer.setsampwidth(2)
+                writer.setframerate(16000)
+                writer.writeframes(b"\x10\x00" * 1600)
+            assert run("transcribe", str(audio)).stdout == "file transcript\n"
+            assert json.loads(run("transcribe", str(audio), "--json").stdout)["text"] == "file transcript"
+            assert calls[0][:2] == ("GET", "/v1/models") and not calls[0][2]
+            assert all(path.startswith("/v1/") for _, path, _ in calls)
+            setup = json.loads(run("setup", "--yes", "--json", "--provider", "custom", "--model", "mock-whisper", "--endpoint", endpoint, "--test").stdout)
+            assert setup["connection"]["ok"]
+        finally:
+            provider.shutdown()
+            thread.join(timeout=3)
+            provider.server_close()
+            assert not thread.is_alive()
         print("CLI acceptance passed: config/personalization, fake system tools, IPC/history/listen/cancel, errors and completions")
 
 
