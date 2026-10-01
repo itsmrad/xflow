@@ -621,3 +621,118 @@ fn offline_and_remote_credential_boundaries_cover_every_preset() {
         assert!(build_transformer(&cfg, false).is_err(), "{}", row.id);
     }
 }
+
+#[tokio::test]
+async fn cleanup_reasoning_settings_only_for_verified_models() {
+    for (id, model, effort) in [
+        ("openai", None, Some("none")),
+        ("groq", None, Some("none")),
+        ("fireworks", None, Some("none")),
+        ("gemini", None, Some("minimal")),
+        ("openai", Some("unknown-model"), None),
+    ] {
+        let (url, rx) = server(
+            "200 OK",
+            br#"{"choices":[{"message":{"content":"edited"}}]}"#,
+            Duration::ZERO,
+            "",
+        )
+        .await;
+        let cfg = CleanupConfig {
+            mode: CleanupMode::Light,
+            provider: Some(id.into()),
+            endpoint: Some(url),
+            model: model.map(str::to_owned),
+            api_key_env: String::new(),
+            ..Default::default()
+        };
+        build_transformer(&cfg, true)
+            .unwrap()
+            .unwrap()
+            .transform(TransformRequest {
+                text: "hello",
+                mode: CleanupMode::Light,
+                instructions: None,
+                command: None,
+                app_id: None,
+                vocabulary: &[],
+            })
+            .await
+            .unwrap();
+        let bytes = rx.await.unwrap();
+        let body: Value = serde_json::from_slice(body(&bytes)).unwrap();
+        assert_eq!(body["reasoning_effort"].as_str(), effort);
+    }
+}
+
+#[tokio::test]
+async fn together_auto_language_and_model_precedes_audio() {
+    let (url, rx) = server("200 OK", br#"{"text":"bonjour"}"#, Duration::ZERO, "").await;
+    let cfg = config("together", url);
+    build_stt(&cfg, true)
+        .unwrap()
+        .transcribe(clip(), Default::default())
+        .await
+        .unwrap();
+    let bytes = rx.await.unwrap();
+    let body = String::from_utf8_lossy(body(&bytes));
+    assert!(body.contains("name=\"language\"\r\n\r\nauto"));
+    assert!(body.find("name=\"model\"").unwrap() < body.find("name=\"file\"").unwrap());
+}
+
+#[tokio::test]
+async fn compressed_raw_upload_has_correct_mime_and_16k_lossless_audio() {
+    let (url, rx) = server(
+        "200 OK",
+        br#"{"results":{"channels":[{"alternatives":[{"transcript":"hello"}]}]}}"#,
+        Duration::ZERO,
+        "",
+    )
+    .await;
+    let cfg = config("deepgram", url);
+    let audio = AudioClip {
+        samples: vec![0.25; 48_000 * 2],
+        sample_rate: 48_000,
+        channels: 2,
+    };
+    build_stt(&cfg, true)
+        .unwrap()
+        .transcribe(audio, Default::default())
+        .await
+        .unwrap();
+    let bytes = rx.await.unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("content-type: audio/flac"));
+    let mut flac = claxon::FlacReader::new(std::io::Cursor::new(body(&bytes))).unwrap();
+    assert_eq!(flac.streaminfo().sample_rate, 16_000);
+    assert_eq!(flac.streaminfo().channels, 1);
+    let samples: Vec<i32> = flac.samples().map(Result::unwrap).collect();
+    assert_eq!(samples.len(), 16_000);
+    assert!(samples.iter().all(|&s| s == 8192));
+}
+
+#[tokio::test]
+async fn assembly_rejects_bad_ids_and_redacts_job_errors() {
+    for result in [
+        json!({"id":"../../secret", "status":"queued"}),
+        json!({"id":"job", "status":"error", "error":"test-secret-123 private audio"}),
+    ] {
+        let (url, task) = scripted(
+            vec![
+                ("200 OK", json!({"upload_url":"https://example.com/upload"})),
+                ("200 OK", result),
+            ],
+            "/v2/transcript",
+        )
+        .await;
+        let cfg = config("assemblyai", url);
+        let error = build_stt(&cfg, true)
+            .unwrap()
+            .transcribe(clip(), Default::default())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("test-secret-123"));
+        assert!(!error.contains("private audio"));
+        assert_eq!(task.await.unwrap().len(), 2);
+    }
+}
