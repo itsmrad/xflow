@@ -1,11 +1,15 @@
 .xflow-pill {
-    padding: 6px 12px;
-    spacing: 10px;
-    border-radius: 22px;
-    background-color: rgba(24, 24, 28, 0.96);
-    border: 1px solid #78aeed;
-    color: #ffffff;
-    font-size: 11pt;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    font-weight: 500;
 }
-.xflow-wave { spacing: 3px; }
-.xflow-bar { background-color: #78aeed; border-radius: 2px; }
+.xflow-light { background-color: #f7f6f3; color: #111111; }
+.xflow-dark { background-color: #19191b; color: #fafaf7; border-color: rgba(255, 255, 255, 0.12); }
+.xflow-light .xflow-bar { background-color: #111111; }
+.xflow-dark .xflow-bar { background-color: #fafaf7; }
+.xflow-command { border-color: #8071a8; }
+.xflow-command .xflow-bar { background-color: #8071a8; }
+.xflow-error { border-color: #b84942; }
+.xflow-error StIcon { color: #b84942; }
+.xflow-success StIcon { color: #4c785b; }
+.xflow-wave { padding: 0; }
