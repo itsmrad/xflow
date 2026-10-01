@@ -36,3 +36,49 @@ pub async fn notify(summary: &str, body: &str) -> Result<()> {
     .await
     .context("desktop notification timed out")?
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct StubNotifications;
+    #[zbus::interface(name = "org.freedesktop.Notifications")]
+    impl StubNotifications {
+        #[allow(clippy::too_many_arguments)]
+        fn notify(
+            &self,
+            app: &str,
+            replaces: u32,
+            icon: &str,
+            summary: &str,
+            body: &str,
+            actions: Vec<String>,
+            hints: HashMap<String, zbus::zvariant::OwnedValue>,
+            expires: i32,
+        ) -> u32 {
+            assert_eq!(app, "XFlow");
+            assert_eq!(replaces, 0);
+            assert!(!icon.is_empty());
+            assert_eq!(summary, "Test");
+            assert_eq!(body, "Message");
+            assert!(actions.is_empty() && hints.is_empty());
+            assert_eq!(expires, 5000);
+            42
+        }
+    }
+    #[tokio::test]
+    #[ignore = "requires an isolated dbus-run-session bus"]
+    async fn notifications_use_native_bus_contract() {
+        let service = zbus::ConnectionBuilder::session()
+            .unwrap()
+            .name("org.freedesktop.Notifications")
+            .unwrap()
+            .serve_at("/org/freedesktop/Notifications", StubNotifications)
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        notify("Test", "Message").await.unwrap();
+        assert!(notify(&"x".repeat(4097), "Message").await.is_err());
+        service.close().await.unwrap();
+    }
+}

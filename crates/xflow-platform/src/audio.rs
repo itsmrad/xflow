@@ -14,7 +14,6 @@ enum Command {
     Start(oneshot::Sender<Result<()>>),
     Stop(oneshot::Sender<Result<AudioClip>>),
     Cancel(oneshot::Sender<Result<()>>),
-    Failed(u64, String),
     Limit(u64),
     Shutdown,
 }
@@ -182,6 +181,16 @@ impl CaptureBuffer {
         self.active.store(true, Ordering::Release);
         Ok(())
     }
+
+    fn fail(&self, error: String) {
+        self.active.store(false, Ordering::Release);
+        if let Ok(mut guard) = self.recording.lock() {
+            if let Some(recording) = guard.as_mut() {
+                recording.error = Some(error);
+            }
+        }
+        self.limited.store(true, Ordering::Release);
+    }
 }
 
 struct OpenStream {
@@ -249,11 +258,16 @@ impl CpalCapture {
                                     bail!("already recording");
                                 }
                                 if let Some(open) = &stream {
+                                    let started = Instant::now();
                                     open.buffer.begin(Recording::new(
                                         open.sample_rate,
                                         open.channels,
                                         &config,
                                     )?)?;
+                                    tracing::debug!(
+                                        warm_start_us = started.elapsed().as_micros() as u64,
+                                        "microphone warm stream activated"
+                                    );
                                 } else {
                                     generation = generation.wrapping_add(1);
                                     stream = Some(open_stream(
@@ -320,21 +334,10 @@ impl CpalCapture {
                                 thread_level.store(0, Ordering::Relaxed);
                             }
                         }
-                        Command::Failed(source, error) => {
-                            if stream.as_ref().is_some_and(|s| s.generation == source) {
-                                if let Some(open) = stream.take() {
-                                    completed = open.buffer.take().ok().flatten();
-                                    if let Some(buffer) = &mut completed {
-                                        buffer.error = Some(error);
-                                    }
-                                }
-                                deadline = None;
-                                thread_level.store(0, Ordering::Relaxed);
-                            }
-                        }
                         Command::Shutdown => break,
                     }
-                    // Limit closure is signaled without allocating or queuing in the audio callback.
+                    // If the bounded wake queue was full, any queued command also
+                    // observes the limit/failure flag and closes the stream.
                     if stream
                         .as_ref()
                         .is_some_and(|s| s.buffer.limited.load(Ordering::Acquire))
@@ -445,6 +448,7 @@ where
 {
     let samples_per_second = config.sample_rate.0 as f32 * f32::from(config.channels);
     let limit_sender = sender.clone();
+    let error_buffer = buffer.clone();
     let mut first = true;
     let mut smoothed = 0.0;
     device
@@ -478,7 +482,9 @@ where
                 }
             },
             move |error| {
-                let _ = sender.send(Command::Failed(generation, error.to_string()));
+                error_buffer.fail(error.to_string());
+                // Never block a CPAL callback on the worker that drops its stream.
+                let _ = sender.try_send(Command::Limit(generation));
             },
             Some(Duration::from_secs(3)),
         )
@@ -584,6 +590,38 @@ mod tests {
         assert!(attack > 0.3 && attack < 0.5);
         let release = smooth_level(attack, 0.0, 1.0 / 30.0);
         assert!(release > 0.0 && release < attack);
+    }
+    #[test]
+    fn stream_failure_survives_a_full_wake_queue() {
+        let buffer = CaptureBuffer {
+            recording: Mutex::new(Some(
+                Recording::new(4, 1, &RecordingConfig::default()).unwrap(),
+            )),
+            active: AtomicBool::new(true),
+            limited: AtomicBool::new(false),
+            first_callback_us: AtomicU64::new(0),
+        };
+        buffer
+            .recording
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .push(&[0.5_f32]);
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        sender.try_send(Command::Limit(1)).unwrap();
+        buffer.fail("device disconnected".into());
+        assert!(sender.try_send(Command::Limit(1)).is_err());
+        assert!(buffer.limited.load(Ordering::Acquire));
+        assert!(!buffer.active.load(Ordering::Acquire));
+        assert!(buffer
+            .take()
+            .unwrap()
+            .unwrap()
+            .finish()
+            .unwrap_err()
+            .to_string()
+            .contains("device disconnected"));
     }
     #[test]
     fn recording_is_bounded_and_normalizes_nonfinite_samples() {
