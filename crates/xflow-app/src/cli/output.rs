@@ -134,6 +134,9 @@ impl Output {
         if let Some(protocol) = response.protocol {
             rows.push(vec!["Protocol".into(), protocol.to_string()]);
         }
+        if let Some(mode) = response.mode {
+            rows.push(vec!["Mode".into(), format!("{mode:?}").to_lowercase()]);
+        }
         if let Some(timings) = &response.timings {
             rows.push(vec![
                 "Last latency (ms)".into(),
