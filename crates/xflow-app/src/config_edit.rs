@@ -130,8 +130,9 @@ impl ConfigFile {
         Ok(removed)
     }
 
-    /// Atomically replace the file (temp file + rename), creating a private
-    /// config directory on first save. A symlinked config is written through.
+    /// Atomically replace the file (unique sibling temp file + rename),
+    /// creating a private config directory on first save. A symlinked config
+    /// is written through.
     pub fn save(&self) -> Result<()> {
         let target = match std::fs::canonicalize(&self.path) {
             Ok(real) => real,
@@ -142,28 +143,24 @@ impl ConfigFile {
             }
         };
         let parent = target.parent().context("config path has no parent")?;
-        let temp = parent.join(format!(".xflow-config-{}.tmp", std::process::id()));
-        let result = (|| -> Result<()> {
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-                let mode = std::fs::metadata(&target)
-                    .map(|metadata| metadata.permissions().mode() & 0o777)
-                    .unwrap_or(0o600);
-                options.mode(mode);
-            }
-            let mut file = options.open(&temp)?;
-            file.write_all(self.doc.to_string().as_bytes())?;
-            file.sync_all()?;
-            std::fs::rename(&temp, &target)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temp);
+        let mut temp = tempfile::Builder::new()
+            .prefix(".xflow-config-")
+            .suffix(".tmp")
+            .tempfile_in(parent)
+            .with_context(|| format!("cannot create a temporary file in {}", parent.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            temp.as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o600))?;
         }
-        result.with_context(|| format!("cannot write {}", target.display()))
+        temp.as_file_mut()
+            .write_all(self.doc.to_string().as_bytes())?;
+        temp.as_file().sync_all()?;
+        temp.persist(&target)
+            .map_err(|error| error.error)
+            .with_context(|| format!("cannot replace {}", target.display()))?;
+        Ok(())
     }
 
     fn try_edit(
@@ -322,5 +319,106 @@ mod tests {
         file.save().unwrap();
         let config = ConfigFile::load(&path).unwrap().config().unwrap();
         assert_eq!(config.ui.themes["mine"]["bg"], "#f7f6f3");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_permissive_config_with_private_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, path) = temp_config("[ui]\ntheme = 'paper'\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let mut file = ConfigFile::load(&path).unwrap();
+        file.set("ui.theme", "midnight").unwrap();
+        file.save().unwrap();
+
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn save_does_not_remove_an_unowned_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let sentinel = dir
+            .path()
+            .join(format!(".xflow-config-{}.tmp", std::process::id()));
+        std::fs::write(&path, "[ui]\ntheme = 'paper'\n").unwrap();
+        std::fs::write(&sentinel, "owned by another save").unwrap();
+        let mut file = ConfigFile::load(&path).unwrap();
+        file.set("ui.theme", "midnight").unwrap();
+
+        file.save().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(sentinel).unwrap(),
+            "owned by another save"
+        );
+        assert_eq!(
+            ConfigFile::load(&path).unwrap().config().unwrap().ui.theme,
+            "midnight"
+        );
+    }
+
+    #[test]
+    fn concurrent_saves_to_distinct_files_in_one_directory_succeed() {
+        const SAVES: usize = 8;
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Barrier::new(SAVES);
+
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..SAVES)
+                .map(|index| {
+                    let path = dir.path().join(format!("config-{index}.toml"));
+                    std::fs::write(&path, "[ui]\ntheme = 'paper'\n").unwrap();
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        let mut file = ConfigFile::load(&path).unwrap();
+                        file.set("ui.theme", "midnight").unwrap();
+                        barrier.wait();
+                        file.save().unwrap();
+                        assert_eq!(
+                            ConfigFile::load(&path).unwrap().config().unwrap().ui.theme,
+                            "midnight"
+                        );
+                    })
+                })
+                .collect();
+            for worker in workers {
+                worker.join().unwrap();
+            }
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_writes_through_symlink_and_secures_target() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("actual.toml");
+        let link = dir.path().join("config.toml");
+        std::fs::write(&target, "[ui]\ntheme = 'paper'\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        symlink(&target, &link).unwrap();
+        let mut file = ConfigFile::load(&link).unwrap();
+        file.set("ui.theme", "midnight").unwrap();
+
+        file.save().unwrap();
+
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            ConfigFile::load(&link).unwrap().config().unwrap().ui.theme,
+            "midnight"
+        );
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }

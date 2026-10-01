@@ -36,6 +36,8 @@ pub struct Setting {
 pub struct GSettings {
     schema_dir: Option<PathBuf>,
     memory_backend: bool,
+    #[cfg(test)]
+    test_config_home: Option<PathBuf>,
 }
 
 impl GSettings {
@@ -61,6 +63,8 @@ impl GSettings {
         let settings = Self {
             schema_dir,
             memory_backend: false,
+            #[cfg(test)]
+            test_config_home: None,
         };
         settings.run(&["list-keys", SCHEMA]).context(
             "the xflow GNOME extension settings are not installed; run `xflow extension install`",
@@ -68,11 +72,23 @@ impl GSettings {
         Ok(settings)
     }
 
-    /// For tests: a compiled schema directory and a throwaway in-memory backend.
+    /// For tests: a compiled schema directory and optional in-memory backend.
     pub fn with_schema_dir(dir: PathBuf, memory_backend: bool) -> Self {
         Self {
             schema_dir: Some(dir),
             memory_backend,
+            #[cfg(test)]
+            test_config_home: None,
+        }
+    }
+
+    /// For tests: a compiled schema and a persistent keyfile in a private directory.
+    #[cfg(test)]
+    fn with_test_schema_dir(dir: PathBuf, config_home: PathBuf) -> Self {
+        Self {
+            schema_dir: Some(dir),
+            memory_backend: false,
+            test_config_home: Some(config_home),
         }
     }
 
@@ -117,6 +133,12 @@ impl GSettings {
         }
         if self.memory_backend {
             command.env("GSETTINGS_BACKEND", "memory");
+        }
+        #[cfg(test)]
+        if let Some(config_home) = &self.test_config_home {
+            command
+                .env("XDG_CONFIG_HOME", config_home)
+                .env("GSETTINGS_BACKEND", "keyfile");
         }
         let output = command
             .args(args)
@@ -181,15 +203,9 @@ mod tests {
 
     #[test]
     fn reads_and_writes_a_compiled_schema() {
-        let tools = ["gsettings", "glib-compile-schemas"];
-        if tools
-            .iter()
-            .any(|tool| Command::new(tool).arg("--help").output().is_err())
-        {
-            eprintln!("skipping: GLib tools unavailable");
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
+        let config_home = dir.path().join("config");
+        std::fs::create_dir(&config_home).unwrap();
         std::fs::copy(
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -203,13 +219,21 @@ mod tests {
             .status()
             .unwrap()
             .success());
-        let settings = GSettings::with_schema_dir(dir.path().to_owned(), true);
+        let settings = GSettings::with_test_schema_dir(dir.path().to_owned(), config_home);
         let all = settings.list().unwrap();
         assert!(all.iter().any(|setting| setting.kind == Kind::Bool));
-        let key = &all[0];
-        settings.set(&key.key, &key.value).unwrap();
-        assert_eq!(settings.get(&key.key).unwrap(), key.value);
+        assert_eq!(settings.get("animation").unwrap(), "true");
+        settings.set("animation", "false").unwrap();
+        assert_eq!(settings.get("animation").unwrap(), "false");
+        assert_eq!(settings.get("command-path").unwrap(), "'xflow'");
+        settings.set("command-path", "xflow-test").unwrap();
+        assert_eq!(settings.get("command-path").unwrap(), "'xflow-test'");
         assert!(settings.set("no-such-key", "1").is_err());
-        settings.reset(&key.key).unwrap();
+        assert!(settings.set("width", "1").is_err());
+        assert!(settings.set("position", "'left'").is_err());
+        settings.reset("animation").unwrap();
+        assert_eq!(settings.get("animation").unwrap(), "true");
+        settings.reset("command-path").unwrap();
+        assert_eq!(settings.get("command-path").unwrap(), "'xflow'");
     }
 }
