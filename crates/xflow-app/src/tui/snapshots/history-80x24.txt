@@ -9,7 +9,7 @@
 │  5 Styles       ││                                                           │
 │  6 Providers    ││                                                           │
 │  7 Settings     │╰───────────────────────────────────────────────────────────╯
-│  8 Overlay      │╭Details · PgUp/PgDn scroll─────────────────────────────────╮
+│  8 Overlay      │╭Details · [ / ] scroll─────────────────────────────────────╮
 │  9 Stats        ││The best ideas start with a conversation.                  │
 │  0 Doctor       ││                                                           │
 │                 ││#42 · groq · whisper-large-v3-turbo                        │

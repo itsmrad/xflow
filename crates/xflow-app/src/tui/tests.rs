@@ -280,3 +280,51 @@ fn palette_routes_actions_and_masked_key_never_appears_on_screen() {
         matches!(&effects[..],[Effect::SaveKey(id,secret)] if id=="groq" && secret.as_str()=="test-secret-never-rendered")
     );
 }
+
+#[test]
+fn untrusted_transcripts_cannot_emit_terminal_controls() {
+    let (_dir, mut app) = populated();
+    app.transcript = "hello\u{1b}]52;c;clipboard\u{7}world".into();
+    let text = screen(&app, 80, 24);
+    assert!(!text.contains('\u{1b}'));
+    assert!(!text.contains('\u{7}'));
+    assert!(text.contains("hello"));
+}
+
+#[test]
+fn cursor_edits_unicode_and_f2_submits_multifield_forms() {
+    let (_dir, mut app) = app();
+    app.page = Page::Dictionary;
+    app.action(Action::Add);
+    type_text(&mut app, "café");
+    key(&mut app, KeyCode::Left, KeyModifiers::NONE);
+    key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
+    type_text(&mut app, "e");
+    key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
+    assert_eq!(app.config.dictionary.words, ["cafe"]);
+    app.page = Page::Snippets;
+    app.action(Action::Add);
+    type_text(&mut app, "sig");
+    key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+    type_text(&mut app, "Thanks\nAda");
+    key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
+    assert_eq!(app.config.snippets[0].text, "Thanks\nAda");
+}
+#[test]
+fn mouse_hit_targets_follow_scroll_and_modal_blocks_background_clicks() {
+    let (_dir, mut app) = populated();
+    app.page = Page::Doctor;
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+    let mut hits = render::HitMap::default();
+    terminal
+        .draw(|frame| hits = render::draw(frame, &app))
+        .unwrap();
+    assert!(hits.tabs.iter().any(|(_, p)| *p == Page::Doctor));
+    assert!(!hits.tabs.iter().any(|(_, p)| *p == Page::Home));
+    app.action(Action::Help);
+    terminal
+        .draw(|frame| hits = render::draw(frame, &app))
+        .unwrap();
+    assert!(hits.tabs.is_empty());
+    assert!(hits.actions.is_empty());
+}

@@ -1,7 +1,7 @@
  xflow                ╭Control center──────────────────────────────────────────────────────────────────────────────────╮
  Voice, at your pace. │Settings  ·  Connected                                                                          │
                       ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭Navigate─────────╮╭Settings───────────────────────────────────╮╭Details · PgUp/PgDn scroll────────────────────────────╮
+╭Navigate─────────╮╭Settings───────────────────────────────────╮╭Details · [ / ] scroll────────────────────────────────╮
 │  1 Home         ││› cleanup.api_key_env                      ││cleanup.api_key_env                                   │
 │  2 History      ││  "OPENAI_API_KEY"                         ││                                                      │
 │  3 Dictionary   ││  cleanup.app_context                      ││"OPENAI_API_KEY"                                      │

@@ -210,14 +210,18 @@ pub struct Field {
     pub value: Zeroizing<String>,
     pub choices: Vec<String>,
     pub secret: bool,
+    pub cursor: usize,
 }
 impl Field {
     fn new(label: &str, value: impl Into<String>) -> Self {
+        let value = value.into();
+        let cursor = value.len();
         Self {
             label: label.into(),
-            value: Zeroizing::new(value.into()),
+            value: Zeroizing::new(value),
             choices: vec![],
             secret: false,
+            cursor,
         }
     }
     fn choices(label: &str, value: impl Into<String>, choices: Vec<String>) -> Self {
@@ -232,6 +236,44 @@ impl Field {
         } else {
             self.value.to_string()
         }
+    }
+    pub fn caret(&self) -> String {
+        let mut text = self.display();
+        let index = if self.secret {
+            self.value[..self.cursor].chars().count() * '•'.len_utf8()
+        } else {
+            self.cursor
+        };
+        text.insert(index, '▏');
+        text
+    }
+    fn left(&mut self) {
+        self.cursor = self.value[..self.cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+    }
+    fn right(&mut self) {
+        if let Some(c) = self.value[self.cursor..].chars().next() {
+            self.cursor += c.len_utf8();
+        }
+    }
+    fn insert(&mut self, c: char) {
+        self.value.insert(self.cursor, c);
+        self.cursor += c.len_utf8();
+    }
+    fn backspace(&mut self) {
+        let end = self.cursor;
+        self.left();
+        self.value.replace_range(self.cursor..end, "");
+    }
+    fn delete(&mut self) {
+        let start = self.cursor;
+        self.right();
+        let end = self.cursor;
+        self.value.replace_range(start..end, "");
+        self.cursor = start;
     }
 }
 pub struct Editor {
@@ -503,6 +545,10 @@ impl App {
                 self.selected[Page::History.index()] =
                     self.selected[Page::History.index()].min(self.history.len().saturating_sub(1));
                 self.detail = None;
+                if self.offset > 0 && self.offset as u64 >= self.total {
+                    self.offset = ((self.total.saturating_sub(1) as usize) / PAGE_SIZE) * PAGE_SIZE;
+                    return self.refresh();
+                }
             }
             Tag::Detail(_) => self.detail = response.entry,
             Tag::Activity => {
@@ -643,9 +689,12 @@ impl App {
                     } else if key.code == KeyCode::BackTab {
                         editor.focus =
                             (editor.focus + editor.fields.len() - 1) % editor.fields.len();
-                    } else if key.code == KeyCode::Enter
-                        && (editor.fields.len() == 1
-                            || key.modifiers.contains(KeyModifiers::CONTROL))
+                    } else if key.code == KeyCode::F(2)
+                        || (key.code == KeyCode::Char('s')
+                            && key.modifiers.contains(KeyModifiers::CONTROL))
+                        || (key.code == KeyCode::Enter
+                            && (editor.fields.len() == 1
+                                || key.modifiers.contains(KeyModifiers::CONTROL)))
                     {
                         match self.apply_editor(editor) {
                             Ok(next) => {
@@ -670,25 +719,32 @@ impl App {
                                     (pos + count - 1) % count
                                 };
                                 *field.value = field.choices[pos].clone();
+                                field.cursor = field.value.len();
                             }
+                            KeyCode::Left => field.left(),
+                            KeyCode::Right => field.right(),
+                            KeyCode::Home => field.cursor = 0,
+                            KeyCode::End => field.cursor = field.value.len(),
+                            KeyCode::Delete => field.delete(),
                             KeyCode::Backspace => {
-                                field.value.pop();
+                                field.backspace();
                             }
                             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                field.value.clear()
+                                field.value.clear();
+                                field.cursor = 0;
                             }
                             KeyCode::Char('j')
                                 if key.modifiers.contains(KeyModifiers::CONTROL)
                                     && !field.secret =>
                             {
                                 if field.value.len() < 16 * 1024 {
-                                    field.value.push('\n');
+                                    field.insert('\n');
                                 }
                             }
                             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 if field.value.len() + c.len_utf8() <= 16 * 1024 && !c.is_control()
                                 {
-                                    field.value.push(c);
+                                    field.insert(c);
                                 }
                             }
                             KeyCode::Enter => {
@@ -784,12 +840,13 @@ impl App {
     pub fn paste(&mut self, text: &str) {
         if let Some(Modal::Editor(editor)) = &mut self.modal {
             let field = &mut editor.fields[editor.focus];
+            let multiline = !field.secret;
             if field.value.len() + text.len() <= 16 * 1024 {
                 for c in text
                     .chars()
-                    .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+                    .filter(|c| !c.is_control() || (multiline && (*c == '\n' || *c == '\t')))
                 {
-                    field.value.push(c);
+                    field.insert(c);
                 }
             } else {
                 editor.error = Some("Input exceeds 16 KiB".into());

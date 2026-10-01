@@ -1,7 +1,7 @@
  xflow                ╭Control center──────────────────────────────────────────────────────────────────────────────────╮
  Voice, at your pace. │History  ·  Connected                                                                           │
                       ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭Navigate─────────╮╭History 1–1 / 1 · / ───────────────────────╮╭Details · PgUp/PgDn scroll────────────────────────────╮
+╭Navigate─────────╮╭History 1–1 / 1 · / ───────────────────────╮╭Details · [ / ] scroll────────────────────────────────╮
 │  1 Home         ││› The best ideas start with a conversation.││The best ideas start with a conversation.             │
 │› 2 History      ││  #42  groq  430ms                         ││                                                      │
 │  3 Dictionary   ││                                           ││#42 · groq · whisper-large-v3-turbo                   │

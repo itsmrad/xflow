@@ -219,7 +219,7 @@ pub async fn run() -> Result<()> {
                 let Some(event)=event else{break;};redraw=true;
                 match event? {
                     Event::Key(key) if key.kind!=KeyEventKind::Release=>effects=app.key(key),
-                    Event::Paste(text)=>app.paste(&text),Event::Resize(_,_)=>(),
+                    Event::Paste(text)=>{let text=zeroize::Zeroizing::new(text);app.paste(&text);},Event::Resize(_,_)=>(),
                     Event::Mouse(event) if mouse=>match event.kind {
                         MouseEventKind::ScrollUp=>effects=app.select(-1),MouseEventKind::ScrollDown=>effects=app.select(1),
                         MouseEventKind::Down(MouseButton::Left)=>{

@@ -9,7 +9,7 @@
 │  5 Styles       ││  cleanup.endpoint                                         │
 │  6 Providers    ││  (unset)                                                  │
 │› 7 Settings     │╰───────────────────────────────────────────────────────────╯
-│  8 Overlay      │╭Details · PgUp/PgDn scroll─────────────────────────────────╮
+│  8 Overlay      │╭Details · [ / ] scroll─────────────────────────────────────╮
 │  9 Stats        ││cleanup.api_key_env                                        │
 │  0 Doctor       ││                                                           │
 │                 ││"OPENAI_API_KEY"                                           │

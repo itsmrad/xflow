@@ -119,12 +119,12 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         body[0],
         &mut nav,
     );
-    for (i, page) in PAGES.iter().enumerate() {
-        if (i as u16) + 1 < body[0].height.saturating_sub(1) {
+    for (i, page) in PAGES.iter().enumerate().skip(nav.offset()) {
+        if ((i - nav.offset()) as u16) + 1 < body[0].height.saturating_sub(1) {
             hits.tabs.push((
                 Rect::new(
                     body[0].x + 1,
-                    body[0].y + 1 + i as u16,
+                    body[0].y + 1 + (i - nav.offset()) as u16,
                     body[0].width.saturating_sub(2),
                     1,
                 ),
@@ -168,6 +168,18 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
     if let Some(modal) = &app.modal {
         draw_modal(frame, area, app, modal);
         hits = HitMap::default();
+    }
+    // IPC/config strings are untrusted terminal text. A control byte in a cell
+    // must never become an OSC clipboard operation or another terminal escape.
+    for cell in &mut frame.buffer_mut().content {
+        if cell.symbol().chars().any(char::is_control) {
+            let clean = cell
+                .symbol()
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect::<String>();
+            cell.set_symbol(if clean.is_empty() { " " } else { &clean });
+        }
     }
     hits
 }
@@ -382,14 +394,14 @@ fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     let text=match app.page {
         Page::History=>app.detail.as_ref().or_else(||app.history.get(app.selected())).map(|h|format!("{}\n\n#{} · {} · {}\nApp: {} · language: {}\nAudio: {}ms · latency: {}ms\nMode: {:?} · timestamp: {}\n\nRaw transcription:\n{}",h.text,h.id,h.provider,h.model.as_deref().unwrap_or("default"),h.app_id.as_deref().unwrap_or("—"),h.language.as_deref().unwrap_or("auto"),h.duration_ms.unwrap_or(0),h.latency_ms.unwrap_or(0),h.mode,h.created_at,h.raw_text.as_deref().unwrap_or("Same as final text"))).unwrap_or_else(||"Select a transcript for details.\n\nc Copy · p Paste · Delete Remove\ne Export JSON · PgUp/PgDn Page".into()),
         Page::Dictionary=>rows.get(app.selected()).map(|(name,kind)|format!("{name}\n\n{kind}\n\nWords guide recognition; replacements correct whole words.\n\nN Add word · A Add replacement\nEnter Edit · Delete Remove\nCtrl+S Save and reload")).unwrap_or_else(||"Keep names, acronyms and specialist terms accurate.\n\nN Add word · A Add replacement".into()),
-        Page::Snippets=>app.config.snippets.get(app.selected()).map(|s|format!("Say: {}\n\n{}",s.trigger,s.text)).unwrap_or_else(||"Say a trigger to expand text.\n\nN Add · Enter Edit · Delete Remove\nCtrl+J adds a newline.\nCtrl+Enter stages a multi-field form.".into()),
+        Page::Snippets=>app.config.snippets.get(app.selected()).map(|s|format!("Say: {}\n\n{}",s.trigger,s.text)).unwrap_or_else(||"Say a trigger to expand text.\n\nN Add · Enter Edit · Delete Remove\nCtrl+J adds a newline.\nF2 stages a multi-field form.".into()),
         Page::Styles=>app.config.styles.get(app.selected()).map(|s|format!("{}\nApps: {}\nMode: {:?}\n\n{}",s.name,s.apps.join(", "),s.mode,s.prompt.as_deref().unwrap_or("Inherit cleanup instructions"))).unwrap_or_else(||"Choose a tone for each app. First matching style wins.\n\nN Add · Enter Edit · Delete Remove".into()),
         Page::Providers=>app.providers.get(app.selected()).map(|p|format!("{} [{}]\n{}\n\nModels:\n{}\n\n{}\n\nEnter activates · m model · k key\nT tests · b switches STT/cleanup\nCtrl+S saves and reloads",p.name,p.id,p.key,p.models.join("\n"),p.note)).unwrap_or_default(),
         Page::Settings=>rows.get(app.selected()).map(|(key,value)|format!("{key}\n\n{value}\n\nEnter edits with schema validation.\n←/→ cycles form choices.\nu resets to the default.\n\nCtrl+S saves + reloads\nCtrl+R reverts unsaved edits\ni chooses the microphone\n\nConfig: {}",app.path.display())).unwrap_or_default(),
         Page::Overlay=>app.overlay.get(app.selected()).map(|s|format!("{}\n\n{}\n\nValue: {}\nType: {:?}\n\nEnter edits and applies immediately.\nShortcuts accept GVariant lists, for example ['<Super>space'].",s.key,s.summary,s.value,s.kind)).unwrap_or_else(||"Overlay and shortcuts are GNOME extension settings.\n\nInstall: xflow extension install\nEnable: xflow extension enable\nr refreshes".into()),
         Page::Doctor=>"Diagnostics never record audio or send paid requests.\n\nFollow each row's fix hints.\n6 Providers: choose model and key.\n7 Settings: edit configuration.\n8 Overlay: global shortcuts.\nr reruns checks.".into(),_=>String::new(),
     };
-    panel(frame, detail, "Details · PgUp/PgDn scroll", text, app);
+    panel(frame, detail, "Details · [ / ] scroll", text, app);
 }
 fn stats(frame: &mut Frame, area: Rect, app: &App) {
     if !app.stats_loaded {
@@ -453,7 +465,7 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal) {
                 .map(|c| format!("{:<16} {}", c.key, c.title))
                 .collect::<Vec<_>>()
                 .join("\n");
-            frame.render_widget(Paragraph::new(format!("{text}\n\nForms: Tab field · Ctrl+J newline · Ctrl+Enter apply · Esc cancel\nPgUp/PgDn scrolls · Esc closes")).block(block("Keyboard guide",theme)).wrap(Wrap{trim:false}).scroll((app.scroll,0)),rect);
+            frame.render_widget(Paragraph::new(format!("{text}\n\nForms: Tab field · Ctrl+J newline · F2 apply · Esc cancel\nPgUp/PgDn scrolls · Esc closes")).block(block("Keyboard guide",theme)).wrap(Wrap{trim:false}).scroll((app.scroll,0)),rect);
         }
         Modal::Palette { query, selected } => {
             let inner = block("Actions · fuzzy search · Esc closes", theme).inner(rect);
@@ -490,10 +502,9 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal) {
             rect,
         ),
         Modal::Editor(e) => {
-            let inner =
-                block("Edit · Tab field · Ctrl+Enter apply · Esc cancel", theme).inner(rect);
+            let inner = block("Edit · Tab field · F2 apply · Esc cancel", theme).inner(rect);
             frame.render_widget(
-                block("Edit · Tab field · Ctrl+Enter apply · Esc cancel", theme),
+                block("Edit · Tab field · F2 apply · Esc cancel", theme),
                 rect,
             );
             let first = e
@@ -504,7 +515,11 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal) {
                 if y + 3 > inner.bottom().saturating_sub(2) {
                     break;
                 }
-                let value = field.display();
+                let value = if i == e.focus {
+                    field.caret()
+                } else {
+                    field.display()
+                };
                 let display = value
                     .lines()
                     .rev()
