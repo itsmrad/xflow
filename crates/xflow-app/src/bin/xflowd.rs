@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
     }
     #[cfg(unix)]
     {
-        xflow_app::daemon::serve(config).await
+        xflow_app::daemon::serve_with_path(config, path).await
     }
     #[cfg(not(unix))]
     {
