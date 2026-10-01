@@ -51,7 +51,7 @@ static STT: &[ProviderInfo] = &[
     row!(Stt,"elevenlabs","ElevenLabs","https://api.elevenlabs.io/v1/speech-to-text",Some("ELEVENLABS_API_KEY"),"https://elevenlabs.io/app/settings/api-keys","https://elevenlabs.io/docs/api-reference/speech-to-text/convert",true,false,[
         ("scribe_v2","Scribe v2","Multilingual file transcription; keyterms cost extra")]),
     row!(Stt,"gemini","Google Gemini","https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-transcribe:generateContent",Some("GEMINI_API_KEY"),"https://aistudio.google.com/apikey","https://ai.google.dev/gemini-api/docs/generate-content/transcribe",true,false,[
-        ("gemini-3.5-transcribe","Gemini 3.5 Transcribe","Dedicated verbatim ASR; inline audio requires account verification"),
+        ("gemini-3.5-transcribe","Gemini 3.5 Transcribe","Dedicated verbatim ASR; inline path not live-tested"),
         ("gemini-3.5-flash-lite","Gemini 3.5 Flash Lite","Prompted transcription; may hallucinate on silence")]),
     row!(Stt,"mistral","Mistral","https://api.mistral.ai/v1/audio/transcriptions",Some("MISTRAL_API_KEY"),"https://console.mistral.ai/api-keys/","https://docs.mistral.ai/studio/audio/speech_to_text/offline_transcription",true,false,[
         ("voxtral-mini-latest","Voxtral Mini Transcribe","Fast current transcription alias"),
@@ -84,8 +84,16 @@ static CLEANUP: &[ProviderInfo] = &[
         true,
         false,
         [
-            ("gpt-4.1-nano", "GPT-4.1 Nano", "Fast editing"),
-            ("gpt-4.1-mini", "GPT-4.1 Mini", "Higher quality editing")
+            (
+                "gpt-5.6-luna",
+                "GPT-5.6 Luna",
+                "Low latency editing; reasoning disabled"
+            ),
+            (
+                "gpt-4.1-nano",
+                "GPT-4.1 Nano",
+                "Legacy; retires October 23, 2026"
+            )
         ]
     ),
     row!(
@@ -100,11 +108,20 @@ static CLEANUP: &[ProviderInfo] = &[
         false,
         [
             (
+                "qwen/qwen3.8-27b",
+                "Qwen 3.8 27B",
+                "Fast public model; reasoning disabled"
+            ),
+            (
                 "llama-3.1-8b-instant",
                 "Llama 3.1 8B Instant",
-                "Fast non-reasoning editor"
+                "Enterprise accounts only"
             ),
-            ("llama-3.3-70b-versatile", "Llama 3.3 70B", "Higher quality")
+            (
+                "llama-3.3-70b-versatile",
+                "Llama 3.3 70B",
+                "Enterprise accounts only"
+            )
         ]
     ),
     row!(
@@ -150,9 +167,9 @@ static CLEANUP: &[ProviderInfo] = &[
         true,
         false,
         [(
-            "accounts/fireworks/models/llama-v3p3-70b-instruct",
-            "Llama 3.3 70B",
-            "Non-reasoning editor; verify account availability"
+            "accounts/fireworks/models/qwen3-8b",
+            "Qwen 3 8B",
+            "Small editor; reasoning disabled"
         )]
     ),
     row!(
