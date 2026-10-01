@@ -30,12 +30,13 @@ config and data directories must be its `run`, `config` and `data` children, the
 sink must be `delivered.txt` inside it, and display variables must be absent.
 `voice` yields one second of deterministic 16 kHz mono PCM; `silence` fails before
 upload. File delivery uses a private file and refuses symlinks. The production
-daemon change is only adapter selection in `daemon::serve`; release packaging
+daemon change is only adapter selection at startup and in the reload service
+factory; release packaging
 builds without the feature and cannot activate this seam.
 
-The reload scenario is temporarily ignored until the daemon worker's Reload
-milestone is integrated. It checks switching endpoints and retaining the previous
-config after an invalid edit. Remove that ignore when the milestone is available.
+The reload scenario checks switching endpoints and rebuilding recording/desktop
+services while retaining the synthetic adapters. An invalid config edit must
+return an error and keep the previous services working.
 
 These tests do not validate real microphone drivers, GNOME rendering, clipboard,
 paste/type delivery, external provider availability, paid calls, or native ARM

@@ -564,7 +564,6 @@ async fn concurrent_clients_and_malformed_frames_leave_daemon_responsive() {
 }
 
 #[tokio::test]
-#[ignore = "awaiting daemon worker Reload milestone; enable after integration"]
 async fn reload_changes_provider_and_invalid_config_keeps_running_config() {
     let mut original = MockStt::start(vec![Plan::success("original")]).await;
     let mut replacement = MockStt::start(vec![
@@ -578,7 +577,10 @@ async fn reload_changes_provider_and_invalid_config_keeps_running_config() {
     dictate(&daemon, &mut events).await;
     original.upload().await;
     let path = daemon.root.path().join("config/xflow/config.toml");
-    fs::write(&path, config(&replacement.endpoint, true)).unwrap();
+    // Changing recording settings exercises both audio and desktop rebuilding.
+    let reconfigured =
+        config(&replacement.endpoint, true).replace("min_ms = 0", "min_ms = 0\nmax_seconds = 60");
+    fs::write(&path, reconfigured).unwrap();
     assert!(daemon.request(json!({"command":"reload"})).await.ok);
     dictate(&daemon, &mut events).await;
     replacement.upload().await;
