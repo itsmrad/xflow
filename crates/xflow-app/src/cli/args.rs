@@ -176,6 +176,9 @@ pub struct Setup {
     pub provider: Option<String>,
     #[arg(long)]
     pub model: Option<String>,
+    /// Full transcription URL for custom/local providers.
+    #[arg(long)]
+    pub endpoint: Option<String>,
     #[arg(long)]
     pub language: Option<String>,
     #[arg(long)]

@@ -16,7 +16,7 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
 }
 pub fn commit(file: &ConfigFile, out: &Output) -> Result<()> {
     file.save().map_err(Error::config)?;
-    super::ipc::reload_if_running(out)?;
+    super::ipc::reload_if_running(file.path(), out)?;
     out.confirm("Configuration saved")?;
     Ok(())
 }
@@ -34,17 +34,19 @@ pub fn run(path: &Path, action: Option<&args::Config>, out: &Output) -> Result<(
             out.data(&file.config().map_err(Error::config)?, &file.to_string())?;
         }
         Get { key } => {
-            let value = load(path)?
+            let file = load(path)?;
+            let json = serde_json::to_value(file.config().map_err(Error::config)?)?;
+            let mut typed = &json;
+            for part in key.split('.') {
+                typed = typed
+                    .get(part)
+                    .ok_or_else(|| Error::config(format!("Unknown configuration key: {key}")))?;
+            }
+            let value = file
                 .effective(key)
                 .map_err(Error::config)?
-                .ok_or_else(|| {
-                    Error::new(
-                        4,
-                        format!("unknown or unset configuration key: {key}"),
-                        "Run xflow config show",
-                    )
-                })?;
-            out.data(&serde_json::json!({"key":key,"value":value}), &value)?;
+                .unwrap_or_else(|| "unset".into());
+            out.data(&serde_json::json!({"key":key,"value":typed}), &value)?;
         }
         Set { key, value } => {
             let mut file = load(path)?;
@@ -63,7 +65,7 @@ pub fn run(path: &Path, action: Option<&args::Config>, out: &Output) -> Result<(
         Reset { yes } => {
             confirm(*yes, "Reset configuration to defaults?")?;
             replace(path, TEMPLATE.as_bytes())?;
-            super::ipc::reload_if_running(out)?;
+            super::ipc::reload_if_running(path, out)?;
             out.confirm("Configuration reset to defaults")?;
         }
         Edit => edit(path, out)?,
@@ -116,7 +118,7 @@ fn edit(path: &Path, out: &Output) -> Result<()> {
     let content = bounded_read(temp.path(), 1024 * 1024)?;
     load(temp.path())?.config().map_err(Error::config)?;
     replace(path, &content)?;
-    super::ipc::reload_if_running(out)?;
+    super::ipc::reload_if_running(path, out)?;
     out.confirm("Configuration saved")?;
     Ok(())
 }

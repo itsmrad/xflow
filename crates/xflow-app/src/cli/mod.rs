@@ -149,10 +149,15 @@ pub fn main() -> ExitCode {
     }
 }
 fn path(cli: &Cli) -> Result<PathBuf> {
-    Ok(cli
-        .config
-        .clone()
-        .unwrap_or(xflow_app::paths::config_path()?))
+    let path = match &cli.config {
+        Some(path) => path.clone(),
+        None => xflow_app::paths::config_path()?,
+    };
+    Ok(if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    })
 }
 fn run(cli: &Cli, out: &Output) -> Result<()> {
     match &cli.command {
