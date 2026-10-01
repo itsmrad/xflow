@@ -88,6 +88,7 @@ impl Store {
                     created_at: row.get(1)?,
                     text: row.get(2)?,
                     provider: row.get(3)?,
+                    ..HistoryEntry::default()
                 })
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
