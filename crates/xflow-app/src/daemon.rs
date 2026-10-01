@@ -69,11 +69,13 @@ pub struct Engine {
     config_path: Option<PathBuf>,
     reload_factory: ReloadFactory,
     reloading: bool,
+    delivering: bool,
     state: State,
     mode: Mode,
     delivery: Delivery,
     last: Option<String>,
     message: Option<String>,
+    persistence_warning: Option<String>,
     generation: u64,
     epoch: Arc<AtomicU64>,
     job: Option<JoinHandle<()>>,
@@ -84,6 +86,7 @@ pub struct Engine {
     started: Option<Instant>,
     silent_since: Option<Instant>,
     timings: Timings,
+    last_timings: Option<Timings>,
     events: broadcast::Sender<Response>,
     desktop_events: broadcast::Sender<DesktopEvent>,
 }
@@ -102,11 +105,13 @@ impl Engine {
             config_path: None,
             reload_factory: Arc::new(native_services),
             reloading: false,
+            delivering: false,
             state: State::Idle,
             mode: Mode::Dictation,
             delivery: Delivery::Inject,
             last: None,
             message: None,
+            persistence_warning: None,
             generation: 0,
             epoch: Arc::new(AtomicU64::new(0)),
             job: None,
@@ -117,6 +122,7 @@ impl Engine {
             started: None,
             silent_since: None,
             timings: Timings::default(),
+            last_timings: None,
             events,
             desktop_events,
         }
@@ -135,13 +141,21 @@ impl Engine {
                 0.0
             },
         );
-        r.message = self.message.clone();
+        r.message = match (&self.message, &self.persistence_warning) {
+            (Some(message), Some(warning)) => {
+                Some(bounded_message(&format!("{message}; {warning}")))
+            }
+            (None, Some(warning)) => Some(warning.clone()),
+            (message, None) => message.clone(),
+        };
         r.version = Some(env!("CARGO_PKG_VERSION").into());
         r.protocol = Some(PROTOCOL_VERSION);
         r.provider = Some(self.services.stt.name().into());
         r.model = Some(self.services.stt.model().to_owned()).filter(|s| !s.is_empty());
         if self.active() {
             r.mode = Some(self.mode);
+        } else {
+            r.timings = self.last_timings.clone();
         }
         r
     }
@@ -197,6 +211,9 @@ impl Engine {
     ) -> Result<()> {
         if self.active() {
             bail!("a recording is already active");
+        }
+        if self.delivering {
+            bail!("previous delivery is finishing; retry shortly");
         }
         if self.reloading {
             bail!("configuration reload is in progress");
@@ -485,6 +502,8 @@ impl Engine {
         levels.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut pending: Option<Processed> = None;
         let mut queries = tokio::task::JoinSet::new();
+        let mut deliveries = tokio::task::JoinSet::new();
+        let mut desktop_ops = tokio::task::JoinSet::new();
         loop {
             let deadline = self.started.map(|s| {
                 tokio::time::Instant::from_std(
@@ -495,7 +514,9 @@ impl Engine {
                 command = commands.recv() => {
                     let Some(Command { request, reply }) = command else { break; };
                     if reply.is_closed() { continue; }
-                    if (is_query(&request) || matches!(request, Request::Reload)) && queries.len() >= 32 { let _ = reply.send(Response::error(self.state, "daemon request capacity reached")); continue; }
+                    while queries.try_join_next().is_some() {}
+                    while desktop_ops.try_join_next().is_some() {}
+                    if (is_query(&request) || matches!(request, Request::Reload)) && queries.len() + desktop_ops.len() >= 32 { let _ = reply.send(Response::error(self.state, "daemon request capacity reached")); continue; }
                     if matches!(request, Request::Reload) {
                         if self.active() || self.reloading { let _ = reply.send(Response::error(self.state, "reload requires an idle daemon")); continue; }
                         let Some(path) = self.config_path.clone() else { let _ = reply.send(Response::error(self.state, "reload config path is unavailable")); continue; };
@@ -512,15 +533,19 @@ impl Engine {
                         }); continue;
                     }
                     if is_query(&request) {
+                        if is_desktop_query(&request) && (!desktop_ops.is_empty() || self.delivering) { let _ = reply.send(Response::error(self.state, "desktop delivery is busy")); continue; }
                         if matches!(request, Request::PasteLast | Request::HistoryPaste { .. }) && self.active() { let _ = reply.send(Response::error(self.state, "wait for the current recording before pasting")); continue; }
                         if matches!(request, Request::ClearHistory) {
                             if self.active() { let _ = self.cancel().await; } else { self.advance(); }
-                            self.last = None; pending = None;
+                            self.last = None; self.last_timings = None; pending = None;
                         }
                         let status = self.status(); let store = self.store.clone(); let desktop = self.services.desktop.clone(); let last = self.last.clone();
-                        queries.spawn(async move { let state = status.state; let response = query(status, request, store, desktop, last).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
+                        let desktop_query = is_desktop_query(&request);
+                        let work = async move { let state = status.state; let response = query(status, request, store, desktop, last).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); };
+                        if desktop_query { desktop_ops.spawn(work); } else { queries.spawn(work); }
                         continue;
                     }
+                    if matches!(request, Request::Start { .. } | Request::Toggle { .. }) && !self.active() && !desktop_ops.is_empty() { let _ = reply.send(Response::error(self.state, "desktop delivery is busy")); continue; }
                     let shutdown = matches!(request, Request::Shutdown);
                     let response = self.handle(request, &completion_tx).await.unwrap_or_else(|e| Response::error(self.state, format!("{e:#}")));
                     let _ = reply.send(response); if shutdown { break; }
@@ -530,13 +555,16 @@ impl Engine {
                         self.job = None;
                         match result { Ok(processed) => { self.last = Some(processed.text.clone()); pending = Some(processed); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
-                    Completion::Finished { generation, mut processed, result } if generation == self.generation => {
-                        self.job = None; self.abort_context();
+                    Completion::Finished { generation, mut processed, result } => {
+                        self.delivering = false;
+                        if generation != self.generation { continue; }
+                        self.abort_context();
                         match result {
                             Ok(outcome) => {
                                 if outcome == Some(InjectionOutcome::ClipboardOnly) { self.notify("XFlow transcript copied", "Paste manually to insert your dictation."); }
                                 let message = delivery_message(processed.warning.take(), outcome);
                                 // One final success event: subscribers can trust its complete payload.
+                                self.last_timings = Some(processed.timings.clone());
                                 self.state = State::Success; self.message = message; let mut r = self.status();
                                 r.text = Some(processed.text); r.injection = outcome; r.entry = processed.entry; r.timings = Some(processed.timings);
                                 fit_final(&mut r);
@@ -548,7 +576,7 @@ impl Engine {
                     }
                     Completion::Reloaded { result, reply } => {
                         self.reloading = false;
-                        let r = match *result { Ok((config, services, store)) => { self.config = config; self.services = services; self.store = store; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
+                        let r = match *result { Ok((config, services, store)) => { self.config = config; self.services = services; self.store = store; self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
                     }
                     _ => (),
@@ -557,18 +585,25 @@ impl Engine {
                     let mut processed = pending.take().unwrap();
                     if self.state != State::Processing { continue; }
                     let generation = self.generation; let delivery = self.delivery; let desktop = self.services.desktop.clone(); let store = self.store.clone(); let tx = completion_tx.clone();
-                    self.job = Some(tokio::spawn(async move {
+                    self.delivering = true;
+                    deliveries.spawn(async move {
                         let start = Instant::now();
                         let result = match delivery { Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
                         if delivery != Delivery::None { processed.timings.inject_ms = Some(ms(start.elapsed())); }
                         processed.timings.total_ms = ms(processed.stopped.elapsed());
                         if let Some(entry) = &mut processed.entry { entry.latency_ms = Some(processed.timings.total_ms as u64); if store.set_latency(entry.id, processed.timings.total_ms as u64).await.is_err() { processed.warning = Some("History latency update failed".into()); } }
                         let _ = tx.send(Completion::Finished { generation, processed, result }).await;
-                    }));
+                    });
                 }
                 _ = queries.join_next(), if !queries.is_empty() => (),
+                _ = deliveries.join_next(), if !deliveries.is_empty() => (),
+                _ = desktop_ops.join_next(), if !desktop_ops.is_empty() => (),
                 _ = self.notifications.join_next(), if !self.notifications.is_empty() => (),
                 _ = levels.tick(), if self.state == State::Listening => {
+                    if self.services.audio.finished() {
+                        if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
+                        continue;
+                    }
                     self.publish(); let level = self.services.audio.level();
                     if level.is_finite() && level > self.config.recording.silence_threshold { self.silent_since = None; }
                     else { self.silent_since.get_or_insert_with(Instant::now); }
@@ -581,10 +616,23 @@ impl Engine {
                 }
             }
         }
+        drop(completion_rx);
         queries.abort_all();
         self.notifications.abort_all();
         let _ = self.cancel().await;
+        // Once delivery starts, finish its key release even after cancel/shutdown.
+        while deliveries.join_next().await.is_some() {}
+        while desktop_ops.join_next().await.is_some() {}
     }
+}
+fn is_desktop_query(r: &Request) -> bool {
+    matches!(
+        r,
+        Request::CopyLast
+            | Request::PasteLast
+            | Request::HistoryCopy { .. }
+            | Request::HistoryPaste { .. }
+    )
 }
 fn is_query(r: &Request) -> bool {
     matches!(
@@ -784,7 +832,7 @@ fn validate_last_frame(text: &str) -> Result<()> {
     let mut r = Response::status(State::Processing, 0.0);
     r.message = Some("\0".repeat(4096));
     r.text = Some(text.to_owned());
-    if serde_json::to_vec(&r)?.len() + 128 >= MAX_MESSAGE_BYTES {
+    if serde_json::to_vec(&r)?.len() + 1024 >= MAX_MESSAGE_BYTES {
         bail!("transcript exceeds IPC last-response limit after JSON encoding");
     }
     Ok(())
@@ -847,11 +895,21 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let (audio, desktop) = test_adapters.map(Ok).unwrap_or_else(native_adapters)?;
     #[cfg(not(feature = "test-support"))]
     let (audio, desktop) = native_adapters()?;
-    let store = Store::open(
-        &crate::paths::data_dir()?.join("history.db"),
+    let history_path = crate::paths::data_dir()?.join("history.db");
+    let (store, persistence_warning) = match Store::open(
+        &history_path,
         config.privacy.history,
         config.privacy.history_limit,
-    )?;
+    ) {
+        Ok(store) => (store, None),
+        Err(error) => {
+            log(
+                "warn",
+                "history unavailable; original database preserved; dictation remains available",
+            );
+            (Store::open(&history_path, false, config.privacy.history_limit)?, Some(bounded_message(&format!("History unavailable: {error:#}; original database preserved; repair it and reload"))))
+        }
+    };
     let (commands_tx, commands_rx) = mpsc::channel(32);
     let (events_tx, _) = broadcast::channel(64);
     let (desktop_tx, desktop_rx) = broadcast::channel(32);
@@ -877,6 +935,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
         desktop_tx,
     );
     engine.config_path = Some(config_path);
+    engine.persistence_warning = persistence_warning;
     let mut engine_task = tokio::spawn(engine.run(commands_rx));
     let capacity = Arc::new(tokio::sync::Semaphore::new(32));
     let mut clients = tokio::task::JoinSet::new();
@@ -909,7 +968,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     while clients.join_next().await.is_some() {}
     // Engine is already finished for Shutdown, otherwise channel closure drives cleanup.
     if !engine_task.is_finished() {
-        tokio::time::timeout(Duration::from_secs(5), &mut engine_task)
+        tokio::time::timeout(Duration::from_secs(20), &mut engine_task)
             .await
             .context("daemon cleanup timed out")??;
     }
@@ -923,20 +982,35 @@ async fn connection(
 ) -> Result<()> {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
-    let request: Request = tokio::time::timeout(Duration::from_secs(3), read_frame(&mut reader))
-        .await??
-        .context("empty IPC request")?;
+    let request: Request =
+        match tokio::time::timeout(Duration::from_secs(3), read_frame(&mut reader)).await {
+            Ok(Ok(Some(request))) => request,
+            Ok(Ok(None)) => return Ok(()),
+            _ => {
+                let mut response = Response::error(
+                    State::Idle,
+                    "invalid or unsupported IPC request; check client and daemon versions",
+                );
+                response.protocol = Some(PROTOCOL_VERSION);
+                write_frame(&mut write, &response).await?;
+                return Ok(());
+            }
+        };
     let subscribe = matches!(request, Request::Subscribe);
     // Subscribe first, then get an actor snapshot, avoiding missed state transitions.
     let mut receiver = events.subscribe();
     let (reply_tx, reply_rx) = oneshot::channel();
-    commands
-        .send(Command {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(9);
+    tokio::time::timeout_at(
+        deadline,
+        commands.send(Command {
             request,
             reply: reply_tx,
-        })
-        .await?;
-    let response = tokio::time::timeout(Duration::from_secs(9), reply_rx)
+        }),
+    )
+    .await
+    .context("daemon command queue timed out")??;
+    let response = tokio::time::timeout_at(deadline, reply_rx)
         .await
         .context("daemon request timed out")??;
     write_frame(&mut write, &response).await?;
@@ -1415,6 +1489,7 @@ mod tests {
         let (engine, tx, rx, mut events, _) = fixture(Config::default(), desktop.clone(), store);
         let task = tokio::spawn(engine.run(rx));
         let snapshot = ask(&tx, Request::Subscribe).await;
+        assert!(snapshot.timings.is_none());
         assert_eq!(
             (
                 snapshot.protocol,
@@ -1445,6 +1520,16 @@ mod tests {
         );
         assert_eq!(timings.audio_ms, 500);
         assert_eq!(entry.latency_ms, Some(timings.total_ms as u64));
+        assert_eq!(
+            ask(&tx, Request::Status).await.timings,
+            Some(timings.clone())
+        );
+        assert!(ask(&tx, Request::start()).await.timings.is_none());
+        ask(&tx, Request::Cancel).await;
+        assert_eq!(
+            ask(&tx, Request::Status).await.timings,
+            Some(timings.clone())
+        );
         let page = ask(
             &tx,
             Request::History {
@@ -1875,6 +1960,141 @@ mod tests {
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
+    struct FinishingAudio {
+        finished: AtomicBool,
+        fail: bool,
+    }
+    #[async_trait]
+    impl AudioCapture for FinishingAudio {
+        async fn start(&self) -> Result<()> {
+            self.finished.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn stop(&self) -> Result<AudioClip> {
+            self.finished.store(false, Ordering::SeqCst);
+            if self.fail {
+                return Err(
+                    anyhow::anyhow!("fixture device disconnected").context("capture failed")
+                );
+            }
+            Ok(AudioClip {
+                samples: vec![0.2; 8000],
+                sample_rate: 16000,
+                channels: 1,
+            })
+        }
+        async fn cancel(&self) -> Result<()> {
+            self.finished.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+        fn level(&self) -> f32 {
+            0.2
+        }
+        fn finished(&self) -> bool {
+            self.finished.load(Ordering::SeqCst)
+        }
+    }
+    #[tokio::test]
+    async fn completed_capture_stops_early_and_surfaces_original_device_error() {
+        for fail in [false, true] {
+            let (mut engine, tx, rx, mut events, calls) = fixture(
+                Config::default(),
+                Arc::new(RecordingDesktop::default()),
+                Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+            );
+            let audio = Arc::new(FinishingAudio {
+                finished: AtomicBool::new(false),
+                fail,
+            });
+            engine.services.audio = audio.clone();
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            audio.finished.store(true, Ordering::SeqCst);
+            if fail {
+                let r = timeout_event_error(&mut events).await;
+                assert!(r.message.unwrap().contains("fixture device disconnected"));
+                assert_eq!(calls.load(Ordering::SeqCst), 0);
+            } else {
+                success(&mut events).await;
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+            }
+            assert!(!audio.finished());
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    async fn timeout_event_error(events: &mut broadcast::Receiver<Response>) -> Response {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let r = events.recv().await.unwrap();
+                if r.state == State::Error {
+                    return r;
+                }
+            }
+        })
+        .await
+        .unwrap()
+    }
+    struct HoldingDesktop {
+        pressed: AtomicBool,
+        started: Notify,
+        release: Notify,
+    }
+    #[async_trait]
+    impl Desktop for HoldingDesktop {
+        async fn context(&self) -> Result<AppContext> {
+            Ok(AppContext::default())
+        }
+        async fn copy(&self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn inject(&self, _: &str, _: &AppContext) -> Result<InjectionOutcome> {
+            self.pressed.store(true, Ordering::SeqCst);
+            self.started.notify_one();
+            self.release.notified().await;
+            self.pressed.store(false, Ordering::SeqCst);
+            Ok(InjectionOutcome::Pasted)
+        }
+    }
+    #[tokio::test]
+    async fn cancel_and_shutdown_allow_started_delivery_to_release_keys() {
+        let desktop = Arc::new(HoldingDesktop {
+            pressed: AtomicBool::new(false),
+            started: Notify::new(),
+            release: Notify::new(),
+        });
+        let (engine, tx, rx, _, _) = fixture(
+            Config::default(),
+            desktop.clone(),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        tokio::time::timeout(Duration::from_secs(2), desktop.started.notified())
+            .await
+            .unwrap();
+        assert_eq!(ask(&tx, Request::Cancel).await.state, State::Idle);
+        assert!(!ask(&tx, Request::start()).await.ok);
+        ask(&tx, Request::Shutdown).await;
+        assert!(desktop.pressed.load(Ordering::SeqCst));
+        desktop.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!desktop.pressed.load(Ordering::SeqCst));
+    }
+    #[test]
+    fn clipboard_delivery_retains_warnings() {
+        let message = delivery_message(
+            Some("Cleanup failed; original transcript retained".into()),
+            Some(InjectionOutcome::ClipboardOnly),
+        )
+        .unwrap();
+        assert!(message.contains("Cleanup failed") && message.contains("paste manually"));
+    }
+
     #[test]
     fn final_event_sheds_optional_metadata_to_fit_frame() {
         let mut r = Response {

@@ -27,6 +27,9 @@ pub struct Store {
 }
 impl Store {
     pub fn open(path: &Path, enabled: bool, limit: usize) -> Result<Self> {
+        if enabled && limit == 0 {
+            bail!("history_limit must be positive when history is enabled");
+        }
         let mut connection = if enabled {
             if let Some(parent) = path.parent() {
                 crate::paths::private_dir(parent)?;
@@ -59,6 +62,10 @@ impl Store {
             Connection::open_in_memory()?
         };
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > SCHEMA_VERSION {
+            bail!("history database schema {version} is newer than this xflow");
+        }
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;")?;
         migrate(&mut connection)?;
         let store = Self {
@@ -452,9 +459,7 @@ mod tests {
         assert!(disabled.history(10, 0, None).await.unwrap().0.is_empty());
         assert_eq!(disabled.stats().await.unwrap(), Stats::default());
         assert!(!disabled_path.exists());
-        let zero = Store::open(&dir.path().join("zero.db"), true, 0).unwrap();
-        assert!(zero.append(entry("gone")).await.unwrap().is_none());
-        assert_eq!(zero.history(10, 0, None).await.unwrap().1, 0);
+        assert!(Store::open(&path, true, 0).is_err());
     }
 
     #[tokio::test]

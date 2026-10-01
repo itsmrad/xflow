@@ -149,6 +149,11 @@ pub trait AudioCapture: Send + Sync {
     async fn stop(&self) -> Result<AudioClip>;
     async fn cancel(&self) -> Result<()>;
     fn level(&self) -> f32;
+    /// Capture reached its device/buffer limit or failed. The daemon calls
+    /// stop() to retrieve the buffered clip or original error. No idle polling.
+    fn finished(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
