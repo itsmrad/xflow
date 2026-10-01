@@ -16,17 +16,13 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
 };
+pub use xflow_core::ipc::Command;
 use xflow_core::{
     config::Config,
-    ipc::{Request, Response, MAX_MESSAGE_BYTES},
-    AppContext, AudioCapture, AudioClip, Desktop, DesktopEvent, SpeechToText, State,
-    TextTransformer, TranscriptionOptions,
+    ipc::{Request, Response, MAX_MESSAGE_BYTES, PROTOCOL_VERSION},
+    AppContext, AudioCapture, AudioClip, Desktop, DesktopEvent, Mode, SpeechToText, State,
+    TextTransformer, TranscriptionOptions, TransformRequest,
 };
-
-pub struct Command {
-    pub request: Request,
-    pub reply: oneshot::Sender<Response>,
-}
 enum Completion {
     Transcribed {
         generation: u64,
@@ -54,6 +50,7 @@ pub struct Engine {
     transformer: Option<Arc<dyn TextTransformer>>,
     store: Store,
     state: State,
+    mode: Mode,
     target: AppContext,
     last: Option<String>,
     message: Option<String>,
@@ -79,6 +76,7 @@ impl Engine {
             transformer: services.transformer,
             store,
             state: State::Idle,
+            mode: Mode::Dictation,
             target: AppContext::default(),
             last: None,
             message: None,
@@ -99,6 +97,13 @@ impl Engine {
             },
         );
         response.message = self.message.clone();
+        response.version = Some(env!("CARGO_PKG_VERSION").into());
+        response.protocol = Some(PROTOCOL_VERSION);
+        response.provider = Some(self.stt.name().into());
+        response.model = Some(self.stt.model().to_owned()).filter(|model| !model.is_empty());
+        if matches!(self.state, State::Listening | State::Processing) {
+            response.mode = Some(self.mode);
+        }
         response
     }
     fn publish(&self) {
@@ -107,6 +112,7 @@ impl Engine {
             state: response.state,
             level: response.level,
             message: response.message.clone(),
+            mode: self.mode,
         });
         let _ = self.events.send(response);
     }
@@ -115,19 +121,31 @@ impl Engine {
         self.message = message.map(|message| bounded_message(&message));
         self.publish();
     }
-    async fn start(&mut self) -> Result<()> {
+    async fn start(&mut self, mode: Mode, context: Option<AppContext>) -> Result<()> {
         if matches!(self.state, State::Listening | State::Processing) {
             bail!("a recording is already active");
         }
-        self.target = self.desktop.context().await.unwrap_or_default();
+        if mode == Mode::Command {
+            bail!("command mode is not available yet");
+        }
+        // Open the microphone first: a slow focus query must never clip speech.
         if let Err(error) = self.audio.start().await {
             let _ = self.audio.cancel().await;
             self.set_state(State::Error, Some(error.to_string()));
             return Err(error);
         }
+        let stt = self.stt.clone();
+        tokio::spawn(async move {
+            let _ = stt.warm().await;
+        });
         self.generation += 1;
+        self.mode = mode;
         self.started = Some(Instant::now());
         self.set_state(State::Listening, None);
+        self.target = match context {
+            Some(context) => context,
+            None => self.desktop.context().await.unwrap_or_default(),
+        };
         Ok(())
     }
     async fn stop(&mut self, completion: mpsc::Sender<Completion>) -> Result<()> {
@@ -154,6 +172,12 @@ impl Engine {
         // The provider was built from SttConfig and already owns these defaults.
         let options = TranscriptionOptions::default();
         let mode = self.config.cleanup.mode;
+        let instructions = self.config.cleanup.prompt.clone();
+        let app_id = context
+            .app_id
+            .clone()
+            .filter(|_| self.config.cleanup.app_context);
+        let vocabulary = self.config.dictionary.words.clone();
         let generation = self.generation;
         self.job = Some(tokio::spawn(async move {
             let result = async {
@@ -170,7 +194,15 @@ impl Engine {
                     bail!("transcript exceeds 32 KiB safety limit");
                 }
                 let result = if let Some(transformer) = transformer {
-                    match transformer.transform(&text, mode, &context).await {
+                    let request = TransformRequest {
+                        text: &text,
+                        mode,
+                        instructions: instructions.as_deref(),
+                        command: None,
+                        app_id: app_id.as_deref(),
+                        vocabulary: &vocabulary,
+                    };
+                    match transformer.transform(request).await {
                         Ok(clean) if !clean.trim().is_empty() && clean.len() <= 32 * 1024 => {
                             (clean, None)
                         }
@@ -210,13 +242,13 @@ impl Engine {
         completion: &mpsc::Sender<Completion>,
     ) -> Result<Response> {
         match request {
-            Request::Start => self.start().await?,
+            Request::Start { mode, context, .. } => self.start(mode, context).await?,
             Request::Stop => self.stop(completion.clone()).await?,
-            Request::Toggle => {
+            Request::Toggle { mode, context, .. } => {
                 if self.state == State::Listening {
                     self.stop(completion.clone()).await?
                 } else {
-                    self.start().await?
+                    self.start(mode, context).await?
                 }
             }
             Request::Cancel => self.cancel().await?,
@@ -241,7 +273,11 @@ impl Engine {
                 response.injection = Some(injection);
                 return Ok(response);
             }
-            Request::History { limit } => {
+            Request::History {
+                limit,
+                offset: 0,
+                query: None,
+            } => {
                 let mut response = self.status();
                 response.history = self.store.history(limit).await?;
                 // Keep complete entries and a bounded frame; omit older entries until it fits.
@@ -258,6 +294,13 @@ impl Engine {
                 self.store.clear().await?;
                 self.last = None;
             }
+            Request::History { .. }
+            | Request::HistoryGet { .. }
+            | Request::HistoryDelete { .. }
+            | Request::HistoryCopy { .. }
+            | Request::HistoryPaste { .. }
+            | Request::Stats
+            | Request::Reload => bail!("this request is not available yet"),
             Request::Status | Request::Subscribe | Request::Shutdown => (),
         }
         Ok(self.status())
@@ -412,8 +455,9 @@ pub async fn serve(config: Config) -> Result<()> {
     let (commands_tx, commands_rx) = mpsc::channel(32);
     let (events_tx, _) = broadcast::channel(64);
     let (desktop_tx, desktop_rx) = broadcast::channel(32);
+    let bridge_commands = commands_tx.downgrade();
     let bridge = tokio::spawn(async move {
-        if xflow_platform::run_desktop_bridge(desktop_rx)
+        if xflow_platform::run_desktop_bridge(desktop_rx, bridge_commands)
             .await
             .is_err()
         {
@@ -603,12 +647,7 @@ mod tests {
     struct FailingCleanup;
     #[async_trait]
     impl TextTransformer for FailingCleanup {
-        async fn transform(
-            &self,
-            _: &str,
-            _: xflow_core::CleanupMode,
-            _: &AppContext,
-        ) -> Result<String> {
+        async fn transform(&self, _: TransformRequest<'_>) -> Result<String> {
             bail!("provider unavailable")
         }
     }
@@ -648,8 +687,8 @@ mod tests {
             desktop_events,
         );
         let task = tokio::spawn(engine.run(rx));
-        assert_eq!(ask(&tx, Request::Start).await.state, State::Listening);
-        assert!(!ask(&tx, Request::Start).await.ok);
+        assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
+        assert!(!ask(&tx, Request::start()).await.ok);
         assert_eq!(ask(&tx, Request::Stop).await.state, State::Processing);
         called.notified().await;
         assert_eq!(ask(&tx, Request::Status).await.state, State::Processing);
@@ -693,8 +732,8 @@ mod tests {
             desktop_events,
         );
         let task = tokio::spawn(engine.run(rx));
-        ask(&tx, Request::Toggle).await;
-        ask(&tx, Request::Toggle).await;
+        ask(&tx, Request::toggle()).await;
+        ask(&tx, Request::toggle()).await;
         called.notified().await;
         release.notify_one();
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -707,7 +746,17 @@ mod tests {
             Some("Postgres is ready.")
         );
         assert_eq!(
-            ask(&tx, Request::History { limit: 5 }).await.history.len(),
+            ask(
+                &tx,
+                Request::History {
+                    limit: 5,
+                    offset: 0,
+                    query: None,
+                }
+            )
+            .await
+            .history
+            .len(),
             1
         );
         assert_eq!(desktop.0.load(Ordering::SeqCst), 1);
@@ -719,10 +768,17 @@ mod tests {
         }
         ask(&tx, Request::ClearHistory).await;
         assert!(ask(&tx, Request::Last).await.text.is_none());
-        assert!(ask(&tx, Request::History { limit: 5 })
-            .await
-            .history
-            .is_empty());
+        assert!(ask(
+            &tx,
+            Request::History {
+                limit: 5,
+                offset: 0,
+                query: None,
+            }
+        )
+        .await
+        .history
+        .is_empty());
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
@@ -751,11 +807,11 @@ mod tests {
             desktop_events,
         );
         let task = tokio::spawn(engine.run(rx));
-        assert_eq!(ask(&tx, Request::Start).await.state, State::Listening);
+        assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
         let failed = ask(&tx, Request::Stop).await;
         assert!(!failed.ok);
         assert_eq!(failed.state, State::Error);
-        assert_eq!(ask(&tx, Request::Toggle).await.state, State::Listening);
+        assert_eq!(ask(&tx, Request::toggle()).await.state, State::Listening);
         assert_eq!(ask(&tx, Request::Stop).await.state, State::Processing);
         called.notified().await;
         release.notify_one();
@@ -798,16 +854,23 @@ mod tests {
             desktop_events,
         );
         let task = tokio::spawn(engine.run(rx));
-        ask(&tx, Request::Start).await;
+        ask(&tx, Request::start()).await;
         ask(&tx, Request::Stop).await;
         called.notified().await;
         assert_eq!(ask(&tx, Request::ClearHistory).await.state, State::Idle);
         release.notify_one();
         assert!(ask(&tx, Request::Last).await.text.is_none());
-        assert!(ask(&tx, Request::History { limit: 5 })
-            .await
-            .history
-            .is_empty());
+        assert!(ask(
+            &tx,
+            Request::History {
+                limit: 5,
+                offset: 0,
+                query: None,
+            }
+        )
+        .await
+        .history
+        .is_empty());
         assert_eq!(desktop.0.load(Ordering::SeqCst), 0);
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();

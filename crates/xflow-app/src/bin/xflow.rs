@@ -114,15 +114,19 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         let request = match args.command {
-            Commands::Start => Request::Start,
+            Commands::Start => Request::start(),
             Commands::Stop => Request::Stop,
-            Commands::Toggle => Request::Toggle,
+            Commands::Toggle => Request::toggle(),
             Commands::Cancel => Request::Cancel,
             Commands::Status => Request::Status,
             Commands::Last => Request::Last,
             Commands::CopyLast => Request::CopyLast,
             Commands::PasteLast => Request::PasteLast,
-            Commands::History { limit } => Request::History { limit },
+            Commands::History { limit } => Request::History {
+                limit,
+                offset: 0,
+                query: None,
+            },
             Commands::ClearHistory => Request::ClearHistory,
             Commands::Shutdown => Request::Shutdown,
             _ => unreachable!(),
