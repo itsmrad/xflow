@@ -144,6 +144,8 @@ pub async fn watch(out: &Output) -> Result<()> {
     }
 }
 pub async fn listen(once: bool, seconds: Option<u64>, command: bool, out: &Output) -> Result<()> {
+    // Register before Start so Ctrl-C cannot terminate us with a capture in flight.
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let interactive = std::io::stdin().is_terminal();
     if seconds.is_none() && !interactive {
         return Err(Error::new(
@@ -185,7 +187,18 @@ pub async fn listen(once: bool, seconds: Option<u64>, command: bool, out: &Outpu
         None
     };
     loop {
-        send(&mode_request(false, command, Delivery::None)).await?;
+        let request = mode_request(false, command, Delivery::None);
+        let start = send(&request);
+        tokio::pin!(start);
+        tokio::select! {
+            result = &mut start => { result?; }
+            _ = interrupt.recv() => {
+                // Finish the bounded Start request before Cancel to preserve command order.
+                let _ = start.await;
+                let _ = send(&Request::Cancel).await;
+                return Err(cancelled());
+            }
+        }
         if !out.quiet {
             eprintln!(
                 "Listening{}",
@@ -196,7 +209,7 @@ pub async fn listen(once: bool, seconds: Option<u64>, command: bool, out: &Outpu
                 }
             );
         }
-        let result = collect(&mut reader, &mut input, seconds, out).await;
+        let result = collect(&mut reader, &mut input, &mut interrupt, seconds, out).await;
         if result.is_err() {
             let _ = send(&Request::Cancel).await;
         }
@@ -209,6 +222,7 @@ pub async fn listen(once: bool, seconds: Option<u64>, command: bool, out: &Outpu
 async fn collect(
     reader: &mut BufReader<tokio::net::UnixStream>,
     input: &mut Option<tokio::sync::mpsc::Receiver<()>>,
+    interrupt: &mut tokio::signal::unix::Signal,
     seconds: Option<u64>,
     out: &Output,
 ) -> Result<()> {
@@ -217,23 +231,39 @@ async fn collect(
     let deadline = tokio::time::sleep(Duration::from_secs(4200));
     tokio::pin!(deadline);
     let mut stopped = false;
+    let mut listening = false;
     loop {
         tokio::select! {
             response = transport::read_frame::<Response, _>(reader) => {
                 let response = response?.context("Daemon disconnected before transcription completed")?;
                 validate(&response, false)?;
                 if response.state == State::Error { return Err(Error::new(1, response.message.unwrap_or_else(|| "Dictation failed".into()), "Check xflow doctor")); }
-                if let Some(text) = &response.text { out.data(&response, text)?; return Ok(()); }
+                if response.state == State::Listening { listening = true; }
+                // The subscription may have queued an older completion after its snapshot.
+                if listening && response.state == State::Success {
+                    if let Some(text) = &response.text { out.data(&response, text)?; return Ok(()); }
+                    return Err(Error::new(1, "Dictation completed without text", "Try a longer recording"));
+                }
+                if listening && response.state == State::Idle {
+                    return Err(Error::new(1, response.message.unwrap_or_else(|| "Dictation ended without a transcript".into()), "Try again with a longer recording; the session may have been cancelled"));
+                }
             }
             _ = &mut stop, if !stopped && seconds.is_some() => { send(&Request::Stop).await?; stopped = true; }
             value = async { match input { Some(rx) => rx.recv().await, None => std::future::pending().await } }, if !stopped && seconds.is_none() => {
                 if value.is_none() { return Err(Error::new(1, "Input closed before recording finished", "Use --seconds N for scripting")); }
                 send(&Request::Stop).await?; stopped = true;
             }
-            _ = tokio::signal::ctrl_c() => return Err(Error::new(130, "Dictation cancelled", "The active recording was discarded")),
+            _ = interrupt.recv() => return Err(cancelled()),
             _ = &mut deadline => return Err(Error::new(1, "Dictation timed out", "Check provider timeouts and xflow doctor")),
         }
     }
+}
+fn cancelled() -> Error {
+    Error::new(
+        130,
+        "Dictation cancelled",
+        "The active recording was discarded",
+    )
 }
 pub fn history(page: &args::Page, action: Option<&args::History>, out: &Output) -> Result<()> {
     use args::History::*;

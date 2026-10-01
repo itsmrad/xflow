@@ -26,6 +26,8 @@ class Daemon:
         self.subscribers = []
         self.protocol = 2
         self.fail = False
+        self.start_gate = None
+        self.finish_state = "success"
         self.closed = threading.Event()
         self.lock = threading.Lock()
         self.socket = socket.socket(socket.AF_UNIX)
@@ -56,6 +58,7 @@ class Daemon:
             if command == "subscribe":
                 # A stale last transcript in the snapshot must not become listen's result.
                 self.reply(connection, protocol=self.protocol, version="0.1.0", text="stale")
+                self.reply(connection, state="success", text="queued stale dictation")
                 self.subscribers.append(connection)
                 continue
             if self.fail:
@@ -69,15 +72,27 @@ class Daemon:
                 self.reply(connection, entry={"id": 7, "created_at": 42, "provider": "local", "text": "saved"})
             elif command == "last":
                 self.reply(connection, text="saved")
+            elif command == "start":
+                if self.start_gate is not None:
+                    assert self.start_gate.wait(timeout=5), "pending Start fixture timed out"
+                self.reply(connection, state="listening")
+                self.broadcast(state="listening")
             else:
                 self.reply(connection, state="processing" if command == "stop" else "idle")
                 if command == "stop":
-                    for subscriber in self.subscribers:
-                        try:
-                            self.reply(subscriber, state="success", text="fresh dictation")
-                        except (BrokenPipeError, ConnectionResetError):
-                            pass
+                    self.broadcast(state="processing", text="not a completed transcript")
+                    if self.finish_state == "success":
+                        self.broadcast(state="success", text="fresh dictation")
+                    else:
+                        self.broadcast(state="idle", message="Recording too short or cancelled")
             connection.close()
+
+    def broadcast(self, **fields):
+        for subscriber in self.subscribers:
+            try:
+                self.reply(subscriber, **fields)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def close(self):
         self.closed.set()
@@ -197,16 +212,42 @@ def main():
             assert result.stdout == "fresh dictation\n", result.stdout
             starts = [r for r in daemon.requests if r["command"] == "start" and r.get("delivery") == "none"]
             assert starts
+            daemon.finish_state = "idle"
+            short = run("listen", "--once", "--seconds", "1", "--quiet", code=1)
+            assert not short.stdout and "too short or cancelled" in short.stderr
+            daemon.finish_state = "success"
+            count = len([r for r in daemon.requests if r.get("delivery") == "none"])
             listen = subprocess.Popen([str(binary), "listen", "--once", "--seconds", "10"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:
                 deadline = time.monotonic() + 5
-                while time.monotonic() < deadline and len([r for r in daemon.requests if r.get("delivery") == "none"]) < 2:
+                while time.monotonic() < deadline and len([r for r in daemon.requests if r.get("delivery") == "none"]) == count:
                     time.sleep(0.01)
                 listen.send_signal(signal.SIGINT)
                 _, stderr = listen.communicate(timeout=5)
                 assert listen.returncode == 130, stderr
                 assert daemon.requests[-1]["command"] == "cancel"
             finally:
+                if listen.poll() is None:
+                    listen.kill()
+                    listen.wait()
+            # Ctrl-C while Start is awaiting its reply must still send Cancel afterwards.
+            daemon.start_gate = threading.Event()
+            count = len(daemon.requests)
+            listen = subprocess.Popen([str(binary), "listen", "--once", "--seconds", "10"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not any(r["command"] == "start" for r in daemon.requests[count:]):
+                    time.sleep(0.01)
+                assert any(r["command"] == "start" for r in daemon.requests[count:])
+                listen.send_signal(signal.SIGINT)
+                time.sleep(0.05)
+                daemon.start_gate.set()
+                stdout, stderr = listen.communicate(timeout=5)
+                assert listen.returncode == 130 and not stdout, stderr
+                assert daemon.requests[-1]["command"] == "cancel"
+            finally:
+                daemon.start_gate.set()
+                daemon.start_gate = None
                 if listen.poll() is None:
                     listen.kill()
                     listen.wait()
