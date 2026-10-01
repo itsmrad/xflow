@@ -2,7 +2,10 @@ use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 use xflow_core::{
     ipc::{HistoryEntry, Stats},
@@ -85,11 +88,27 @@ impl Store {
     /// Stores a finished session and returns it with its id and timestamp, or
     /// `None` when history is disabled. `id`/`created_at` of the input are ignored.
     pub async fn append(&self, entry: HistoryEntry) -> Result<Option<HistoryEntry>> {
+        self.append_guarded(entry, None).await
+    }
+    pub(crate) async fn append_current(
+        &self,
+        entry: HistoryEntry,
+        epoch: Arc<AtomicU64>,
+        generation: u64,
+    ) -> Result<Option<HistoryEntry>> {
+        self.append_guarded(entry, Some((epoch, generation))).await
+    }
+    async fn append_guarded(
+        &self,
+        entry: HistoryEntry,
+        guard: Option<(Arc<AtomicU64>, u64)>,
+    ) -> Result<Option<HistoryEntry>> {
         if !self.enabled {
             return Ok(None);
         }
         let limit = self.limit;
         self.run(move |conn| {
+            if guard.is_some_and(|(epoch, generation)| epoch.load(Ordering::SeqCst) != generation) { return Ok(None); }
             let tx = conn.transaction()?;
             tx.execute(
                 "INSERT INTO history (text, provider, model, raw_text, app_id, language, duration_ms, latency_ms, mode, words) \
@@ -116,7 +135,7 @@ impl Store {
             prune(&tx, limit)?;
             tx.commit()?;
             // A zero history_limit keeps nothing.
-            Ok(Some(stored).filter(|_| limit > 0))
+            Ok((limit > 0).then_some(stored))
         })
         .await
     }
@@ -184,6 +203,16 @@ impl Store {
         }
         self.run(move |conn| Ok(conn.execute("DELETE FROM history WHERE id = ?1", [id])? > 0))
             .await
+    }
+    pub async fn set_latency(&self, id: i64, latency_ms: u64) -> Result<()> {
+        self.run(move |conn| {
+            conn.execute(
+                "UPDATE history SET latency_ms = ?2 WHERE id = ?1",
+                params![id, clamp_i64(latency_ms)],
+            )?;
+            Ok(())
+        })
+        .await
     }
     pub async fn clear(&self) -> Result<()> {
         self.run(|conn| {
@@ -301,7 +330,9 @@ fn migrate(connection: &mut Connection) -> Result<()> {
     {
         let mut select = tx.prepare("SELECT id, text FROM history")?;
         let mut update = tx.prepare("UPDATE history SET words = ?2 WHERE id = ?1")?;
-        let rows = select.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+        let rows = select.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
         for row in rows {
             let (id, text) = row?;
             update.execute(params![id, words(&text)])?;
@@ -460,7 +491,15 @@ mod tests {
     async fn search_escapes_wildcards_and_pages() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("h.db"), true, 100).unwrap();
-        for text in ["100% done", "100 percent", "snake_case", "snakeXcase", "Hello World", "hello again", r"C:\path"] {
+        for text in [
+            "100% done",
+            "100 percent",
+            "snake_case",
+            "snakeXcase",
+            "Hello World",
+            "hello again",
+            r"C:\path",
+        ] {
             store.append(entry(text)).await.unwrap();
         }
         let texts = |rows: Vec<HistoryEntry>| rows.into_iter().map(|r| r.text).collect::<Vec<_>>();
@@ -469,13 +508,24 @@ mod tests {
         assert_eq!(texts(search("e_c").await.unwrap().0), ["snake_case"]);
         assert_eq!(texts(search(r"\p").await.unwrap().0), [r"C:\path"]);
         let (rows, total) = search("HELLO").await.unwrap();
-        assert_eq!((texts(rows), total), (vec!["hello again".into(), "Hello World".into()], 2));
+        assert_eq!(
+            (texts(rows), total),
+            (vec!["hello again".into(), "Hello World".into()], 2)
+        );
         assert_eq!(search("").await.unwrap().1, 7);
         let (page, total) = store.history(2, 2, None).await.unwrap();
-        assert_eq!((texts(page), total), (vec!["snake_case".into(), "100 percent".into()], 7));
+        assert_eq!(
+            (texts(page), total),
+            (vec!["Hello World".into(), "snakeXcase".into()], 7)
+        );
         let (page, total) = store.history(2, 1, Some("hello".into())).await.unwrap();
         assert_eq!((texts(page), total), (vec!["Hello World".into()], 2));
-        assert!(store.history(5, usize::MAX, None).await.unwrap().0.is_empty());
+        assert!(store
+            .history(5, usize::MAX, None)
+            .await
+            .unwrap()
+            .0
+            .is_empty());
     }
 
     #[tokio::test]
@@ -507,9 +557,20 @@ mod tests {
             .unwrap();
         assert_eq!(version, 2);
         // Reopening an already-migrated database is a no-op.
-        assert_eq!(Store::open(&path, true, 500).unwrap().history(10, 0, None).await.unwrap().1, 3);
+        assert_eq!(
+            Store::open(&path, true, 500)
+                .unwrap()
+                .history(10, 0, None)
+                .await
+                .unwrap()
+                .1,
+            3
+        );
         // A database from a newer xflow is refused, not rewritten.
-        Connection::open(&path).unwrap().execute_batch("PRAGMA user_version=3;").unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("PRAGMA user_version=3;")
+            .unwrap();
         assert!(Store::open(&path, true, 500).is_err());
     }
 
