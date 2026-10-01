@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Explicit opt-in for isolated binary integration tests; never enabled in releases.
+test-support = []
+
 [[bin]]
 name = "xflow"
 path = "src/bin/xflow.rs"
