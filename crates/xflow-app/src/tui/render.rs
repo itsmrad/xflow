@@ -62,7 +62,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
     ])
     .split(area);
     let top = Layout::horizontal([
-        Constraint::Length(if area.width >= 100 { 22 } else { 14 }),
+        Constraint::Length(if area.width >= 60 { 22 } else { 14 }),
         Constraint::Min(1),
     ])
     .split(rows[0]);
@@ -98,11 +98,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         .block(block("Control center", theme)),
         top[1],
     );
-    let body = Layout::horizontal([
-        Constraint::Length(if area.width >= 100 { 19 } else { 15 }),
-        Constraint::Min(1),
-    ])
-    .split(rows[1]);
+    let body = Layout::horizontal([Constraint::Length(19), Constraint::Min(1)]).split(rows[1]);
     let items = PAGES
         .iter()
         .enumerate()
@@ -413,18 +409,13 @@ fn stats(frame: &mut Frame, area: Rect, app: &App) {
     panel(frame, rows[0], "Your voice, in numbers", text, app);
     // ponytail: Stats has no daily buckets. Show loaded history's word counts;
     // add daily activity when the shared Stats contract exposes it.
-    let activity = app
-        .history
-        .iter()
-        .rev()
-        .map(|h| h.text.split_whitespace().count() as u64)
-        .collect::<Vec<_>>();
+    let activity = &app.activity;
     frame.render_widget(
         Sparkline::default()
-            .data(&activity)
+            .data(activity)
             .style(app.theme.base().fg(app.theme.accent))
             .block(block(
-                "Recent activity · words in loaded history page",
+                "Recent activity · words in last 30 sessions",
                 app.theme,
             )),
         rows[1],

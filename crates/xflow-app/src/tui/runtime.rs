@@ -24,7 +24,10 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{
     io::{IsTerminal, Write},
     path::Path,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tokio::{io::BufReader, net::UnixStream, sync::mpsc, task::JoinSet};
@@ -88,15 +91,25 @@ impl Drop for TerminalGuard {
 /// Frames are read in this dedicated task: select cancellation never discards a
 /// partially read line. Reconnect only while disconnected, with bounded backoff.
 async fn subscribe(tx: mpsc::Sender<Update>) {
+    reconnect(tx, transport::connect).await;
+}
+async fn reconnect<F, Fut>(tx: mpsc::Sender<Update>, connect: F)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<UnixStream>>,
+{
     let mut backoff = Duration::from_millis(250);
     loop {
         let result = async {
-            let stream = transport::connect().await?;
+            let stream = connect().await?;
             stream_events(stream, &tx).await
         }
         .await;
         if tx.is_closed() {
             return;
+        }
+        if result.is_ok() {
+            backoff = Duration::from_millis(250);
         }
         let message = result
             .err()
@@ -147,7 +160,13 @@ pub async fn run() -> Result<()> {
     let (tx, mut rx) = mpsc::channel(64);
     let mut jobs = JoinSet::new();
     jobs.spawn(subscribe(tx.clone()));
-    dispatch(vec![Effect::Load(app.path.clone())], &tx, &mut jobs);
+    let generation = Arc::new(AtomicU64::new(0));
+    dispatch(
+        vec![Effect::Load(app.path.clone())],
+        &tx,
+        &mut jobs,
+        &generation,
+    );
     let mut input = EventStream::new();
     let mut hits = HitMap::default();
     let mut redraw = true;
@@ -216,16 +235,36 @@ pub async fn run() -> Result<()> {
             _=term.recv()=>{effects=app.action(Action::Quit);redraw=true;},
             Some(result)=jobs.join_next(),if !jobs.is_empty()=>{if let Err(error)=result{app.toast=Some(format!("Background operation failed: {error}"));redraw=true;}},
         }
-        dispatch(effects, &tx, &mut jobs);
+        dispatch(effects, &tx, &mut jobs, &generation);
     }
     jobs.abort_all();
     Ok(())
 }
 
-fn dispatch(effects: Vec<Effect>, tx: &mpsc::Sender<Update>, jobs: &mut JoinSet<()>) {
+fn dispatch(
+    effects: Vec<Effect>,
+    tx: &mpsc::Sender<Update>,
+    jobs: &mut JoinSet<()>,
+    generation: &Arc<AtomicU64>,
+) {
     for effect in effects {
+        let current = generation.clone();
+        let history_generation = match &effect {
+            Effect::Request(_, Tag::History(g)) => {
+                current.store(*g, Ordering::Relaxed);
+                Some(*g)
+            }
+            _ => None,
+        };
         let tx = tx.clone();
         jobs.spawn(async move {
+            // Debounce search without opening obsolete daemon connections.
+            if let Some(g) = history_generation {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+                if current.load(Ordering::Relaxed) != g {
+                    return;
+                }
+            }
             let update = match effect {
                 Effect::Request(request, tag) => {
                     Update::Reply(tag, transport::request(&request).await)
@@ -279,6 +318,16 @@ fn dispatch(effects: Vec<Effect>, tx: &mpsc::Sender<Update>, jobs: &mut JoinSet<
                     })
                     .await,
                 ),
+                Effect::ExportDraft(path, text) => Update::Notice(
+                    blocking(move || {
+                        write_new(&path, text.as_bytes())?;
+                        Ok(format!(
+                            "Exported configuration draft to {}",
+                            path.display()
+                        ))
+                    })
+                    .await,
+                ),
                 Effect::Doctor => Update::Doctor(
                     blocking(doctor)
                         .await
@@ -307,6 +356,9 @@ pub(super) fn save(file: &ConfigFile, expected: Option<&str>) -> Result<()> {
 }
 pub(super) fn export(path: &Path, entry: &HistoryEntry) -> Result<()> {
     let text = serde_json::to_vec_pretty(entry)?;
+    write_new(path, &text)
+}
+fn write_new(path: &Path, text: &[u8]) -> Result<()> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     use std::os::unix::fs::OpenOptionsExt;
@@ -314,7 +366,7 @@ pub(super) fn export(path: &Path, entry: &HistoryEntry) -> Result<()> {
     let mut file = options
         .open(path)
         .context("Choose a new writable export path")?;
-    file.write_all(&text)?;
+    file.write_all(text)?;
     file.write_all(b"\n")?;
     file.sync_all()?;
     Ok(())
@@ -346,4 +398,121 @@ fn doctor() -> Result<Vec<String>> {
     rows.push("Daemon connection is shown in the header; xflow service start when offline".into());
     rows.push("Keys: see 6 Providers for environment/keyring status and connection checks".into());
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+    use xflow_core::State;
+
+    #[tokio::test]
+    async fn mock_subscription_keeps_fragmented_frames_and_final_timings() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let (tx, mut rx) = mpsc::channel(16);
+        let reader = tokio::spawn(async move { stream_events(client, &tx).await.unwrap() });
+        let mut server_reader = BufReader::new(&mut server);
+        assert_eq!(
+            transport::read_frame::<Request, _>(&mut server_reader)
+                .await
+                .unwrap(),
+            Some(Request::Subscribe)
+        );
+        drop(server_reader);
+        for response in [
+            Response::status(State::Idle, 0.0),
+            Response::status(State::Listening, 0.6),
+            Response {
+                text: Some("hello mock".into()),
+                timings: Some(xflow_core::ipc::Timings {
+                    total_ms: 27,
+                    ..Default::default()
+                }),
+                ..Response::status(State::Success, 0.0)
+            },
+        ] {
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            for part in bytes.chunks(3) {
+                server.write_all(part).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        }
+        server.shutdown().await.unwrap();
+        reader.await.unwrap();
+        assert!(matches!(rx.recv().await, Some(Update::Connection(true, _))));
+        assert!(matches!(rx.recv().await,Some(Update::Event(r)) if r.state==State::Idle));
+        assert!(matches!(rx.recv().await,Some(Update::Event(r)) if r.state==State::Listening));
+        assert!(
+            matches!(rx.recv().await,Some(Update::Event(r)) if r.text.as_deref()==Some("hello mock") && r.timings.as_ref().unwrap().total_ms==27)
+        );
+    }
+
+    #[tokio::test]
+    async fn isolated_reconnect_survives_daemon_disconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mock.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                assert_eq!(
+                    transport::read_frame::<Request, _>(&mut reader)
+                        .await
+                        .unwrap(),
+                    Some(Request::Subscribe)
+                );
+                drop(reader);
+                transport::write_frame(&mut stream, &Response::status(State::Idle, 0.0))
+                    .await
+                    .unwrap();
+                stream.shutdown().await.unwrap();
+            }
+        });
+        let (tx, mut rx) = mpsc::channel(16);
+        let task = tokio::spawn(async move {
+            reconnect(tx, || {
+                let path = path.clone();
+                async move { Ok(UnixStream::connect(path).await?) }
+            })
+            .await
+        });
+        let mut connected = 0;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while connected < 2 {
+                if matches!(rx.recv().await, Some(Update::Connection(true, _))) {
+                    connected += 1;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+        let _ = task.await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn obsolete_search_does_not_open_any_daemon_connection() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut jobs = JoinSet::new();
+        let generation = Arc::new(AtomicU64::new(0));
+        dispatch(
+            vec![Effect::Request(
+                Request::History {
+                    limit: 30,
+                    offset: 0,
+                    query: Some("obsolete".into()),
+                },
+                Tag::History(1),
+            )],
+            &tx,
+            &mut jobs,
+            &generation,
+        );
+        generation.store(2, Ordering::Relaxed);
+        jobs.join_next().await.unwrap().unwrap();
+        assert!(rx.try_recv().is_err());
+    }
 }

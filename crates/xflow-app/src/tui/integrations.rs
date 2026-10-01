@@ -69,5 +69,9 @@ pub async fn delete_key(_id: &str) -> Result<()> {
     bail!("Key deletion awaits provider catalog integration")
 }
 pub fn devices() -> Result<Vec<String>> {
-    bail!("Device catalog awaits platform integration; set recording.device by name in Settings")
+    // Device enumeration never opens or records from an input stream.
+    Ok(xflow_platform::input_devices()?
+        .into_iter()
+        .map(|d| d.name)
+        .collect())
 }

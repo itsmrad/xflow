@@ -91,6 +91,8 @@ pub enum Action {
     DeleteKey,
     CheckProvider,
     Devices,
+    ScrollUp,
+    ScrollDown,
     Quit,
 }
 #[derive(Clone)]
@@ -122,7 +124,11 @@ pub fn commands() -> Vec<Command> {
         (Action::AddReplacement, "Add replacement", "A"),
         (Action::Edit, "Edit or activate selection", "Enter"),
         (Action::Delete, "Delete selected entry", "Delete"),
-        (Action::Export, "Export selected history entry", "e"),
+        (
+            Action::Export,
+            "Export history selection / config draft",
+            "e",
+        ),
         (Action::NextPage, "Next history page", "PgDn"),
         (Action::PrevPage, "Previous history page", "PgUp"),
         (Action::Save, "Save config and reload daemon", "Ctrl+S"),
@@ -139,6 +145,8 @@ pub fn commands() -> Vec<Command> {
         (Action::DeleteKey, "Delete provider key", "K"),
         (Action::CheckProvider, "Check provider connection", "T"),
         (Action::Devices, "Choose microphone", "i"),
+        (Action::ScrollUp, "Scroll detail up", "["),
+        (Action::ScrollDown, "Scroll detail down", "]"),
         (Action::Quit, "Quit", "q"),
     ] {
         out.push(Command {
@@ -164,6 +172,7 @@ pub enum Tag {
     Detail(i64),
     Mutation,
     Stats,
+    Activity,
     Reload,
 }
 pub enum Effect {
@@ -178,6 +187,7 @@ pub enum Effect {
     CheckProvider(Config, bool),
     Devices,
     Export(PathBuf, HistoryEntry),
+    ExportDraft(PathBuf, String),
     Doctor,
 }
 #[derive(Clone, Debug)]
@@ -191,6 +201,7 @@ pub enum EditTarget {
     Model,
     Key(String),
     Export(HistoryEntry),
+    Draft,
     Theme,
     Device,
 }
@@ -233,7 +244,7 @@ pub enum Modal {
     Help,
     Palette { query: String, selected: usize },
     Search,
-    Editor(Editor),
+    Editor(Box<Editor>),
     Confirm { action: Action, prompt: String },
 }
 pub struct App {
@@ -260,6 +271,7 @@ pub struct App {
     pub generation: u64,
     pub stats: Stats,
     pub stats_loaded: bool,
+    pub activity: Vec<u64>,
     pub overlay: Vec<Setting>,
     pub providers: Vec<Provider>,
     pub cleanup: bool,
@@ -299,6 +311,7 @@ impl App {
             generation: 0,
             stats: Stats::default(),
             stats_loaded: false,
+            activity: vec![],
             overlay: vec![],
             providers: vec![],
             cleanup: false,
@@ -319,7 +332,7 @@ impl App {
         let theme = Theme::resolve(&config.ui.theme, &config.ui.themes, self.colors);
         self.theme = theme.unwrap_or_else(|error| {
             self.toast = Some(error.to_string());
-            Theme::resolve("paper", &config.ui.themes, self.colors).expect("paper theme")
+            Theme::resolve("paper", &Default::default(), self.colors).expect("paper theme")
         });
         self.config = config;
         self.disk = disk;
@@ -447,7 +460,17 @@ impl App {
                     Tag::History(self.generation),
                 )]
             }
-            Page::Stats => vec![Effect::Request(Request::Stats, Tag::Stats)],
+            Page::Stats => vec![
+                Effect::Request(Request::Stats, Tag::Stats),
+                Effect::Request(
+                    Request::History {
+                        limit: PAGE_SIZE,
+                        offset: 0,
+                        query: None,
+                    },
+                    Tag::Activity,
+                ),
+            ],
             Page::Providers => vec![Effect::Providers(self.config.clone(), self.cleanup)],
             Page::Overlay => vec![Effect::Overlay],
             Page::Doctor => vec![Effect::Doctor],
@@ -482,6 +505,14 @@ impl App {
                 self.detail = None;
             }
             Tag::Detail(_) => self.detail = response.entry,
+            Tag::Activity => {
+                self.activity = response
+                    .history
+                    .iter()
+                    .rev()
+                    .map(|h| h.text.split_whitespace().count() as u64)
+                    .collect()
+            }
             Tag::Stats => {
                 if let Some(stats) = response.stats {
                     self.stats = stats;
@@ -490,7 +521,16 @@ impl App {
             }
             Tag::Mutation => return self.refresh(),
             Tag::Reload => self.toast = Some("Saved and reloaded".into()),
-            Tag::Ordinary => self.event(response),
+            Tag::Ordinary => {
+                // The subscription owns session state; a delayed command reply
+                // must never roll a newer state event back to an older state.
+                if let Some(text) = response.text {
+                    self.transcript = text;
+                }
+                if let Some(message) = response.message {
+                    self.toast = Some(message);
+                }
+            }
         }
         vec![]
     }
@@ -550,12 +590,13 @@ impl App {
                         self.offset = 0;
                         effects = self.refresh();
                     }
-                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if self.query.len() < 1024 {
-                            self.query.push(c);
-                            self.offset = 0;
-                            effects = self.refresh();
-                        }
+                    KeyCode::Char(c)
+                        if !key.modifiers.contains(KeyModifiers::CONTROL)
+                            && self.query.len() + c.len_utf8() <= 1024 =>
+                    {
+                        self.query.push(c);
+                        self.offset = 0;
+                        effects = self.refresh();
                     }
                     _ => (),
                 },
@@ -733,6 +774,8 @@ impl App {
             KeyCode::Char('K') => Action::DeleteKey,
             KeyCode::Char('T') => Action::CheckProvider,
             KeyCode::Char('i') => Action::Devices,
+            KeyCode::Char('[') => Action::ScrollUp,
+            KeyCode::Char(']') => Action::ScrollDown,
             KeyCode::Char('q') => Action::Quit,
             _ => return vec![],
         };
@@ -754,12 +797,12 @@ impl App {
         }
     }
     fn edit(&mut self, target: EditTarget, fields: Vec<Field>) {
-        self.modal = Some(Modal::Editor(Editor {
+        self.modal = Some(Modal::Editor(Box::new(Editor {
             target,
             fields,
             focus: 0,
             error: None,
-        }));
+        })));
     }
     fn editable(&mut self) -> bool {
         if self.saving || self.file.is_none() {
@@ -860,7 +903,12 @@ impl App {
                     });
                 }
             }
-            Action::Help => self.modal = Some(Modal::Help),
+            Action::Help => {
+                self.scroll = 0;
+                self.modal = Some(Modal::Help);
+            }
+            Action::ScrollUp => self.scroll = self.scroll.saturating_sub(4),
+            Action::ScrollDown => self.scroll = self.scroll.saturating_add(4),
             Action::Palette => {
                 self.modal = Some(Modal::Palette {
                     query: String::new(),
@@ -935,6 +983,18 @@ impl App {
                         vec![Field::new(
                             "New export file (JSON; existing files are never overwritten)",
                             format!("xflow-history-{}.json", h.id),
+                        )],
+                    );
+                }
+            }
+            Action::Export => {
+                if let Some(file) = &self.file {
+                    let _ = file;
+                    self.edit(
+                        EditTarget::Draft,
+                        vec![Field::new(
+                            "New file for configuration draft",
+                            "xflow-config-draft.toml",
                         )],
                     );
                 }
@@ -1184,6 +1244,19 @@ impl App {
                 }
                 return Ok(vec![Effect::Export(PathBuf::from(value), entry.clone())]);
             }
+            EditTarget::Draft => {
+                if value.trim().is_empty() {
+                    bail!("Choose a file path");
+                }
+                let file = self
+                    .file
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Wait for save to finish"))?;
+                return Ok(vec![Effect::ExportDraft(
+                    PathBuf::from(value),
+                    file.to_string(),
+                )]);
+            }
             EditTarget::Word(index) => {
                 replace(&mut config.dictionary.words, *index, value.trim().into())?;
                 "dictionary.words"
@@ -1349,8 +1422,11 @@ fn mode_name(mode: CleanupMode) -> &'static str {
 fn setting_field(key: &str, value: &str) -> Field {
     let value = if value == "(unset)" {
         String::new()
-    } else if let Ok(toml::Value::String(s)) = value.parse::<toml::Value>() {
-        s
+    } else if let Ok(doc) = format!("value = {value}").parse::<toml::Table>() {
+        doc.get("value")
+            .and_then(toml::Value::as_str)
+            .map(String::from)
+            .unwrap_or_else(|| value.into())
     } else {
         value.into()
     };
