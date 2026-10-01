@@ -104,8 +104,10 @@ def main():
 
         assert "setup" in run("--help").stdout
         assert "complete" in run("completions", "bash").stdout
+        assert "script" in json.loads(run("completions", "zsh", "--json").stdout)
         assert run("listen", "--seconds", "0", code=2).stderr
         run("setup", "--yes", "--provider", "groq")
+        assert json.loads(run("setup", "--yes", "--json").stdout)["provider"] == "groq"
         config = root / "cfg/xflow/config.toml"
         assert config.stat().st_mode & 0o777 == 0o600
         run("config", "set", "recording.max_seconds", "30")
@@ -113,6 +115,7 @@ def main():
         run("config", "set", "recording.max_seconds", "0", code=4)
         assert config.read_bytes() == before
         assert json.loads(run("config", "show", "--json").stdout)["recording"]["max_seconds"] == 30
+        assert json.loads(run("config", "get", "recording.max_seconds", "--json").stdout)["value"] == 30
         run("config", "reset", code=2)
         run("dictionary", "add", "XFlow", "Postgres")
         run("dictionary", "replace", "post grass", "Postgres")
@@ -152,10 +155,23 @@ def main():
         assert not (assets / "extension.js").exists()
         run("service", "uninstall")
         assert not (root / "cfg/systemd/user/xflow.service").exists()
+        source = root / "prebuilt"
+        source.mkdir()
+        for name in ("xflow", "xflowd"):
+            path = source / name
+            path.write_text("#!/bin/sh\nexit 0\n")
+            path.chmod(0o755)
+        prefix = root / "prefix with spaces"
+        installer = Path(__file__).resolve().parents[4] / "scripts/install.sh"
+        installed = subprocess.run(["sh", str(installer), "--prefix", str(prefix), "--bin-dir", str(source)], env=env, capture_output=True, text=True, timeout=10)
+        assert installed.returncode == 0, installed.stderr
+        assert all((prefix / "bin" / name).stat().st_mode & 0o777 == 0o755 for name in ("xflow", "xflowd"))
 
         daemon = Daemon(root)
         try:
             assert json.loads(run("status", "--json").stdout)["protocol"] == 2
+            assert run("status").stdout == "FIELD     VALUE\nState     idle\nProvider  local\nModel     test\nDaemon    0.1.0\nProtocol  2\n"
+            assert json.loads(run("doctor", "--json").stdout)["ok"] is True
             run("toggle", "--quiet")
             run("start", "--command", "--json")
             run("stop")
@@ -172,6 +188,9 @@ def main():
             run("history", "clear", "--yes")
             run("config", "set", "sounds.enabled", "false")
             assert any(r["command"] == "reload" for r in daemon.requests)
+            reloads = len([r for r in daemon.requests if r["command"] == "reload"])
+            run("--config", str(root / "alternate.toml"), "config", "set", "sounds.enabled", "false")
+            assert len([r for r in daemon.requests if r["command"] == "reload"]) == reloads
             result = run("listen", "--once", "--seconds", "1", "--quiet")
             assert result.stdout == "fresh dictation\n", result.stdout
             starts = [r for r in daemon.requests if r["command"] == "start" and r.get("delivery") == "none"]

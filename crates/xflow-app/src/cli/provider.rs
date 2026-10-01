@@ -19,6 +19,17 @@ pub fn info(id: &str) -> Result<&'static ProviderInfo> {
 pub fn catalog() -> &'static [ProviderInfo] {
     xflow_providers::stt_providers()
 }
+fn credential_provider(id: &str) -> Result<()> {
+    if id == "cleanup"
+        || xflow_providers::find_provider(ProviderKind::Stt, id)
+            .or_else(|| xflow_providers::find_provider(ProviderKind::Cleanup, id))
+            .is_some()
+    {
+        Ok(())
+    } else {
+        Err(Error::provider("Unknown credential provider"))
+    }
+}
 fn value(p: &ProviderInfo) -> serde_json::Value {
     serde_json::json!({"id":p.id,"name":p.name,"endpoint":p.endpoint,"default_model":p.default_model,
         "models":p.models.iter().map(|m| serde_json::json!({"id":m.id,"label":m.label,"note":m.note})).collect::<Vec<_>>(),
@@ -169,7 +180,7 @@ pub fn key(
         Some(args::Key::Set { provider, stdin }) => save_key(path, provider, *stdin, out),
         None if legacy.is_some() => save_key(path, legacy.unwrap(), stdin, out),
         Some(args::Key::Remove { provider }) => {
-            info(provider)?;
+            credential_provider(provider)?;
             ipc::block_on(async {
                 xflow_providers::delete_key(provider)
                     .await
@@ -186,7 +197,7 @@ pub fn key(
 fn key_status(path: &Path, id: Option<&str>, out: &Output) -> Result<()> {
     let cfg = config::load(path)?.config().map_err(Error::config)?;
     let id = id.unwrap_or(&cfg.stt.provider);
-    info(id)?;
+    credential_provider(id)?;
     let override_env = if id == cfg.stt.provider {
         cfg.stt.api_key_env.as_deref()
     } else {
@@ -209,7 +220,7 @@ fn key_status(path: &Path, id: Option<&str>, out: &Output) -> Result<()> {
     Ok(())
 }
 pub fn save_key(path: &Path, provider: &str, stdin: bool, out: &Output) -> Result<()> {
-    info(provider)?;
+    credential_provider(provider)?;
     let secret = if stdin {
         let mut value = zeroize::Zeroizing::new(String::new());
         std::io::stdin().take(4097).read_to_string(&mut value)?;
@@ -231,6 +242,13 @@ pub fn save_key(path: &Path, provider: &str, stdin: bool, out: &Output) -> Resul
         }
         zeroize::Zeroizing::new(rpassword::prompt_password("API key (hidden): ")?)
     };
+    if secret.len() > 4096 {
+        return Err(Error::new(
+            2,
+            "API key is too long",
+            "Provide at most 4096 bytes",
+        ));
+    }
     if secret.is_empty() {
         return Err(Error::new(
             2,

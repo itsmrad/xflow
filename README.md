@@ -90,7 +90,7 @@ xflow dictionary add XFlow Postgres
 xflow dictionary replace 'post grass' Postgres
 xflow snippets add 'my signature' 'Regards, Alex'
 xflow styles add chat --apps slack,discord --mode light
-xflow overlay set pill-position bottom
+xflow overlay set position bottom
 xflow completions bash > xflow.bash
 ```
 

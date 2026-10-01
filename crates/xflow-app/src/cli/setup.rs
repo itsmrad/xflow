@@ -88,6 +88,32 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
         let endpoint = config::ask("Custom transcription endpoint (full URL): ", "")?;
         current.stt.endpoint = Some(endpoint);
     }
+    if id == "custom"
+        && current
+            .stt
+            .endpoint
+            .as_deref()
+            .is_none_or(|v| v.trim().is_empty())
+    {
+        return Err(Error::new(
+            2,
+            "Custom provider requires an endpoint",
+            "Pass --endpoint http://127.0.0.1:8080/v1/audio/transcriptions",
+        ));
+    }
+    if id == "custom"
+        && current
+            .stt
+            .model
+            .as_deref()
+            .is_none_or(|v| v.trim().is_empty())
+    {
+        return Err(Error::new(
+            2,
+            "Custom provider requires a model",
+            "Pass --model with your server's model ID",
+        ));
+    }
     if let Some(language) = &options.language {
         current.stt.language = Some(language.clone());
     }

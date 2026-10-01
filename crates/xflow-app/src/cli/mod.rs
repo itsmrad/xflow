@@ -162,7 +162,13 @@ fn path(cli: &Cli) -> Result<PathBuf> {
 fn run(cli: &Cli, out: &Output) -> Result<()> {
     match &cli.command {
         Command::Completions { shell } => {
-            clap_complete::generate(*shell, &mut Cli::command(), "xflow", &mut std::io::stdout());
+            let mut bytes = Vec::new();
+            clap_complete::generate(*shell, &mut Cli::command(), "xflow", &mut bytes);
+            let script = String::from_utf8(bytes)?;
+            out.data(
+                &serde_json::json!({"shell":shell.to_string(),"script":script}),
+                script.trim_end(),
+            )?;
             Ok(())
         }
         Command::Start(mode) | Command::Toggle(mode) => {

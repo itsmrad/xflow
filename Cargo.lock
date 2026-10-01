@@ -3360,6 +3360,7 @@ dependencies = [
  "xflow-core",
  "xflow-platform",
  "xflow-providers",
+ "zeroize",
 ]
 
 [[package]]

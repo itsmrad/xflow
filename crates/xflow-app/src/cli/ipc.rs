@@ -110,15 +110,18 @@ pub async fn watch(out: &Output) -> Result<()> {
     let mut stream = transport::connect().await.map_err(Error::daemon)?;
     transport::write_frame(&mut stream, &Request::Subscribe).await?;
     let mut reader = BufReader::new(stream);
-    let first: Response = transport::read_frame(&mut reader)
-        .await?
-        .context("Daemon closed subscription")?;
+    let first: Response =
+        tokio::time::timeout(Duration::from_secs(10), transport::read_frame(&mut reader))
+            .await
+            .map_err(Error::daemon)?
+            .map_err(Error::daemon)?
+            .ok_or_else(|| Error::daemon("Daemon closed subscription"))?;
     validate(&first, true)?;
     out.response(&first)?;
     loop {
         tokio::select! {
             result = transport::read_frame::<Response, _>(&mut reader) => {
-                let response = result?.context("Daemon disconnected")?;
+                let response = result.map_err(Error::daemon)?.ok_or_else(|| Error::daemon("Daemon disconnected"))?;
                 out.response(&response)?;
             }
             _ = tokio::signal::ctrl_c() => return Ok(()),
@@ -139,8 +142,10 @@ pub async fn listen(once: bool, seconds: Option<u64>, command: bool, out: &Outpu
     let mut reader = BufReader::new(stream);
     let snapshot: Response =
         tokio::time::timeout(Duration::from_secs(10), transport::read_frame(&mut reader))
-            .await??
-            .context("Daemon closed subscription")?;
+            .await
+            .map_err(Error::daemon)?
+            .map_err(Error::daemon)?
+            .ok_or_else(|| Error::daemon("Daemon closed subscription"))?;
     validate(&snapshot, true)?;
     if matches!(snapshot.state, State::Listening | State::Processing) {
         return Err(Error::new(

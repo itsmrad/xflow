@@ -80,7 +80,9 @@ pub fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
         path.to_owned()
     };
     let parent = target.parent().context("configuration has no parent")?;
-    xflow_app::paths::private_dir(parent).map_err(Error::config)?;
+    if !parent.exists() {
+        xflow_app::paths::private_dir(parent).map_err(Error::config)?;
+    }
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(Error::config)?;
     temp.write_all(bytes).map_err(Error::config)?;
     temp.as_file().sync_all().map_err(Error::config)?;
@@ -143,7 +145,21 @@ pub fn ask(prompt: &str, default: &str) -> Result<String> {
     eprint!("{prompt}");
     io::stderr().flush()?;
     let mut value = String::new();
-    io::stdin().lock().take(16 * 1024).read_line(&mut value)?;
+    let read = io::stdin().lock().take(16 * 1024).read_line(&mut value)?;
+    if read == 0 {
+        return Err(Error::new(
+            1,
+            "Input closed",
+            "Run setup --yes with explicit flags for non-interactive use",
+        ));
+    }
+    if read >= 16 * 1024 {
+        return Err(Error::new(
+            2,
+            "Prompt input is too long",
+            "Use at most 16 KiB per answer",
+        ));
+    }
     let value = value.trim();
     Ok(if value.is_empty() {
         default.into()
@@ -356,6 +372,12 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        replace(&path, TEMPLATE.as_bytes()).unwrap();
+        assert_eq!(
+            std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
+            0o755
         );
     }
 }

@@ -51,7 +51,9 @@ pub fn tool(program: &str, args: &[&str]) -> Result<String> {
 }
 fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("install path has no parent")?;
-    xflow_app::paths::private_dir(parent)?;
+    if !parent.exists() {
+        xflow_app::paths::private_dir(parent)?;
+    }
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(bytes)?;
     file.as_file().sync_all()?;

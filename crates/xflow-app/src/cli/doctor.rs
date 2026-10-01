@@ -129,7 +129,27 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
         .map_err(|e| e.message);
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
-    let checks = checks(path, &desktop, &session, present, daemon);
+    let mut checks = checks(path, &desktop, &session, present, daemon);
+    if let Ok(cfg) = super::config::load(path).and_then(|f| f.config().map_err(Error::config)) {
+        let known = super::provider::info(&cfg.stt.provider);
+        checks.push(check(
+            "provider",
+            known.is_ok(),
+            true,
+            cfg.stt.provider,
+            "Run xflow providers list and xflow providers use <provider>",
+        ));
+    }
+    if desktop.to_lowercase().contains("gnome") && present("gnome-extensions") {
+        let extension = super::system::tool("gnome-extensions", &["info", "xflow@xflow.local"]);
+        checks.push(check(
+            "GNOME extension",
+            extension.is_ok(),
+            true,
+            extension.unwrap_or_else(|e| e.message),
+            "Run xflow extension install; on Wayland log out/back in, then xflow extension enable",
+        ));
+    }
     let ok = checks.iter().all(|c| c.ok || !c.required);
     if out.json {
         out.data(&serde_json::json!({"ok":ok,"checks":checks,"manual_checks":["Microphone quality","Desktop shortcuts and text delivery","Provider credentials: xflow key status"]}), "")?;
