@@ -40,7 +40,13 @@
     },
     "python": "3.12.14",
     "recorded_utc": "2026-10-01T11:53:40Z",
-    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)"
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "supplemental_host_metadata": {
+      "cpu_governor": "schedutil",
+      "ram_total_kib": 15787708,
+      "recorded_utc": "2026-10-01T12:38:23Z",
+      "scope": "same-host final smoke; not captured at original collection time"
+    }
   },
   "error": null,
   "measurements": {

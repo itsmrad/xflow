@@ -110,10 +110,36 @@ about 4/3 and adds another live allocation.
 
 ### Profile decision and verification
 
-The initial selected profile remains thin LTO / opt 3 / cgu 1 / unwind / stripped.
-The full profile comparison is recorded separately in
-[linux-profiles-v1.json](docs/benchmarks/linux-profiles-v1.json); see the final
-selection in that artifact. Never choose `panic=abort` here: the coordinator
+The selected profile remains thin LTO / opt 3 / cgu 1 / unwind / stripped,
+with `panic = "unwind"` now explicit. All five profiles were compared with 30
+launches, 200 IPC/CLI samples and 60 seconds idle each. The full comparison and
+raw CPU validation are recorded in
+[linux-profiles-v1.json](docs/benchmarks/linux-profiles-v1.json).
+
+| Profile | Daemon / CLI bytes | Startup p50 / p95 (ms) | Idle RSS / PSS (KiB) |
+| --- | ---: | ---: | ---: |
+| thin / opt 3 / cgu 1 / unwind — selected | 9,929,168 / 2,319,784 | 2.562 / 3.259 | 8,772 / 5,659 |
+| fat / opt 3 / cgu 1 / unwind | 9,101,584 / 2,142,448 | 2.675 / 3.093 | 7,876 / 4,793 |
+| thin / opt s / cgu 1 / unwind | 6,970,320 / 2,046,840 | 2.638 / 3.088 | 9,276 / 6,153 |
+| thin / opt 3 / cgu 1 / abort — ineligible | 8,941,456 / 2,082,032 | 2.512 / 2.764 | 10,476 / 7,540 |
+| thin / opt 3 / cgu 16 / unwind | 11,816,016 / 2,828,488 | 2.601 / 3.727 | 11,572 / 8,462 |
+
+Every profile observed zero idle CPU ticks. RSS/PSS vary with residency and
+sharing; the isolated baseline's 11,116 KiB RSS and the profile run's 8,772 KiB
+are separate observations, not evidence of a product memory reduction.
+Build times reflect different cache states and are not comparable cold builds.
+Desktop/other worker load was uncontrolled, so small startup differences are
+not statistically established improvements.
+
+Fat LTO saved 8.3% daemon and 7.6% CLI bytes, but WAV encoding was slower in
+the affected workload. The follow-up thin/fat p50s were 8.882/10.207 ms at 30 s
+(60/20/8 samples for 5/30/120 s), and 35.319/38.319 ms at 120 s. The initial fat
+120 s result was 40.379 ms versus the original thin 35.231 ms. These comparisons
+do not isolate causality under shared-host load, but do not justify changing a
+speed-focused app to fat LTO. Opt=s is smallest without hot-path CPU acceptance;
+cgu16 increases size and startup p95 here. Retain the established profile and
+explicit unwind requirement, and revisit size tradeoffs on a controlled runner.
+Never choose `panic=abort` here: the coordinator
 requires unwinding for TUI terminal restoration. Cargo's
 [profile reference](https://doc.rust-lang.org/cargo/reference/profiles.html)
 documents the optimization, LTO and panic tradeoffs; tests force unwind and
@@ -126,6 +152,10 @@ test is ignored by the ordinary suite. An initial run failed three SQLite tests
 because host `/tmp` hit its quota, and a profile compiler hit the same quota.
 Moving only test/build scratch files resolved the workspace failures. No product
 crate edits or integration merges were needed for this MVP baseline.
+
+Release workspace tests also pass under the fat-LTO candidate (31 passed, one
+ignored), before rejecting it on CPU evidence. The final harness safety/smoke
+checks use worktree-local temporary XDG roots to avoid the shared `/tmp` quota.
 
 `scripts/bench/mic_open.py` is provided for a later human-consented device trace
 and has not been run. CPAL open/play/first-callback time cannot be inferred from

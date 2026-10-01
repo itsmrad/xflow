@@ -50,7 +50,9 @@ def stop(child):
 
 @contextmanager
 def isolated():
-    with tempfile.TemporaryDirectory(prefix="xflow-bench-") as temp:
+    scratch = ROOT / 'target/btmp'
+    scratch.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="xfb-", dir=scratch) as temp:
         root = Path(temp)
         for name in ("run", "config/xflow", "data", "cache", "home"):
             (root / name).mkdir(mode=0o700, parents=True)

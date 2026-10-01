@@ -28,7 +28,9 @@ class SafetyTests(unittest.TestCase):
             self.assertFalse(path.parent.parent.exists())
 
     def assert_invalid_status(self, payload, message):
-        with tempfile.TemporaryDirectory(prefix='xflow-reader-test-') as temp:
+        scratch = baseline.ROOT / 'target/btmp'
+        scratch.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='xfb-', dir=scratch) as temp:
             path = Path(temp) / 'socket'
             with socket.socket(socket.AF_UNIX) as server:
                 server.bind(str(path))

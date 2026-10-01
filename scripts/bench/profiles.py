@@ -26,12 +26,15 @@ def main():
     parser.add_argument('--cargo', default='/home/mrad/.cache/xflow-dev/bin/cargo')
     parser.add_argument('--profiles', default=','.join(PROFILES))
     parser.add_argument('--idle-seconds', type=float, default=60)
+    parser.add_argument('--resume', action='store_true', help='retain completed profiles in the output file')
     args = parser.parse_args()
     names = args.profiles.split(',')
     if any(name not in PROFILES for name in names):
         parser.error('unknown profile')
-    result = {'schema_version': 1, 'profiles': {}, 'selection': None}
     output = Path(args.output).resolve()
+    result = json.loads(output.read_text()) if args.resume and output.exists() else {
+        'schema_version': 1, 'profiles': {}, 'selection': None}
+    result['selection'] = None
     # Binary copies belong on the checkout filesystem, not size-limited /tmp.
     with tempfile.TemporaryDirectory(prefix='xflow-profiles-', dir=baseline.ROOT / 'target') as temp:
         for name in names:

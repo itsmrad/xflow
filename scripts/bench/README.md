@@ -34,8 +34,9 @@ Each daemon has a private D-Bus with **no service activation directories** and
 fresh config/data/runtime/home/cache; inherited secrets and desktop variables
 are excluded. Its configuration disables history and cloud access, and uses a
 literal loopback STT endpoint that is never called. The driver starts and stops
-only its own children. Scratch directories live under the system temporary
-directory; it never connects to the real daemon or alters installed settings.
+only its own children. Scratch directories live under the checkout's ignored
+`target/btmp` (short names keep Unix socket paths within Linux's limit); it never
+connects to the real daemon or alters installed settings.
 Startup includes spawn through a successful status reply (1 ms readiness polling);
 it excludes private-bus setup. Filesystem cache is warm, config/data are fresh.
 
@@ -71,6 +72,10 @@ The inherited optional `spawn-fake-ydotool` fixture is never run by this harness
 ```sh
 python3 -B scripts/bench/profiles.py --output docs/benchmarks/linux-profiles-v1.json
 ```
+
+To resume after an environmental failure, add `--resume --profiles <remaining
+comma-separated names>`; completed profiles stay in the artifact. The committed
+decision retains thin LTO / opt 3 / cgu 1 with explicit `panic = "unwind"`.
 
 This serially builds thin/fat LTO, opt 3/s, panic unwind/abort and cgu 1/16
 variants through the gate, saves temporary copies of binaries and measures each

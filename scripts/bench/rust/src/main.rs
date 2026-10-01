@@ -577,6 +577,15 @@ fn command_json() -> String {
     .to_string()
 }
 
+fn listening_event() -> Result<DesktopEvent> {
+    // Deserialize optional/defaulted fields so the fixture also builds against
+    // the v1 contract's added mode field, while the recorded MVP stays unchanged.
+    Ok(serde_json::from_value(
+        json!({"state": "listening", "level": 0.421_337,
+        "message": null, "mode": "dictation"}),
+    )?)
+}
+
 async fn dbus(report: &mut Report, samples: usize) -> Result<()> {
     use zbus::export::futures_util::StreamExt;
     require_isolated_bus()?;
@@ -633,11 +642,7 @@ async fn dbus(report: &mut Report, samples: usize) -> Result<()> {
     report.samples("command_rtt_reused_proxy_us", "us", command);
 
     // Event signal cost: today's JSON string vs a typed level-only signal.
-    let event = DesktopEvent {
-        state: State::Listening,
-        level: 0.421_337,
-        message: None,
-    };
+    let event = listening_event()?;
     let event_json = serde_json::to_string(&event)?;
     let path = "/org/xflow/Daemon";
     let iface = "org.xflow.Daemon";
@@ -946,11 +951,7 @@ fn per_op_ns(samples: usize, batch: usize, mut f: impl FnMut()) -> Vec<f64> {
 }
 
 fn json_suite(report: &mut Report, samples: usize) -> Result<()> {
-    let event = DesktopEvent {
-        state: State::Listening,
-        level: 0.421_337,
-        message: None,
-    };
+    let event = listening_event()?;
     let response = Response::status(State::Listening, 0.421_337);
     let encoded = serde_json::to_string(&response)?;
     let batch = 10_000;
