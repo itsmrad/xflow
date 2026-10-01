@@ -6,10 +6,10 @@ Do not install the tests or their temporary artifacts.
 
 ## Automated checks
 
-- 36 focused JavaScript tests: waveform/theme/geometry, smart/hold/toggle,
+- 38 focused JavaScript tests: waveform/theme/geometry, smart/hold/toggle,
   physical modifier masks, boundary parsing, command ordering/stale replies,
   locked/disabled services, focus changes, modifier cleanup, Unicode IM typing,
-  and generation-safe clipboard restoration.
+  and generation-safe clipboard restoration and disable/re-enable callback isolation.
 - Module syntax checks for every runtime JavaScript file.
 - Strict GSettings schema compilation.
 - `scripts/check.sh` through the shared Cargo gate passed after merging the
@@ -20,7 +20,7 @@ Do not install the tests or their temporary artifacts.
   Context/Version/Selection and unknown-target injection, queued start/stop,
   actual virtual trigger-release and modifier-first-release push-to-talk,
   quick-tap latch/next-press stop, reduced motion, zero idle sources,
-  and removal of all sources and accelerators on disable.
+  removal of all sources and accelerators on disable, and clean re-enable.
 - Preferences construction and visual rendering passed in the isolated Shell
   with `GSK_RENDERER=cairo`; the screenshot shows the native pages and preview.
   The default GPU renderer did not map this window in the headless environment
@@ -49,7 +49,7 @@ Both motion controls must be enabled for animation. Transcripts are never logged
 
 A successful state/service/PTT run is under:
 
-`target/overlay-smoke/smoke-hh_15ro1/`
+`target/overlay-smoke/smoke-rz727ad0/`
 
 It includes `idle.png`, `listening.png`, `processing.png`, `success.png`,
 `error.png`, `command-dark.png`, `shell.log`, `prefs.log` and `results.json`.

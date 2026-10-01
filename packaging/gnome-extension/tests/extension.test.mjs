@@ -124,3 +124,23 @@ test('failure releasing one modifier still attempts the others', async () => {
     assert.equal((await f.x._inject('text', {...options(f.target), terminal: true})).outcome, 'clipboard_only');
     assert.deepEqual(f.keys.at(-1), [0xffe3, false], 'Control release must still be attempted');
 });
+
+test('a previous enable generation cannot resume a pending clipboard request', async () => {
+    const f = fixture(); f.x._epoch = 1;
+    let callback;
+    f.x._clipboard.get_text = (_type, result) => {callback = result;};
+    const pending = f.x._inject('old request', options(f.target));
+    f.x._enabled = false; ++f.x._epoch;
+    f.x._enabled = true; ++f.x._epoch;
+    callback(null, 'old clipboard');
+    await assert.rejects(pending);
+    assert.equal(f.clipboard(), 'old clipboard'); assert.equal(f.keys.length, 0);
+});
+
+test('a previous enable generation cannot reconcile an old daemon reply', async () => {
+    const f = fixture(); f.x._epoch = 1;
+    f.x._command('start'); await flush();
+    ++f.x._epoch; f.x._state = 'idle';
+    f.reply(0, {ok: true, state: 'listening'}); await f.x._queue;
+    assert.equal(f.x._state, 'idle');
+});

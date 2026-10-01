@@ -145,6 +145,10 @@ try:
  evaluate('Main.extensionManager.disableExtension("xflow@xflow.local");true')
  time.sleep(.1)
  assert evaluate('JSON.stringify({enabled:xflowTest._enabled,sources:xflowTest._sources.size,grabs:xflowTest._grabs.size})')=='{"enabled":false,"sources":0,"grabs":0}'
+ evaluate('Main.extensionManager.enableExtension("xflow@xflow.local");true')
+ time.sleep(.15)
+ assert evaluate('JSON.stringify(xflowTest._enabled&&xflowTest._sources.size===0&&xflowTest._grabs.size>=5)')=='true'
+ assert call('org.xflow.Shell','/org/xflow/Shell','org.xflow.Shell.Version')=="('3',)"
  (root/'results.json').write_text(json.dumps({'states':results,'requests':requests,'disable':'all sources and shortcuts removed','preferences':'mapped with software renderer','ptt':'held trigger release and modifier-first release, tap latch and next-press stop verified'},indent=2))
  print('PASS isolated Shell smoke',flush=True)
 except Exception as e:
