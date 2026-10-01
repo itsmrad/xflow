@@ -207,7 +207,7 @@ impl Engine {
         let opened = Instant::now();
         if let Err(error) = self.services.audio.start().await {
             let _ = self.services.audio.cancel().await;
-            self.set_state(State::Error, Some(error.to_string()));
+            self.set_state(State::Error, Some(format!("{error:#}")));
             return Err(error);
         }
         self.advance();
@@ -272,7 +272,7 @@ impl Engine {
             Err(e) => {
                 let _ = self.services.audio.cancel().await;
                 self.abort_context();
-                self.set_state(State::Error, Some(e.to_string()));
+                self.set_state(State::Error, Some(format!("{e:#}")));
                 return Err(e);
             }
         };
@@ -437,7 +437,7 @@ impl Engine {
         self.started = None;
         self.silent_since = None;
         if let Err(e) = self.services.audio.cancel().await {
-            self.set_state(State::Error, Some(e.to_string()));
+            self.set_state(State::Error, Some(format!("{e:#}")));
             return Err(e);
         }
         self.set_state(State::Idle, None);
@@ -494,6 +494,7 @@ impl Engine {
             tokio::select! { biased;
                 command = commands.recv() => {
                     let Some(Command { request, reply }) = command else { break; };
+                    if reply.is_closed() { continue; }
                     if (is_query(&request) || matches!(request, Request::Reload)) && queries.len() >= 32 { let _ = reply.send(Response::error(self.state, "daemon request capacity reached")); continue; }
                     if matches!(request, Request::Reload) {
                         if self.active() || self.reloading { let _ = reply.send(Response::error(self.state, "reload requires an idle daemon")); continue; }
@@ -517,24 +518,24 @@ impl Engine {
                             self.last = None; pending = None;
                         }
                         let status = self.status(); let store = self.store.clone(); let desktop = self.services.desktop.clone(); let last = self.last.clone();
-                        queries.spawn(async move { let state = status.state; let response = query(status, request, store, desktop, last).await.unwrap_or_else(|e| Response::error(state, e.to_string())); let _ = reply.send(response); });
+                        queries.spawn(async move { let state = status.state; let response = query(status, request, store, desktop, last).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
                         continue;
                     }
                     let shutdown = matches!(request, Request::Shutdown);
-                    let response = self.handle(request, &completion_tx).await.unwrap_or_else(|e| Response::error(self.state, e.to_string()));
+                    let response = self.handle(request, &completion_tx).await.unwrap_or_else(|e| Response::error(self.state, format!("{e:#}")));
                     let _ = reply.send(response); if shutdown { break; }
                 }
                 Some(completion) = completion_rx.recv() => match completion {
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
-                        match result { Ok(processed) => { self.last = Some(processed.text.clone()); pending = Some(processed); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(e.to_string())); } }
+                        match result { Ok(processed) => { self.last = Some(processed.text.clone()); pending = Some(processed); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
                     Completion::Finished { generation, mut processed, result } if generation == self.generation => {
                         self.job = None; self.abort_context();
                         match result {
                             Ok(outcome) => {
                                 if outcome == Some(InjectionOutcome::ClipboardOnly) { self.notify("XFlow transcript copied", "Paste manually to insert your dictation."); }
-                                let message = if outcome == Some(InjectionOutcome::ClipboardOnly) { Some("Transcript copied; paste manually".into()) } else { processed.warning.take() };
+                                let message = delivery_message(processed.warning.take(), outcome);
                                 // One final success event: subscribers can trust its complete payload.
                                 self.state = State::Success; self.message = message; let mut r = self.status();
                                 r.text = Some(processed.text); r.injection = outcome; r.entry = processed.entry; r.timings = Some(processed.timings);
@@ -547,7 +548,7 @@ impl Engine {
                     }
                     Completion::Reloaded { result, reply } => {
                         self.reloading = false;
-                        let r = match *result { Ok((config, services, store)) => { self.config = config; self.services = services; self.store = store; self.publish(); self.status() }, Err(e) => Response::error(self.state, e.to_string()) };
+                        let r = match *result { Ok((config, services, store)) => { self.config = config; self.services = services; self.store = store; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
                     }
                     _ => (),
@@ -572,11 +573,11 @@ impl Engine {
                     if level.is_finite() && level > self.config.recording.silence_threshold { self.silent_since = None; }
                     else { self.silent_since.get_or_insert_with(Instant::now); }
                     if self.config.recording.auto_stop_secs > 0 && self.silent_since.is_some_and(|s| s.elapsed() >= Duration::from_secs(self.config.recording.auto_stop_secs as u64)) {
-                        if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(e.to_string())); }
+                        if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
                     }
                 }
                 _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } }, if deadline.is_some() => {
-                    if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(e.to_string())); }
+                    if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
                 }
             }
         }
@@ -659,6 +660,16 @@ async fn query(
         _ => bail!("invalid history request"),
     }
     Ok(r)
+}
+fn delivery_message(warning: Option<String>, outcome: Option<InjectionOutcome>) -> Option<String> {
+    if outcome == Some(InjectionOutcome::ClipboardOnly) {
+        Some(bounded_message(&match warning {
+            Some(warning) => format!("{warning}; Transcript copied; paste manually"),
+            None => "Transcript copied; paste manually".into(),
+        }))
+    } else {
+        warning.map(|s| bounded_message(&s))
+    }
 }
 fn native_services(old: &Config, config: &Config, services: Services) -> Result<Services> {
     let stt = xflow_providers::build_stt(&config.stt, config.privacy.offline)?;
@@ -871,6 +882,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let mut clients = tokio::task::JoinSet::new();
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -882,6 +894,12 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
             }
             _ = clients.join_next(), if !clients.is_empty() => (),
             result = &mut engine_task => { result?; break; }
+            _ = hangup.recv() => {
+                let (reply, response) = oneshot::channel();
+                if commands_tx.try_send(Command { request: Request::Reload, reply }).is_ok() {
+                    clients.spawn(async move { if !response.await.is_ok_and(|r| r.ok) { log("warn", "SIGHUP reload refused or failed; running config retained"); } });
+                } else { log("warn", "SIGHUP reload could not be queued"); }
+            }
             _ = interrupt.recv() => break,
             _ = terminate.recv() => break,
         }
@@ -918,7 +936,10 @@ async fn connection(
             reply: reply_tx,
         })
         .await?;
-    write_frame(&mut write, &reply_rx.await?).await?;
+    let response = tokio::time::timeout(Duration::from_secs(9), reply_rx)
+        .await
+        .context("daemon request timed out")??;
+    write_frame(&mut write, &response).await?;
     if subscribe {
         // Keep one read future alive across broadcasts. Dropping read_line after a
         // partial frame would discard bytes already consumed from the socket.
@@ -1834,6 +1855,26 @@ mod tests {
         assert_eq!(vocabulary(&config), ["Postgres", "XFlow", "Éva"]);
     }
 
+    #[tokio::test]
+    async fn abandoned_queued_start_does_not_open_capture() {
+        let (engine, tx, rx, _, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let (reply, dropped) = oneshot::channel();
+        drop(dropped);
+        tx.send(Command {
+            request: Request::start(),
+            reply,
+        })
+        .await
+        .unwrap();
+        let task = tokio::spawn(engine.run(rx));
+        assert_eq!(ask(&tx, Request::Status).await.state, State::Idle);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
     #[test]
     fn final_event_sheds_optional_metadata_to_fit_frame() {
         let mut r = Response {

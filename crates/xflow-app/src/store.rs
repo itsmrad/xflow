@@ -219,12 +219,20 @@ impl Store {
         .await
     }
     pub async fn clear(&self) -> Result<()> {
-        self.run(|conn| {
-            conn.execute("DELETE FROM history", [])?;
-            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-            Ok(())
-        })
-        .await
+        if !self.enabled {
+            let path = self.path.clone();
+            let persisted = tokio::task::spawn_blocking(move || -> Result<Option<Store>> {
+                if !path.try_exists()? {
+                    return Ok(None);
+                }
+                Ok(Some(Store::open(&path, true, usize::MAX)?))
+            })
+            .await??;
+            if let Some(persisted) = persisted {
+                persisted.run(clear_database).await?;
+            }
+        }
+        self.run(clear_database).await
     }
     pub async fn stats(&self) -> Result<Stats> {
         if !self.enabled {
@@ -305,6 +313,14 @@ impl Store {
         })
         .await
     }
+}
+fn clear_database(conn: &mut Connection) -> Result<()> {
+    conn.execute("DELETE FROM history", [])?;
+    let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+    if busy != 0 {
+        bail!("history deleted but WAL checkpoint is busy; retry clear_history");
+    }
+    Ok(())
 }
 
 /// Schema v1 (MVP) → v2 in one transaction. Unknown newer schemas are refused
@@ -656,6 +672,28 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
             0o644
+        );
+    }
+    #[tokio::test]
+    async fn clear_with_persistence_disabled_erases_previously_saved_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.db");
+        let persisted = Store::open(&path, true, 10).unwrap();
+        persisted
+            .append(entry("old private transcript"))
+            .await
+            .unwrap();
+        let disabled = Store::open(&path, false, 10).unwrap();
+        disabled.clear().await.unwrap();
+        assert_eq!(persisted.history(10, 0, None).await.unwrap().1, 0);
+        assert_eq!(
+            Store::open(&path, true, 10)
+                .unwrap()
+                .stats()
+                .await
+                .unwrap()
+                .sessions,
+            0
         );
     }
 }
