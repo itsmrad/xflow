@@ -17,10 +17,10 @@ run_tests() {
     if command -v dbus-run-session >/dev/null 2>&1; then
         # A private session bus keeps tests off the desktop bus and lets the
         # #[ignore]d bridge test own its well-known name.
-        dbus-run-session -- sh -c 'cargo test --workspace --locked && cargo test -p xflow-platform --locked -- --ignored'
+        dbus-run-session -- sh -c 'cargo test --workspace --locked --features xflow-app/test-support && cargo test -p xflow-platform --locked -- --ignored'
     else
         missing dbus-run-session "the D-Bus bridge test"
-        cargo test --workspace --locked
+        cargo test --workspace --locked --features xflow-app/test-support
     fi
 }
 
@@ -49,7 +49,7 @@ for stage in "$@"; do
     case "$stage" in
         fmt) cargo fmt --all -- --check ;;
         extension) check_extension ;;
-        clippy) cargo clippy --workspace --all-targets --locked -- -D warnings ;;
+        clippy) cargo clippy --workspace --all-targets --locked --features xflow-app/test-support -- -D warnings ;;
         test) run_tests ;;
         *) echo "usage: $0 [fmt|extension|clippy|test]..." >&2; exit 2 ;;
     esac
