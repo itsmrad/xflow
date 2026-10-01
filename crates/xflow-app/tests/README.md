@@ -16,7 +16,7 @@ PATH=/home/mrad/.cache/xflow-dev/bin:$PATH sh scripts/check.sh
 run the same suite. To run only this harness:
 
 ```sh
-cargo test -p xflow-app --locked --features test-support --test daemon_e2e
+PATH=/home/mrad/.cache/xflow-dev/bin:$PATH cargo test -p xflow-app --locked --features test-support --test daemon_e2e
 ```
 
 If the shared `/tmp` quota is exhausted, point `TMPDIR` to an owned scratch

@@ -329,6 +329,8 @@ async fn read_upload(
 
 async fn dictate(daemon: &Daemon, events: &mut BufReader<UnixStream>) {
     assert!(daemon.request(json!({"command":"start"})).await.ok);
+    // Consume earlier sessions' final events before waiting for this result.
+    state(events, State::Listening).await;
     assert!(daemon.request(json!({"command":"stop"})).await.ok);
     state(events, State::Success).await;
 }
