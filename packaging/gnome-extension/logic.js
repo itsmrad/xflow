@@ -12,6 +12,13 @@ export const MAX_INJECT_BYTES = 1024 * 1024;
 export const MAX_TYPE_CHARS = 500;
 export const DAEMON_COMMANDS = Object.freeze(['status', 'start', 'stop', 'toggle', 'cancel', 'copy_last', 'paste_last']);
 
+/** Physical modifier bits, excluding Caps Lock and Num Lock. Symbolic Super
+ * differs from the Mod4 bit returned by Shell.get_pointer(); snapshot the
+ * actual chord at activation instead of assuming a virtual-to-physical map. */
+export function heldModifierMask(modifiers) {
+    return modifiers & 0xed;
+}
+
 export function clamp(value, low, high) {
     return Math.min(high, Math.max(low, value));
 }
@@ -159,15 +166,12 @@ export function focusMatches(target, current) {
     return target.app_id !== null && target.app_id === current.app_id;
 }
 
-// Linux evdev codes (input-event-codes.h). Physical keys keep Ctrl+V working
-// on non-Latin layouts, matching the previous ydotool path.
-// ponytail: Dvorak-style layouts that move V get the physical V key; upgrade
-// to a keymap keysym lookup once Clutter exposes one.
-const KEY_LEFTCTRL = 29;
-const KEY_LEFTSHIFT = 42;
-const KEY_V = 47;
+// Clutter keysyms for a native Ctrl+V / Ctrl+Shift+V chord.
+const KEY_LEFTCTRL = 0xffe3;
+const KEY_LEFTSHIFT = 0xffe1;
+const KEY_V = 0x76;
 
-/** Key events [evdev code, pressed] for Ctrl+V or Ctrl+Shift+V. */
+/** Key events [keysym, pressed] for Ctrl+V or Ctrl+Shift+V. */
 export function pasteKeys(terminal) {
     const chord = terminal ? [KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_V] : [KEY_LEFTCTRL, KEY_V];
     return [...chord.map(code => [code, true]), ...chord.reverse().map(code => [code, false])];
@@ -203,8 +207,23 @@ const POSITIONS = {
 
 /** Alignment of the pill inside the monitor work area. */
 export function alignmentFor(position) {
+    if (position === 'top') position = 'top-center';
+    if (position === 'bottom') position = 'bottom-center';
     const [x, y] = POSITIONS[position] ?? POSITIONS['bottom-center'];
     return {x, y};
+}
+
+/** Keep the complete pill on its monitor, even with large offsets. */
+export function pillPosition(area, width, height, position, margin, offsetX = 0, offsetY = 0) {
+    const {x, y} = alignmentFor(position);
+    const coord = (origin, size, length, align, offset) => {
+        const inset = Math.min(Math.max(0, margin), Math.max(0, (size - length) / 2));
+        const wanted = align === 'center' ? origin + (size - length) / 2
+            : align === 'start' ? origin + inset : origin + size - length - inset;
+        return Math.round(clamp(wanted + offset, origin, origin + Math.max(0, size - length)));
+    };
+    return {x: coord(area.x, area.width, width, x, offsetX),
+        y: coord(area.y, area.height, height, y, offsetY)};
 }
 
 /** Monitor index for the placement setting, falling back to the primary. */

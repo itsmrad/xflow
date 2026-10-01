@@ -85,9 +85,9 @@ test('focusMatches requires a provable match', () => {
 });
 
 test('paste chords press and release symmetrically', () => {
-    assert.deepEqual(L.pasteKeys(false), [[29, true], [47, true], [47, false], [29, false]]);
+    assert.deepEqual(L.pasteKeys(false), [[0xffe3, true], [0x76, true], [0x76, false], [0xffe3, false]]);
     assert.deepEqual(L.pasteKeys(true),
-        [[29, true], [42, true], [47, true], [47, false], [42, false], [29, false]]);
+        [[0xffe3, true], [0xffe1, true], [0x76, true], [0x76, false], [0xffe1, false], [0xffe3, false]]);
 });
 
 test('typeUnits maps newlines and tabs to keysyms', () => {
@@ -233,4 +233,18 @@ test('demo level stays in a speech-like RMS range', () => {
         const level = L.demoLevel(t);
         assert.ok(level > 0 && level < 0.12);
     }
+});
+
+test('position respects negative monitor origins, margin and bounds', () => {
+    const area = {x: -1920, y: 20, width: 1920, height: 1060};
+    assert.deepEqual(L.pillPosition(area, 120, 40, 'bottom-center', 32), {x: -1020, y: 1008});
+    assert.deepEqual(L.pillPosition(area, 120, 40, 'top-right', 32, 5000, -5000), {x: -120, y: 20});
+    assert.deepEqual(L.pillPosition(area, 120, 40, 'top', 32), {x: -1020, y: 52});
+    assert.deepEqual(L.pillPosition({x: 0, y: 0, width: 80, height: 30}, 120, 40, 'bottom-right', 100), {x: 0, y: 0});
+});
+
+test('held modifier snapshot uses physical Super and ignores lock keys', () => {
+    assert.equal(L.heldModifierMask(0x48), 0x48, 'Alt and physical Mod4/Super');
+    assert.equal(L.heldModifierMask(0x48 | 0x12), 0x48, 'Caps Lock and Num Lock are irrelevant');
+    assert.equal(L.heldModifierMask(0x12), 0);
 });
