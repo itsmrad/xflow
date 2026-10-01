@@ -8,6 +8,8 @@ use std::{
 const UUID: &str = "xflow@xflow.local";
 const UNIT: &str = include_str!("../../../../packaging/xflow.service");
 const ASSETS: &[(&str, &[u8])] = &[
+    ("logic.js", include_bytes!("../../../../packaging/gnome-extension/logic.js")),
+    ("prefs.js", include_bytes!("../../../../packaging/gnome-extension/prefs.js")),
     ("extension.js", include_bytes!("../../../../packaging/gnome-extension/extension.js")),
     ("metadata.json", include_bytes!("../../../../packaging/gnome-extension/metadata.json")),
     ("stylesheet.css", include_bytes!("../../../../packaging/gnome-extension/stylesheet.css")),
@@ -170,7 +172,6 @@ pub fn extension(action: &args::Extension, out: &Output) -> Result<()> {
                         .context("non-UTF-8 extension path")?,
                 ],
             )?;
-            out.confirm("GNOME extension installed. On Wayland, log out and back in before enabling a new installation with xflow extension enable.")?;
             if *enable {
                 tool("gnome-extensions", &["enable", UUID]).map_err(|_| {
                     Error::new(
@@ -180,6 +181,7 @@ pub fn extension(action: &args::Extension, out: &Output) -> Result<()> {
                     )
                 })?;
             }
+            out.confirm("GNOME extension installed. On Wayland, log out and back in before enabling a new installation with xflow extension enable.")?;
         }
         Uninstall => {
             let root = extension_path()?;
@@ -205,7 +207,7 @@ pub fn extension(action: &args::Extension, out: &Output) -> Result<()> {
             } else {
                 "disable"
             };
-            tool("gnome-extensions", &[verb, UUID])?;
+            tool("gnome-extensions", &[verb, UUID]).map_err(|e| Error::new(e.code, e.message, "For a new Wayland installation, log out and back in before xflow extension enable"))?;
             out.confirm(&format!("Extension {verb}d"))?;
         }
         Status => {
@@ -265,6 +267,7 @@ mod tests {
         assert!(UNIT.contains("PartOf=graphical-session.target"));
         assert!(UNIT.contains("WantedBy=graphical-session.target"));
         assert!(ASSETS.iter().any(|(p, _)| p.ends_with("gschema.xml")));
+        assert_eq!(ASSETS.len(), 6);
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("install/asset");
         atomic(&path, b"first").unwrap();

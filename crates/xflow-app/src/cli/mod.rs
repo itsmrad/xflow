@@ -103,6 +103,11 @@ pub fn main() -> ExitCode {
         Some("always") => clap::ColorChoice::Always,
         _ => clap::ColorChoice::Auto,
     };
+    let clap_color = if json {
+        clap::ColorChoice::Never
+    } else {
+        clap_color
+    };
     let matches = match Cli::command().color(clap_color).try_get_matches_from(argv) {
         Ok(matches) => matches,
         Err(error) => {

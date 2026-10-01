@@ -29,6 +29,21 @@ pub async fn send(request: &Request) -> Result<Response> {
     Ok(response)
 }
 fn validate(response: &Response, require_protocol: bool) -> Result<()> {
+    if response
+        .version
+        .as_deref()
+        .is_some_and(|v| v != env!("CARGO_PKG_VERSION"))
+    {
+        return Err(Error::new(
+            3,
+            format!(
+                "Daemon version {} differs from CLI version {}",
+                response.version.as_deref().unwrap_or_default(),
+                env!("CARGO_PKG_VERSION")
+            ),
+            "Restart the daemon with xflow daemon restart",
+        ));
+    }
     if (require_protocol && response.protocol != Some(PROTOCOL_VERSION))
         || response.protocol.is_some_and(|p| p != PROTOCOL_VERSION)
     {
