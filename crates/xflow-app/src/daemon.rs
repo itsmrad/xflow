@@ -639,6 +639,15 @@ async fn query(
 fn native_services(old: &Config, config: &Config, services: Services) -> Result<Services> {
     let stt = xflow_providers::build_stt(&config.stt, config.privacy.offline)?;
     let transformer = build_transformer(config)?;
+    #[cfg(feature = "test-support")]
+    if let Some((audio, desktop)) = crate::test_support::adapters(&config.recording)? {
+        return Ok(Services {
+            audio,
+            desktop,
+            stt,
+            transformer,
+        });
+    }
     let audio = if old.recording != config.recording {
         Arc::new(xflow_platform::CpalCapture::new(&config.recording)?) as Arc<dyn AudioCapture>
     } else {
@@ -750,6 +759,8 @@ pub async fn serve(config: Config) -> Result<()> {
 
 pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()> {
     config.validate()?;
+    #[cfg(feature = "test-support")]
+    let test_adapters = crate::test_support::adapters(&config.recording)?;
     let directory = crate::paths::runtime_dir()?;
     let lock = std::fs::OpenOptions::new()
         .read(true)
@@ -779,8 +790,16 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     std::fs::set_permissions(&_guard.path, std::fs::Permissions::from_mode(0o600))?;
     let stt = xflow_providers::build_stt(&config.stt, config.privacy.offline)?;
     let transformer = build_transformer(&config)?;
-    let audio = Arc::new(xflow_platform::CpalCapture::new(&config.recording)?);
-    let desktop = Arc::new(xflow_platform::LinuxDesktop::new(&config.injection));
+    let native_adapters = || -> Result<(Arc<dyn AudioCapture>, Arc<dyn Desktop>)> {
+        Ok((
+            Arc::new(xflow_platform::CpalCapture::new(&config.recording)?),
+            Arc::new(xflow_platform::LinuxDesktop::new(&config.injection)),
+        ))
+    };
+    #[cfg(feature = "test-support")]
+    let (audio, desktop) = test_adapters.map(Ok).unwrap_or_else(native_adapters)?;
+    #[cfg(not(feature = "test-support"))]
+    let (audio, desktop) = native_adapters()?;
     let store = Store::open(
         &crate::paths::data_dir()?.join("history.db"),
         config.privacy.history,
