@@ -345,6 +345,7 @@ mod tests {
             &RecordingConfig {
                 max_seconds: 1,
                 silence_threshold: 0.1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -362,6 +363,7 @@ mod tests {
         let config = RecordingConfig {
             max_seconds: 1,
             silence_threshold: 0.1,
+            ..Default::default()
         };
         let mut silent = Recording::new(4, 1, &config).unwrap();
         silent.push(&[0.01_f32; 4]);

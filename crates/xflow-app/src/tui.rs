@@ -97,7 +97,7 @@ pub async fn run() -> Result<()> {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         let command = match key.code {
                             KeyCode::Char('q') => break,
-                            KeyCode::Char(' ') => Some(Request::Toggle), KeyCode::Esc => Some(Request::Cancel),
+                            KeyCode::Char(' ') => Some(Request::toggle()), KeyCode::Esc => Some(Request::Cancel),
                             KeyCode::Char('l') => Some(Request::Last), KeyCode::Char('c') => Some(Request::CopyLast), KeyCode::Char('p') => Some(Request::PasteLast),
                             _ => None,
                         };
