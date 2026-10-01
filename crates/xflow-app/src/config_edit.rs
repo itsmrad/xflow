@@ -138,7 +138,13 @@ impl ConfigFile {
             Ok(real) => real,
             Err(_) => {
                 let parent = self.path.parent().context("config path has no parent")?;
-                crate::paths::private_dir(parent)?;
+                match std::fs::symlink_metadata(parent) {
+                    Ok(_) => (),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        crate::paths::private_dir(parent)?;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
                 self.path.clone()
             }
         };
@@ -312,6 +318,9 @@ mod tests {
 
     #[test]
     fn missing_file_starts_from_template_and_new_tables_are_created() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("xflow/config.toml");
         let mut file = ConfigFile::load(&path).unwrap();
@@ -319,6 +328,40 @@ mod tests {
         file.save().unwrap();
         let config = ConfigFile::load(&path).unwrap().config().unwrap();
         assert_eq!(config.ui.themes["mine"]["bg"], "#f7f6f3");
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_in_existing_directory_preserves_directory_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("user-selected");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = parent.join("config.toml");
+        let mut file = ConfigFile::load(&path).unwrap();
+        file.set("ui.theme", "midnight").unwrap();
+
+        file.save().unwrap();
+
+        assert_eq!(
+            std::fs::metadata(parent).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[cfg(unix)]
