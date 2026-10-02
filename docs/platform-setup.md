@@ -105,9 +105,9 @@ back in to reload cached modules. See
 [overlay validation](../packaging/gnome-extension/tests/VALIDATION.md) for checks,
 screenshots and the manual acceptance checklist.
 
-## Wayland automatic paste
+## Wayland utility fallback
 
-`wl-copy` owns the clipboard. Paste uses `ydotool key` only when an existing
+GNOME prefers `org.xflow.Shell.Inject`, without a ydotool dependency. When the Shell service is unavailable, `wl-copy` owns the clipboard and paste uses `ydotool key` only when an existing
 ydotool daemon socket is found, using `YDOTOOL_SOCKET`,
 `$XDG_RUNTIME_DIR/.ydotool_socket`, or `/tmp/.ydotool_socket`. Install the
 distribution's `ydotool` package and configure its daemon with permission to
@@ -126,7 +126,7 @@ transcript for `xflow last` and later copy.
 GNOME focus identity comes from the extension's `org.xflow.Shell.Context` method;
 without it, automatic paste is intentionally disabled. Text is passed to
 clipboard helpers over stdin, never interpolated into shell commands. XFlow
-does not refocus windows. Single-line terminals use Shift+Insert; multiline
+does not refocus windows. The utility fallback uses Shift+Insert for single-line terminals; multiline
 terminal text and any text with unknown app identity remain clipboard
 only so pasting cannot silently execute a newline. Focus is checked immediately
 before keyboard dispatch, but another focus change can still race with synthetic
@@ -136,9 +136,9 @@ keys; use `injection.clipboard_only = true` when that residual risk matters.
 
 | Session | Clipboard | Automatic paste | Global shortcuts / overlay |
 | --- | --- | --- | --- |
-| Ubuntu GNOME Wayland | `wl-copy` | `ydotool`, original-window guard via extension | Bundled GNOME extension |
-| Fedora GNOME Wayland | `wl-copy` | Same adapter; distro uinput/ydotool setup required | Same extension API; target validation pending |
-| GNOME X11 | `xclip` | `xdotool`, original-window guard | Bundled GNOME extension |
+| Ubuntu GNOME Wayland | Native Shell; `wl-copy` fallback | Native Shell paste/type; guarded `ydotool` fallback | Bundled GNOME extension |
+| Fedora GNOME Wayland | Native Shell; `wl-copy` fallback | Same adapter; utility fallback needs distro uinput/ydotool setup | Same extension API; target validation pending |
+| GNOME X11 | Native Shell; `xclip` fallback | Native Shell paste/type; guarded `xdotool` fallback | Bundled GNOME extension |
 | Other X11 desktops | `xclip` | `xdotool`, original-window guard | Bind CLI commands in desktop settings; native pill pending |
 | wlroots Wayland (Sway, etc.) | `wl-copy` | Clipboard only until compositor focus adapter exists | Bind CLI commands in compositor config; layer-shell pill pending |
 | KDE Plasma Wayland | `wl-copy` | Clipboard only until KWin focus adapter exists | Bind CLI commands in KDE settings; native overlay pending |

@@ -1,10 +1,10 @@
 # XFlow product requirements
 
-Revision: 2026-09-30. This document defines intended product behavior and release gates; it does not certify that every gate has passed. The current workspace contains `xflow-core`, `xflow-providers`, `xflow-platform`, and `xflow-app`; the latter builds the `xflow` CLI and `xflowd` daemon. See [PERFORMANCE.md](PERFORMANCE.md) for measured smoke results and targets, and [docs/RESEARCH.md](docs/RESEARCH.md) for source provenance.
+Revision: 2026-10-02. This document defines intended product behavior and release gates; it does not certify that every gate has passed. The current workspace contains `xflow-core`, `xflow-providers`, `xflow-platform`, and `xflow-app`; the latter builds the `xflow` CLI and `xflowd` daemon. See [PERFORMANCE.md](PERFORMANCE.md) for measured smoke results and targets, and [docs/RESEARCH.md](docs/RESEARCH.md) for source provenance.
 
-## Implementation status (2026-09-30)
+## Implementation status (2026-10-02)
 
-The integrated MVP implements shared Rust contracts/configuration, batch Groq/OpenRouter/custom OpenAI-compatible provider adapters, bounded cpal capture, a GNOME bridge/extension, clipboard/paste adapter, event-driven CLI/TUI updates, and SQLite WAL history (default retention 500; configurable up to 100,000). Daemon cancel aborts an active job and uses a generation guard to reject stale completion. These implementation facts do not establish desktop acceptance. The GNOME shortcut is toggle-oriented; true press-and-release GNOME push-to-talk is not implemented. Provider credentials have not been validated against live accounts, and physical microphone capture, paste delivery, overlay lifecycle and direct uinput remain pending desktop validation. Headless smoke measurements are recorded in [PERFORMANCE.md](PERFORMANCE.md); desktop and live-provider performance remain unmeasured.
+The integrated v1 development build includes ten cloud batch STT adapters plus custom/local servers, bounded cpal capture, native GNOME injection and toggle/hold/smart shortcuts, protocol v2 history/stats/reload, explicit dictionary/snippets/per-app styles and command-mode selection transforms. The CLI adds onboarding, diagnostics, validated config editing, file transcription and delivery-free listening; the event-driven TUI exposes the same configuration and history. See [shared contracts](docs/CONTRACTS.md) and [daemon behavior](docs/DAEMON_V1.md) for exact semantics. These implementations and mock tests do not establish desktop acceptance: live credentials, physical microphone/shortcuts, actual destination delivery and compositor performance remain unvalidated. [PERFORMANCE.md](PERFORMANCE.md) separates historical headless measurements from those release gates.
 
 ## Outcome and users
 
@@ -16,13 +16,13 @@ Success is a reliable, measured microphone-to-text vertical slice with a CLI, ke
 
 | Requirement | MVP behavior | Acceptance evidence |
 | --- | --- | --- |
-| Recording | CLI start/stop/toggle/cancel and GNOME toggle path are implemented; start/stop can be bound to press/release events where a compositor provides them, but the GNOME shortcut is not true PTT | Real mic sessions, quick taps, repeated commands, permission loss, cancellation in listening and processing |
-| Recognition | Groq and OpenRouter batch adapters, BYOK; custom OpenAI-compatible REST endpoint; explicit model/language configuration | Request-contract tests plus one authorized live transcription per advertised cloud backend |
+| Recording | CLI start/stop/toggle/cancel and GNOME toggle/hold/smart shortcuts are implemented | Real mic sessions, quick taps, repeated commands, permission loss, cancellation in listening and processing |
+| Recognition | Ten cloud batch adapters, BYOK; custom/local servers and whisper.cpp server protocol; explicit model/language configuration | Request-contract tests plus one authorized live transcription per advertised cloud backend |
 | Cleanup | Raw default; optional independent LLM transformation with light/polished policies; retain raw output when optional cleanup fails | Cleanup failure, timeout and blank-output tests; review examples for meaning/technical-term preservation |
 | Audio | Native cpal capture with bounded duration/memory, basic silence gating and audio levels | Built-in and USB input; native sample-rate/channel negotiation; silence avoids a paid request |
-| Insertion | Clipboard paste using an available desktop utility; clipboard-only fallback and copy/paste-last recovery | Text editor/browser/terminal checks, missing-tool failures, Unicode, multiline text and changed focus |
+| Insertion | Native GNOME paste/type with guarded utility fallback; conditional text clipboard restoration, clipboard-only fallback and copy/paste-last recovery | Text editor/browser/terminal checks, missing-tool failures, Unicode, multiline text and changed focus |
 | Feedback | Hidden idle native pill; listening, processing, success and error; audio-reactive waveform; keyboard-accessible TUI | GNOME extension install/disable/reenable, daemon restart, no focus theft, idle animation/timer inspection |
-| History | Local SQLite WAL, default retention of 500 entries (configurable up to 100,000), list/clear and disable persistence | Retention boundary, no-history behavior, restart and filesystem permissions |
+| History | Local SQLite WAL, default retention of 500 entries (configurable up to 100,000), paged search/get/delete/export, stats, clear and disable persistence | Retention boundary, no-history behavior, restart and filesystem permissions |
 | Security | OS credential storage where available, environment credentials for CLI/headless use, no keys in TOML, no default secret/audio/transcript logs | Dummy-secret redaction, socket/data modes, keyring-unavailable behavior, offline rejection |
 | Performance | Establish reproducible measurements for all seven requested metrics | Report environment, build profile, sample size and distributions; label unmeasured desktop metrics |
 
@@ -37,41 +37,41 @@ Physical capture, direct uinput, confirmed paste and overlay lifecycle are deskt
 5. Final text is pasted or copied. The TUI/CLI distinguish those outcomes. Automatic paste cannot prove the target app accepted text; copy-last remains available after uncertain delivery.
 6. Daemon `Success`/`Error` state persists until the next recording or cancel. The GNOME pill hides success feedback after 1.5 seconds and error feedback after 4 seconds without changing daemon state. History follows the explicit retention preference.
 
-Do not automatically execute dictated commands. In terminals, newline/paste behavior and terminal-specific shortcuts must be documented and tested. Until app/focus identity is available, the MVP cannot guarantee insertion into the original app if the user changes focus during transcription.
+Do not automatically execute dictated commands. In terminals, newline/paste behavior and terminal-specific shortcuts must be documented and tested. GNOME identity guards original-window delivery; changed/unknown focus falls back to clipboard. Keyboard dispatch is not acknowledgement that the app accepted the text.
 
 ## Provider capabilities
 
 Provider capabilities must be based on the wire protocol and selected model. Batch uploads are not described as streaming. Multilingual support and punctuation are provider/model properties, with a language override where supported. Vocabulary hints must fail visibly or be reported unsupported if the endpoint ignores them. BYOK does not imply the provider retains no data.
 
-[Groq](https://console.groq.com/docs/speech-to-text) and [OpenRouter](https://openrouter.ai/docs/api/api-reference/stt/create-transcription) use distinct verified request formats. Deepgram/WebSocket streaming, arbitrary custom protocol mappings and local whisper.cpp are later backends. Configuring offline mode before a local engine is present must produce an error before any network request.
+[Groq](https://console.groq.com/docs/speech-to-text) and [OpenRouter](https://openrouter.ai/docs/api/api-reference/stt/create-transcription) use distinct verified request formats. Deepgram batch and the whisper.cpp server protocol are implemented; WebSocket streaming and arbitrary custom protocol mappings remain later work. Offline rejects non-loopback STT/cleanup endpoints before network access; users manage local servers/models.
 
 ## Personalization and later product scope
 
 | Feature | Intended behavior | Stage |
 | --- | --- | --- |
-| Personal dictionary/corrections | Manage local words and literal whole-word corrections; separate hints from replacements | After core slice |
-| Vocabulary and developer terms | Bound provider hints; preserve identifiers, casing, punctuation and code in cleanup evaluations | Basic configured hints first, richer dictionary later |
-| Filler removal/backtracking | Provider transcription plus optional cleanup; preserve meaning and negation; raw bypass | Optional cleanup first; quality corpus later |
-| Snippets | User-created voice triggers expand plain text with deterministic precedence and word boundaries | Later |
-| App writing styles | Explicit per-app preference; unknown context uses default | Later |
-| App/context awareness | Minimal app identity by default; selected/surrounding text only with explicit opt-in | Later |
-| Selected-text transforms | Capture the exact selection, preview/review where needed, report stale target and transform failure | Later |
-| Voice command mode | Explicit mode with named text transforms; no implicit shell execution | Later |
+| Personal dictionary/corrections | Manage local words and literal whole-word corrections; separate hints from replacements | Implemented; quality acceptance pending |
+| Vocabulary and developer terms | Bound provider hints; preserve identifiers, casing, punctuation and code in cleanup evaluations | Implemented hints/replacements; quality corpus pending |
+| Filler removal/backtracking | Provider transcription plus optional cleanup; preserve meaning and negation; raw bypass | Implemented configured fillers/spoken punctuation; quality corpus pending |
+| Snippets | User-created voice triggers expand plain text with deterministic precedence and word boundaries | Implemented |
+| App writing styles | Explicit per-app preference; unknown context uses default | Implemented |
+| App/context awareness | GNOME app identity; app id sent to cleanup only with opt-in; bounded PRIMARY selection in explicit command mode | Implemented; physical acceptance pending |
+| Selected-text transforms | Explicit command mode transforms bounded selection; failure leaves selection untouched, unknown target falls back to clipboard | Implemented; physical acceptance pending |
+| Voice command mode | Explicit transformer instructions; no implicit shell execution | Implemented |
 | Streaming | Preview partials; insert finalized transcript once; cancellation never flushes stale partial text | Later |
-| Offline | Optional isolated local engine with no cloud fallback | Later |
+| Offline | User-managed loopback server; reject remote STT/cleanup, no cloud fallback | Implemented; model management later |
 | Auto-learning | Observe only a bounded inserted span; trust narrow repeated spelling corrections; reversible dictionary promotion | Design only now |
 
 Wispr's [dictionary](https://docs.wisprflow.ai/articles/4052411709-teach-flow-your-words-with-the-dictionary), [snippets](https://docs.wisprflow.ai/articles/5784437944-create-and-use-snippets), [styles](https://docs.wisprflow.ai/articles/2368263928-how-to-setup-flow-styles) and [cleanup](https://docs.wisprflow.ai/articles/4283510616-auto-cleanup-control-how-much-flow-edits-your-dictation-beta) establish useful interaction patterns; they are not shipped XFlow capability claims.
 
 ## Privacy and control
 
-Local settings, bounded history and optional future dictionaries need no account. Telemetry is off by default; initial implementation must contain no telemetry sender. No raw audio persistence by default. Users can disable transcript history and clear it. SQLite deletion is logical deletion, not a promise of forensic erasure from backups or storage media.
+Local settings, bounded history and explicit dictionaries need no account. Telemetry is off by default; initial implementation must contain no telemetry sender. No raw audio persistence by default. Users can disable transcript history and clear it. SQLite deletion is logical deletion, not a promise of forensic erasure from backups or storage media.
 
-Cloud STT sends recorded audio to the chosen provider. Optional LLM cleanup additionally sends transcript text. Optional future context access must have a separate control and minimal scope; reading a whole window for dictation is unnecessary by default. OS credential storage falls back to explicit environment credentials when unavailable, never to writing keys into configuration. Logs may contain states/timing/error categories, never unredacted credentials, provider bodies or transcripts.
+Cloud STT sends recorded audio to the chosen provider. Optional LLM cleanup additionally sends transcript text. App context sent to cleanup has a separate opt-in and minimal scope; reading a whole window for dictation is unnecessary by default. OS credential storage falls back to explicit environment credentials when unavailable, never to writing keys into configuration. Logs may contain states/timing/error categories, never unredacted credentials, provider bodies or transcripts.
 
 ## Overlay requirements
 
-Native GNOME Shell rendering is acceptable for the Ubuntu slice; its required extension must be documented. The overlay is always above ordinary app content, hidden while idle, and does not capture focus. Waveform updates are coalesced and active only while listening. No idle frame loop. Configurable position/size/opacity/animation are product requirements to add incrementally; unsupported controls must not appear to work. wlroots/KDE/X11/macOS renderers are separate adapters, with CLI/TUI usable when no overlay exists.
+Native GNOME Shell rendering is acceptable for the Ubuntu slice; its required extension must be documented. The overlay is always above ordinary app content, hidden while idle, and does not capture focus. Waveform updates are coalesced and active only while listening. No idle frame loop. Position/size/opacity/waveform/animation and monitor preferences are implemented with bounded GSettings values; physical placement and accessibility acceptance remain pending. wlroots/KDE/X11/macOS renderers are separate adapters, with CLI/TUI usable when no overlay exists.
 
 ## Release criteria
 

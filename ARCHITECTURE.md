@@ -1,6 +1,6 @@
 # Architecture
 
-Revision: 2026-09-30. The integrated Rust workspace contains `xflow-core`, `xflow-providers`, `xflow-platform`, and `xflow-app`; the app crate builds the `xflow` CLI/TUI and `xflowd` daemon. The current design distinguishes implemented behavior from proposed extensions; desktop acceptance remains incomplete. Research supporting these choices is in [docs/RESEARCH.md](docs/RESEARCH.md), and release stages are in [ROADMAP.md](ROADMAP.md).
+Revision: 2026-10-02. The integrated Rust workspace contains `xflow-core`, `xflow-providers`, `xflow-platform`, and `xflow-app`; the app crate builds the `xflow` CLI/TUI and `xflowd` daemon. The current design distinguishes implemented behavior from proposed extensions; desktop acceptance remains incomplete. Research supporting these choices is in [docs/RESEARCH.md](docs/RESEARCH.md), and release stages are in [ROADMAP.md](ROADMAP.md).
 
 ## Process and crate boundaries
 
@@ -35,13 +35,13 @@ The canonical declarations are in `crates/xflow-core/src/lib.rs`:
 
 | Contract | Meaning and boundary |
 | --- | --- |
-| `SpeechToText` | `name`, `supports_streaming`, async `transcribe(AudioClip, TranscriptionOptions) -> Transcript`; raw input is interleaved normalized f32 PCM with explicit sample rate/channels |
+| `SpeechToText` | `name`, `model`, `warm`, `supports_streaming`, async `transcribe(AudioClip, TranscriptionOptions) -> Transcript`; raw input is interleaved normalized f32 PCM with explicit sample rate/channels |
 | `StreamingSpeechSession` | `send_audio`, `next_partial`, consuming `finish` and `cancel`; future streaming must return a finalized transcript before insertion |
-| `TextTransformer` | Independent optional `transform(text, CleanupMode, AppContext) -> String`; no credentials or STT implementation required by this trait |
-| `AudioCapture` | Async `start`, `stop -> AudioClip`, `cancel` and cheap latest `level`; capture ownership remains on the dedicated thread |
-| `Desktop` | `context -> AppContext`, `inject(text, target) -> InjectionOutcome`, `copy`; distinguishes `Pasted` from `ClipboardOnly` |
+| `TextTransformer` | Independent optional `transform(TransformRequest) -> String`; no credentials or STT implementation required by this trait |
+| `AudioCapture` | Async `start`, `stop -> AudioClip`, `cancel`, `finished` and cheap latest `level`; capture ownership remains on the dedicated thread |
+| `Desktop` | `context -> AppContext`, `inject(text, target) -> InjectionOutcome`, `copy`, `selection`; distinguishes `Pasted`, `Typed` and `ClipboardOnly` |
 | `GlobalHotkeys` | Event-based `next_action -> HotkeyAction`; actions are start/stop/toggle/cancel/paste-last |
-| `Overlay` | `update(DesktopEvent)` with state, normalized level and optional message |
+| `Overlay` | `update(DesktopEvent)` with state, normalized level, mode and optional message |
 
 `AppContext` contains optional app/window identifiers and selected text. An empty context is an honest capability limitation, not proof of context discovery. The MVP's combined `Desktop` trait is intentionally small; split clipboard/context/injection interfaces only when a real second implementation requires independent ownership.
 
@@ -59,7 +59,7 @@ Later streaming uses bounded audio queues and separates partial preview from com
 
 ## IPC and UI events
 
-The app IPC path uses event-driven subscription for UI state, rather than polling. Unix domain IPC is used on Linux/macOS. A future Windows transport may use a named pipe with the same serialized request/response contracts. `xflow-core::ipc` includes status/start/stop/toggle/cancel, last/copy/paste-last, history/clear-history, subscribe and shutdown requests, with a 64 KiB maximum message contract. The transport implementation must enforce that cap before allocating unbounded input and limit slow clients.
+The app IPC path uses event-driven subscription for UI state, rather than polling. Unix domain IPC is used on Linux/macOS. A future Windows transport may use a named pipe with the same serialized request/response contracts. `xflow-core::ipc` includes status/start/stop/toggle/cancel, last/copy/paste-last, paged/searchable history, history get/delete/copy/paste, clear-history, stats, reload, subscribe and shutdown requests, with a 64 KiB maximum message contract. The transport implementation must enforce that cap before allocating unbounded input and limit slow clients.
 
 Place the socket in a user-private runtime directory and restrict permissions. A fallback directory must be private and validate ownership; never trust a publicly writable predictable socket path. Reject malformed/oversized requests and bound read/write time. Subscription clients get current state then events without polling. Slow or disconnected subscribers must not block audio or command handling.
 
@@ -67,27 +67,27 @@ Audio remains inside the capture/provider pipeline. Normal UI events carry state
 
 ## Provider transport and secret boundaries
 
-Groq uses multipart WAV upload. OpenRouter uses a distinct JSON/base64 `input_audio` request; the [official reference](https://openrouter.ai/docs/api/api-reference/stt/create-transcription) is the contract, not assumptions based on an OpenAI-looking URL. A custom OpenAI-compatible REST adapter accepts a full transcription endpoint; it is not arbitrary-protocol support. Language/vocabulary fields are only sent when supported. Model-dependent limits and rejected fields need clear user diagnostics.
+The integrated catalog includes ten cloud batch STT adapters plus custom/local servers (see [provider contracts](crates/xflow-providers/README.md)). Groq uses multipart WAV upload. OpenRouter uses a distinct JSON/base64 `input_audio` request; the [official reference](https://openrouter.ai/docs/api/api-reference/stt/create-transcription) is the contract, not assumptions based on an OpenAI-looking URL. A custom OpenAI-compatible REST adapter accepts a full transcription endpoint; it is not arbitrary-protocol support. Language/vocabulary fields are only sent when supported. Model-dependent limits and rejected fields need clear user diagnostics.
 
 Reuse HTTP clients across sessions, apply deadlines and bound response bodies. Reject empty/malformed successful responses. Do not return raw server bodies or request URLs containing credentials in logs. No automatic provider failover: audio must stay with the explicitly configured endpoint. Future retry policy must distinguish transient failures and avoid repeating completed billable requests or injection.
 
 Configuration is TOML with strict field validation. Secrets are resolved through configured environment references and OS keyring storage where available; they are not TOML values. Local endpoints may require no credentials, but cloud adapters must reject missing keys before recording/upload when possible. Optional LLM cleanup is independently configured; raw bypasses it. Cleanup failure should preserve usable STT output and expose that cleanup failed rather than silently discard dictation.
 
-Offline is a policy boundary. Before a local backend exists, selecting offline fails before network access. Later local engines run in an optional sidecar process, lazy-loaded on demand, with crash/error semantics and resource limits. A WebSocket URL alone cannot implement arbitrary streaming: each protocol needs framing, finalization, cancellation and fixture tests.
+Offline rejects non-loopback STT and cleanup endpoints before network access. Compatible local servers and the whisper.cpp server protocol are implemented; users manage the server and model themselves. Managed model downloads and sidecar lifecycle remain future work. A local server's own network behavior is outside this guard. A WebSocket URL alone cannot implement arbitrary streaming: each protocol needs framing, finalization, cancellation and fixture tests.
 
 ## Storage and retention
 
-SQLite WAL stores bounded local transcript history. The default retention is 500 entries; configuration permits up to 100,000. Queries apply limits before returning rows; preferences/configuration remain local. Proposed later migrations add dictionary, snippets and per-app preferences only when those features exist. Do not represent a placeholder table as a functioning dictionary.
+SQLite WAL stores bounded local transcript history. The default retention is 500 entries; configuration permits up to 100,000. Queries apply limits before returning rows; preferences/configuration remain local. History schema v2 adds model/raw text/app/language/duration/latency/mode metadata. Dictionary, snippets and per-app styles live in validated TOML and run through the deterministic text pipeline; they are not SQLite placeholder tables.
 
 History-disabled sessions must not write transcript text, although copy-last may retain a transient in-memory result for recovery. Clearing history must also be clear about transient last-result state and backups. Private directory/file permissions protect against other users, not arbitrary processes running under the same account. No audio files by default, no telemetry sender, and no secret/transcript content in routine logging.
 
-SQLite writes are serialized and bounded; blocking database operations stay outside latency-sensitive capture callbacks. Migration/versioning and atomic settings writes are release-hardening work. Encryption-at-rest is not implied by a local SQLite file.
+SQLite writes are serialized and bounded; blocking database operations stay outside latency-sensitive capture callbacks. Transactional history migration and atomic comment-preserving settings writes are implemented. Encryption-at-rest is not implied by a local SQLite file.
 
 ## Platform strategy and truthful fallback
 
 | Platform/session | Initial approach | Release status / later work |
 | --- | --- | --- |
-| Ubuntu GNOME Wayland | cpal audio; session-bus bridge + native Shell pill; configured toggle shortcut; clipboard and `ydotool` paste path where usable | Primary integration target; physical microphone, live provider credentials, actual paste and input-device/uinput operation require desktop acceptance; release-aware GNOME push-to-talk is not implemented |
+| Ubuntu GNOME Wayland | cpal audio; session-bus bridge + native Shell pill; toggle/hold/smart shortcuts; native Shell injection with guarded utility fallbacks | Primary integration target; physical microphone, live provider credentials, actual paste and input-device/uinput operation require desktop acceptance; physical hold/smart shortcut behavior remains an acceptance gate |
 | GNOME X11 | Same core; X11 utilities can provide paste | Basic adapter path is not tested-desktop certification; dedicated hotkey/overlay acceptance later |
 | Fedora GNOME | Reuse GNOME design, verify packages, security policy and Shell compatibility | Later distro gate |
 | wlroots compositors | Compositor bindings; native layer-shell overlay; virtual-keyboard protocol when exposed, uinput/paste fallback | Separate adapter and verification later |
@@ -96,11 +96,11 @@ SQLite writes are serialized and bounded; blocking database operations stay outs
 | macOS | Accessibility focus/selection, CGEvent input, native nonactivating panel, Keychain | Design only; permission and signing/package validation later |
 | Windows | UI Automation/SendInput, native overlay, credential manager, named-pipe IPC | Architectural possibility; no shipped support claim |
 
-The [GlobalShortcuts portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html) specifies activation/release signals, but every runtime must probe actual backend support. GNOME's current toggle binding does not supply push-to-talk, and true press-and-release handling remains unimplemented. Direct uinput/evdev permissions should be minimal and explicit; the daemon must not run as root to obtain them. The current paste path invokes `ydotool` where configured; direct uinput operation and actual destination delivery remain unvalidated. `ydotool` and `xdotool` success indicates an attempted key action, not a verified editable target.
+The [GlobalShortcuts portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html) specifies activation/release signals, but every runtime must probe actual backend support. The GNOME extension implements release-aware hold/smart shortcuts alongside toggle; physical desktop validation remains pending. Direct uinput/evdev permissions should be minimal and explicit; the daemon must not run as root to obtain them. GNOME prefers the native Shell virtual keyboard; the fallback invokes `ydotool` where configured; direct uinput operation and actual destination delivery remain unvalidated. `ydotool` and `xdotool` success indicates an attempted key action, not a verified editable target.
 
-Clipboard transport overwrites current clipboard content unless restoration is implemented. Report this plainly; future restoration must preserve MIME types and skip restoring if the user copied something newer. Missing paste capability produces clipboard-only recovery rather than a false pasted result. Focus/context discovery can be unknown in the MVP, so original-window guarantees and per-app styles are deferred.
+Clipboard transport overwrites current content. Optional restoration preserves prior text only when the clipboard still holds the injected text; full MIME restoration remains unsupported. Missing paste capability produces clipboard-only recovery rather than a false pasted result. GNOME app/window identity drives guarded injection and per-app styles. Unknown or changed focus yields clipboard-only recovery; dispatch is not proof that the destination accepted text.
 
-GNOME overlay rendering must not become the active window. Hide it when idle and disconnect D-Bus signals/timers on extension disable. Later position/size/opacity/animation preferences must be bounded; unsupported desktops retain CLI/TUI operation. Shell renderer CPU and memory are measured separately from daemon RSS.
+GNOME overlay rendering must not become the active window. Hide it when idle and disconnect D-Bus signals/timers on extension disable. Implemented position/size/opacity/waveform/animation preferences are bounded in GSettings; unsupported desktops retain CLI/TUI operation. Shell renderer CPU and memory are measured separately from daemon RSS.
 
 ## Auto-learning dictionary: design only
 

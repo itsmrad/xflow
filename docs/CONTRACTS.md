@@ -1,6 +1,6 @@
 # xflow v1 shared contracts
 
-Revision: 2026-10-01. Authoritative interface between the daemon, CLI, TUI, providers, platform
+Revision: 2026-10-02. Authoritative interface between the daemon, CLI, TUI, providers, platform
 adapters and the GNOME extension. Code is the source of truth for exact types:
 `crates/xflow-core/src/{lib,config,ipc}.rs`, `crates/xflow-platform/src/bridge.rs`. Change a contract
 only through the v1 orchestrator so every consumer moves together.
@@ -54,8 +54,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 
 `HistoryEntry` adds model, raw_text, app_id, language, duration_ms, latency_ms, mode. `Timings` carries
 hotkey_ms, open_ms, audio_ms, stt_ms, cleanup_ms, inject_ms, total_ms. All new response fields are
-optional on the wire. Requests marked "not available yet" in the contract branch are implemented by
-the daemon worker.
+optional on the wire. The integrated daemon implements these requests; see [daemon behavior](DAEMON_V1.md) for retention, cancellation, delivery and timing semantics.
 
 ## D-Bus (session bus)
 

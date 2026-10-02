@@ -1,5 +1,7 @@
 # Performance methodology and budgets
 
+The dated baselines below describe their named historical fixtures, not the combined v1 build. Integrated CLI measurements are in [the CLI report](crates/xflow-app/src/cli/REPORT.md); combined verification and short headless smoke are in [the integration report](docs/INTEGRATION_V1.md). Physical hotkey, microphone, live-provider, destination and compositor budgets remain unmeasured by those checks.
+
 ## Measured v1 optimization baseline — 2026-10-01
 
 [linux-baseline-v1.json](docs/benchmarks/linux-baseline-v1.json) contains raw
