@@ -41,6 +41,7 @@ enum Update {
     Connection(bool, String),
     Overlay(Result<Vec<Setting>>),
     Providers(bool, Vec<integrations::Provider>),
+    ActiveKey(xflow_core::config::SttConfig, bool),
     Devices(Result<Vec<String>>),
     Doctor(Vec<String>),
     Notice(Result<String>),
@@ -195,10 +196,10 @@ pub async fn run() -> Result<()> {
             update=rx.recv()=>{
                 let Some(update)=update else{break;};redraw=true;
                 match update {
-                    Update::Loaded(result)=>match result {Ok((file,disk))=>if let Err(e)=app.load(file,disk){app.toast=Some(format!("Invalid configuration: {e:#}"));},Err(e)=>app.toast=Some(format!("Cannot load configuration: {e:#}"))},
+                    Update::Loaded(result)=>match result {Ok((file,disk))=>match app.load(file,disk){Ok(())=>effects.push(Effect::ActiveKey(app.config.clone())),Err(e)=>app.toast=Some(format!("Invalid configuration: {e:#}"))},Err(e)=>app.toast=Some(format!("Cannot load configuration: {e:#}"))},
                     Update::Saved(file,result)=>{
                         app.saving=false;
-                        match result {Ok(())=>{app.disk=Some(file.to_string());app.dirty=false;app.toast=Some("Saved; reloading daemon…".into());effects.push(Effect::Request(Request::Reload,Tag::Reload));},Err(e)=>app.toast=Some(format!("Save failed; edits retained: {e:#}"))}
+                        match result {Ok(())=>{app.disk=Some(file.to_string());app.dirty=false;app.toast=Some("Saved; reloading daemon…".into());effects.push(Effect::Request(Request::Reload,Tag::Reload));effects.push(Effect::ActiveKey(app.config.clone()));},Err(e)=>app.toast=Some(format!("Save failed; edits retained: {e:#}"))}
                         app.file=Some(file);
                     },
                     Update::Reply(tag,result)=>match result{Ok(response)=>effects=app.response(response,tag),Err(error)=>app.toast=Some(format!("Request failed: {error:#}"))},
@@ -210,9 +211,10 @@ pub async fn run() -> Result<()> {
                     Update::Connection(connected,message)=>{app.connected=connected;app.connection=message;if connected{effects=app.refresh();}},
                     Update::Overlay(result)=>match result{Ok(rows)=>app.overlay=rows,Err(e)=>app.toast=Some(format!("{e:#}"))},
                     Update::Providers(cleanup, rows)=>if cleanup==app.cleanup{app.providers=rows;},
+                    Update::ActiveKey(stt, missing)=>app.key_status(&stt, missing),
                     Update::Devices(result)=>match result{Ok(devices)=>app.devices(devices),Err(e)=>app.toast=Some(format!("{e:#}"))},
                     Update::Doctor(rows)=>app.diagnostics=rows,
-                    Update::Notice(result)=>{app.toast=Some(match result{Ok(text)=>text,Err(e)=>format!("{e:#}")});if app.page==Page::Providers{effects=app.refresh();}},
+                    Update::Notice(result)=>{app.toast=Some(match result{Ok(text)=>text,Err(e)=>format!("{e:#}")});if app.page==Page::Providers{effects=app.refresh();effects.push(Effect::ActiveKey(app.config.clone()));}},
                 }
             },
             event=input.next()=>{
@@ -296,6 +298,10 @@ fn dispatch(
                 ),
                 Effect::Providers(config, cleanup) => {
                     Update::Providers(cleanup, integrations::providers(&config, cleanup).await)
+                }
+                Effect::ActiveKey(config) => {
+                    let missing = integrations::missing_key(&config).await;
+                    Update::ActiveKey(config.stt, missing)
                 }
                 Effect::SaveKey(id, secret) => Update::Notice(
                     xflow_providers::save_key(&id, &secret)

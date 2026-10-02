@@ -267,7 +267,7 @@ fn home(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
             .style(theme.base().fg(theme.accent)),
         wave,
     );
-    if !app.connected || app.disk.is_none() {
+    if !app.connected || app.disk.is_none() || app.missing_key {
         let text=format!("Welcome to xflow\n\n1. Choose a provider in 6 Providers; k sets its key.\n2. m chooses a model; 7 Settings configures language and microphone.\n3. Ctrl+S saves. Start the daemon: xflow service start\n4. Space dictates; 8 Overlay configures global shortcuts.\n\n{}\n\nLast transcript:\n{}",app.connection,app.transcript);
         panel(frame, rows[1], "Getting started", text, app);
         hits.actions.push((rows[1], Action::Go(Page::Providers)));

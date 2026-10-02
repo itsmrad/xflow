@@ -117,6 +117,17 @@ pub async fn check(config: &Config, cleanup: bool) -> Result<String> {
         report.detail
     ))
 }
+pub async fn missing_key(config: &Config) -> bool {
+    // Custom servers can be anonymous on loopback; their connection check is
+    // authoritative. Built-in local servers need no default credential.
+    if matches!(config.stt.provider.as_str(), "local" | "custom") {
+        return false;
+    }
+    matches!(
+        xflow_providers::key_status(&config.stt.provider, config.stt.api_key_env.as_deref()).await,
+        KeySource::Missing
+    )
+}
 pub async fn delete_key(id: &str) -> Result<()> {
     xflow_providers::delete_key(id).await
 }

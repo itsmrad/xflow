@@ -375,3 +375,62 @@ fn real_catalog_selection_resets_routes_and_models_without_losing_other_edits() 
         super::integrations::selection(&app.config, "ollama", true, Some("bad\nmodel")).is_err()
     );
 }
+
+#[tokio::test]
+async fn provider_connection_probe_uses_anonymous_loopback_get_without_audio() {
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::TcpListener,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "GET /v1/models HTTP/1.1\r\n");
+        loop {
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            assert!(!line.to_ascii_lowercase().starts_with("authorization:"));
+        }
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            .await
+            .unwrap();
+    });
+    let mut config = xflow_core::config::Config::default();
+    config.privacy.offline = true;
+    config.stt.provider = "custom".into();
+    config.stt.endpoint = Some(format!("http://{address}/v1/audio/transcriptions"));
+    config.stt.model = Some("mock".into());
+    config.stt.timeout_secs = 2;
+    assert!(!super::integrations::missing_key(&config).await);
+    let result = super::integrations::check(&config, false).await.unwrap();
+    assert!(result.contains('✓'));
+    assert!(result.contains("non-billing"));
+    tokio::time::timeout(std::time::Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn missing_key_has_guided_onboarding_with_an_existing_config_and_daemon() {
+    let (_dir, mut app) = populated();
+    app.missing_key = true;
+    let text = screen(&app, 80, 24);
+    assert!(text.contains("Getting started"));
+    assert!(text.contains("Choose a provider"));
+    let before = app.config.stt.clone();
+    app.set("stt.api_key_env", "NEW_KEY").unwrap();
+    app.key_status(&before, false);
+    assert!(app.missing_key); // Obsolete credentials cannot suppress onboarding.
+    app.key_status(&app.config.stt.clone(), false);
+    assert!(!app.missing_key);
+}

@@ -182,6 +182,7 @@ pub enum Effect {
     Overlay,
     OverlaySet(String, String),
     Providers(Config, bool),
+    ActiveKey(Config),
     SaveKey(String, Zeroizing<String>),
     DeleteKey(String),
     CheckProvider(Config, bool),
@@ -317,6 +318,7 @@ pub struct App {
     pub overlay: Vec<Setting>,
     pub providers: Vec<Provider>,
     pub cleanup: bool,
+    pub missing_key: bool,
     pub diagnostics: Vec<String>,
     pub modal: Option<Modal>,
     pub toast: Option<String>,
@@ -357,6 +359,7 @@ impl App {
             overlay: vec![],
             providers: vec![],
             cleanup: false,
+            missing_key: false,
             diagnostics: vec![],
             modal: None,
             toast: None,
@@ -377,6 +380,7 @@ impl App {
             Theme::resolve("paper", &Default::default(), self.colors).expect("paper theme")
         });
         self.config = config;
+        self.missing_key = false;
         self.disk = disk;
         self.file = Some(file);
         self.dirty = false;
@@ -385,6 +389,12 @@ impl App {
     }
     pub fn selected(&self) -> usize {
         self.selected[self.page.index()]
+    }
+    pub fn key_status(&mut self, stt: &xflow_core::config::SttConfig, missing: bool) {
+        // An older lookup must not replace onboarding for a newly edited route.
+        if stt == &self.config.stt {
+            self.missing_key = missing;
+        }
     }
     pub fn rows(&self) -> Vec<(String, String)> {
         match self.page {
@@ -1142,6 +1152,7 @@ impl App {
         self.sync_config();
         self.toast =
             Some("Provider/model staged; Ctrl+S saves. Cleanup mode is set in Settings.".into());
+        self.missing_key = false;
         Ok(())
     }
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {

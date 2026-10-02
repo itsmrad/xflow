@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import signal
 import socket
 import struct
 import subprocess
@@ -22,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[4]
 BINARY = ROOT / "target/debug/xflow"
 
 
-def run(online):
+def run(online, columns, rows):
     with tempfile.TemporaryDirectory(dir=ROOT / "target/tui-tmp") as scratch:
         base = Path(scratch)
         for name in ("run", "cfg", "data"):
@@ -103,7 +104,7 @@ def run(online):
             acceptor = threading.Thread(target=serve)
             acceptor.start()
         master, slave = pty.openpty()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
         before = termios.tcgetattr(slave)
         process = subprocess.Popen([BINARY, "tui"], stdin=slave, stdout=slave, stderr=slave, env=env, cwd=base)
         output = bytearray()
@@ -125,6 +126,12 @@ def run(online):
         try:
             drain(0.8)
             assert process.poll() is None, output.decode(errors="replace")
+            # Exercise resize while live, including the tiny-terminal fallback.
+            for width, height in ((34, 11), (columns, rows)):
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
+                process.send_signal(signal.SIGWINCH)
+                drain()
+                assert process.poll() is None
             if online:
                 stat = Path(f"/proc/{process.pid}/stat")
                 ticks = lambda: sum(map(int, stat.read_text().split()[13:15]))
@@ -160,7 +167,7 @@ def run(online):
             assert process.returncode == 0, output.decode(errors="replace")
             assert termios.tcgetattr(slave) == before, "terminal attributes not restored"
             assert b"\x1b[?1049l" in output, "alternate screen not restored"
-            print(json.dumps(dict(online=online, idle_cpu_ticks=idle_ticks, requests=[r["command"] for r in requests], saved_config=True, terminal_restored=True)))
+            print(json.dumps(dict(online=online, size=f"{columns}x{rows}", idle_cpu_ticks=idle_ticks, requests=[r["command"] for r in requests], saved_config=True, terminal_restored=True, resize_safe=True)))
         finally:
             if process.poll() is None:
                 process.kill()
@@ -178,5 +185,6 @@ def run(online):
 
 
 if __name__ == "__main__":
-    run(False)
-    run(True)
+    for columns, rows in ((80, 24), (120, 35)):
+        run(False, columns, rows)
+        run(True, columns, rows)
