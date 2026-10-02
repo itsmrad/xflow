@@ -343,6 +343,9 @@ impl Config {
         if self.privacy.history_limit > 100_000 {
             bail!("history_limit exceeds 100000");
         }
+        if self.privacy.history && self.privacy.history_limit == 0 {
+            bail!("history_limit must be positive when history is enabled; disable privacy.history to keep no history");
+        }
         check_count("formatting.fillers", self.formatting.fillers.len(), 200)?;
         for filler in &self.formatting.fillers {
             check_text("formatting.fillers entry", filler, 64)?;
@@ -488,5 +491,13 @@ mod tests {
             case(&mut config);
             assert!(config.validate().is_err(), "case {index} should fail");
         }
+    }
+    #[test]
+    fn zero_history_retention_requires_explicitly_disabled_history() {
+        let mut config = Config::default();
+        config.privacy.history_limit = 0;
+        assert!(config.validate().is_err());
+        config.privacy.history = false;
+        assert!(config.validate().is_ok());
     }
 }

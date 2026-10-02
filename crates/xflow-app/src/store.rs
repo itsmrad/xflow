@@ -27,6 +27,9 @@ pub struct Store {
 }
 impl Store {
     pub fn open(path: &Path, enabled: bool, limit: usize) -> Result<Self> {
+        if enabled && limit == 0 {
+            bail!("history_limit must be positive when history is enabled");
+        }
         let mut connection = if enabled {
             if let Some(parent) = path.parent() {
                 crate::paths::private_dir(parent)?;
@@ -34,15 +37,19 @@ impl Store {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt;
-                std::fs::OpenOptions::new()
+                let file = std::fs::OpenOptions::new()
                     .write(true)
                     .create(true)
                     .truncate(false)
                     .mode(0o600)
-                    .custom_flags(libc::O_NOFOLLOW)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
                     .open(path)?;
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+                use std::os::unix::fs::{MetadataExt, PermissionsExt};
+                let metadata = file.metadata()?;
+                if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } {
+                    bail!("unsafe history database file");
+                }
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
             }
             Connection::open_with_flags(
                 path,
@@ -55,6 +62,10 @@ impl Store {
             Connection::open_in_memory()?
         };
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > SCHEMA_VERSION {
+            bail!("history database schema {version} is newer than this xflow");
+        }
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;")?;
         migrate(&mut connection)?;
         let store = Self {
@@ -215,12 +226,20 @@ impl Store {
         .await
     }
     pub async fn clear(&self) -> Result<()> {
-        self.run(|conn| {
-            conn.execute("DELETE FROM history", [])?;
-            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-            Ok(())
-        })
-        .await
+        if !self.enabled {
+            let path = self.path.clone();
+            let persisted = tokio::task::spawn_blocking(move || -> Result<Option<Store>> {
+                if !path.try_exists()? {
+                    return Ok(None);
+                }
+                Ok(Some(Store::open(&path, true, usize::MAX)?))
+            })
+            .await??;
+            if let Some(persisted) = persisted {
+                persisted.run(clear_database).await?;
+            }
+        }
+        self.run(clear_database).await
     }
     pub async fn stats(&self) -> Result<Stats> {
         if !self.enabled {
@@ -301,6 +320,14 @@ impl Store {
         })
         .await
     }
+}
+fn clear_database(conn: &mut Connection) -> Result<()> {
+    conn.execute("DELETE FROM history", [])?;
+    let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+    if busy != 0 {
+        bail!("history deleted but WAL checkpoint is busy; retry clear_history");
+    }
+    Ok(())
 }
 
 /// Schema v1 (MVP) → v2 in one transaction. Unknown newer schemas are refused
@@ -432,9 +459,7 @@ mod tests {
         assert!(disabled.history(10, 0, None).await.unwrap().0.is_empty());
         assert_eq!(disabled.stats().await.unwrap(), Stats::default());
         assert!(!disabled_path.exists());
-        let zero = Store::open(&dir.path().join("zero.db"), true, 0).unwrap();
-        assert!(zero.append(entry("gone")).await.unwrap().is_none());
-        assert_eq!(zero.history(10, 0, None).await.unwrap().1, 0);
+        assert!(Store::open(&path, true, 0).is_err());
     }
 
     #[tokio::test]
@@ -613,5 +638,67 @@ mod tests {
             "INSERT INTO history (created_at, text, provider) VALUES (unixepoch() - 3 * 86400, 'x', 'p')", [],
         ).unwrap();
         assert_eq!(old.stats().await.unwrap().streak_days, 0);
+    }
+    #[tokio::test]
+    async fn canceled_generation_cannot_save_and_latency_does_not_resurrect_deleted_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let epoch = Arc::new(AtomicU64::new(2));
+        assert!(store
+            .append_current(entry("stale"), epoch.clone(), 1)
+            .await
+            .unwrap()
+            .is_none());
+        let saved = store
+            .append_current(entry("current"), epoch, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        store.set_latency(saved.id, 99).await.unwrap();
+        assert_eq!(
+            store.get(saved.id).await.unwrap().unwrap().latency_ms,
+            Some(99)
+        );
+        store.delete(saved.id).await.unwrap();
+        store.set_latency(saved.id, 100).await.unwrap();
+        assert!(store.get(saved.id).await.unwrap().is_none());
+    }
+    #[test]
+    fn refuses_database_symlinks_without_changing_target_permissions() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.db");
+        std::fs::write(&target, "keep").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let path = dir.path().join("link.db");
+        symlink(&target, &path).unwrap();
+        assert!(Store::open(&path, true, 10).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+    #[tokio::test]
+    async fn clear_with_persistence_disabled_erases_previously_saved_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.db");
+        let persisted = Store::open(&path, true, 10).unwrap();
+        persisted
+            .append(entry("old private transcript"))
+            .await
+            .unwrap();
+        let disabled = Store::open(&path, false, 10).unwrap();
+        disabled.clear().await.unwrap();
+        assert_eq!(persisted.history(10, 0, None).await.unwrap().1, 0);
+        assert_eq!(
+            Store::open(&path, true, 10)
+                .unwrap()
+                .stats()
+                .await
+                .unwrap()
+                .sessions,
+            0
+        );
     }
 }

@@ -8,6 +8,8 @@ only through the v1 orchestrator so every consumer moves together.
 ## Configuration (`~/.config/xflow/config.toml`)
 
 Strict TOML (`deny_unknown_fields`), every section optional, validated by `Config::validate()`.
+When `privacy.history = true`, `history_limit` must be positive. Zero is accepted only with
+history disabled; it must never silently erase saved rows at startup.
 `config/default.toml` is the documented template and must deserialize to `Config::default()`
 (enforced by a test). MVP configs keep loading (`injection.clipboard_only` is a deprecated alias).
 
@@ -38,15 +40,15 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 
 | Request (`"command"`) | Fields | Reply / semantics |
 | --- | --- | --- |
-| `status` | — | state, level, version, protocol, provider, model, mode (while active) |
+| `status` | — | state, level, version, protocol, provider, model, mode (while active); last successful timings when inactive |
 | `start`, `toggle` | `mode` ("dictation"/"command", default dictation), `context` (AppContext captured by the caller), `t0_us` (caller CLOCK_MONOTONIC µs at hotkey), `delivery` ("inject" default / "clipboard" / "none" — none leaves the desktop untouched so a subscribed client such as `xflow listen` can print the text) | Mic opens **before** any focus query; provider connection is warmed in the background |
 | `stop`, `cancel` | — | unchanged |
 | `last`, `copy_last`, `paste_last` | — | unchanged |
 | `history` | `limit`, `offset` (default 0), `query` (case-insensitive substring) | `history` rows newest first, `total` = matching rows |
 | `history_get` / `history_delete` / `history_copy` / `history_paste` | `id` | `entry` for get; injection outcome for paste |
-| `clear_history` | — | unchanged |
+| `clear_history` | — | clears persisted rows even with history disabled; also clears the in-memory last result/timings |
 | `stats` | — | `stats` (sessions, words, audio_ms, today, streak, wpm, latency p50/p95) |
-| `reload` | — | re-read config; on error keep the running config and return the error |
+| `reload` | — | idle only; stage services before swapping config; on error keep the running config and return the error; SIGHUP uses this path |
 | `subscribe` | — | snapshot, then every state/level event; the final event of a successful session carries `text`, `injection`, `entry`, `timings` |
 | `shutdown` | — | unchanged |
 
@@ -88,6 +90,9 @@ safety check stay in Rust (`safe_target`).
 - `TextTransformer::transform(TransformRequest)` — text, mode, instructions (cleanup/style prompt),
   command (command mode), app_id (only with `cleanup.app_context`), vocabulary (dictionary words).
 - `Desktop::selection()` — PRIMARY selection for command mode (default `None`).
+- `AudioCapture::finished()` — default `false`; true after capture reaches a device/buffer limit or
+  fails. The daemon checks it on its existing listening-level tick, then calls `stop()` to retrieve
+  the buffered clip or original error. Reset on start/stop/cancel; no new idle polling.
 - `InjectionOutcome::Typed`, `CleanupMode::Custom`, `Mode::{Dictation, Command}`.
 
 ## Ownership map (v1 workers)
