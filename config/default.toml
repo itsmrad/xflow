@@ -1,27 +1,79 @@
+# xflow configuration. Edit here, with `xflow config set <key> <value>`, or in the TUI.
 # Secrets are read from OS credential storage or environment variables, never this file.
+# Overlay look and global shortcuts are GNOME extension settings (`xflow overlay`, or the
+# extension's preferences window).
+
 [stt]
-provider = "groq"
-# endpoint = "https://api.groq.com/openai/v1/audio/transcriptions"
-# model = "whisper-large-v3-turbo"
+provider = "groq"            # `xflow providers` lists every provider
+# model = "whisper-large-v3-turbo"   # `xflow models` lists models; unset = provider default
+# endpoint = "https://api.groq.com/openai/v1/audio/transcriptions"   # full URL override
+# protocol = "openai"        # wire protocol for provider = "custom"
 # api_key_env = "GROQ_API_KEY"
-# language = "en" # omit for multilingual auto detection
-vocabulary = []
+# language = "en"            # ISO-639-1; unset = automatic detection
+vocabulary = []              # extra recognition hints (dictionary.words are added too)
 timeout_secs = 30
 
 [cleanup]
-mode = "raw" # raw | light | polished; light/polished require endpoint and model
-# endpoint = "https://api.openai.com/v1/chat/completions"
-# model = "gpt-4o-mini"
+mode = "raw"                 # raw | light | polished | custom (custom requires prompt)
+# provider = "groq"          # preset that fills endpoint/model/key defaults
+# endpoint = "https://api.groq.com/openai/v1/chat/completions"
+# model = "llama-3.1-8b-instant"
 api_key_env = "OPENAI_API_KEY"
-
-[privacy]
-history = true
-history_limit = 500
-offline = false # rejects remote endpoints; explicitly use a loopback STT sidecar
+# prompt = "Keep my British spelling."
+timeout_secs = 20
+app_context = true           # tell the model the focused app id (never window contents)
 
 [recording]
 max_seconds = 120
 silence_threshold = 0.005
+# device = "USB Microphone"  # `xflow devices`; unset = system default input
+min_ms = 300                 # shorter taps are discarded without upload
+auto_stop_secs = 0           # stop after N s of silence (0 = off)
+keep_warm_secs = 0           # keep the mic open N s after a recording (0 = off)
 
 [injection]
-clipboard_only = false
+method = "paste"             # paste | type | clipboard
+clipboard_only = false       # deprecated: use method = "clipboard"
+restore_clipboard = true     # put your previous clipboard text back after pasting
+restore_delay_ms = 300
+trailing_space = true
+
+[formatting]
+remove_fillers = true
+fillers = ["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]
+spoken_punctuation = false   # "comma", "period", "new line", ... become punctuation
+
+[dictionary]
+words = []                   # e.g. ["Postgres", "Kubernetes", "xflow"]
+replacements = []            # e.g. [{ from = "postgress", to = "Postgres" }]
+
+[sounds]
+enabled = true
+volume = 0.5
+# start = "/path/to/start.wav"
+# stop = "/path/to/stop.wav"
+# error = "/path/to/error.wav"
+
+[notifications]
+enabled = false              # desktop notifications for errors and clipboard-only results
+
+[privacy]
+history = true
+history_limit = 500
+offline = false              # reject remote endpoints (local engines only)
+
+[ui]
+theme = "paper"              # TUI theme; see `xflow tui` → Settings
+mouse = true
+
+# Voice snippets: say the trigger, get the text.
+# [[snippets]]
+# trigger = "my email"
+# text = "me@example.com"
+
+# Per-app styles: the first style whose apps match the focused app id wins.
+# [[styles]]
+# name = "chat"
+# apps = ["slack", "discord", "telegram"]
+# mode = "light"
+# prompt = "Casual tone. Lowercase is fine."

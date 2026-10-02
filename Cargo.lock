@@ -3345,6 +3345,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "toml",
+ "toml_edit 0.22.27",
  "xflow-core",
  "xflow-platform",
  "xflow-providers",
