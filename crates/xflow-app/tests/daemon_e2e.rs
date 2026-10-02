@@ -122,6 +122,11 @@ impl Daemon {
                 .unwrap();
             let mut line = String::new();
             BufReader::new(stream).read_line(&mut line).await.unwrap();
+            assert!(
+                !line.is_empty(),
+                "daemon closed before replying to {request}: {}",
+                fs::read_to_string(self.root.path().join("daemon.log")).unwrap()
+            );
             serde_json::from_str(&line).unwrap()
         })
         .await
@@ -686,6 +691,34 @@ async fn reload_changes_provider_and_invalid_config_keeps_running_config() {
     assert_eq!(fs::read_to_string(daemon.sink()).unwrap(), "retained");
     assert_eq!(daemon.history().await.history.len(), 3);
     daemon.stop_process().await;
+}
+
+#[tokio::test]
+async fn shutdown_flushes_reply_and_closes_live_subscribers() {
+    let mock = MockStt::start(vec![]).await;
+    for attempt in 0..16 {
+        let mut daemon = Daemon::spawn_with(&mock.endpoint, "voice", true, |command, _| {
+            command.env("TOKIO_WORKER_THREADS", "2");
+        });
+        daemon.ready().await;
+        let mut events = daemon.events().await;
+        let _stalled = if attempt == 0 {
+            let stream = UnixStream::connect(daemon.socket()).await.unwrap();
+            assert!(daemon.request(json!({"command":"status"})).await.ok);
+            Some(stream)
+        } else {
+            None
+        };
+        daemon.stop_process().await;
+        timeout(DEADLINE, async {
+            let mut line = String::new();
+            while events.read_line(&mut line).await.unwrap() != 0 {
+                line.clear();
+            }
+        })
+        .await
+        .expect("subscriber stayed open after shutdown");
+    }
 }
 
 #[tokio::test]

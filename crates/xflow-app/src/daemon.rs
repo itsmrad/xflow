@@ -942,6 +942,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
+    let mut engine_finished = false;
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -952,7 +953,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
                 clients.spawn(async move { let _permit = permit; let _ = connection(stream, commands, events).await; });
             }
             _ = clients.join_next(), if !clients.is_empty() => (),
-            result = &mut engine_task => { result?; break; }
+            result = &mut engine_task => { result?; engine_finished = true; break; }
             _ = hangup.recv() => {
                 let (reply, response) = oneshot::channel();
                 if commands_tx.try_send(Command { request: Request::Reload, reply }).is_ok() {
@@ -964,6 +965,14 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
         }
     }
     drop(commands_tx);
+    if engine_finished {
+        // The actor's reply may still be queued for the socket task. Let replies
+        // flush before aborting clients; idle or stalled peers remain bounded.
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            while clients.join_next().await.is_some() {}
+        })
+        .await;
+    }
     clients.abort_all();
     while clients.join_next().await.is_some() {}
     // Engine is already finished for Shutdown, otherwise channel closure drives cleanup.
@@ -1028,6 +1037,9 @@ async fn connection(
                 },
                 // Observe client closure even while daemon is idle, without polling.
                 result = &mut closed => { let _ = result?; break; }
+                // The actor closes its command receiver after cleanup. Leave only
+                // after the initial response above has been written.
+                _ = commands.closed() => break,
             }
         }
     }
