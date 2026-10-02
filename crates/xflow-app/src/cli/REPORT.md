@@ -10,7 +10,7 @@ The CLI now uses clap derive for discovery and aliases, aligned human tables, gl
 
 `listen` subscribes before starting with delivery `none`, ignores snapshot and queued old completions, requires an observed Listening event before accepting Success text, and rejects Processing text. Idle after recording returns promptly without text. Ctrl-C is registered before Start and sends Cancel after the bounded pending Start completes. A pinned transport read preserves partially received frames when the recording timer or Enter sends Stop; an isolated split-frame regression covers this path.
 
-Current reviewed dependencies include providers `1b58d82` and overlay `77ab635`; daemon/mock-fixture follow-ups are recorded with final verification below. Research CLI/PM files were unavailable when checked again; the live assignment and shared contract define the command tree.
+Current reviewed dependencies include providers `1b58d82`, overlay `77ab635` and daemon `64b38ed` (merged at `8eafa7f`, retaining `b92709c` capture-completion and last-timings changes). The mock-fixture follow-up is recorded with final verification below. Research CLI/PM files were unavailable when checked again; the live assignment and shared contract define the command tree.
 
 ## Final `xflow --help`
 
@@ -126,7 +126,7 @@ JSON goes to stdout; errors go to stderr as `{ok:false,error,hint,exit_code}`. `
 
 The complete acceptance harness passes with both the updated release and debug CLI, including the added split-frame test. It uses temporary XDG paths, same-user fake Unix sockets, loopback HTTP, synthetic audio files, and fake system/extension/editor tools. It covers config/personalization round-trips, rejected writes and editor rollback, private file modes, reload isolation, onboarding JSON, staged install paths containing spaces, catalog/models, non-billable checks, file transcription, human/JSON status, history formats, aliases, completion, protocol errors, stale results and cancellation. Focused CLI Clippy also passes with warnings treated as errors.
 
-Final full-check result is pending the reviewed daemon and warm-up mock-fixture follow-ups. The prior full run passed formatting, 38 extension tests, warnings-as-errors Clippy, 27 application library tests and nine CLI unit tests, then failed five daemon end-to-end tests because the old HTTP fixture asserted every request was a transcription POST and rejected provider warm-up GETs. This fixture belongs to the shared test owner; CLI does not change it.
+Final full-check result is pending the warm-up mock-fixture follow-up. The prior full run passed formatting, 38 extension tests, warnings-as-errors Clippy, 27 application library tests and nine CLI unit tests, then failed five daemon end-to-end tests because the old HTTP fixture asserted every request was a transcription POST and rejected provider warm-up GETs. This fixture belongs to the shared test owner; CLI does not change it. After integrating daemon `64b38ed`, compatibility formatting/Clippy and the release CLI acceptance harness pass, including human/JSON retained-timings output.
 
 Reproduce CLI acceptance and process measurements after a gated build:
 
@@ -143,13 +143,13 @@ env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$PWD/target/t" \
 
 The [benchmark artifact](benchmark.json) records 100 complete process executions after ten warmups per command, using the release profile with thin LTO and one codegen unit. It includes spawning, dynamic loading, parsing, fake-daemon IPC for toggle and process exit. Python spawning and host scheduling are included; no baseline subtraction is applied. The daemon receives exactly one request per toggle; config path and help make no daemon requests. Results vary with host load and are not physical shortcut or microphone measurements. The original approximately 1 ms process aspiration is not claimed as achieved.
 
-Recorded on Linux x86_64, kernel `7.0.0-34-generic`, at 2026-10-02 03:24 UTC with production CLI checkpoint `f947274`; the artifact includes the measured binary's SHA-256.
+Recorded on Linux x86_64, kernel `7.0.0-34-generic`, at 2026-10-02 03:28 UTC with integrated checkpoint `8eafa7f`; the artifact includes the measured binary's SHA-256.
 
 | Command | Minimum (ms) | Median (ms) | p95 (ms) |
 | --- | ---: | ---: | ---: |
-| `toggle --quiet` | 1.842 | 2.019 | 2.991 |
-| `config path` | 1.710 | 2.028 | 3.372 |
-| `--help` | 1.779 | 2.093 | 3.176 |
+| `toggle --quiet` | 1.888 | 2.228 | 2.918 |
+| `config path` | 1.745 | 2.148 | 3.337 |
+| `--help` | 1.754 | 1.983 | 2.765 |
 
 ## Remaining scope limits
 
@@ -157,5 +157,5 @@ Recorded on Linux x86_64, kernel `7.0.0-34-generic`, at 2026-10-02 03:24 UTC wit
 - Provider checking is explicitly non-billable and does not validate transcription quality. File transcription intentionally uploads the supplied file when invoked; `privacy.offline` restricts endpoints.
 - Shell editor arguments use whitespace splitting without shell expansion. Dictionary text import/export handles vocabulary; JSON export additionally preserves replacements.
 - `listen` requires `--seconds` in a pipe and cancels only while operating its recording. The IPC contract has no session IDs; the progression guard relies on ordered subscription events and refuses an already-active snapshot.
-- Status displays last timings only when supplied by the daemon. CLI helpers do not invent missing timings or require extra hotkey status requests.
+- Status displays last successful timings when inactive with the reviewed v1 daemon; fields remain optional for compatible older replies. CLI helpers do not invent missing timings or require extra hotkey status requests.
 - No streaming-provider protocol, local model download or desktop-specific global shortcut implementation was added by the CLI worker. Those remain their component owners' scope.
