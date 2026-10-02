@@ -1,0 +1,32 @@
+{
+  "binary": "/home/mrad/orca/workspaces/xflow/feat-v1-cli/target/release/xflow",
+  "samples": 100,
+  "warmups": 10,
+  "binary_sha256": "1fb70b6d31837fb9e85ea87820b42c679ae41860c7ddacab3ae6f6fb81fadfa7",
+  "recorded_at": "2026-10-02T03:24:46.137596+00:00",
+  "system": "Linux",
+  "kernel": "7.0.0-34-generic",
+  "architecture": "x86_64",
+  "python": "3.12.14",
+  "measurement": "spawn through exit; fake same-user Unix daemon; no audio or desktop",
+  "commands": {
+    "toggle --quiet": {
+      "min_ms": 1.842,
+      "median_ms": 2.019,
+      "p95_ms": 2.991,
+      "max_ms": 3.764
+    },
+    "config path": {
+      "min_ms": 1.71,
+      "median_ms": 2.028,
+      "p95_ms": 3.372,
+      "max_ms": 4.817
+    },
+    "--help": {
+      "min_ms": 1.779,
+      "median_ms": 2.093,
+      "p95_ms": 3.176,
+      "max_ms": 4.043
+    }
+  }
+}
