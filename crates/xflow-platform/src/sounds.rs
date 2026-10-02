@@ -21,6 +21,25 @@ pub enum Cue {
 
 static PLAYING: AtomicUsize = AtomicUsize::new(0);
 struct Playback;
+impl Playback {
+    fn acquire() -> Option<Self> {
+        let mut playing = PLAYING.load(Ordering::Relaxed);
+        loop {
+            if playing >= 4 {
+                return None;
+            }
+            match PLAYING.compare_exchange_weak(
+                playing,
+                playing + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(Self),
+                Err(current) => playing = current,
+            }
+        }
+    }
+}
 impl Drop for Playback {
     fn drop(&mut self) {
         PLAYING.fetch_sub(1, Ordering::Relaxed);
@@ -59,15 +78,9 @@ pub fn play(cue: Cue, config: &SoundsConfig) {
     if !config.enabled || !config.volume.is_finite() || config.volume <= 0.0 {
         return;
     }
-    if PLAYING
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-            (n < 4).then_some(n + 1)
-        })
-        .is_err()
-    {
+    let Some(guard) = Playback::acquire() else {
         return;
-    }
-    let guard = Playback;
+    };
     let config = config.clone();
     let path = std::env::var_os("PATH").unwrap_or_default();
     let work = async move {
@@ -213,6 +226,37 @@ fn scale_wav(data: &mut [u8], volume: f32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn concurrent_playback_slots_are_bounded_and_released() {
+        let acquired = std::sync::Barrier::new(9);
+        let release = std::sync::Barrier::new(9);
+        std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let guard = Playback::acquire();
+                        acquired.wait();
+                        release.wait();
+                        guard.is_some()
+                    })
+                })
+                .collect();
+            acquired.wait();
+            let playing = PLAYING.load(Ordering::Relaxed);
+            release.wait();
+            let admitted = threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .filter(|admitted| *admitted)
+                .count();
+            assert_eq!(playing, 4);
+            assert_eq!(admitted, 4);
+        });
+        assert_eq!(PLAYING.load(Ordering::Relaxed), 0);
+        let guard = Playback::acquire().expect("released slot is reusable");
+        drop(guard);
+        assert_eq!(PLAYING.load(Ordering::Relaxed), 0);
+    }
     #[test]
     fn player_preference_and_missing_tools() {
         assert_eq!(choose_player(|n| Some(n.into())), Some("pw-play".into()));
