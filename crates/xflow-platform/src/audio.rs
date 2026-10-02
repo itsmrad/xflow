@@ -23,6 +23,7 @@ enum Command {
 pub struct CpalCapture {
     sender: mpsc::SyncSender<Command>,
     level: Arc<AtomicU32>,
+    finished: Arc<AtomicBool>,
 }
 
 struct Recording {
@@ -158,7 +159,7 @@ fn device_index(requested: &str, names: &[String]) -> Result<usize> {
 struct CaptureBuffer {
     recording: Mutex<Option<Recording>>,
     active: AtomicBool,
-    limited: AtomicBool,
+    limited: Arc<AtomicBool>,
     first_callback_us: AtomicU64,
 }
 
@@ -220,6 +221,8 @@ impl CpalCapture {
         let callback_sender = sender.clone();
         let level = Arc::new(AtomicU32::new(0_f32.to_bits()));
         let thread_level = level.clone();
+        let finished = Arc::new(AtomicBool::new(false));
+        let thread_finished = finished.clone();
         let config = config.clone();
         std::thread::Builder::new()
             .name("xflow-audio".into())
@@ -257,6 +260,7 @@ impl CpalCapture {
                                 {
                                     bail!("already recording");
                                 }
+                                thread_finished.store(false, Ordering::Release);
                                 if let Some(open) = &stream {
                                     let started = Instant::now();
                                     open.buffer.begin(Recording::new(
@@ -275,6 +279,7 @@ impl CpalCapture {
                                         callback_sender.clone(),
                                         thread_level.clone(),
                                         generation,
+                                        thread_finished.clone(),
                                     )?);
                                 }
                                 deadline = None;
@@ -314,6 +319,7 @@ impl CpalCapture {
                                 stream = None;
                             }
                             thread_level.store(0, Ordering::Relaxed);
+                            thread_finished.store(false, Ordering::Release);
                             let _ = reply.send(result);
                         }
                         Command::Cancel(reply) => {
@@ -321,6 +327,7 @@ impl CpalCapture {
                             completed = None;
                             deadline = None;
                             thread_level.store(0, Ordering::Relaxed);
+                            thread_finished.store(false, Ordering::Release);
                             let _ = reply.send(Ok(()));
                         }
                         Command::Limit(source) => {
@@ -352,7 +359,11 @@ impl CpalCapture {
                 }
             })
             .context("cannot start audio thread")?;
-        Ok(Self { sender, level })
+        Ok(Self {
+            sender,
+            level,
+            finished,
+        })
     }
 }
 
@@ -361,6 +372,7 @@ fn open_stream(
     sender: mpsc::SyncSender<Command>,
     level: Arc<AtomicU32>,
     generation: u64,
+    finished: Arc<AtomicBool>,
 ) -> Result<OpenStream> {
     let opened = Instant::now();
     let host = cpal::default_host();
@@ -389,7 +401,7 @@ fn open_stream(
     let buffer = Arc::new(CaptureBuffer {
         recording: Mutex::new(Some(Recording::new(sample_rate, channels, config)?)),
         active: AtomicBool::new(true),
-        limited: AtomicBool::new(false),
+        limited: finished,
         first_callback_us: AtomicU64::new(0),
     });
     let stream_config = supported.config();
@@ -517,6 +529,9 @@ impl AudioCapture for CpalCapture {
     fn level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
+    fn finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
 }
 
 impl Drop for CpalCapture {
@@ -541,7 +556,7 @@ mod tests {
         let buffer = CaptureBuffer {
             recording: Mutex::new(None),
             active: AtomicBool::new(false),
-            limited: AtomicBool::new(false),
+            limited: Arc::new(AtomicBool::new(false)),
             first_callback_us: AtomicU64::new(0),
         };
         assert!(buffer.take().unwrap().is_none());
@@ -598,7 +613,7 @@ mod tests {
                 Recording::new(4, 1, &RecordingConfig::default()).unwrap(),
             )),
             active: AtomicBool::new(true),
-            limited: AtomicBool::new(false),
+            limited: Arc::new(AtomicBool::new(false)),
             first_callback_us: AtomicU64::new(0),
         };
         buffer
@@ -690,5 +705,56 @@ mod tests {
         assert_eq!(three_channel_limit, (MAX_SAMPLES / 3) * 3);
         assert_eq!(three_channel_limit % 3, 0);
         assert!(Recording::sample_limit(48_000, 0, 120).is_err());
+    }
+    #[test]
+    fn completion_flag_keeps_buffer_and_device_error_until_retrieval() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let buffer = CaptureBuffer {
+            recording: Mutex::new(None),
+            active: AtomicBool::new(false),
+            limited: finished.clone(),
+            first_callback_us: AtomicU64::new(0),
+        };
+        let (sender, _receiver) = mpsc::sync_channel(16);
+        let capture = CpalCapture {
+            sender,
+            level: Arc::new(AtomicU32::new(0)),
+            finished,
+        };
+        buffer
+            .begin(Recording::new(2, 1, &RecordingConfig::default()).unwrap())
+            .unwrap();
+        assert!(!capture.finished());
+        buffer.fail("fixture CPAL device error".into());
+        assert!(capture.finished());
+        assert!(buffer
+            .take()
+            .unwrap()
+            .unwrap()
+            .finish()
+            .unwrap_err()
+            .to_string()
+            .contains("fixture CPAL device error"));
+        buffer
+            .begin(Recording::new(2, 1, &RecordingConfig::default()).unwrap())
+            .unwrap();
+        assert!(!capture.finished());
+        let mut lock = buffer.recording.lock().unwrap();
+        let recording = lock.as_mut().unwrap();
+        recording.push(&[0.5_f32; 2]);
+        drop(lock);
+        buffer.limited.store(true, Ordering::Release);
+        assert!(capture.finished());
+        assert_eq!(
+            buffer
+                .take()
+                .unwrap()
+                .unwrap()
+                .finish()
+                .unwrap()
+                .samples
+                .len(),
+            2
+        );
     }
 }

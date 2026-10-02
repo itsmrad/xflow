@@ -643,11 +643,15 @@ async fn concurrent_clients_and_malformed_frames_leave_daemon_responsive() {
         stream.write_all(&frame).await.unwrap();
         stream.shutdown().await.unwrap();
         let mut output = Vec::new();
-        // Invalid frames are rejected by closing the connection (reset is valid).
+        // Invalid frames receive a bounded error; a reset is also valid for oversized input.
         let _ = timeout(DEADLINE, stream.read_to_end(&mut output))
             .await
             .unwrap();
-        assert!(output.is_empty());
+        if !output.is_empty() {
+            let response: Response = serde_json::from_slice(&output).unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.protocol, Some(PROTOCOL_VERSION));
+        }
         assert!(daemon.request(json!({"command":"status"})).await.ok);
     }
     daemon.stop_process().await;
@@ -681,5 +685,75 @@ async fn reload_changes_provider_and_invalid_config_keeps_running_config() {
     replacement.upload().await;
     assert_eq!(fs::read_to_string(daemon.sink()).unwrap(), "retained");
     assert_eq!(daemon.history().await.history.len(), 3);
+    daemon.stop_process().await;
+}
+
+#[tokio::test]
+async fn corrupt_history_is_preserved_while_dictation_continues() {
+    let mut mock = MockStt::start(vec![Plan::success("Recovered dictation")]).await;
+    let mut daemon = Daemon::spawn_with(&mock.endpoint, "voice", true, |_, root| {
+        fs::create_dir_all(root.join("data/xflow")).unwrap();
+        fs::write(
+            root.join("data/xflow/history.db"),
+            b"original corrupt fixture",
+        )
+        .unwrap();
+    });
+    daemon.ready().await;
+    assert!(daemon
+        .request(json!({"command":"status"}))
+        .await
+        .message
+        .unwrap()
+        .contains("History unavailable"));
+    let mut events = daemon.events().await;
+    daemon.request(json!({"command":"start"})).await;
+    daemon.request(json!({"command":"stop"})).await;
+    let final_event = state(&mut events, State::Success).await;
+    assert_eq!(final_event.state, State::Success);
+    assert!(final_event.message.unwrap().contains("History unavailable"));
+    assert_eq!(
+        fs::read(daemon.root.path().join("data/xflow/history.db")).unwrap(),
+        b"original corrupt fixture"
+    );
+    mock.upload().await;
+    daemon.stop_process().await;
+}
+#[tokio::test]
+async fn sighup_reloads_only_the_isolated_daemon() {
+    let mock = MockStt::start(vec![]).await;
+    let mut daemon = Daemon::spawn(&mock.endpoint, "voice", true);
+    daemon.ready().await;
+    fs::write(
+        daemon.root.path().join("config/xflow/config.toml"),
+        config(&mock.endpoint, true, None)
+            .replace("fixture-model", "hup-model")
+            .replace("min_ms = 0", "min_ms = 5000"),
+    )
+    .unwrap();
+    assert_eq!(
+        unsafe { libc::kill(daemon.child.id() as libc::pid_t, libc::SIGHUP) },
+        0
+    );
+    timeout(DEADLINE, async {
+        loop {
+            if daemon
+                .request(json!({"command":"status"}))
+                .await
+                .model
+                .as_deref()
+                == Some("hup-model")
+            {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    daemon.request(json!({"command":"start"})).await;
+    let stopped = daemon.request(json!({"command":"stop"})).await;
+    assert_eq!(stopped.state, State::Idle);
+    assert!(stopped.message.unwrap().contains("too short"));
     daemon.stop_process().await;
 }
