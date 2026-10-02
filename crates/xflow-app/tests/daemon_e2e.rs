@@ -33,7 +33,11 @@ struct Daemon {
 
 impl Daemon {
     fn spawn(endpoint: &str, audio: &str, offline: bool) -> Self {
-        Self::spawn_with(endpoint, audio, offline, |_, _| {})
+        Self::spawn_with_config(config(endpoint, offline, None), audio, |_, _| {})
+    }
+
+    fn spawn_with_protocol(endpoint: &str, audio: &str, offline: bool, protocol: &str) -> Self {
+        Self::spawn_with_config(config(endpoint, offline, Some(protocol)), audio, |_, _| {})
     }
 
     fn spawn_with(
@@ -42,17 +46,21 @@ impl Daemon {
         offline: bool,
         customize: impl FnOnce(&mut Command, &Path),
     ) -> Self {
+        Self::spawn_with_config(config(endpoint, offline, None), audio, customize)
+    }
+
+    fn spawn_with_config(
+        contents: String,
+        audio: &str,
+        customize: impl FnOnce(&mut Command, &Path),
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         for subdir in ["run", "config/xflow", "data", "home"] {
             fs::create_dir_all(root.path().join(subdir)).unwrap();
         }
         fs::set_permissions(root.path().join("run"), fs::Permissions::from_mode(0o700)).unwrap();
-        fs::write(
-            root.path().join("config/xflow/config.toml"),
-            config(endpoint, offline),
-        )
-        .unwrap();
+        fs::write(root.path().join("config/xflow/config.toml"), contents).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_xflowd"));
         command
             .env_clear()
@@ -181,8 +189,10 @@ impl Drop for Daemon {
     }
 }
 
-fn config(endpoint: &str, offline: bool) -> String {
-    format!("[stt]\nprovider = \"custom\"\nmodel = \"fixture-model\"\nendpoint = {endpoint:?}\ntimeout_secs = 5\n[cleanup]\nmode = \"raw\"\n[recording]\nmin_ms = 0\n[injection]\ntrailing_space = false\n[sounds]\nenabled = false\n[notifications]\nenabled = false\n[privacy]\noffline = {offline}\n")
+fn config(endpoint: &str, offline: bool, protocol: Option<&str>) -> String {
+    let protocol =
+        protocol.map_or_else(String::new, |protocol| format!("protocol = {protocol:?}\n"));
+    format!("[stt]\nprovider = \"custom\"\nmodel = \"fixture-model\"\nendpoint = {endpoint:?}\n{protocol}timeout_secs = 5\n[cleanup]\nmode = \"raw\"\n[recording]\nmin_ms = 0\n[injection]\ntrailing_space = false\n[sounds]\nenabled = false\n[notifications]\nenabled = false\n[privacy]\noffline = {offline}\n")
 }
 
 async fn event(reader: &mut BufReader<UnixStream>) -> Response {
@@ -226,6 +236,7 @@ impl Plan {
 struct MockStt {
     endpoint: String,
     uploads: mpsc::UnboundedReceiver<Vec<u8>>,
+    probes: mpsc::UnboundedReceiver<(String, String)>,
     task: JoinHandle<()>,
 }
 impl MockStt {
@@ -237,6 +248,7 @@ impl MockStt {
         );
         let plans = Arc::new(Mutex::new(VecDeque::from(plans)));
         let (sent, uploads) = mpsc::unbounded_channel();
+        let (probed, probes) = mpsc::unbounded_channel();
         let task = tokio::spawn(async move {
             let mut clients = JoinSet::new();
             loop {
@@ -245,9 +257,10 @@ impl MockStt {
                         let (stream, _) = accepted.unwrap();
                         let plans = plans.clone();
                         let sent = sent.clone();
+                        let probed = probed.clone();
                         clients.spawn(async move {
                             // Preconnect/warm may close without sending a request.
-                            read_upload(stream, plans, sent).await;
+                            handle_provider_request(stream, plans, sent, probed).await;
                         });
                     }
                     result = clients.join_next(), if !clients.is_empty() => { result.unwrap().unwrap(); }
@@ -257,6 +270,7 @@ impl MockStt {
         Self {
             endpoint,
             uploads,
+            probes,
             task,
         }
     }
@@ -266,6 +280,13 @@ impl MockStt {
             .expect("STT upload timed out")
             .expect("mock server stopped")
     }
+
+    async fn probe(&mut self) -> (String, String) {
+        timeout(DEADLINE, self.probes.recv())
+            .await
+            .expect("provider warm-up probe timed out")
+            .expect("mock server stopped")
+    }
 }
 impl Drop for MockStt {
     fn drop(&mut self) {
@@ -273,58 +294,100 @@ impl Drop for MockStt {
     }
 }
 
-async fn read_upload(
+async fn handle_provider_request(
     stream: TcpStream,
     plans: Arc<Mutex<VecDeque<Plan>>>,
     sent: mpsc::UnboundedSender<Vec<u8>>,
+    probed: mpsc::UnboundedSender<(String, String)>,
 ) {
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    if reader.read_line(&mut line).await.unwrap() == 0 {
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).await.unwrap() == 0 {
+            return;
+        }
+        let mut request = line.split_ascii_whitespace();
+        let method = request.next().expect("request method").to_owned();
+        let path = request.next().expect("request path").to_owned();
+        assert_eq!(request.next(), Some("HTTP/1.1"));
+        let mut length = None;
+        let mut multipart = false;
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).await.unwrap() == 0 {
+                return;
+            }
+            if line == "\r\n" {
+                break;
+            }
+            let lower = line.to_ascii_lowercase();
+            if let Some(value) = lower.strip_prefix("content-length:") {
+                length = Some(value.trim().parse::<usize>().unwrap());
+            }
+            if lower.starts_with("content-type: multipart/form-data;") {
+                multipart = true;
+            }
+            assert!(
+                !lower.starts_with("authorization:"),
+                "loopback fixture must be anonymous"
+            );
+        }
+        match (method.as_str(), path.as_str()) {
+            ("GET", "/v1/models") => {
+                // Read-only warm-up responses never touch the billable upload plans.
+                probed.send((method, path)).unwrap();
+                let body = r#"{"data":[]}"#;
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body);
+                if reader
+                    .get_mut()
+                    .write_all(response.as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            ("HEAD", "/") => {
+                // AssemblyAI sync uses HEAD on the origin before its multipart POST.
+                probed.send((method, path)).unwrap();
+                if reader
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            ("POST", "/v1/audio/transcriptions") => (),
+            _ => panic!("unexpected provider request: {method} {path}"),
+        }
+        assert!(multipart, "upload must use the multipart protocol");
+        let length = length.expect("bounded content-length required");
+        assert!(length < 100_000);
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).await.unwrap();
+        sent.send(body).unwrap();
+        let plan = plans
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("unexpected provider upload");
+        if let Some(gate) = plan.gate {
+            gate.acquire().await.unwrap().forget();
+        }
+        let body = if plan.status == 200 {
+            json!({"text":plan.text}).to_string()
+        } else {
+            "private provider error details".into()
+        };
+        // Cancel may close the HTTP connection before the withheld response arrives.
+        let response = format!("HTTP/1.1 {} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", plan.status, body.len(), body);
+        let _ = reader.get_mut().write_all(response.as_bytes()).await;
         return;
     }
-    assert!(line.starts_with("POST /v1/audio/transcriptions HTTP/1.1"));
-    let mut length = None;
-    let mut multipart = false;
-    loop {
-        line.clear();
-        assert!(reader.read_line(&mut line).await.unwrap() > 0);
-        if line == "\r\n" {
-            break;
-        }
-        let lower = line.to_ascii_lowercase();
-        if let Some(value) = lower.strip_prefix("content-length:") {
-            length = Some(value.trim().parse::<usize>().unwrap());
-        }
-        if lower.starts_with("content-type: multipart/form-data;") {
-            multipart = true;
-        }
-        assert!(
-            !lower.starts_with("authorization:"),
-            "loopback fixture must be anonymous"
-        );
-    }
-    assert!(multipart);
-    let length = length.expect("bounded content-length required");
-    assert!(length < 100_000);
-    let mut body = vec![0; length];
-    reader.read_exact(&mut body).await.unwrap();
-    sent.send(body).unwrap();
-    let plan = plans
-        .lock()
-        .unwrap()
-        .pop_front()
-        .expect("unexpected provider upload");
-    if let Some(gate) = plan.gate {
-        gate.acquire().await.unwrap().forget();
-    }
-    let body = if plan.status == 200 {
-        json!({"text":plan.text}).to_string()
-    } else {
-        "private provider error details".into()
-    };
-    // Cancel may close the HTTP connection before the withheld response arrives.
-    let _ = reader.get_mut().write_all(format!("HTTP/1.1 {} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", plan.status, body.len(), body).as_bytes()).await;
 }
 
 async fn dictate(daemon: &Daemon, events: &mut BufReader<UnixStream>) {
@@ -376,6 +439,33 @@ async fn transcript_is_uploaded_delivered_and_persisted() {
         Some("fixture transcript")
     );
     daemon.stop_process().await;
+}
+
+#[tokio::test]
+async fn get_and_head_warm_up_probes_do_not_consume_upload_plans() {
+    for (protocol, expected_probe, transcript) in [
+        (None, ("GET", "/v1/models"), "after GET warm-up"),
+        (Some("assemblyai-sync"), ("HEAD", "/"), "after HEAD warm-up"),
+    ] {
+        let mut mock = MockStt::start(vec![Plan::success(transcript)]).await;
+        let mut daemon = match protocol {
+            Some(protocol) => Daemon::spawn_with_protocol(&mock.endpoint, "voice", true, protocol),
+            None => Daemon::spawn(&mock.endpoint, "voice", true),
+        };
+        daemon.ready().await;
+        let mut events = daemon.events().await;
+        dictate(&daemon, &mut events).await;
+
+        assert_eq!(
+            mock.probe().await,
+            (expected_probe.0.to_owned(), expected_probe.1.to_owned())
+        );
+        let upload = mock.upload().await;
+        assert!(upload.windows(4).any(|bytes| bytes == b"RIFF"));
+        assert_eq!(fs::read_to_string(daemon.sink()).unwrap(), transcript);
+        assert_eq!(daemon.history().await.history[0].text, transcript);
+        daemon.stop_process().await;
+    }
 }
 
 #[tokio::test]
@@ -582,8 +672,8 @@ async fn reload_changes_provider_and_invalid_config_keeps_running_config() {
     original.upload().await;
     let path = daemon.root.path().join("config/xflow/config.toml");
     // Changing recording settings exercises both audio and desktop rebuilding.
-    let reconfigured =
-        config(&replacement.endpoint, true).replace("min_ms = 0", "min_ms = 0\nmax_seconds = 60");
+    let reconfigured = config(&replacement.endpoint, true, None)
+        .replace("min_ms = 0", "min_ms = 0\nmax_seconds = 60");
     fs::write(&path, reconfigured).unwrap();
     assert!(daemon.request(json!({"command":"reload"})).await.ok);
     dictate(&daemon, &mut events).await;
