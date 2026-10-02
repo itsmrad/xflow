@@ -100,9 +100,16 @@ All terminal-cell symbols are sanitized against control-byte injection from tran
   Checks dictation state events, history query, stats, word/multiline snippet save, theme save,
   reload requests, tiny resize, clean quit, original termios and alternate-screen restoration.
   Both connected one-second idle samples measured **0 CPU ticks**.
-- Final isolated `scripts/check.sh`: pending authorized CI mock warm-up fixture adaptation.
-  Prior check passed fmt, Clippy with warnings denied, 38 extension tests and all app unit tests;
-  the daemon upload-only mock rejected the provider's legitimate GET /v1/models warm-up.
+- Final isolated `scripts/check.sh`: **passed on 2026-10-02**, code checkpoint `83b6a3f`.
+  Fmt, strict schema validation, **38 extension tests**, workspace Clippy with warnings denied,
+  **57 app unit tests** (including all 17 TUI tests), **11 daemon end-to-end tests**, **15 core
+  tests**, **17 platform tests**, **41 provider tests**, doc tests, then **3 private-bus platform
+  tests** and **2 fallback harness tests** all passed. The fallback harness also passed its
+  three fake-tool child fixtures.
+  The run used the shared Cargo gate, `target/t` TMPDIR, private XDG roots under `target/v`,
+  a private `dbus-run-session`, unset desktop displays and stripped API-key variables;
+  `MISE_RUST_VERSION=1.98.1` retained the installed compiler through the shared gate.
+  The local full log is `target/v/full-check.log`.
 
 The UI awaits subscription/input/background jobs; animation ticks are enabled only during
 listening/processing. Connected idle has no polling timer. Disconnected reconnect uses bounded
@@ -110,6 +117,20 @@ listening/processing. Connected idle has no polling timer. Disconnected reconnec
 are asynchronous. A panic hook and RAII guard restore raw mode, mouse capture, bracketed paste,
 alternate screen and cursor. Tests never use the real daemon, audio stream, clipboard, desktop
 key synthesis, real keyring service, API keys or paid provider calls.
+
+## Final dependency integration
+
+Integrated the coordinator's verified provider `1b58d82`, overlay `77ab635`, final daemon
+`64b38ed`, and CI warm-up fixture `dc5dd46` checkpoints. The CI merge retained the daemon's
+corrupt-history and SIGHUP scenarios. A coordinator-authorized one-line adaptation passes
+`None` for the fixture helper's new optional protocol argument in the retained SIGHUP test;
+this is the only continuation edit outside the TUI directory. Its commit is `83b6a3f`.
+The final gate passed with all 11 combined end-to-end scenarios. Original mock upload and
+anonymous-loopback assertions remain strict, while warm-up GET/HEAD probes consume no audio plan.
+
+The feature/report checkpoint `a139eb8` was pushed successfully before these final merges.
+The final report commit and dependency merges are published on the same assigned branch;
+the completion message records its exact final SHA and push result.
 
 ## Text screenshots
 
