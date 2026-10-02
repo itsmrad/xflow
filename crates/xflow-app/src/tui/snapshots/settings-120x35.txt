@@ -1,0 +1,35 @@
+ xflow                ╭Control center──────────────────────────────────────────────────────────────────────────────────╮
+ Voice, at your pace. │Settings  ·  Connected                                                                          │
+                      ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭Navigate─────────╮╭Settings───────────────────────────────────╮╭Details · [ / ] scroll────────────────────────────────╮
+│  1 Home         ││› cleanup.api_key_env                      ││cleanup.api_key_env                                   │
+│  2 History      ││  "OPENAI_API_KEY"                         ││                                                      │
+│  3 Dictionary   ││  cleanup.app_context                      ││"OPENAI_API_KEY"                                      │
+│  4 Snippets     ││  true                                     ││                                                      │
+│  5 Styles       ││  cleanup.endpoint                         ││Enter edits with schema validation.                   │
+│  6 Providers    ││  (unset)                                  ││←/→ cycles form choices.                              │
+│› 7 Settings     ││  cleanup.mode                             ││u resets to the default.                              │
+│  8 Overlay      ││  "raw"                                    ││                                                      │
+│  9 Stats        ││  cleanup.model                            ││Ctrl+S saves + reloads                                │
+│  0 Doctor       ││  (unset)                                  ││Ctrl+R reverts unsaved edits                          │
+│                 ││  cleanup.prompt                           ││i chooses the microphone                              │
+│                 ││  (unset)                                  ││                                                      │
+│                 ││  cleanup.provider                         ││Config: /isolated/xflow/config.toml                   │
+│                 ││  (unset)                                  ││                                                      │
+│                 ││  cleanup.timeout_secs                     ││                                                      │
+│                 ││  20                                       ││                                                      │
+│                 ││  dictionary.replacements                  ││                                                      │
+│                 ││  []                                       ││                                                      │
+│                 ││  dictionary.words                         ││                                                      │
+│                 ││  ["xflow", "Ratatui"]                     ││                                                      │
+│                 ││  formatting.fillers                       ││                                                      │
+│                 ││  ["um", "umm", "uh", "uhm", "er", "erm", "││                                                      │
+│                 ││  formatting.remove_fillers                ││                                                      │
+│                 ││  true                                     ││                                                      │
+│                 ││  formatting.spoken_punctuation            ││                                                      │
+│                 ││  false                                    ││                                                      │
+╰─────────────────╯╰───────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
+ Enter Edit   u Reset   Ctrl+S Save   Ctrl+R Revert
+
+? Help  ·  Ctrl+P Actions  ·  t Theme  ·  Ctrl+S Save  ·  q Quit
+

@@ -1,0 +1,24 @@
+ xflow                ╭Control center──────────────────────────────────────────╮
+ Voice, at your pace. │Home  ·  Connected                                      │
+                      ╰────────────────────────────────────────────────────────╯
+╭Navigate─────────╮╭Live session───────────────────────────────────────────────╮
+│› 1 Home         ││ ✓ DONE                                                    │
+│  2 History      ││ Dictation  ·  groq / whisper-large-v3-turbo               │
+│  3 Dictionary   ││ Space starts / stops · C command mode · x cancels         │
+│  4 Snippets     ││                                                           │
+│  5 Styles       ││                                                           │
+│  6 Providers    │╰───────────────────────────────────────────────────────────╯
+│  7 Settings     │╭Last transcript · PgUp/PgDn scroll─────────────────────────╮
+│  8 Overlay      ││The best ideas start with a conversation.                  │
+│  9 Stats        ││                                                           │
+│  0 Doctor       ││                                                           │
+│                 ││                                                           │
+│                 │╰───────────────────────────────────────────────────────────╯
+│                 │╭Latency & connection───────────────────────────────────────╮
+│                 ││Session timing appears after dictation                     │
+│                 ││Daemon 0.1.0 · protocol 2 · Connected                      │
+╰─────────────────╯╰───────────────────────────────────────────────────────────╯
+ Space Dictate   C Command   x Cancel   c Copy   p Paste
+
+? Help  ·  Ctrl+P Actions  ·  t Theme  ·  Ctrl+S Save  ·  q Quit
+

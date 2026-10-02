@@ -1,0 +1,24 @@
+ xflow                ╭Control center──────────────────────────────────────────╮
+ Voice, at your pace. │History  ·  Connected                                   │
+                      ╰────────────────────────────────────────────────────────╯
+╭Navigate─────────╮╭History 1–1 / 1 · / ───────────────────────────────────────╮
+│  1 Home         ││› The best ideas start with a conversation.                │
+│› 2 History      ││  #42  groq  430ms                                         │
+│  3 Dictionary   ││                                                           │
+│  4 Snippets     ││                                                           │
+│  5 Styles       ││                                                           │
+│  6 Providers    ││                                                           │
+│  7 Settings     │╰───────────────────────────────────────────────────────────╯
+│  8 Overlay      │╭Details · [ / ] scroll─────────────────────────────────────╮
+│  9 Stats        ││The best ideas start with a conversation.                  │
+│  0 Doctor       ││                                                           │
+│                 ││#42 · groq · whisper-large-v3-turbo                        │
+│                 ││App: code · language: en                                   │
+│                 ││Audio: 2800ms · latency: 430ms                             │
+│                 ││Mode: Dictation · timestamp: 1790859600                    │
+│                 ││                                                           │
+╰─────────────────╯╰───────────────────────────────────────────────────────────╯
+ / Search   c Copy   p Paste   Del Remove   e Export
+
+? Help  ·  Ctrl+P Actions  ·  t Theme  ·  Ctrl+S Save  ·  q Quit
+

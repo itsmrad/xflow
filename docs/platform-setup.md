@@ -19,11 +19,14 @@ sudo apt install build-essential pkg-config libasound2-dev wl-clipboard xclip xd
 cargo build --release
 ```
 
-Install the extension (run from the repository root):
+Install the extension runtime assets (run from the repository root):
 
 ```sh
-mkdir -p "$HOME/.local/share/gnome-shell/extensions/xflow@xflow.local"
-cp -R packaging/gnome-extension/. "$HOME/.local/share/gnome-shell/extensions/xflow@xflow.local/"
+mkdir -p "$HOME/.local/share/gnome-shell/extensions/xflow@xflow.local/schemas"
+cp packaging/gnome-extension/{extension.js,logic.js,prefs.js,stylesheet.css,metadata.json} \
+  "$HOME/.local/share/gnome-shell/extensions/xflow@xflow.local/"
+cp packaging/gnome-extension/schemas/*.xml \
+  "$HOME/.local/share/gnome-shell/extensions/xflow@xflow.local/schemas/"
 glib-compile-schemas "$HOME/.local/share/gnome-shell/extensions/xflow@xflow.local/schemas"
 ```
 
@@ -31,46 +34,80 @@ Log out and back in on Wayland so GNOME discovers the extension, then run:
 
 ```sh
 gnome-extensions enable xflow@xflow.local
+gnome-extensions prefs xflow@xflow.local
 ```
 
-Ensure `xflow` is on the GNOME session's PATH. Alternatively, set `command-path`
-to its absolute installed path using the local schema:
+The extension calls `org.xflow.Daemon.Command` asynchronously on the session bus.
+It needs the v1 daemon running; it does not spawn the CLI or use `command-path`.
+A missing daemon shows “xflow daemon not running — run: xflow daemon start”.
+Appearance and shortcuts belong to GSettings, independently of daemon TOML.
+The native preferences window has Appearance, Shortcuts and Behavior pages with
+a static preview; changes take effect immediately.
+
+| Action | Default shortcut / setting |
+| --- | --- |
+| Dictate | Super+Alt+Space (`toggle-shortcut`) |
+| Voice command | Super+Alt+R (`command-shortcut`) |
+| Cancel | Escape only while listening/processing; Super+Alt+Escape (`cancel-shortcut`) |
+| Copy / paste last | Super+Alt+C / Super+Alt+V (`copy-shortcut` / `paste-shortcut`) |
+| Explicit start / stop | Unassigned (`start-shortcut` / `stop-shortcut`) |
+
+Smart mode starts recording at keypress. A tap shorter than `ptt-threshold-ms`
+(default 300 ms) keeps hands-free recording running until the next press; a hold
+stops on key or modifier release. Choose `hotkey-mode=hold` for always-held
+push-to-talk, or `toggle` for tap-only control. The release watcher exists only
+while a shortcut is held. Shortcuts ignore autorepeat and apply only in the
+normal desktop session; changing appearance does not re-register shortcuts.
+The command shortcut uses the same gesture rules and sends `mode=command`.
+
+The default pill is a compact, off-white capsule with near-black rounded bars.
+Listening shows a smoothed, center-weighted waveform; processing contracts to
+five shimmer dots; success briefly shows a check; error shows an accent and a
+short message. Command mode uses a muted violet accent. Idle is hidden by
+default, with an optional static minimal handle. No recurring source runs while
+idle. Motion respects both `animations` and the desktop’s `enable-animations`.
+
+Use preferences or the following prefix for settings:
 
 ```sh
 gsettings --schemadir "$HOME/.local/share/gnome-shell/extensions/xflow@xflow.local/schemas" \
-  set org.gnome.shell.extensions.xflow command-path '/absolute/path/to/xflow'
+  set org.gnome.shell.extensions.xflow theme 'auto'
 ```
 
-The same `gsettings --schemadir …` prefix configures `toggle-shortcut`,
-`cancel-shortcut`, `copy-shortcut`, `paste-shortcut`, optional `start-shortcut` and
-`stop-shortcut`, `position` (`top` or `bottom`), `width`, `height`, `margin`,
-`opacity`, and `animation`. Defaults are Super+Alt+Space to toggle,
-Super+Alt+Escape to cancel, Super+Alt+C to copy, and Super+Alt+V to paste last.
-Shortcut bindings apply in the normal desktop session, outside the lock screen.
-Shortcut registration requests Mutter to ignore key autorepeat; changing pill appearance does not
-re-register shortcuts.
+Settings include `theme` (light/dark/auto), `position` (bottom-center, top-center,
+bottom-left, bottom-right, top-left, top-right), `monitor` (primary/focused/pointer),
+`margin`, `offset-x`, `offset-y`, `scale`, `opacity`, `waveform-bars`,
+`waveform-style` (rounded/thin/square), `idle-style` (hidden/minimal), `animations`,
+`show-messages`, `success-hold-ms`, `error-hold-ms`, `hotkey-mode` and
+`ptt-threshold-ms`. Pointer monitor selection is sampled on activation and layout
+updates, without idle polling. Placement uses the monitor work area and HiDPI
+scale, and clamps offsets to keep the pill on screen. The old `position=top` and
+`bottom` values remain aliases; old `width`, `height`, `animation` and
+`command-path` settings are replaced by `scale`, `animations` and D-Bus control.
 
-The extension uses the GNOME 45+ ES module API. Its metadata lists 45–51 as
-candidate versions using that API. JavaScript syntax, GSettings schemas, and
-startup/context-bridge enable-disable behavior were checked in an isolated
-headless GNOME 50.1 session; other versions and physical desktop behavior still
-need validation. GNOME 50 removed the X11 input-region option; the extension
-supplies it only on older Shell versions. After updating
-installed extension JavaScript, log out and back in to load the new module;
-disabling and enabling alone does not reload cached code.
+`org.xflow.Shell` provides `Context`, `Version`, `Selection` (PRIMARY, at most
+64 KiB), and `Inject`. Native paste uses Clutter Ctrl+V or Ctrl+Shift+V for a
+terminal after copying text and rechecking the captured window identity. Unknown
+or changed focus returns `clipboard_only` and keeps text available for recovery.
+Screen lock refuses selection and injection. Optional clipboard restoration
+checks both the injection generation and the current text so it does not erase
+a newer user copy. Short typing uses the native input method for Unicode, with
+an ASCII keysym fallback when no input method owns focus; unsupported Unicode
+there stays on the clipboard. Requests longer than 500 characters use paste.
+A queued keyboard dispatch is not acknowledgement that the application accepted
+it; users should verify their target application and keyboard layout.
 
-The current GNOME adapter provides toggle and explicit start/stop shortcuts.
-It does **not** provide verified press-and-release push-to-talk. Mutter's
-`TRIGGER_RELEASE` flag exposes both transitions and its key handler receives a
-Clutter event. Release handling still needs live Shell verification, including
-modifier release, shortcuts changing while held, and ordering of the start and
-stop CLI processes, before enabling it.
-Do not label a press-only binding push-to-talk. A compositor with independent
-press/release bindings can bind `xflow start` and `xflow stop` to those events.
+Metadata targets GNOME 45–50. GNOME 50 omits the removed X11 input-region option.
+Syntax, schemas, runtime states, services and cleanup were checked in an isolated
+headless GNOME 50.1 session; older versions and physical application delivery
+still need desktop acceptance. After updating installed JavaScript, log out and
+back in to reload cached modules. See
+[overlay validation](../packaging/gnome-extension/tests/VALIDATION.md) for checks,
+screenshots and the manual acceptance checklist.
 
-## Wayland automatic paste
+## Wayland utility fallback
 
-`wl-copy` owns the clipboard. Paste uses `ydotool key` only when an existing
+GNOME prefers `org.xflow.Shell.Inject`, without a ydotool dependency. When the Shell service is unavailable, `wl-copy` owns the clipboard and paste uses `ydotool key` only when an existing
 ydotool daemon socket is found, using `YDOTOOL_SOCKET`,
 `$XDG_RUNTIME_DIR/.ydotool_socket`, or `/tmp/.ydotool_socket`. Install the
 distribution's `ydotool` package and configure its daemon with permission to
@@ -89,7 +126,7 @@ transcript for `xflow last` and later copy.
 GNOME focus identity comes from the extension's `org.xflow.Shell.Context` method;
 without it, automatic paste is intentionally disabled. Text is passed to
 clipboard helpers over stdin, never interpolated into shell commands. XFlow
-does not refocus windows. Single-line terminals use Shift+Insert; multiline
+does not refocus windows. The utility fallback uses Shift+Insert for single-line terminals; multiline
 terminal text and any text with unknown app identity remain clipboard
 only so pasting cannot silently execute a newline. Focus is checked immediately
 before keyboard dispatch, but another focus change can still race with synthetic
@@ -99,9 +136,9 @@ keys; use `injection.clipboard_only = true` when that residual risk matters.
 
 | Session | Clipboard | Automatic paste | Global shortcuts / overlay |
 | --- | --- | --- | --- |
-| Ubuntu GNOME Wayland | `wl-copy` | `ydotool`, original-window guard via extension | Bundled GNOME extension |
-| Fedora GNOME Wayland | `wl-copy` | Same adapter; distro uinput/ydotool setup required | Same extension API; target validation pending |
-| GNOME X11 | `xclip` | `xdotool`, original-window guard | Bundled GNOME extension |
+| Ubuntu GNOME Wayland | Native Shell; `wl-copy` fallback | Native Shell paste/type; guarded `ydotool` fallback | Bundled GNOME extension |
+| Fedora GNOME Wayland | Native Shell; `wl-copy` fallback | Same adapter; utility fallback needs distro uinput/ydotool setup | Same extension API; target validation pending |
+| GNOME X11 | Native Shell; `xclip` fallback | Native Shell paste/type; guarded `xdotool` fallback | Bundled GNOME extension |
 | Other X11 desktops | `xclip` | `xdotool`, original-window guard | Bind CLI commands in desktop settings; native pill pending |
 | wlroots Wayland (Sway, etc.) | `wl-copy` | Clipboard only until compositor focus adapter exists | Bind CLI commands in compositor config; layer-shell pill pending |
 | KDE Plasma Wayland | `wl-copy` | Clipboard only until KWin focus adapter exists | Bind CLI commands in KDE settings; native overlay pending |

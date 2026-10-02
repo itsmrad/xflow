@@ -1,26 +1,181 @@
 # xflow-providers
 
-`build_stt(&SttConfig, offline)` returns a non-streaming `SpeechToText` implementation. `build_transformer(&CleanupConfig, offline)` returns an optional `TextTransformer`; raw cleanup creates no client. `save_key(provider, secret)` asynchronously stores a key in the OS credential store under service `xflow`, account `provider`.
+Bounded, non-streaming speech transcription and optional text cleanup. Models are
+selectable; static catalogs are suggestions, not allowlists. Defaults were checked
+against official documentation on **2026-10-01**. No real microphone, credentials,
+paid inference or daemon was used in verification. Mock tests establish wire
+contracts, not account availability or cloud transcription quality.
 
-Implemented provider contracts, verified against official documentation on 2026-09-30:
+## Provider report
 
-| Provider | Request | Default model | Credentials |
+| Provider id | Default model | Wire protocol | Official documentation / verification |
 | --- | --- | --- | --- |
-| Groq | Multipart `file`, `model`, optional `language`, `prompt` | `whisper-large-v3-turbo` | `GROQ_API_KEY` / `groq` keyring account |
-| OpenRouter | JSON `input_audio: {data: base64, format: "wav"}`, `model`, optional `language` | `openai/whisper-large-v3` | `OPENROUTER_API_KEY` / `openrouter` |
-| OpenAI | OpenAI multipart transcription | `whisper-1` | `OPENAI_API_KEY` / `openai` |
-| Custom | OpenAI multipart transcription; explicit full endpoint and model required | Required | Configured environment variable / `custom` |
+| `groq` | `whisper-large-v3-turbo` | OpenAI multipart | [STT guide](https://console.groq.com/docs/speech-to-text); documented |
+| `openai` | `gpt-transcribe` | Multipart, keyword/language arrays | [Audio reference](https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create); documented |
+| `deepgram` | `nova-3` | Raw audio, Token auth, query hints | [Pre-recorded API](https://developers.deepgram.com/docs/pre-recorded-audio); documented |
+| `assemblyai` | `universal-3-5-pro` | Upload → submit → poll | [Submit API](https://www.assemblyai.com/docs/pre-recorded-audio/api-reference/transcripts/submit); documented |
+| `elevenlabs` | `scribe_v2` | Multipart, xi-api-key | [Scribe API](https://elevenlabs.io/docs/api-reference/speech-to-text/convert); documented |
+| `gemini` | `gemini-3.5-transcribe` | generateContent, inline audio, VERBATIM | [Transcribe guide](https://ai.google.dev/gemini-api/docs/generate-content/transcribe); config documented, inline path inferred from generic Part schema and not live-tested |
+| `mistral` | `voxtral-mini-latest` | Multipart, context_bias | [Audio API](https://docs.mistral.ai/api/endpoint/audio/transcriptions); documented |
+| `openrouter` | `openai/whisper-large-v3` | JSON input_audio, base64 | [STT reference](https://openrouter.ai/docs/api/api-reference/stt/create-transcription); documented |
+| `together` | `openai/whisper-large-v3` | OpenAI multipart, language=auto | [Transcription guide](https://docs.together.ai/docs/inference/transcription/overview); documented |
+| `deepinfra` | `openai/whisper-large-v3-turbo` | OpenAI multipart | [API reference](https://docs.deepinfra.com/api-reference/audio/openai-audio-transcriptions); documented |
+| `custom` | Explicit model | OpenAI multipart by default | Explicit endpoint required; compatibility depends on server |
+| `local` | `Systran/faster-whisper-small` | OpenAI multipart, no key | [Speaches](https://speaches.ai/); default http://127.0.0.1:8000/v1/audio/transcriptions |
 
-[Groq's official STT documentation](https://console.groq.com/docs/speech-to-text) specifies direct attachment limits, multilingual models and Whisper's 224-token prompt budget. The implementation conservatively limits joined vocabulary hints to 224 UTF-8 bytes. Configured language must be a lowercase two-letter code; invalid language, oversized hints and unsupported OpenRouter hints fail when the STT provider is built, before recording. Per-request overrides are checked again after merging with configured hints. [OpenRouter's official transcription reference](https://openrouter.ai/docs/api/api-reference/stt/create-transcription) documents its dedicated `/audio/transcriptions` endpoint and JSON audio format. OpenRouter supports `keyterms` only on some models; this adapter rejects vocabulary hints rather than silently losing them or assuming model support. [OpenAI's audio API reference](https://platform.openai.com/docs/api-reference/audio/createTranscription) defines the multipart contract.
+DeepInfra replaces Fireworks STT, which was
+[deprecated on 2026-06-10](https://docs.fireworks.ai/updates/changelog).
+Fireworks remains a cleanup preset. Legacy OpenAI `gpt-4o-transcribe`,
+`gpt-4o-mini-transcribe` and `whisper-1` remain selectable with retirement notes.
+Catalog flags describe provider capabilities; individual models may impose stricter
+limits. Arbitrary newer model ids are accepted.
 
-`stt.endpoint` is a **full endpoint URL**, not a base URL. `stt.api_key_env` overrides the default environment variable. A named provider uses its default environment variable or keyring account only on its canonical HTTPS host. Other remote hosts require an explicit `stt.api_key_env` and never fall back to the named provider's keyring account; loopback overrides may be anonymous. Environment variables take precedence over OS storage, and an invalid/empty present variable fails instead of falling back silently. API keys are never read at client construction time. Linux uses Secret Service (GNOME Keyring/KWallet); macOS uses Keychain; Windows uses Credential Manager. A Linux source build requires `pkg-config` and DBus development headers. A headless environment can use environment variables without opening the keyring.
+`stt.endpoint` is a **full URL**, not a base URL. `stt.protocol` accepts
+`openai`, `openai-keywords`, `openrouter`, `deepgram`, `assemblyai`,
+`assemblyai-sync`, `elevenlabs`, `gemini`, `mistral` and `whisper-cpp`.
+AssemblyAI sync defaults to https://sync.assemblyai.com/transcribe and requires
+80 ms–120 seconds of 16 kHz WAV; use async for longer clips. Async polling starts
+at 100 ms and doubles to one second under one overall deadline; upload and job
+submission are never repeated. For whisper.cpp, configure `local` with
+`protocol = "whisper-cpp"`, a server model id and endpoint
+http://127.0.0.1:8080/inference. XFlow does not download local models; preinstall
+them to avoid the server's own first-request download latency.
 
-Cleanup is a separate OpenAI-compatible chat completion client. Light/polished modes require an explicit full `cleanup.endpoint` and `cleanup.model`. The default `cleanup.api_key_env` value selects the matching variable for canonical OpenAI, Groq or OpenRouter hosts; for other hosts it selects no environment key. Set a different variable name explicitly for a custom service. Its keyring account is `groq`, `openrouter` or `openai` for those canonical API hosts, otherwise `cleanup`. Application/window identifiers and selected text are not sent. LLM cleanup can make semantic mistakes; the caller should retain the raw transcript locally when history is enabled.
+Language hints use lowercase ISO-639-1 codes; omission requests auto-detection.
+Together explicitly sends `auto`, since its omitted-language default is English.
+Dedicated Gemini ASR maps twelve common codes to locales; other codes require
+auto-detection. Vocabulary merges/deduplicates config and request hints before
+validation. OpenRouter rejects hints because upstream model support differs;
+Together Parakeet rejects ignored prompts. Whisper uses a conservative 224-byte
+prompt ceiling. Mistral allows 100 terms without spaces/commas; AssemblyAI permits
+100 terms / 8000 bytes; Deepgram uses a conservative 500-byte budget. ElevenLabs
+allows up to 1000 terms, each under 50 characters / five words without reserved
+characters; its documented keyterm surcharge applies.
 
-Only HTTPS remote endpoints are accepted. HTTP is permitted for literal loopback addresses (`127.0.0.1`, `[::1]`), and offline mode permits only literal loopback endpoints. Hostnames including `localhost` are rejected in offline mode, so DNS cannot redirect a local request remotely. Redirects, proxies and automatic retries are disabled. Loopback custom STT and cleanup with no explicitly configured key permit anonymous requests. To authenticate a local endpoint, configure a key environment variable explicitly.
+## API and caller integration
 
-Audio is checked for malformed frames and non-finite samples, downmixed to mono, clamped, then encoded as 16-bit PCM WAV at the original sample rate. WAV files are limited to 25 MB; input PCM is capped at 32 million samples; JSON responses at 1 MiB; transcript and cleanup text at 256 KiB. Deadlines cover credential lookup, encoding, HTTP transfer and response reading: configurable for STT (1–300 seconds) and 30 seconds for cleanup. A timeout or disconnect is never automatically retried because processing/billing may already have happened. HTTP error bodies and JSON parse details are omitted to prevent provider-echoed keys/audio/text reaching diagnostics.
+- `stt_providers()`, `cleanup_providers()`, `find_provider(ProviderKind, id)`
+  expose `ProviderInfo` / `ModelInfo`; factories retain existing signatures.
+- `key_status(provider, api_key_env)` returns only `Environment(name)`,
+  `Keyring`, `NotRequired` or `Missing`, never a secret.
+  `save_key` / `delete_key` manage provider keyring accounts.
+- `check_stt` / `check_cleanup` return `CheckReport { ok, latency_ms, detail }`.
+  They use non-billing GET/HEAD account, token or model probes, never audio uploads.
+  Success establishes acceptance of that request, not inference permission or
+  credit balance. HEAD on an unknown custom path may test only reachability.
+- Call `SpeechToText::warm()` when recording starts and retain the **same instance**
+  for transcription. Its five-second ceiling covers credential resolution and a
+  bounded response drain so the pool can reuse the connection. Warm failure should
+  not prevent recording. Rebuilding on every stop loses client/key caches.
+- `transcribe_file` decodes PCM/float WAV through the normal path; recognized MP3,
+  M4A/MP4, OGG, FLAC, WebM and MPEG/MPGA containers pass through without transcoding.
+  Whisper.cpp and AssemblyAI sync require WAV; DeepInfra permits documented MP3
+  and WAV only. Custom/local compatible servers may support fewer containers.
+  Gemini additionally checks its full inline JSON size.
 
-Streaming, Deepgram, arbitrary non-OpenAI HTTP/WebSocket schemas and local ML runtimes are extension points in core, not implemented adapters. Unknown providers fail explicitly.
+## Cleanup presets
 
-Contract tests run against local mock HTTP sockets and need permission to bind loopback sockets in restricted environments. They do not exercise a real paid provider, microphone or unlocked OS keyring.
+| cleanup.provider | Default model |
+| --- | --- |
+| openai | gpt-5.6-luna, reasoning disabled |
+| groq | qwen/qwen3.8-27b, reasoning disabled |
+| openrouter | google/gemini-3.5-flash-lite |
+| together | meta-llama/Llama-3.3-70B-Instruct-Turbo |
+| fireworks | accounts/fireworks/models/qwen3-8b, reasoning disabled |
+| mistral | mistral-small-latest |
+| deepinfra | meta-llama/Llama-3.3-70B-Instruct |
+| gemini | gemini-3.5-flash-lite, minimal reasoning, OpenAI-compatible route |
+| ollama | llama3.2:3b, preinstall it |
+| custom | Explicit endpoint and model |
+
+Presets fill missing endpoint/model/key defaults; explicit values override them.
+[GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) replaces
+the retiring Nano default. Groq's [catalog](https://console.groq.com/docs/models)
+restricts listed Llama alternatives to enterprise accounts. Thinking controls
+are set only for verified specific models per the
+[Groq](https://console.groq.com/docs/reasoning),
+[Fireworks](https://docs.fireworks.ai/api-reference/post-chatcompletions) and
+[Gemini compatibility](https://ai.google.dev/gemini-api/docs/openai) references.
+Unknown model overrides retain server defaults.
+
+Light cleanup fixes punctuation/capitalization, fillers and backtracking while
+preserving wording. Polished improves clarity; custom uses
+`TransformRequest.instructions`. Authorized commands edit supplied text or
+write new text when input is empty. Vocabulary spellings/code identifiers are
+preserved in the prompt. App tone uses `app_id` only when `cleanup.app_context`
+is enabled. The transcript is a separate user message explicitly treated as data,
+which reduces injection risk without guaranteeing model behavior. Retain raw
+text for recovery. Raw factory mode returns no transformer; command callers must
+build an enabled transformer.
+
+## Privacy and bounds
+
+Remote endpoints require HTTPS; HTTP/offline endpoints require literal loopback
+addresses, not DNS names. Local presets cannot target remote hosts. Redirects,
+proxies and retries are disabled. Default cloud keys are resolved only for the
+canonical HTTPS host. Remote overrides require an explicit environment variable
+and cannot receive the named provider's keyring key. Anonymous loopback overrides
+do not read default cloud keys. Invalid/empty present environment keys fail
+without falling back to storage.
+
+Each provider retains one HTTP/2-enabled reqwest client and a sensitive, zeroized
+credential-header cache. HTTP 401/403, key save/delete and rebuilding invalidate
+the cache. Errors omit echoed response bodies, URLs and parse details. PCM input
+is capped at 32 million samples, uploads at 25 MB, responses at 1 MiB and returned
+text at 256 KiB. Configurable 1–300-second deadlines cover credentials, encoding,
+transfer, polling and response reads. Encoding/decoding run off the async
+executor; already-running encoding cannot be cancelled by timeout, but its result
+is not uploaded after that deadline.
+
+## Latency measurements
+
+The 96-tap Blackman windowed-sinc resampler downmixes to 16 kHz mono with proper
+anti-alias filtering. Tests cover 44.1/48/96 kHz amplitude, length and aliasing.
+Pure-Rust FLAC is lossless after PCM16 quantization. It is adopted for documented
+accepting protocols when WAV exceeds 4096 bytes and compression saves at least
+10%. Groq, local, custom, OpenRouter, DeepInfra and AssemblyAI sync keep WAV.
+
+Release-mode measurements on concatenated ALSA speech samples, 48 kHz stereo:
+
+| Length | Original-rate mono WAV bytes / CPU | 16 kHz WAV bytes / resample+CPU | FLAC bytes / additional CPU |
+| --- | --- | --- | --- |
+| 2 s | 192044 / 0.665 ms | 64044 / 3.714 ms | 27991 / 2.199 ms |
+| 10 s | 960044 / 4.385 ms | 320044 / 20.709 ms | 137671 / 10.680 ms |
+| 56 s | 5376044 / 18.004 ms | 1792044 / 83.571 ms | 778317 / 44.874 ms |
+
+A loopback mock imposed 40 ms connection delay and 1 MB/s body consumption.
+Three runs on the 2-second fixture measured stop→text **252.19 ms before vs
+40.17 ms after at the median**: before 247.42/252.19/254.65 ms; after
+40.17/63.94/38.03 ms. Multipart upload bytes fell **192388 → 28507**.
+Warm-up took about 41 ms during recording. The baseline used original-rate WAV
+and a cold connection; the optimized path used 16 kHz, FLAC and a warmed connection.
+This measures simulated upload/connection conditions, **not cloud inference**.
+The socket test proves HTTP/1.1 warm/upload reuse of one TCP connection; it does
+not establish TLS or HTTP/2 negotiation. Codec CPU increases and can outweigh
+bandwidth savings on a very fast link. Native/incremental 16 kHz capture is the
+audio-owner follow-up to remove stop-time resampling cost.
+
+Reproduce with the mandatory shared gate:
+
+```sh
+/home/mrad/.cache/xflow-dev/bin/cargo run -p xflow-providers --release --example latency -- /path/to/speech48k_stereo.wav 2
+```
+
+The example without arguments uses a synthetic tone, whose compression differs
+from the speech measurement. It binds only a loopback mock and joins its thread.
+
+## Validation and remaining limits
+
+`scripts/check.sh` passes at the provider branch based on contracts f510a2c:
+workspace format, strict Clippy and 64 tests (41 provider tests), with one existing
+platform session-bus test ignored. Tests cover each wire protocol, auth/fields,
+redaction, deadlines, limits, file handling, key-cache invalidation, offline
+boundaries, connection reuse, resampling and lossless compression.
+
+Streaming, Files API uploads, automatic long-clip splitting and model downloads
+remain outside scope. Model catalogs are static; account/model availability is
+not validated through billable inference. Gemini's prompted fallback may
+hallucinate on silence; the dedicated inline path needs an authorized account
+test before claiming production validation. Custom endpoints can impose smaller
+format/size limits. Repeated keyring mutation was not exercised on the user's
+real credential store.

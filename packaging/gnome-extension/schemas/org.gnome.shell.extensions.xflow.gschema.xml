@@ -1,18 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
   <schema id="org.gnome.shell.extensions.xflow" path="/org/gnome/shell/extensions/xflow/">
-    <key name="command-path" type="s"><default>'xflow'</default><summary>XFlow executable path</summary></key>
-    <key name="toggle-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;space']</default><summary>Toggle recording</summary></key>
+    <key name="toggle-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;space']</default><summary>Dictate</summary></key>
+    <key name="command-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;r']</default><summary>Voice command</summary></key>
     <key name="start-shortcut" type="as"><default>[]</default><summary>Start recording</summary></key>
     <key name="stop-shortcut" type="as"><default>[]</default><summary>Stop recording</summary></key>
     <key name="cancel-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;Escape']</default><summary>Cancel recording</summary></key>
     <key name="copy-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;c']</default><summary>Copy last transcript</summary></key>
     <key name="paste-shortcut" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;v']</default><summary>Paste last transcript</summary></key>
-    <key name="width" type="i"><range min="120" max="480"/><default>200</default><summary>Pill width</summary></key>
-    <key name="height" type="i"><range min="28" max="80"/><default>40</default><summary>Pill height</summary></key>
-    <key name="margin" type="i"><range min="0" max="300"/><default>32</default><summary>Distance from screen edge</summary></key>
-    <key name="position" type="s"><choices><choice value="top"/><choice value="bottom"/></choices><default>'bottom'</default><summary>Pill position</summary></key>
-    <key name="opacity" type="d"><range min="0.2" max="1.0"/><default>0.95</default><summary>Pill opacity</summary></key>
-    <key name="animation" type="b"><default>true</default><summary>Animate waveform</summary></key>
+    <key name="theme" type="s"><choices><choice value="light"/><choice value="dark"/><choice value="auto"/></choices><default>'light'</default><summary>Pill theme</summary></key>
+    <key name="position" type="s"><choices><choice value="bottom-center"/><choice value="top-center"/><choice value="bottom-left"/><choice value="bottom-right"/><choice value="top-left"/><choice value="top-right"/><choice value="top"/><choice value="bottom"/></choices><default>'bottom-center'</default><summary>Pill position (top and bottom are legacy aliases)</summary></key>
+    <key name="monitor" type="s"><choices><choice value="primary"/><choice value="focused"/><choice value="pointer"/></choices><default>'primary'</default><summary>Monitor for the pill</summary></key>
+    <key name="waveform-style" type="s"><choices><choice value="rounded"/><choice value="thin"/><choice value="square"/></choices><default>'rounded'</default><summary>Waveform bar style</summary></key>
+    <key name="idle-style" type="s"><choices><choice value="hidden"/><choice value="minimal"/></choices><default>'hidden'</default><summary>Idle appearance</summary></key>
+    <key name="hotkey-mode" type="s"><choices><choice value="smart"/><choice value="hold"/><choice value="toggle"/></choices><default>'smart'</default><summary>Dictation shortcut behavior</summary></key>
+    <key name="margin" type="i"><range min="0" max="300"/><default>32</default><summary>Distance from work area edge</summary></key>
+    <key name="offset-x" type="i"><range min="-1000" max="1000"/><default>0</default><summary>Horizontal offset</summary></key>
+    <key name="offset-y" type="i"><range min="-1000" max="1000"/><default>0</default><summary>Vertical offset</summary></key>
+    <key name="scale" type="d"><range min="0.5" max="3.0"/><default>1.0</default><summary>Pill size</summary></key>
+    <key name="opacity" type="d"><range min="0.2" max="1.0"/><default>0.97</default><summary>Pill opacity</summary></key>
+    <key name="waveform-bars" type="i"><range min="3" max="64"/><default>13</default><summary>Number of waveform bars</summary></key>
+    <key name="success-hold-ms" type="i"><range min="0" max="60000"/><default>900</default><summary>Success display duration</summary></key>
+    <key name="error-hold-ms" type="i"><range min="0" max="60000"/><default>4000</default><summary>Error display duration</summary></key>
+    <key name="ptt-threshold-ms" type="i"><range min="0" max="10000"/><default>300</default><summary>Smart shortcut hold threshold</summary></key>
+    <key name="animations" type="b"><default>true</default><summary>Animate the pill</summary></key>
+    <key name="show-messages" type="b"><default>true</default><summary>Show short state messages</summary></key>
   </schema>
 </schemalist>

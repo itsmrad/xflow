@@ -1,6 +1,6 @@
 # Roadmap
 
-Revision: 2026-09-30. Milestones are completion gates, not a list of already shipped capabilities. The integrated workspace contains core, provider, platform and app crates; desktop acceptance remains incomplete. The [headless benchmark report](docs/benchmarks/linux-headless.json) provides limited smoke observations, while [PERFORMANCE.md](PERFORMANCE.md) defines the seven release metrics and their targets. The complete product direction is in [PRD.md](PRD.md).
+Revision: 2026-10-02. Milestones are completion gates, not a list of already shipped capabilities. The integrated workspace contains core, provider, platform and app crates; desktop acceptance remains incomplete. The [headless benchmark report](docs/benchmarks/linux-headless.json) provides limited smoke observations, while [PERFORMANCE.md](PERFORMANCE.md) defines the seven release metrics and their targets. The complete product direction is in [PRD.md](PRD.md).
 
 ## Dependency order
 
@@ -15,7 +15,8 @@ flowchart TD
   U --> B[Desktop acceptance and benchmarks]
   B --> F[Fedora / macOS / compositor adapters]
   B --> S[Streaming and local engines]
-  B --> X[Personalization]
+  D --> X[Explicit personalization]
+  X --> B
   X --> L[Opt-in correction suggestions]
 ```
 
@@ -25,7 +26,7 @@ Deliver PRD, architecture, roadmap, performance methodology and dated research. 
 
 ## 1. Ubuntu GNOME development slice
 
-The integrated development slice includes Rust contracts/workspace, asynchronous daemon, CLI/TUI, native cpal capture, Groq/OpenRouter batch STT and custom OpenAI-compatible REST, optional independent cleanup, SQLite WAL history (default 500 entries), clipboard/paste fallback, and GNOME pill. The TUI and `watch` consume events rather than polling. The headless smoke report establishes only startup, idle process and status IPC observations; true GNOME press/release push-to-talk and desktop/provider validation are not complete.
+The integrated development slice includes Rust contracts/workspace, asynchronous daemon, CLI/TUI, native cpal capture, ten cloud batch STT adapters plus custom/local servers, optional independent cleanup, SQLite WAL history v2/stats (default 500 entries), explicit dictionary/snippets/per-app styles, guarded native Shell injection with clipboard/paste fallback, and GNOME pill/settings. The TUI and `watch` consume events rather than polling. The headless smoke report establishes only startup, idle process and status IPC observations; GNOME hold/smart push-to-talk is implemented, while physical desktop/provider validation remains incomplete. The CLI now includes onboarding, diagnostics, validated config editing, delivery-free listening, file transcription and service/extension management.
 
 Automated verification must cover configuration validation, wire format/error bounds, secrets not leaking, silence/length limits, serialized state transitions, cancelled/stale completion rejection, history retention/no-history and IPC framing. Fixture audio and mock HTTP enable reproducible software checks. They do not replace physical microphone/live API/destination checks.
 
@@ -33,7 +34,7 @@ Exit: retain the integrated development slice, complete deterministic software v
 
 ## 2. Ubuntu desktop acceptance and release hardening
 
-Use a declared Ubuntu/GNOME release and actual desktop session. Physical microphone capture, provider credential validation using authorized live accounts, direct uinput operation, and confirmed paste into editor/browser/terminal remain pending. Record built-in/USB device permissions and failure, short/long/silent recordings, live provider contracts, Unicode, changed focus, clipboard-only recovery, shortcut conflicts and GNOME extension disable/reenable/daemon restart. Add and validate release-aware PTT separately; the current GNOME shortcut is toggle-only.
+Use a declared Ubuntu/GNOME release and actual desktop session. Physical microphone capture, provider credential validation using authorized live accounts, direct uinput operation, and confirmed paste into editor/browser/terminal remain pending. Record built-in/USB device permissions and failure, short/long/silent recordings, live provider contracts, Unicode, changed focus, clipboard-only recovery, shortcut conflicts and GNOME extension disable/reenable/daemon restart. Validate the implemented release-aware hold/smart shortcuts and bounded preferences in the declared physical session.
 
 Measure idle RSS/CPU, startup, hotkey-to-first-sample, stop-to-final-transcript, injection and overlay frame cost with the documented methodology. Profile regressions before optimizing. Test provider timeout/rate-limit/offline error, cancel during processing and recovery without duplicate paste. Harden private IPC, bounded clients, settings/history lifecycle, service startup/shutdown and diagnostics.
 
@@ -51,15 +52,15 @@ Exit: each advertised desktop has its own acceptance matrix and performance repo
 
 Add Deepgram and other verified streaming protocols behind streaming-session lifecycle tests: partial revision, finalization, disconnect, timeout, cancellation and language/hint capability. Keep partials preview-only initially. Arbitrary custom HTTP/WebSocket protocols require explicit payload/response mapping; URL configuration alone is insufficient.
 
-Add optional whisper.cpp or compatible local sidecar, lazy startup and separate memory accounting. Offline mode must block all remote STT/cleanup without silent fallback. Test model missing/corrupt, sidecar crash, language quality, cancellation and resource limits. Establish accuracy and latency tradeoffs on measured hardware.
+Compatible local servers and the whisper.cpp server protocol are already implemented with user-managed models. Managed sidecar startup, model installation and separate memory accounting remain later work. Offline mode must block all remote STT/cleanup without silent fallback. Test model missing/corrupt, sidecar crash, language quality, cancellation and resource limits. Establish accuracy and latency tradeoffs on measured hardware.
 
 Exit: actual provider/local-engine contract and hardware verification; no model memory cost in the default cloud daemon; offline network-negative test and separate sidecar metrics.
 
 ## 5. User-managed personalization
 
-Add SQLite migrations and CLI/TUI management for dictionary, explicit corrections and snippets. Deterministic matching needs token boundaries, overlapping-rule precedence, Unicode, contractions, literal expansions and no recursive expansion. Add vocabulary-hint capability reporting and a technical-term corpus before broad cleanup claims.
+Dictionary, explicit corrections and snippets are implemented in TOML with CLI/TUI management; history uses transactional SQLite v2 migrations. Deterministic matching needs token boundaries, overlapping-rule precedence, Unicode, contractions, literal expansions and no recursive expansion. Add vocabulary-hint capability reporting and a technical-term corpus before broad cleanup claims.
 
-Add per-app writing styles and optional selected-text/context access after target identity is reliable. Context defaults to minimal metadata; opt-in text is bounded. Selected-text transforms and named voice actions require exact selection, stale-target checks, recovery and raw-output inspection. No automatic shell execution.
+Per-app writing styles and explicit command-mode selection transforms are implemented using GNOME identity/selection; validate real destination and selection behavior before release. Context defaults to minimal metadata; opt-in text is bounded. Selected-text transforms and named voice actions require exact selection, stale-target checks, recovery and raw-output inspection. No automatic shell execution.
 
 Exit: a quality corpus checks negation, false starts, identifiers, multilingual text and snippet/correction collisions; user settings have documented behavior and no silent provider-field drops.
 
