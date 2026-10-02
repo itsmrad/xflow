@@ -71,3 +71,50 @@ work. Historical benchmark files retain their original fixture scope. The CLI
 worker's 100-sample optimized fake-daemon result was 2.228 ms median and 2.918 ms
 p95; the approximate 1 ms aspiration was not reached. This is a development
 build, not a production-release certification.
+
+## Follow-up branch audit and shutdown hardening
+
+The main-branch run after PR #4 failed with an empty IPC reply in the corrupt
+history end-to-end test, despite successful PR-head runs. Inspection found that
+the server aborted client tasks immediately after its actor completed, allowing
+a queued shutdown acknowledgment to be lost. Normal actor completion now allows
+up to two seconds for client replies to finish, and subscriptions exit when the
+actor closes its receiver. Signal-driven cleanup retains its previous behavior.
+The test helper now identifies the request and child log if a reply is empty.
+
+A new end-to-end test exercises sixteen shutdowns with live subscriptions and
+two Tokio worker threads; one also holds a stalled client. All acknowledgments,
+subscriber closure and bounded process exit are checked. The original behavior
+did not reproduce in a local stress run of 1,600 shutdowns, so the exact failing
+CI request is not established by that run; the identified server race is fixed
+independently.
+
+The remote branch audit also found four older MVP branch heads outside main's
+ancestry. `git cherry origin/main <head>` marked every one of their nine commits
+patch-equivalent to an existing main commit. Their history was recorded in this
+order: research, providers, platform, tooling. Each ancestry merge preserved the
+complete current tree (verified equal tree hashes), avoiding reapplication of
+older source over the integrated v1 implementation.
+
+The optional PR #4 review findings were checked against actual code:
+
+- GNOME injection checks current focus in Shell immediately before dispatch;
+  utility fallback checks `current` after clipboard preparation. The earlier
+  target-versus-itself check rejects unknown targets and unsafe terminal text.
+  The corresponding daemon-file finding refers to code absent from that file.
+- Generation checks and clear-history run under the same SQLite connection
+  lock, so a queued stale save cannot resurrect rows after clear completes.
+  An already started final save can survive cancellation, as documented.
+- Config symlinks intentionally resolve to the user's configured target;
+  existing symlink/private-write tests cover this behavior.
+- Query/reload capacity already has the explicit parentheses suggested by the
+  reviewer. AssemblyAI polling is inside the overall provider timeout.
+- Keyring serialization across blocking storage calls is intentional. Cue size
+  is bounded when the file is read, which also handles post-validation changes.
+  The dictionary and STT vocabulary share a combined provider-hint limit.
+- The CLI's outer watchdog is conservative; daemon capture and provider/cleanup
+  limits independently bound normal work. A shorter watchdog is a future
+  usability improvement, not an unbounded provider polling defect.
+
+Follow-up verification logs are in `target/iv/followup-*`; the main-branch CI run
+is checked again after the follow-up merge before declaring testing readiness.
