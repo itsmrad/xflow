@@ -23,6 +23,10 @@ clear still erases previously saved rows and resets the in-memory last result an
 timings. A generation check under the database lock prevents an abandoned save
 from restoring cleared rows.
 
+History records a completed processing result before desktop delivery, preserving
+recovery text if delivery fails or is canceled after processing. It is not a count
+of successful pastes.
+
 Database files and their WAL are private; symlinks and unowned/nonregular database
 files are rejected. A corrupt, locked, or newer database does not stop dictation:
 startup preserves it, disables persistence, and reports a persistent warning.
@@ -105,11 +109,12 @@ measurements remain absent instead of being fabricated.
 ## Verification
 
 Tests use fake capture/desktop adapters, loopback mock HTTP, private XDG paths
-under this worktree's target/scratch, and private session buses; they do not use
+under this worktree's target directory, and private session buses; they do not use
 the real daemon, microphone, clipboard, keyring or paid providers. Every Cargo
 invocation goes through `/home/mrad/.cache/xflow-dev/bin/cargo`.
 
-Integrated dependencies: contracts `f810583`, platform `2377ac8`, CI `e590354`,
+Integrated dependencies: contracts `f810583`, platform `2377ac8`, CI `dc5dd46`
+(including `e590354`),
 and providers `1b58d82` (including `c2274dc`). Daemon audit checkpoints `d457cb0`
 and `b92709c` are retained.
 
@@ -123,6 +128,29 @@ Passed during this continuation:
 - Read-only Node execution of the overlay owner's `quick start/stop is serialized`
   regression: one passed. Extension shortcut ordering stays with its owner;
   no new daemon session/request contract was introduced.
+- Full `sh scripts/check.sh`: formatting, extension JavaScript syntax/schema,
+  strict workspace Clippy, 40 app / 15 core / 17 platform / 41 provider unit tests,
+  all 11 daemon mock end-to-end tests, three private-bus platform tests, and two
+  fake-helper fallback tests (covering X11, ydotool and wtype child fixtures).
+  The end-to-end run includes both retained daemon-only corruption/SIGHUP tests
+  and CI's new GET/HEAD warm-up regression. The only integration adaptation was
+  adding `None` to the SIGHUP test's revised config helper signature.
+
+Reproduce the full run from this worktree with short private paths:
+
+```sh
+mkdir -p target/t target/v/r target/v/c target/v/d
+chmod 700 target/v/r
+env -u DISPLAY -u WAYLAND_DISPLAY MISE_RUST_VERSION=1.98.1 \
+  TMPDIR="$PWD/target/t" XDG_RUNTIME_DIR="$PWD/target/v/r" \
+  XDG_CONFIG_HOME="$PWD/target/v/c" XDG_DATA_HOME="$PWD/target/v/d" \
+  PATH="/home/mrad/.cache/xflow-dev/bin:$PATH" sh scripts/check.sh
+```
+
+The successful run's output is in `target/scratch/daemon-verify/full-check.log`.
+One initial run used an overly deep TMPDIR and exceeded Linux's Unix-socket path
+limit at fixture startup; shorter private paths resolved it without daemon code
+changes. No full-suite failure remains.
 
 ## Remaining limits
 

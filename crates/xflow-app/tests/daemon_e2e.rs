@@ -726,7 +726,7 @@ async fn sighup_reloads_only_the_isolated_daemon() {
     daemon.ready().await;
     fs::write(
         daemon.root.path().join("config/xflow/config.toml"),
-        config(&mock.endpoint, true)
+        config(&mock.endpoint, true, None)
             .replace("fixture-model", "hup-model")
             .replace("min_ms = 0", "min_ms = 5000"),
     )
