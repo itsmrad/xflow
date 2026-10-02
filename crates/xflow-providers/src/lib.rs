@@ -514,7 +514,20 @@ impl HttpTransformer {
                 json!(request.vocabulary)
             ));
         }
-        let builder=self.client.post(self.endpoint.clone()).json(&json!({"model":self.model,"stream":false,"messages":[{"role":"system","content":system},{"role":"user","content":request.text}]}));
+        let mut body = json!({"model":self.model,"stream":false,"messages":[{"role":"system","content":system},{"role":"user","content":request.text}]});
+        // Set only parameters verified for these specific presets. Arbitrary model
+        // overrides keep their server defaults rather than receiving guessed knobs.
+        if matches!(
+            (self.provider.as_str(), self.model.as_str()),
+            ("openai", "gpt-5.6-luna")
+                | ("groq", "qwen/qwen3.8-27b")
+                | ("fireworks", "accounts/fireworks/models/qwen3-8b")
+        ) {
+            body["reasoning_effort"] = json!("none");
+        } else if self.provider == "gemini" && self.model == "gemini-3.5-flash-lite" {
+            body["reasoning_effort"] = json!("minimal");
+        }
+        let builder = self.client.post(self.endpoint.clone()).json(&body);
         let response = self
             .credential
             .apply(builder, Auth::Bearer)
