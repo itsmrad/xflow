@@ -28,6 +28,7 @@ class Daemon:
         self.fail = False
         self.start_gate = None
         self.finish_state = "success"
+        self.split_event = False
         self.closed = threading.Event()
         self.lock = threading.Lock()
         self.socket = socket.socket(socket.AF_UNIX)
@@ -77,9 +78,13 @@ class Daemon:
                     assert self.start_gate.wait(timeout=5), "pending Start fixture timed out"
                 self.reply(connection, state="listening")
                 self.broadcast(state="listening")
+                if self.split_event:
+                    self.broadcast_bytes(b'{"ok":true,"state":"list')
             else:
                 self.reply(connection, state="processing" if command == "stop" else "idle")
                 if command == "stop":
+                    if self.split_event:
+                        self.broadcast_bytes(b'ening","level":0}\n')
                     self.broadcast(state="processing", text="not a completed transcript")
                     if self.finish_state == "success":
                         self.broadcast(state="success", text="fresh dictation")
@@ -91,6 +96,13 @@ class Daemon:
         for subscriber in self.subscribers:
             try:
                 self.reply(subscriber, **fields)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    def broadcast_bytes(self, payload):
+        for subscriber in self.subscribers:
+            try:
+                subscriber.sendall(payload)
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
@@ -212,6 +224,9 @@ def main():
             assert result.stdout == "fresh dictation\n", result.stdout
             starts = [r for r in daemon.requests if r["command"] == "start" and r.get("delivery") == "none"]
             assert starts
+            daemon.split_event = True
+            assert run("listen", "--once", "--seconds", "1", "--quiet").stdout == "fresh dictation\n"
+            daemon.split_event = False
             daemon.finish_state = "idle"
             short = run("listen", "--once", "--seconds", "1", "--quiet", code=1)
             assert not short.stdout and "too short or cancelled" in short.stderr

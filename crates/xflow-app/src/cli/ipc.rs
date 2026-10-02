@@ -1,5 +1,4 @@
 use super::{args, output::Output, Error, Result};
-use anyhow::Context;
 use std::{io::IsTerminal, time::Duration};
 use tokio::io::BufReader;
 use xflow_app::transport;
@@ -233,28 +232,57 @@ async fn collect(
     let mut stopped = false;
     let mut listening = false;
     loop {
-        tokio::select! {
-            response = transport::read_frame::<Response, _>(reader) => {
-                let response = response?.context("Daemon disconnected before transcription completed")?;
-                validate(&response, false)?;
-                if response.state == State::Error { return Err(Error::new(1, response.message.unwrap_or_else(|| "Dictation failed".into()), "Check xflow doctor")); }
-                if response.state == State::Listening { listening = true; }
-                // The subscription may have queued an older completion after its snapshot.
-                if listening && response.state == State::Success {
-                    if let Some(text) = &response.text { out.data(&response, text)?; return Ok(()); }
-                    return Err(Error::new(1, "Dictation completed without text", "Try a longer recording"));
-                }
-                if listening && response.state == State::Idle {
-                    return Err(Error::new(1, response.message.unwrap_or_else(|| "Dictation ended without a transcript".into()), "Try again with a longer recording; the session may have been cancelled"));
+        let response = {
+            // read_frame uses read_line, which is not cancellation-safe. Keep its
+            // future alive across Stop/Enter so a partial frame is never discarded.
+            let read = transport::read_frame::<Response, _>(reader);
+            tokio::pin!(read);
+            loop {
+                tokio::select! {
+                    response = &mut read => break response.map_err(Error::daemon)?.ok_or_else(|| Error::daemon("Daemon disconnected before transcription completed"))?,
+                    _ = &mut stop, if !stopped && seconds.is_some() => { send(&Request::Stop).await?; stopped = true; }
+                    value = async { match input { Some(rx) => rx.recv().await, None => std::future::pending().await } }, if !stopped && seconds.is_none() => {
+                        if value.is_none() { return Err(Error::new(1, "Input closed before recording finished", "Use --seconds N for scripting")); }
+                        send(&Request::Stop).await?; stopped = true;
+                    }
+                    _ = interrupt.recv() => return Err(cancelled()),
+                    _ = &mut deadline => return Err(Error::new(1, "Dictation timed out", "Check provider timeouts and xflow doctor")),
                 }
             }
-            _ = &mut stop, if !stopped && seconds.is_some() => { send(&Request::Stop).await?; stopped = true; }
-            value = async { match input { Some(rx) => rx.recv().await, None => std::future::pending().await } }, if !stopped && seconds.is_none() => {
-                if value.is_none() { return Err(Error::new(1, "Input closed before recording finished", "Use --seconds N for scripting")); }
-                send(&Request::Stop).await?; stopped = true;
+        };
+        validate(&response, false)?;
+        if response.state == State::Error {
+            return Err(Error::new(
+                1,
+                response
+                    .message
+                    .unwrap_or_else(|| "Dictation failed".into()),
+                "Check xflow doctor",
+            ));
+        }
+        if response.state == State::Listening {
+            listening = true;
+        }
+        // The subscription may have queued an older completion after its snapshot.
+        if listening && response.state == State::Success {
+            if let Some(text) = &response.text {
+                out.data(&response, text)?;
+                return Ok(());
             }
-            _ = interrupt.recv() => return Err(cancelled()),
-            _ = &mut deadline => return Err(Error::new(1, "Dictation timed out", "Check provider timeouts and xflow doctor")),
+            return Err(Error::new(
+                1,
+                "Dictation completed without text",
+                "Try a longer recording",
+            ));
+        }
+        if listening && response.state == State::Idle {
+            return Err(Error::new(
+                1,
+                response
+                    .message
+                    .unwrap_or_else(|| "Dictation ended without a transcript".into()),
+                "Try again with a longer recording; the session may have been cancelled",
+            ));
         }
     }
 }
