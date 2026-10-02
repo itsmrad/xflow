@@ -16,6 +16,11 @@ impl DaemonBridge {
     /// Same JSON request/response as the Unix socket, limited to the controls
     /// the desktop shell needs. See docs/CONTRACTS.md.
     async fn command(&self, request: &str) -> fdo::Result<String> {
+        if request.len() > xflow_core::ipc::MAX_MESSAGE_BYTES {
+            return Err(fdo::Error::InvalidArgs(
+                "xflow request exceeds 64 KiB".into(),
+            ));
+        }
         let request: Request = serde_json::from_str(request)
             .map_err(|_| fdo::Error::InvalidArgs("invalid xflow request".into()))?;
         if !matches!(
@@ -81,6 +86,20 @@ mod tests {
     use zbus::export::futures_util::StreamExt;
 
     #[tokio::test]
+    async fn bridge_rejects_oversized_requests_before_forwarding() {
+        let (commands, mut requests) = mpsc::channel(1);
+        let bridge = DaemonBridge {
+            commands: commands.downgrade(),
+        };
+        let error = bridge
+            .command(&" ".repeat(xflow_core::ipc::MAX_MESSAGE_BYTES + 1))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, fdo::Error::InvalidArgs(_)));
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[tokio::test]
     #[ignore = "requires an isolated session bus: dbus-run-session cargo test -p xflow-platform -- --ignored"]
     async fn bridge_emits_json_and_exits_when_channel_closes() {
         let (send, receive) = broadcast::channel(8);
@@ -138,13 +157,28 @@ mod tests {
             let command = requests.recv().await.unwrap();
             assert_eq!(command.request, Request::toggle());
             let _ = command.reply.send(Response::status(State::Listening, 0.0));
+            let command = requests.recv().await.unwrap();
+            assert_eq!(command.request, Request::Status);
+            let _ = command.reply.send(Response::status(State::Idle, 0.0));
         });
         let reply: String = proxy
             .call("Command", &(r#"{"command":"toggle"}"#,))
             .await
             .unwrap();
         assert!(reply.contains(r#""state":"listening""#));
+        let mut boundary = r#"{"command":"status"}"#.to_owned();
+        boundary.extend(std::iter::repeat_n(
+            ' ',
+            xflow_core::ipc::MAX_MESSAGE_BYTES - boundary.len(),
+        ));
+        let _: String = proxy.call("Command", &(boundary.as_str(),)).await.unwrap();
         actor.await.unwrap();
+        boundary.push(' ');
+        let error = proxy
+            .call::<_, _, String>("Command", &(boundary.as_str(),))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("InvalidArgs"));
         assert!(proxy
             .call::<_, _, String>("Command", &(r#"{"command":"history","limit":1}"#,))
             .await
