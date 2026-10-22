@@ -1,15 +1,18 @@
 //! Short cues. Playback work and child reaping happen off the caller's thread.
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
+#[cfg(any(target_os = "linux", test))]
+use anyhow::{bail, Context};
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     process::Stdio,
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    process::Command,
-};
+#[cfg(target_os = "linux")]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
 use xflow_core::config::SoundsConfig;
 
 #[derive(Clone, Copy, Debug)]
@@ -46,6 +49,7 @@ impl Drop for Playback {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn player_path(path: &std::ffi::OsStr) -> Option<PathBuf> {
     choose_player(|name| {
         std::env::split_paths(path)
@@ -54,6 +58,7 @@ fn player_path(path: &std::ffi::OsStr) -> Option<PathBuf> {
     })
 }
 
+#[cfg(target_os = "linux")]
 fn executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -67,6 +72,7 @@ fn executable(path: &Path) -> bool {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn choose_player(mut find: impl FnMut(&str) -> Option<PathBuf>) -> Option<PathBuf> {
     ["pw-play", "paplay", "aplay"]
         .into_iter()
@@ -116,6 +122,7 @@ fn builtin(cue: Cue) -> &'static [u8] {
     }
 }
 
+#[cfg(target_os = "linux")]
 async fn playback(cue: Cue, config: &SoundsConfig, path: &std::ffi::OsStr) -> Result<()> {
     let Some(player) = player_path(path) else {
         return Ok(());
@@ -186,8 +193,39 @@ async fn playback(cue: Cue, config: &SoundsConfig, path: &std::ffi::OsStr) -> Re
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+async fn playback(cue: Cue, config: &SoundsConfig, _path: &std::ffi::OsStr) -> Result<()> {
+    use std::io::Write;
+    let custom = match cue {
+        Cue::Start => &config.start,
+        Cue::Stop => &config.stop,
+        Cue::Error => &config.error,
+    };
+    let mut temporary;
+    let file = if let Some(file) = custom {
+        Path::new(file)
+    } else {
+        temporary = tempfile::NamedTempFile::new()?;
+        temporary.write_all(builtin(cue))?;
+        temporary.path()
+    };
+    let status = Command::new("/usr/bin/afplay")
+        .arg("-v")
+        .arg(config.volume.clamp(0.0, 1.0).to_string())
+        .arg(file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status()
+        .await?;
+    anyhow::ensure!(status.success(), "sound player failed");
+    Ok(())
+}
+
 // ponytail: aplay's fallback supports PCM16 WAV only and attenuates samples
 // without changing the mixer; pw-play/paplay handle other custom formats.
+#[cfg(any(target_os = "linux", test))]
 fn scale_wav(data: &mut [u8], volume: f32) -> Result<()> {
     if data.len() < 12 || &data[..4] != b"RIFF" || &data[8..12] != b"WAVE" {
         bail!("ALSA cues must be PCM16 WAV files");
@@ -258,6 +296,7 @@ mod tests {
         assert_eq!(PLAYING.load(Ordering::Relaxed), 0);
     }
     #[test]
+    #[cfg(target_os = "linux")]
     fn player_preference_and_missing_tools() {
         assert_eq!(choose_player(|n| Some(n.into())), Some("pw-play".into()));
         assert_eq!(

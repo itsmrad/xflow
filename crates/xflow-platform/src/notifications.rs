@@ -1,7 +1,11 @@
-use anyhow::{bail, Context, Result};
+#[cfg(target_os = "linux")]
+use anyhow::Context;
+use anyhow::{bail, Result};
+#[cfg(target_os = "linux")]
 use std::{collections::HashMap, time::Duration};
 
 /// Send a native desktop notification; the daemon controls when it is enabled.
+#[cfg(target_os = "linux")]
 pub async fn notify(summary: &str, body: &str) -> Result<()> {
     if summary.len() > 4096 || body.len() > 64 * 1024 {
         bail!("notification text exceeds limit");
@@ -37,7 +41,7 @@ pub async fn notify(summary: &str, body: &str) -> Result<()> {
     .context("desktop notification timed out")?
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     struct StubNotifications;
@@ -81,4 +85,26 @@ mod tests {
         assert!(notify(&"x".repeat(4097), "Message").await.is_err());
         service.close().await.unwrap();
     }
+}
+
+#[cfg(target_os = "macos")]
+pub async fn notify(summary: &str, body: &str) -> Result<()> {
+    if summary.len() > 4096 || body.len() > 64 * 1024 {
+        bail!("notification text exceeds limit");
+    }
+    fn quoted(text: &str) -> String {
+        format!(
+            "\"{}\"",
+            text.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+        )
+    }
+    let script = format!(
+        "display notification {} with title {}",
+        quoted(body),
+        quoted(summary)
+    );
+    super::desktop::copy_with("/usr/bin/osascript", &[], &script).await
 }

@@ -71,6 +71,76 @@ fn validate_options(
     }
     Ok(())
 }
+/// Appends `extra` hints in order and returns how many are sent. Dictionary hints
+/// never fail a dictation: a term the provider rejects on its own is skipped, and
+/// the first term past the total budget ends the list. Duplicates ignore ASCII case,
+/// matching the daemon's merge.
+fn push_hints(
+    hints: &mut Vec<String>,
+    extra: impl IntoIterator<Item = String>,
+    language: Option<&str>,
+    protocol: Protocol,
+    model: &str,
+) -> usize {
+    let mut sent = 0;
+    for term in extra {
+        if hints.iter().any(|h| h.eq_ignore_ascii_case(&term)) {
+            sent += 1;
+            continue;
+        }
+        if validate_options(language, std::slice::from_ref(&term), protocol, model).is_err() {
+            continue;
+        }
+        hints.push(term);
+        if validate_options(language, hints, protocol, model).is_err() {
+            hints.pop();
+            break;
+        }
+        sent += 1;
+    }
+    sent
+}
+/// How many of `words` the configured provider sends after `stt.vocabulary`.
+pub fn hint_fit(config: &SttConfig, words: &[String]) -> Result<usize> {
+    let (_, model, protocol) = resolve(config)?;
+    let mut hints = config.vocabulary.clone();
+    validate_options(None, &hints, protocol, model)?;
+    Ok(push_hints(
+        &mut hints,
+        words.iter().cloned(),
+        None,
+        protocol,
+        model,
+    ))
+}
+fn resolve(config: &SttConfig) -> Result<(&'static ProviderInfo, &str, Protocol)> {
+    if config.provider == "fireworks" {
+        bail!("Fireworks audio inference is deprecated; use another STT provider or an explicit custom endpoint");
+    }
+    let info = find_provider(ProviderKind::Stt, &config.provider)
+        .ok_or_else(|| anyhow!("unsupported STT provider"))?;
+    let model = config.model.as_deref().unwrap_or(info.default_model);
+    if model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_control) {
+        bail!("STT model is required and must be at most 256 bytes");
+    }
+    let default = match info.id {
+        "openai" if model == "gpt-transcribe" => Protocol::Keywords,
+        "openrouter" => Protocol::Router,
+        "deepgram" => Protocol::Deepgram,
+        "assemblyai" => Protocol::Assembly,
+        "elevenlabs" => Protocol::Eleven,
+        "gemini" => Protocol::Gemini,
+        "mistral" => Protocol::Mistral,
+        _ => Protocol::Multipart,
+    };
+    let protocol = config
+        .protocol
+        .as_deref()
+        .map(Protocol::parse)
+        .transpose()?
+        .unwrap_or(default);
+    Ok((info, model, protocol))
+}
 struct HttpProvider {
     name: String,
     endpoint: Url,
@@ -83,31 +153,7 @@ struct HttpProvider {
 }
 impl HttpProvider {
     fn new(config: &SttConfig, offline: bool) -> Result<Self> {
-        if config.provider == "fireworks" {
-            bail!("Fireworks audio inference is deprecated; use another STT provider or an explicit custom endpoint");
-        }
-        let info = find_provider(ProviderKind::Stt, &config.provider)
-            .ok_or_else(|| anyhow!("unsupported STT provider"))?;
-        let model = config.model.as_deref().unwrap_or(info.default_model);
-        if model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_control) {
-            bail!("STT model is required and must be at most 256 bytes");
-        }
-        let default = match info.id {
-            "openai" if model == "gpt-transcribe" => Protocol::Keywords,
-            "openrouter" => Protocol::Router,
-            "deepgram" => Protocol::Deepgram,
-            "assemblyai" => Protocol::Assembly,
-            "elevenlabs" => Protocol::Eleven,
-            "gemini" => Protocol::Gemini,
-            "mistral" => Protocol::Mistral,
-            _ => Protocol::Multipart,
-        };
-        let protocol = config
-            .protocol
-            .as_deref()
-            .map(Protocol::parse)
-            .transpose()?
-            .unwrap_or(default);
+        let (info, model, protocol) = resolve(config)?;
         let mut url = endpoint(
             config
                 .endpoint
@@ -171,13 +217,15 @@ impl HttpProvider {
     }
     fn options(&self, options: TranscriptionOptions) -> Result<TranscriptionOptions> {
         let mut vocabulary = self.options.vocabulary.clone();
-        for term in options.vocabulary {
-            if !vocabulary.contains(&term) {
-                vocabulary.push(term);
-            }
-        }
         let language = options.language.or_else(|| self.options.language.clone());
         validate_options(language.as_deref(), &vocabulary, self.protocol, &self.model)?;
+        push_hints(
+            &mut vocabulary,
+            options.vocabulary,
+            language.as_deref(),
+            self.protocol,
+            &self.model,
+        );
         Ok(TranscriptionOptions {
             language,
             vocabulary,
@@ -321,6 +369,10 @@ impl HttpProvider {
                 )
             }
             Protocol::Gemini => {
+                let transcribe = self.model == "gemini-3.5-transcribe";
+                if gemini_body_bound(data.len(), &options.vocabulary, transcribe) > 20_000_000 {
+                    bail!("Gemini inline audio request exceeds 20 MB");
+                }
                 let audio = json!({"inlineData":{"mimeType":mime,"data":STANDARD.encode(&data)}});
                 let mut body = if self.model == "gemini-3.5-transcribe" {
                     let mut cfg = json!({"mode":"VERBATIM","customVocabulary":options.vocabulary});
@@ -339,9 +391,6 @@ impl HttpProvider {
                     body["generationConfig"]["thinkingConfig"] = json!({"thinkingLevel":"minimal"});
                 } else if self.model == "gemini-2.5-flash-lite" {
                     body["generationConfig"]["thinkingConfig"] = json!({"thinkingBudget":0});
-                }
-                if body.to_string().len() > 20_000_000 {
-                    bail!("Gemini inline audio request exceeds 20 MB");
                 }
                 request.json(&body)
             }
@@ -560,6 +609,13 @@ fn audio_mime(format: &str) -> Result<&'static str> {
         "webm" => Ok("audio/webm"),
         _ => bail!("unsupported audio container"),
     }
+}
+/// Upper bound of the Gemini JSON body without serializing it: padded base64 audio,
+/// fully escaped hints (twice on the prompt route) and the fixed fields.
+pub(crate) fn gemini_body_bound(audio: usize, hints: &[String], transcribe: bool) -> usize {
+    let escape = if transcribe { 2 } else { 4 };
+    let hints: usize = hints.iter().map(|h| h.len() * escape + 6).sum();
+    audio.div_ceil(3) * 4 + hints + 4096
 }
 fn gemini_locale(code: &str) -> Result<&'static str> {
     match code {
