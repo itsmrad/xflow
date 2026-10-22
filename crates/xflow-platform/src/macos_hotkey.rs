@@ -54,7 +54,7 @@ extern "C" {
     fn CFRunLoopStop(runloop: Ref);
     fn CFRunLoopWakeUp(runloop: Ref);
     fn CFRetain(value: Ref) -> Ref;
-    fn CFRelease(value: Ref);
+    fn CFRelease(value: *const c_void); // matches macos.rs
 }
 
 const FLAGS_CHANGED: u32 = 12;
