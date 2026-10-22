@@ -81,7 +81,12 @@ pub(crate) fn mono16(audio: &AudioClip) -> Result<Vec<f32>> {
         // Interior windows: eight independent lanes let LLVM vectorise the dot product.
         if let Some(window) = first.and_then(|n| mono.get(n..n + filter.len())) {
             let mut lanes = [0.0_f32; 8];
-            for (w, c) in window.chunks_exact(8).zip(filter.chunks_exact(8)) {
+            for (w, c) in window
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(filter.as_chunks::<8>().0)
+            {
                 for ((lane, s), k) in lanes.iter_mut().zip(w).zip(c) {
                     *lane += s * k;
                 }
