@@ -181,6 +181,7 @@ pub enum EditTarget {
     Device,
     Menu(Vec<Action>),
     Setup(Step),
+    Transcript(i64),
 }
 pub struct Field {
     pub label: String,
@@ -693,12 +694,17 @@ impl App {
                 }
             }
             Tag::Done(text) => {
+                let changed = response.entry.is_some();
                 self.toast = Some(
                     response
                         .message
                         .map(|m| options::plain(&m))
                         .unwrap_or_else(|| text.into()),
-                )
+                );
+                // A corrected transcript replies with its updated entry.
+                if changed && self.page == Page::History {
+                    return self.refresh();
+                }
             }
             Tag::Last => {
                 if self.transcript.is_empty() {
@@ -1183,6 +1189,7 @@ impl App {
                         vec![
                             (Action::Copy, "Copy"),
                             (Action::Paste, "Paste into the app you were using"),
+                            (Action::Edit, "Correct this transcript"),
                             (Action::Delete, "Delete"),
                         ],
                     );
@@ -1540,6 +1547,22 @@ impl App {
         Ok(())
     }
     fn open_editor(&mut self, action: Action) -> Vec<Effect> {
+        if self.page == Page::History {
+            if let Some(h) = self
+                .history
+                .get(self.selected())
+                .filter(|_| action == Action::Edit)
+            {
+                let (id, text) = (h.id, h.text.clone());
+                self.edit(
+                    EditTarget::Transcript(id),
+                    "Correct transcript",
+                    "Fix any misheard words. xflow saves the change and learns the corrected words.",
+                    vec![Field::new("Transcript (Ctrl+J for a new line)", text)],
+                );
+            }
+            return vec![];
+        }
         if !self.editable() {
             return vec![];
         }
@@ -1725,6 +1748,16 @@ impl App {
                 effects.extend(self.open_setup(Step::Microphone));
                 return Ok(effects);
             }
+            EditTarget::Transcript(id) => {
+                let text = editor.fields[0].value.trim().to_owned();
+                if text.is_empty() {
+                    bail!("Type the corrected transcript first");
+                }
+                return Ok(vec![Effect::Request(
+                    Request::HistoryUpdate { id, text },
+                    Tag::Done("Transcript corrected."),
+                )]);
+            }
             _ => (),
         }
         let values: Vec<_> = editor.fields.iter().map(|f| f.value.to_string()).collect();
@@ -1767,7 +1800,7 @@ impl App {
                 self.set_optional("recording.device", value)?;
                 return Ok(vec![]);
             }
-            EditTarget::Key { .. } => unreachable!(),
+            EditTarget::Key { .. } | EditTarget::Transcript(_) => unreachable!(),
             EditTarget::Overlay(key) => {
                 return Ok(vec![Effect::OverlaySet(key.clone(), value.clone())])
             }
@@ -1873,8 +1906,19 @@ impl App {
                     Page::Dictionary => {
                         let mut dictionary = self.config.dictionary.clone();
                         if pos < dictionary.words.len() {
-                            dictionary.words.remove(pos);
+                            // Same as `xflow dictionary remove`: a learned word is never learned again.
+                            let word = dictionary.words[pos].clone();
+                            dictionary.forget(&word);
                             file.set_typed("dictionary.words", &dictionary.words)
+                                .and_then(|()| {
+                                    file.set_typed("dictionary.learned", &dictionary.learned)
+                                })
+                                .and_then(|()| {
+                                    file.set_typed(
+                                        "dictionary.never_learn",
+                                        &dictionary.never_learn,
+                                    )
+                                })
                         } else if pos - dictionary.words.len() < dictionary.replacements.len() {
                             dictionary.replacements.remove(pos - dictionary.words.len());
                             file.set_typed("dictionary.replacements", &dictionary.replacements)

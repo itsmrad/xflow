@@ -21,7 +21,7 @@ history disabled; it must never silently erase saved rows at startup.
 | `[hotkey]` | key, double_tap_ms (500), hold_threshold_ms (500), enabled (true) | macOS event tap, daemon |
 | `[injection]` | method (paste/type/clipboard), clipboard_only, restore_clipboard, restore_delay_ms, trailing_space | platform desktop, extension |
 | `[formatting]` | remove_fillers, fillers, spoken_punctuation | daemon text pipeline |
-| `[dictionary]` | words, replacements = [{from, to}] | daemon text pipeline, providers (hints) |
+| `[dictionary]` | words, replacements = [{from, to}], auto_learn, learned, never_learn | daemon text pipeline and correction learning, providers (hints) |
 | `[[snippets]]` | trigger, text | daemon text pipeline |
 | `[[styles]]` | name, apps, mode, prompt | daemon (picks style by focused app id) |
 | `[sounds]` | enabled, volume, start, stop, error | daemon/platform |
@@ -50,10 +50,11 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | `last`, `copy_last`, `paste_last` | — | unchanged |
 | `history` | `limit`, `offset` (default 0), `query` (case-insensitive substring) | `history` rows newest first, `total` = matching rows |
 | `history_get` / `history_delete` / `history_copy` / `history_paste` | `id` | `entry` for get; injection outcome for paste |
+| `history_update` | `id`, `text` | replaces the entry text (first text kept as `raw_text`); with `auto_learn`, learns close word corrections (vocabulary only) exactly like a corrected paste; command-mode entries learn nothing. Reply: updated `entry`; `message` = "Added 'X' to your dictionary" when something was learned |
 | `clear_history` | — | clears persisted rows even with history disabled; also clears the in-memory last result/timings |
 | `stats` | — | `stats` (sessions, words, audio_ms, today, streak, wpm, latency p50/p95) |
 | `reload` | — | idle only; stage services before swapping config; on error keep the running config and return the error; SIGHUP uses this path |
-| `subscribe` | — | snapshot, then every state/level event; the final event of a successful session carries `text`, `injection`, `entry`, `timings` |
+| `subscribe` | — | snapshot, then every state/level event; the final event of a successful session carries `text`, `injection`, `entry`, `timings`. A learned-words event carries only `message` and leaves the state unchanged |
 | `shutdown` | — | unchanged |
 
 `HistoryEntry` adds model, raw_text, app_id, language, duration_ms, latency_ms, mode. `Timings` carries
@@ -93,6 +94,11 @@ safety check stay in Rust (`safe_target`).
 - `TextTransformer::transform(TransformRequest)` — text, mode, instructions (cleanup/style prompt),
   command (command mode), app_id (only with `cleanup.app_context`), vocabulary (dictionary words).
 - `Desktop::selection()` — PRIMARY selection for command mode (default `None`).
+- `Desktop::focused_text()` — focus context plus the value of the focused editable field, from one
+  lookup, for correction learning (text `None` by default; macOS Accessibility only, `None` for
+  secure fields and terminals).
+- `learn::{Receipt, corrections}` and `DictionaryConfig::{learn, forget}` — pure correction learning
+  shared by the paste observer and `history_update`.
 - `AudioCapture::finished()` — default `false`; true after capture reaches a device/buffer limit or
   fails. The daemon checks it on its existing listening-level tick, then calls `stop()` to retrieve
   the buffered clip or original error. Reset on start/stop/cancel; no new idle polling.

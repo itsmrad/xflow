@@ -59,7 +59,7 @@ Provider capabilities must be based on the wire protocol and selected model. Bat
 | Voice command mode | Explicit transformer instructions; no implicit shell execution | Implemented |
 | Streaming | Preview partials; insert finalized transcript once; cancellation never flushes stale partial text | Later |
 | Offline | User-managed loopback server; reject remote STT/cleanup, no cloud fallback | Implemented; model management later |
-| Auto-learning | Observe only a bounded inserted span; trust narrow repeated spelling corrections; reversible dictionary promotion | Design only now |
+| Auto-learning | Observe only a bounded inserted span; trust narrow spelling corrections; reversible dictionary promotion | macOS paste observer and history edits (see ARCHITECTURE) |
 
 Wispr's [dictionary](https://docs.wisprflow.ai/articles/4052411709-teach-flow-your-words-with-the-dictionary), [snippets](https://docs.wisprflow.ai/articles/5784437944-create-and-use-snippets), [styles](https://docs.wisprflow.ai/articles/2368263928-how-to-setup-flow-styles) and [cleanup](https://docs.wisprflow.ai/articles/4283510616-auto-cleanup-control-how-much-flow-edits-your-dictation-beta) establish useful interaction patterns; they are not shipped XFlow capability claims.
 

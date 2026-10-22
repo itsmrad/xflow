@@ -106,11 +106,14 @@ xflow config set recording.auto_stop_secs 3
 xflow config get stt.model --json
 xflow dictionary add XFlow Postgres
 xflow dictionary replace 'post grass' Postgres
+xflow history edit 42 --text 'Deploy it on Kubernetes'   # or omit --text to use $EDITOR
 xflow snippets add 'my signature' 'Regards, Alex'
 xflow styles add chat --apps slack,discord --mode light
 xflow overlay set position bottom
 xflow completions bash > xflow.bash
 ```
+
+**Learning from corrections** (`dictionary.auto_learn = true` by default). When you fix a word right after dictating, xflow learns it: the corrected word is added to your vocabulary as a recognition hint (it never becomes an automatic replacement), and `xflow watch` (plus a notification, when enabled) says "Added 'Kubernetes' to your dictionary". On macOS xflowd reads the field it pasted into twice through Accessibility: about 120 ms after the paste, then when you start the next dictation or after 60 s, only while focus is still on that field. It keeps just the pasted text and 16 characters on each side in memory, never the field. Correcting a transcript with `xflow history edit` uses the same rules, on every platform. Only close spellings are learned (at most four per dictation); case or punctuation changes, grammar or homophone fixes between everyday words (their/there), numbers, URLs, code, everyday words and secure fields are skipped. `xflow dictionary list` marks learned entries, and `xflow dictionary remove <word>` removes one for good.
 
 The command tree is discoverable with `xflow --help` and `xflow <command> --help`:
 
@@ -119,7 +122,7 @@ setup                  provider/model/key/microphone onboarding
 start stop toggle cancel
 status watch listen transcribe
 last copy paste        copy-last / paste-last remain aliases
-history                list search show copy paste delete export clear
+history                list search show copy paste delete edit export clear
 config                 path show get set unset edit validate reset
 providers              list info test use
 models                 [provider]
