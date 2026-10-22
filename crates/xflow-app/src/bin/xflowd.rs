@@ -12,7 +12,7 @@ struct Args {
     #[arg(long)]
     check_config: bool,
 }
-#[tokio::main(worker_threads = 2)]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args = Args::parse();
     let path = args
