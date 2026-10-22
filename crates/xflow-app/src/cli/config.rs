@@ -115,6 +115,25 @@ pub fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 fn edit(path: &Path, out: &Output) -> Result<()> {
+    let mut temp = tempfile::NamedTempFile::new()?;
+    temp.write_all(load(path)?.to_string().as_bytes())?;
+    run_editor(temp.path())?;
+    let content = bounded_read(temp.path(), 1024 * 1024)?;
+    load(temp.path())?.config().map_err(Error::config)?;
+    replace(path, &content)?;
+    super::ipc::reload_if_running(path, out)?;
+    out.confirm("Configuration saved")?;
+    Ok(())
+}
+/// Edit `text` in $VISUAL/$EDITOR and return the result (history corrections).
+pub fn edit_text(text: &str) -> Result<String> {
+    let mut temp = tempfile::NamedTempFile::new()?;
+    temp.write_all(text.as_bytes())?;
+    run_editor(temp.path())?;
+    let edited = String::from_utf8(bounded_read(temp.path(), 64 * 1024)?)?;
+    Ok(edited.trim_end_matches('\n').to_owned())
+}
+fn run_editor(file: &Path) -> Result<()> {
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .map_err(|_| {
@@ -127,25 +146,18 @@ fn edit(path: &Path, out: &Output) -> Result<()> {
     // ponytail: editor commands support whitespace-separated arguments; shell expansion is deliberately absent.
     let mut parts = editor.split_whitespace();
     let program = parts.next().context("editor command is empty")?;
-    let mut temp = tempfile::NamedTempFile::new()?;
-    temp.write_all(load(path)?.to_string().as_bytes())?;
     let status = std::process::Command::new(program)
         .args(parts)
-        .arg(temp.path())
+        .arg(file)
         .status()
         .context("cannot start editor")?;
     if !status.success() {
         return Err(Error::new(
             4,
-            "Editor failed; original configuration preserved",
+            "Editor failed; nothing was changed",
             "Check your editor command",
         ));
     }
-    let content = bounded_read(temp.path(), 1024 * 1024)?;
-    load(temp.path())?.config().map_err(Error::config)?;
-    replace(path, &content)?;
-    super::ipc::reload_if_running(path, out)?;
-    out.confirm("Configuration saved")?;
     Ok(())
 }
 pub fn confirm(yes: bool, prompt: &str) -> Result<()> {
@@ -207,22 +219,28 @@ pub fn bounded_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
 }
 pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) -> Result<()> {
     use args::Dictionary::*;
+    let _lock = xflow_app::config_edit::lock(path).map_err(Error::config)?;
     let mut file = load(path)?;
     let mut config = file.config().map_err(Error::config)?;
     match action.unwrap_or(&List) {
         List => {
-            let mut rows: Vec<_> = config
-                .dictionary
+            let d = &config.dictionary;
+            let kind = |word: &str, plain: &str| {
+                if d.learned.iter().any(|w| w == word) {
+                    format!("{plain} (learned)")
+                } else {
+                    plain.into()
+                }
+            };
+            let mut rows: Vec<_> = d
                 .words
                 .iter()
-                .map(|w| vec!["word".into(), w.clone(), "".into()])
+                .map(|w| vec![kind(w, "word"), w.clone(), "".into()])
                 .collect();
             rows.extend(
-                config
-                    .dictionary
-                    .replacements
+                d.replacements
                     .iter()
-                    .map(|r| vec!["replace".into(), r.from.clone(), r.to.clone()]),
+                    .map(|r| vec![kind(&r.to, "replace"), r.from.clone(), r.to.clone()]),
             );
             if out.json {
                 out.data(&config.dictionary, "")?;
@@ -243,7 +261,13 @@ pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) 
             }
         }
         Remove { words } => {
-            config.dictionary.words.retain(|word| !words.contains(word));
+            for word in words {
+                config.dictionary.forget(word);
+            }
+            file.set_typed("dictionary.learned", &config.dictionary.learned)
+                .map_err(Error::config)?;
+            file.set_typed("dictionary.never_learn", &config.dictionary.never_learn)
+                .map_err(Error::config)?;
         }
         Replace { from, to } => {
             config

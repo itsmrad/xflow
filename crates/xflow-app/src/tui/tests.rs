@@ -337,6 +337,35 @@ fn untrusted_transcripts_cannot_emit_terminal_controls() {
     assert!(text.contains("hello"));
 }
 #[test]
+fn history_corrections_and_removed_learned_words_feed_learning() {
+    let (_dir, mut app) = populated();
+    // History → Enter → "Correct this transcript" opens the text, Enter saves it.
+    app.page = Page::History;
+    key_enter(&mut app);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key_enter(&mut app);
+    assert!(matches!(&editor(&app).target, EditTarget::Transcript(42)));
+    app.paste(" Thanks");
+    let effects = key_enter(&mut app);
+    assert!(matches!(
+        &effects[..],
+        [Effect::Request(Request::HistoryUpdate { id: 42, text }, _)]
+            if text == "The best ideas start with a conversation. Thanks"
+    ));
+    // Deleting a learned word works like `xflow dictionary remove`.
+    app.set("dictionary.learned", r#"["xflow"]"#).unwrap();
+    app.page = Page::Dictionary;
+    app.selected[Page::Dictionary.index()] = 2;
+    key_enter(&mut app);
+    key(&mut app, KeyCode::Down);
+    key_enter(&mut app);
+    key_enter(&mut app);
+    assert_eq!(app.config.dictionary.words, ["Ratatui"]);
+    assert!(app.config.dictionary.learned.is_empty());
+    assert_eq!(app.config.dictionary.never_learn, ["xflow"]);
+}
+#[test]
 fn lists_work_with_arrows_enter_and_esc_only() {
     let (_dir, mut app) = populated();
     app.page = Page::Dictionary;

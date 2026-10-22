@@ -314,6 +314,34 @@ pub fn history(page: &args::Page, action: Option<&args::History>, out: &Output) 
         Some(Copy { id }) => request(&Request::HistoryCopy { id: positive(*id)? })?,
         Some(Paste { id }) => request(&Request::HistoryPaste { id: positive(*id)? })?,
         Some(Delete { id }) => request(&Request::HistoryDelete { id: positive(*id)? })?,
+        Some(Edit { id, text }) => {
+            let id = positive(*id)?;
+            let text = match text {
+                Some(text) => text.clone(),
+                None => {
+                    let entry = request(&Request::HistoryGet { id })?.entry.ok_or_else(|| {
+                        Error::new(
+                            1,
+                            "History entry not found",
+                            "Run xflow history to find an ID",
+                        )
+                    })?;
+                    let edited = super::config::edit_text(&entry.text)?;
+                    if edited.trim() == entry.text.trim() {
+                        out.confirm("No changes")?;
+                        return Ok(());
+                    }
+                    edited
+                }
+            };
+            let response = request(&Request::HistoryUpdate { id, text })?;
+            if out.json {
+                out.response(&response)?;
+            } else {
+                out.confirm(response.message.as_deref().unwrap_or("Transcript updated"))?;
+            }
+            return Ok(());
+        }
         Some(Clear { yes }) => {
             super::config::confirm(*yes, "Delete all dictation history?")?;
             request(&Request::ClearHistory)?

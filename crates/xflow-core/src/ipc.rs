@@ -80,6 +80,13 @@ pub enum Request {
     HistoryPaste {
         id: i64,
     },
+    /// Replace an entry's text with the user's correction (its first text is kept
+    /// as `raw_text`) and, with `dictionary.auto_learn`, learn the corrected words.
+    /// Replies with the updated `entry`; `message` names any learned words.
+    HistoryUpdate {
+        id: i64,
+        text: String,
+    },
     ClearHistory,
     Stats,
     /// Re-read config.toml and rebuild providers/desktop services. On error the
@@ -115,7 +122,8 @@ pub struct HistoryEntry {
     pub provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Provider output before local formatting/cleanup, when it differs.
+    /// The first text of the entry, when it differs: provider output before local
+    /// formatting/cleanup, or the text before a history correction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

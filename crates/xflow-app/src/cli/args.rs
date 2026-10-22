@@ -228,6 +228,13 @@ pub enum History {
     Delete {
         id: i64,
     },
+    /// Correct a transcript (in $EDITOR, or with --text) and learn the corrected words.
+    Edit {
+        id: i64,
+        /// The corrected transcript; omit to edit it in $VISUAL or $EDITOR.
+        #[arg(long)]
+        text: Option<String>,
+    },
     Export {
         #[arg(long, value_enum, default_value = "json")]
         format: Format,
@@ -411,6 +418,14 @@ mod tests {
             vec!["xflow", "history", "-n", "10"],
             vec!["xflow", "config", "set", "stt.model", "whisper-large-v3"],
             vec!["xflow", "history", "search", "hello", "--json"],
+            vec![
+                "xflow",
+                "history",
+                "edit",
+                "3",
+                "--text",
+                "Kubernetes rocks",
+            ],
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
