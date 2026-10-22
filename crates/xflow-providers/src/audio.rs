@@ -88,9 +88,10 @@ pub fn encode_wav(audio: &AudioClip) -> Result<Vec<u8>> {
 /// Compression is lossless after PCM16 conversion. Tiny or incompressible clips keep WAV.
 pub(crate) fn encode_upload(audio: &AudioClip, flac: bool) -> Result<(Vec<u8>, &'static str)> {
     let samples = mono16(audio)?;
-    let wav = wav(&samples)?;
-    if !flac || wav.len() < 4096 {
-        return Ok((wav, "wav"));
+    // Build the WAV only when it is sent; its size is known up front.
+    let wav_len = samples.len() * 2 + 44;
+    if !flac || wav_len < 4096 {
+        return Ok((wav(&samples)?, "wav"));
     }
     use flacenc::{component::BitRepr, error::Verify};
     let pcm: Vec<i32> = samples.iter().map(|&s| pcm16(s) as i32).collect();
@@ -104,10 +105,10 @@ pub(crate) fn encode_upload(audio: &AudioClip, flac: bool) -> Result<(Vec<u8>, &
     stream
         .write(&mut sink)
         .map_err(|_| anyhow!("FLAC serialization failed"))?;
-    if sink.as_slice().len() < wav.len() * 9 / 10 {
-        Ok((sink.as_slice().to_vec(), "flac"))
+    if sink.as_slice().len() < wav_len * 9 / 10 {
+        Ok((sink.into_inner(), "flac"))
     } else {
-        Ok((wav, "wav"))
+        Ok((wav(&samples)?, "wav"))
     }
 }
 fn pcm16(sample: f32) -> i16 {

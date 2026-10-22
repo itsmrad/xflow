@@ -14,8 +14,25 @@ pub const TEMPLATE: &str = include_str!("../../../../config/default.toml");
 pub fn load(path: &Path) -> Result<ConfigFile> {
     ConfigFile::load(path).map_err(Error::config)
 }
+/// Over-budget dictionary words are dropped at dictation time; say so when config changes.
+pub fn hint_warning(config: &xflow_core::config::Config) -> Option<String> {
+    let words = &config.dictionary.words;
+    let sent = xflow_providers::hint_fit(&config.stt, words).ok()?;
+    (sent < words.len()).then(|| {
+        format!(
+            "{} dictionary words exceed the {} hint limit; only the first {sent} are sent",
+            words.len(),
+            config.stt.provider
+        )
+    })
+}
 pub fn commit(file: &ConfigFile, out: &Output) -> Result<()> {
     file.save().map_err(Error::config)?;
+    if let Some(warning) = file.config().ok().as_ref().and_then(hint_warning) {
+        if !out.json {
+            eprintln!("Warning: {warning}");
+        }
+    }
     super::ipc::reload_if_running(file.path(), out)?;
     out.confirm("Configuration saved")?;
     Ok(())

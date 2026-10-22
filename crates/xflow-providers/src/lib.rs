@@ -18,7 +18,7 @@ mod check;
 pub use check::{check_cleanup, CheckReport};
 use check::{check_request, probe_url};
 mod stt;
-pub use stt::{build_stt, check_stt, transcribe_file};
+pub use stt::{build_stt, check_stt, hint_fit, transcribe_file};
 mod audio;
 mod catalog;
 #[cfg(test)]
@@ -439,7 +439,10 @@ impl HttpTransformer {
                 .is_some_and(|u| u.host_str().is_some_and(|h| is_canonical_host(&url, h)))
         });
         let info = preset.or(inferred);
-        let provider = info.map_or("cleanup", |p| p.id);
+        // Cleanup `custom` must never reuse the STT `custom` key on another host.
+        let provider = info
+            .filter(|p| p.id != "custom")
+            .map_or("cleanup", |p| p.id);
         let canonical = info.is_some_and(|p| {
             Url::parse(p.endpoint)
                 .ok()
@@ -770,18 +773,32 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.to_string().contains("language"));
-        let error = stt
+    }
+    #[tokio::test]
+    async fn over_budget_dictionary_hints_are_truncated_not_fatal() {
+        let (url, rx) = server("200 OK", br#"{"text":"hello"}"#, Duration::ZERO, "").await;
+        let mut cfg = config("groq", url);
+        cfg.vocabulary = vec!["a".repeat(120)];
+        // 120 + 2 + 50 fits the 224-byte prompt; the 103-byte word stops the prefix.
+        let words = vec!["c".repeat(50), "b".repeat(103), "d".into()];
+        assert_eq!(hint_fit(&cfg, &words).unwrap(), 1);
+        let result = build_stt(&cfg, true)
+            .unwrap()
             .transcribe(
                 clip(),
                 TranscriptionOptions {
-                    vocabulary: vec!["b".repeat(103)],
+                    vocabulary: words,
                     ..Default::default()
                 },
             )
             .await
-            .err()
             .unwrap();
-        assert!(error.to_string().contains("224-byte"));
+        assert_eq!(result.text, "hello");
+        let request = String::from_utf8_lossy(&rx.await.unwrap()).into_owned();
+        assert!(request.contains(&format!("{}, {}", "a".repeat(120), "c".repeat(50))));
+        assert!(!request.contains(&"b".repeat(103)));
+        let cfg = config("openrouter", "http://127.0.0.1:9/x".into());
+        assert_eq!(hint_fit(&cfg, &["Postgres".into()]).unwrap(), 0);
     }
     #[tokio::test]
     async fn named_provider_loopback_override_does_not_send_default_key() {
@@ -903,22 +920,6 @@ mod tests {
         );
         assert!(value.get("messages").is_none());
         std::env::remove_var(env);
-    }
-    #[tokio::test]
-    async fn router_does_not_silently_discard_hints() {
-        let cfg = config("openrouter", "http://127.0.0.1:9/x".into());
-        let error = build_stt(&cfg, true)
-            .unwrap()
-            .transcribe(
-                clip(),
-                TranscriptionOptions {
-                    vocabulary: vec!["Postgres".into()],
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("vocabulary"));
     }
     #[tokio::test]
     async fn local_custom_is_anonymous_and_model_required() {
@@ -1050,5 +1051,18 @@ mod tests {
         let error = secret_header(Zeroizing::new("private\nsecret".into())).unwrap_err();
         assert!(!format!("{error:?}").contains("private"));
         assert!(Credentials::new("groq", Some("KEY=$secret".into()), false, true).is_err());
+    }
+    #[test]
+    fn custom_cleanup_uses_its_own_keyring_entry() {
+        let cfg = CleanupConfig {
+            mode: CleanupMode::Light,
+            provider: Some("custom".into()),
+            endpoint: Some("https://llm.b.example/v1/chat/completions".into()),
+            model: Some("editor".into()),
+            ..CleanupConfig::default()
+        };
+        let transformer = HttpTransformer::new(&cfg, false).unwrap();
+        assert_eq!(transformer.credential.provider, "cleanup");
+        assert!(transformer.credential.allow_keyring);
     }
 }

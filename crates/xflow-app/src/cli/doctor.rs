@@ -114,6 +114,14 @@ fn checks(
             "Cloud transcription uploads audio to the configured provider"
         };
         checks.push(check("privacy", true, false, detail, "Review xflow config show; keys belong in environment variables or OS credential storage"));
+        let warning = super::config::hint_warning(&config);
+        checks.push(check(
+            "dictionary hints",
+            warning.is_none(),
+            false,
+            warning.unwrap_or_else(|| "All dictionary words fit the provider hint limit".into()),
+            "Remove rarely used words with xflow dictionary remove",
+        ));
     }
     checks
 }
@@ -216,5 +224,20 @@ mod tests {
             .iter()
             .find(|c| c.name == "Wayland injection")
             .is_some_and(|c| !c.required));
+        let words: Vec<_> = (0..30).map(|i| format!("\"word{i:02}\"")).collect();
+        std::fs::write(
+            &path,
+            format!("[dictionary]\nwords = [{}]", words.join(",")),
+        )
+        .unwrap();
+        let result = checks(&path, "sway", "wayland", |_| true, Ok("v1".into()));
+        let hints = result
+            .iter()
+            .find(|c| c.name == "dictionary hints")
+            .unwrap();
+        assert!(!hints.ok && !hints.required);
+        assert!(hints
+            .detail
+            .starts_with("30 dictionary words exceed the groq hint limit"));
     }
 }

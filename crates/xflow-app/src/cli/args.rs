@@ -100,7 +100,7 @@ pub enum Command {
     },
     /// List a provider's models, marking the selected and default model.
     Models { provider: Option<String> },
-    /// Manage provider credentials in OS credential storage.
+    /// Manage provider credentials in OS credential storage; a custom cleanup endpoint uses the `cleanup` entry.
     Key {
         #[command(subcommand)]
         action: Option<Key>,
