@@ -193,7 +193,7 @@ pub struct DictionaryConfig {
     pub replacements: Vec<Replacement>,
     /// Learn words you correct right after dictating, or in history.
     pub auto_learn: bool,
-    /// Words that were learned; removing one also removes its replacements.
+    /// Words that were learned (vocabulary hints only, never replacements).
     pub learned: Vec<String>,
     /// Lowercase words you removed after they were learned; never learned again.
     pub never_learn: Vec<String>,

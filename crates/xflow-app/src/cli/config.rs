@@ -195,6 +195,7 @@ pub fn bounded_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
 }
 pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) -> Result<()> {
     use args::Dictionary::*;
+    let _lock = xflow_app::config_edit::lock(path).map_err(Error::config)?;
     let mut file = load(path)?;
     let mut config = file.config().map_err(Error::config)?;
     match action.unwrap_or(&List) {

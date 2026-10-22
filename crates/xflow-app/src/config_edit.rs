@@ -17,6 +17,24 @@ pub struct ConfigFile {
     doc: DocumentMut,
 }
 
+/// Exclusive advisory lock on `<config>.lock`. Hold it from load to save so the
+/// daemon's learning and CLI dictionary edits never overwrite each other.
+pub fn lock(path: &Path) -> Result<std::fs::File> {
+    let parent = path.parent().context("config path has no parent")?;
+    if !parent.exists() {
+        crate::paths::private_dir(parent)?;
+    }
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(name)?;
+    fs2::FileExt::lock_exclusive(&file)?;
+    Ok(file)
+}
+
 impl ConfigFile {
     /// The user's file, or the documented template when it does not exist yet.
     pub fn load(path: &Path) -> Result<Self> {

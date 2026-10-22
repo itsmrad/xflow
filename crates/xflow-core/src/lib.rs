@@ -167,10 +167,11 @@ pub trait Desktop: Send + Sync {
     async fn selection(&self) -> Result<Option<String>> {
         Ok(None)
     }
-    /// Full value of the focused editable text element, for learning user corrections;
-    /// None when unavailable or secure.
-    async fn focused_text(&self) -> Result<Option<String>> {
-        Ok(None)
+    /// The focus context and the full value of the focused editable text element,
+    /// from one lookup, for learning user corrections; the text is None when
+    /// unavailable or secure.
+    async fn focused_text(&self) -> Result<(AppContext, Option<String>)> {
+        Ok((self.context().await?, None))
     }
 }
 

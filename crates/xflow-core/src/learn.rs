@@ -12,7 +12,6 @@ const MAX_DIFF_WORDS: usize = 400;
 
 /// Where a dictation landed in a text field: the pasted text plus up to 16
 /// characters on each side. Never the rest of the field.
-#[derive(Debug)]
 pub struct Receipt {
     before: String,
     inserted: String,
@@ -49,7 +48,15 @@ impl Receipt {
     }
     /// The span between the anchors in the field as it reads now. An empty anchor
     /// means the field's start or end; any other anchor must occur exactly once.
+    /// A short dictation that filled an empty field has nothing to tell it apart
+    /// from the next message typed there, so it is not trusted.
     pub fn corrected<'a>(&self, field: &'a str) -> Option<&'a str> {
+        if self.before.is_empty()
+            && self.after.is_empty()
+            && self.inserted.split_whitespace().count() < 4
+        {
+            return None;
+        }
         let unique = |anchor: &str| {
             (field.matches(anchor).count() == 1)
                 .then(|| field.find(anchor))
@@ -71,7 +78,7 @@ impl Receipt {
 
 /// Close word corrections from `original` to `corrected` (at most four), skipping
 /// words the dictionary already has or the user removed. Shared by the paste
-/// observer and history edits.
+/// observer and history edits. Nothing is learned from a mostly different text.
 pub fn corrections(
     original: &str,
     corrected: &str,
@@ -82,16 +89,23 @@ pub fn corrections(
     if a.len() > MAX_DIFF_WORDS || b.len() > MAX_DIFF_WORDS {
         return vec![];
     }
+    // Case-insensitive, so recapitalizing the next word is not part of a fix.
+    let lower =
+        |words: &[&str]| -> Vec<String> { words.iter().map(|w| w.to_lowercase()).collect() };
+    let (la, lb) = (lower(&a), lower(&b));
     // Suffix LCS lengths; edits are the unmatched runs between matched words.
     let mut lcs = vec![vec![0u16; b.len() + 1]; a.len() + 1];
     for i in (0..a.len()).rev() {
         for j in (0..b.len()).rev() {
-            lcs[i][j] = if a[i] == b[j] {
+            lcs[i][j] = if la[i] == lb[j] {
                 lcs[i + 1][j + 1] + 1
             } else {
                 lcs[i + 1][j].max(lcs[i][j + 1])
             };
         }
+    }
+    if usize::from(lcs[0][0]) * 2 < a.len() {
+        return vec![];
     }
     let known = |word: &str| {
         let word = word.to_lowercase();
@@ -104,7 +118,7 @@ pub fn corrections(
     let mut found: Vec<Replacement> = vec![];
     let (mut i, mut j, mut from, mut to) = (0, 0, 0, 0);
     loop {
-        let matched = i < a.len() && j < b.len() && a[i] == b[j];
+        let matched = i < a.len() && j < b.len() && la[i] == lb[j];
         if matched || (i == a.len() && j == b.len()) {
             if let Some(c) = hunk(&a[from..i], &b[to..j]) {
                 // A removed word is not learned back in either direction.
@@ -146,7 +160,8 @@ fn key(token: &str) -> &str {
 }
 /// One edit is learnable when it replaces 1-3 words with 1-3 plain words that
 /// look or sound like what was dictated. Insertions, deletions, case or
-/// punctuation changes, numbers, URLs, paths, code and everyday words are not.
+/// punctuation changes, numbers, URLs, paths, code and everyday words (so
+/// homophone and grammar fixes like their/there) are not.
 fn candidate(from: &[&str], to: &[&str]) -> Option<Replacement> {
     if from.is_empty() || to.is_empty() || from.len() > MAX_HUNK_WORDS || to.len() > MAX_HUNK_WORDS
     {
@@ -250,25 +265,15 @@ fn common(word: &str) -> bool {
 }
 
 impl DictionaryConfig {
-    /// Save learned corrections: the corrected word becomes a recognition hint
-    /// (first, so provider hint limits keep it) and the original spelling gets a
-    /// replacement unless it is an everyday word or the user already has a rule
-    /// for it. Returns the newly learned words.
+    /// Save learned corrections as vocabulary only: the corrected word becomes a
+    /// recognition hint (first, so provider hint limits keep it). Learning never
+    /// writes replacements, which would rewrite every future transcript.
+    /// Returns the newly learned words.
     pub fn learn(&mut self, found: &[Replacement]) -> Vec<String> {
         let mut added = Vec::new();
         for c in found {
-            if self.words.len() >= MAX_DICTIONARY_ITEMS
-                || self.replacements.len() >= MAX_DICTIONARY_ITEMS
-            {
+            if self.words.len() >= MAX_DICTIONARY_ITEMS {
                 break;
-            }
-            if !common(&c.from)
-                && !self
-                    .replacements
-                    .iter()
-                    .any(|r| r.from.to_lowercase() == c.from.to_lowercase())
-            {
-                self.replacements.push(c.clone());
             }
             if !self.words.contains(&c.to) {
                 self.words.insert(0, c.to.clone());
@@ -280,8 +285,7 @@ impl DictionaryConfig {
         }
         added
     }
-    /// Remove a word. A learned word also loses the replacements that produce it
-    /// and is remembered so it is never learned again.
+    /// Remove a word. A learned word is remembered so it is never learned again.
     pub fn forget(&mut self, word: &str) {
         self.words.retain(|w| w != word);
         let lower = word.to_lowercase();
@@ -289,7 +293,6 @@ impl DictionaryConfig {
         self.learned.retain(|w| w.to_lowercase() != lower);
         if self.learned.len() < learned {
             self.words.retain(|w| w.to_lowercase() != lower);
-            self.replacements.retain(|r| r.to.to_lowercase() != lower);
             if !self.never_learn.contains(&lower) {
                 if self.never_learn.len() >= MAX_DICTIONARY_ITEMS {
                     self.never_learn.remove(0);
@@ -329,12 +332,17 @@ mod tests {
             pair("cooper netties", "Kubernetes")
         );
         assert_eq!(
-            learn("ask jon smyth", "ask John Smith"),
+            learn("please ask jon smyth today", "please ask John Smith today"),
             pair("jon smyth", "John Smith")
         );
         // The user fixed a word and kept typing.
         assert_eq!(
-            learn("use postgress", "use Postgres today and more"),
+            learn("use postgress today", "use Postgres today and more"),
+            pair("postgress", "Postgres")
+        );
+        // Recapitalizing the next word is not part of the fix.
+        assert_eq!(
+            learn("it uses postgress. then we", "it uses Postgres. Then we"),
             pair("postgress", "Postgres")
         );
         // Nothing changed, case or punctuation only, insertion, deletion.
@@ -345,7 +353,12 @@ mod tests {
         assert!(learn("hello brave new world", "hello world").is_empty());
         // Unrelated rewrites, everyday words, numbers, URLs, code.
         assert!(learn("the cat sat", "the dog sat").is_empty());
+        // Homophone and grammar fixes between everyday words.
         assert!(learn("I went their", "I went there").is_empty());
+        assert!(learn("check its done", "check it's done").is_empty());
+        assert!(learn("buy a apple", "buy an apple").is_empty());
+        // A different text is not a correction of this one.
+        assert!(learn("deploy kubernetis now", "lunch at noon with Kubernetes").is_empty());
         assert!(learn("call me at five", "call me at 5").is_empty());
         assert!(learn("open example dot com", "open example.com").is_empty());
         assert!(learn("call get user name", "call getUserName").is_empty());
@@ -353,8 +366,8 @@ mod tests {
         // At most four per dictation.
         assert_eq!(
             learn(
-                "kubernetis and postgress and grafanna and terraforn and ansibel",
-                "Kubernetes and Postgres and Grafana and Terraform and Ansible"
+                "we use kubernetis and postgress and grafanna and terraforn and ansibel",
+                "we use Kubernetes and Postgres and Grafana and Terraform and Ansible"
             )
             .len(),
             MAX_CANDIDATES
@@ -362,22 +375,18 @@ mod tests {
     }
 
     #[test]
-    fn removed_words_are_not_relearned() {
+    fn learning_adds_vocabulary_only_and_removed_words_stay_removed() {
         let mut dictionary = DictionaryConfig::default();
         let found = corrections("use kubernetis", "use Kubernetes", &dictionary);
         assert_eq!(dictionary.learn(&found), ["Kubernetes"]);
         assert_eq!(dictionary.words, ["Kubernetes"]);
-        assert_eq!(dictionary.replacements[0].from, "kubernetis");
+        assert_eq!(dictionary.learned, ["Kubernetes"]);
+        assert!(dictionary.replacements.is_empty());
         assert!(corrections("use kubernetis", "use Kubernetes", &dictionary).is_empty());
         dictionary.forget("Kubernetes");
-        assert!(dictionary.words.is_empty() && dictionary.replacements.is_empty());
-        assert!(dictionary.learned.is_empty());
+        assert!(dictionary.words.is_empty() && dictionary.learned.is_empty());
         assert!(corrections("use kubernetis", "use Kubernetes", &dictionary).is_empty());
         assert!(corrections("use Kubernetes", "use kubernetis", &dictionary).is_empty());
-        // An everyday original word gets no replacement, only the hint.
-        let found = corrections("use data", "use Dada", &dictionary);
-        assert_eq!(dictionary.learn(&found), ["Dada"]);
-        assert!(dictionary.replacements.is_empty());
     }
 
     #[test]
@@ -396,8 +405,8 @@ mod tests {
         );
         // Pasted at the end of the field; the app dropped the trailing space; the
         // user typed more afterwards (an insertion, not learned).
-        let receipt = Receipt::new("Notes: use postgress", "use postgress ").unwrap();
-        let span = receipt.corrected("Notes: use Postgres today").unwrap();
+        let receipt = Receipt::new("Notes: we use postgress", "we use postgress ").unwrap();
+        let span = receipt.corrected("Notes: we use Postgres today").unwrap();
         assert_eq!(
             learn(receipt.inserted(), span),
             pair("postgress", "Postgres")
@@ -410,5 +419,8 @@ mod tests {
             .is_none());
         // Anchor gone.
         assert!(receipt.corrected("Something else entirely").is_none());
+        // A short dictation that filled an empty field has no anchors to trust.
+        let receipt = Receipt::new("use postgress", "use postgress").unwrap();
+        assert!(receipt.corrected("lunch with Postgres").is_none());
     }
 }

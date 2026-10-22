@@ -122,7 +122,8 @@ pub struct HistoryEntry {
     pub provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Provider output before local formatting/cleanup, when it differs.
+    /// The first text of the entry, when it differs: provider output before local
+    /// formatting/cleanup, or the text before a history correction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

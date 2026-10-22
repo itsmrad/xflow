@@ -90,6 +90,8 @@ pub struct Engine {
     warm_job: Option<JoinHandle<()>>,
     /// Ends the observation of the last pasted field (see `observe`).
     observing: Option<oneshot::Sender<()>>,
+    /// Words learned while a reload was in flight; the reload may have read the file first.
+    learned_during_reload: Option<DictionaryConfig>,
     notifications: tokio::task::JoinSet<()>,
     started: Option<Instant>,
     silent_since: Option<Instant>,
@@ -127,6 +129,7 @@ impl Engine {
             context_abort: None,
             warm_job: None,
             observing: None,
+            learned_during_reload: None,
             notifications: tokio::task::JoinSet::new(),
             started: None,
             silent_since: None,
@@ -602,11 +605,13 @@ impl Engine {
                     }
                     Completion::Reloaded { result, reply } => {
                         self.reloading = false;
-                        let r = match *result { Ok((config, services, store)) => { self.config = config; self.services = services; self.store = store; self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
+                        let learned = self.learned_during_reload.take();
+                        let r = match *result { Ok((config, services, store)) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.services = services; self.store = store; self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
                     }
                     Completion::Learned { dictionary, message } => {
                         // Event only: the state and status message stay with the current session.
+                        if self.reloading { self.learned_during_reload = Some(dictionary.clone()); }
                         self.config.dictionary = dictionary;
                         let mut r = self.status(); r.message = Some(message.clone()); let _ = self.events.send(r);
                         self.notify("XFlow dictionary", &message);
@@ -785,11 +790,11 @@ async fn observe(
 /// Text of the focused field while focus is still on the paste target; 100 ms budget.
 async fn focused_field(desktop: &dyn Desktop, target: &AppContext) -> Option<String> {
     tokio::time::timeout(Duration::from_millis(100), async {
-        let now = desktop.context().await.ok()?;
+        let (now, text) = desktop.focused_text().await.ok()?;
         if now.app_id != target.app_id || now.window_id != target.window_id {
             return None;
         }
-        desktop.focused_text().await.ok().flatten()
+        text
     })
     .await
     .ok()
@@ -805,7 +810,7 @@ async fn learn(
     completion: mpsc::Sender<Completion>,
 ) -> Result<Option<String>> {
     let learned = tokio::task::spawn_blocking(move || -> Result<_> {
-        // ponytail: read-modify-write races a concurrent CLI edit; last writer wins.
+        let _lock = crate::config_edit::lock(&path)?;
         let mut file = ConfigFile::load(&path)?;
         let mut dictionary = file.config()?.dictionary;
         if !dictionary.auto_learn {
@@ -817,7 +822,6 @@ async fn learn(
             return Ok(None);
         }
         file.set_typed("dictionary.words", &dictionary.words)?;
-        file.set_typed("dictionary.replacements", &dictionary.replacements)?;
         file.set_typed("dictionary.learned", &dictionary.learned)?;
         file.save()?;
         Ok(Some((dictionary, added)))
@@ -853,7 +857,9 @@ async fn edit_history(
         .await?
         .context("history entry not found")?;
     r.entry = store.get(id).await?;
-    if let Some(path) = path {
+    // Command-mode output is the model's text, not speech recognition; nothing to learn.
+    let dictated = r.entry.as_ref().is_some_and(|e| e.mode == Mode::Dictation);
+    if let Some(path) = path.filter(|_| dictated) {
         r.message = learn(path, original, text, completion)
             .await
             .unwrap_or_else(|e| Some(format!("Transcript saved; dictionary not updated: {e:#}")));
@@ -1564,8 +1570,8 @@ mod tests {
             }
             Ok(InjectionOutcome::Pasted)
         }
-        async fn focused_text(&self) -> Result<Option<String>> {
-            Ok(self.field.lock().unwrap().clone())
+        async fn focused_text(&self) -> Result<(AppContext, Option<String>)> {
+            Ok((self.context().await?, self.field.lock().unwrap().clone()))
         }
     }
     struct ImmediateStt {
@@ -1707,14 +1713,8 @@ mod tests {
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Gress", "Postgres"]);
         assert_eq!(dictionary.learned, ["Postgres", "Gress"]);
-        assert_eq!(
-            dictionary
-                .replacements
-                .iter()
-                .map(|r| (r.from.as_str(), r.to.as_str()))
-                .collect::<Vec<_>>(),
-            [("post gres", "Postgres"), ("gres", "Gress")]
-        );
+        // Learning adds vocabulary hints only, never replacements.
+        assert!(dictionary.replacements.is_empty());
         assert!(
             !ask(
                 &tx,

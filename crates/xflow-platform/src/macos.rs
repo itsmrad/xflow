@@ -297,16 +297,18 @@ impl Desktop for MacDesktop {
         })
         .await?
     }
-    async fn focused_text(&self) -> Result<Option<String>> {
+    async fn focused_text(&self) -> Result<(AppContext, Option<String>)> {
         tokio::task::spawn_blocking(|| {
             let focus = focus();
-            Ok(
-                if focus.secure || !focus.editable || is_terminal(focus.context.app_id.as_deref()) {
-                    None
-                } else {
-                    focus.element.and_then(|e| e.text("AXValue"))
-                },
-            )
+            let text = if focus.secure
+                || !focus.editable
+                || is_terminal(focus.context.app_id.as_deref())
+            {
+                None
+            } else {
+                focus.element.and_then(|e| e.text("AXValue"))
+            };
+            Ok((focus.context, text))
         })
         .await?
     }
@@ -449,7 +451,7 @@ mod tests {
             "focus a scratch TextEdit document first"
         );
         assert!(
-            desktop.focused_text().await.unwrap().is_some(),
+            desktop.focused_text().await.unwrap().1.is_some(),
             "focused element must be editable"
         );
         assert_eq!(
@@ -464,6 +466,7 @@ mod tests {
             .focused_text()
             .await
             .unwrap()
+            .1
             .unwrap()
             .contains("xflow macOS delivery check"));
         assert!(
