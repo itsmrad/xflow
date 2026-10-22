@@ -199,7 +199,7 @@ fn parse_selection(text: String) -> Result<String> {
     Ok(text) // Preserve leading/trailing spaces and newlines exactly.
 }
 
-async fn output(program: &str, args: &[&str]) -> Result<String> {
+pub(crate) async fn output(program: &str, args: &[&str]) -> Result<String> {
     timeout(Duration::from_secs(2), async {
         let mut child = Command::new(program)
             .args(args)
@@ -251,7 +251,7 @@ async fn input_command(mut command: Command, text: &str, duration: Duration) -> 
     .context("desktop helper timed out")?
 }
 
-async fn copy_with(program: &str, args: &[&str], text: &str) -> Result<()> {
+pub(crate) async fn copy_with(program: &str, args: &[&str], text: &str) -> Result<()> {
     let mut command = Command::new(program);
     command.args(args);
     input_command(command, text, Duration::from_secs(3))

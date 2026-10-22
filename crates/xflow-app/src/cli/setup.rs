@@ -163,9 +163,10 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     } else {
         None
     };
-    let extension = options.install_extension
-        || (interactive
-            && config::ask("Install GNOME extension? [y/N] ", "")?.eq_ignore_ascii_case("y"));
+    let extension = cfg!(target_os = "linux")
+        && (options.install_extension
+            || (interactive
+                && config::ask("Install GNOME extension? [y/N] ", "")?.eq_ignore_ascii_case("y")));
     if extension {
         super::system::extension(&args::Extension::Install { enable: false }, &quiet)?;
     }
