@@ -16,7 +16,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "time", "process", "fs"] }
 
 [profile.release]
-lto = "thin"
+# Fat LTO measured on M2: xflowd -14%, xflow -13%, 30 s resample 9.0 -> 7.0 ms; opt-level "s" was 4.5x slower.
+lto = "fat"
 codegen-units = 1
 strip = true
 # TUI terminal restoration needs stack unwinding.

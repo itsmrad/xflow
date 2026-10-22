@@ -141,7 +141,11 @@ do not isolate causality under shared-host load, but do not justify changing a
 speed-focused app to fat LTO. Opt=s is smallest without hot-path CPU acceptance;
 cgu16 increases size and startup p95 here. Retain the established profile and
 explicit unwind requirement, and revisit size tradeoffs on a controlled runner.
-Never choose `panic=abort` here: the coordinator
+Revisited 2026-10-22 on an M2 after the resampler was vectorised: fat LTO cut
+xflowd 5,647,648 → 4,835,120 bytes and xflow 6,801,040 → 5,889,376 bytes, and
+was also faster on the stop path (30 s 48 kHz stereo resample+WAV p50 9.0 →
+7.0 ms); opt-level "s" barely shrank xflowd and was 4.5× slower. Fat LTO is now
+the release profile. Never choose `panic=abort` here: the coordinator
 requires unwinding for TUI terminal restoration. Cargo's
 [profile reference](https://doc.rust-lang.org/cargo/reference/profiles.html)
 documents the optimization, LTO and panic tradeoffs; tests force unwind and

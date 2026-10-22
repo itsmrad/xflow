@@ -23,13 +23,20 @@ pub(crate) fn mono16(audio: &AudioClip) -> Result<Vec<f32>> {
     if audio.samples.iter().any(|s| !s.is_finite()) {
         bail!("audio contains non-finite samples");
     }
-    let mono: Vec<f32> = audio
-        .samples
-        .chunks_exact(channels)
-        .map(|f| f.iter().map(|s| s.clamp(-1.0, 1.0)).sum::<f32>() / channels as f32)
-        .collect();
+    // Mono capture that is already in range is filtered in place: no full-rate copy.
+    let mono: std::borrow::Cow<[f32]> =
+        if channels == 1 && audio.samples.iter().all(|s| s.abs() <= 1.0) {
+            audio.samples.as_slice().into()
+        } else {
+            audio
+                .samples
+                .chunks_exact(channels)
+                .map(|f| f.iter().map(|s| s.clamp(-1.0, 1.0)).sum::<f32>() / channels as f32)
+                .collect::<Vec<_>>()
+                .into()
+        };
     if audio.sample_rate == RATE {
-        return Ok(mono);
+        return Ok(mono.into_owned());
     }
     fn gcd(mut a: u32, mut b: u32) -> u32 {
         while b != 0 {
@@ -63,11 +70,31 @@ pub(crate) fn mono16(audio: &AudioClip) -> Result<Vec<f32>> {
                 .collect()
         })
         .collect();
+    let weights: Vec<f32> = filters.iter().map(|f| f.iter().sum()).collect();
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let position = i as u64 * u64::from(step);
         let center = (position / u64::from(phases)) as i64;
-        let filter = &filters[(position % u64::from(phases)) as usize];
+        let phase = (position % u64::from(phases)) as usize;
+        let filter = &filters[phase];
+        let first = usize::try_from(center - HALF + 1).ok();
+        // Interior windows: eight independent lanes let LLVM vectorise the dot product.
+        if let Some(window) = first.and_then(|n| mono.get(n..n + filter.len())) {
+            let mut lanes = [0.0_f32; 8];
+            for (w, c) in window
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(filter.as_chunks::<8>().0)
+            {
+                for ((lane, s), k) in lanes.iter_mut().zip(w).zip(c) {
+                    *lane += s * k;
+                }
+            }
+            out.push((lanes.iter().sum::<f32>() / weights[phase]).clamp(-1.0, 1.0));
+            continue;
+        }
+        // Edges renormalise over the taps that exist.
         let mut sum = 0.0;
         let mut weight = 0.0;
         for (j, &coefficient) in filter.iter().enumerate() {
