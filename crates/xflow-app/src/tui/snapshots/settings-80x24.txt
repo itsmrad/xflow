@@ -1,24 +1,24 @@
- xflow                ╭Control center──────────────────────────────────────────╮
- Voice, at your pace. │Settings  ·  Connected                                  │
-                      ╰────────────────────────────────────────────────────────╯
-╭Navigate─────────╮╭Settings───────────────────────────────────────────────────╮
-│  1 Home         ││› cleanup.api_key_env                                      │
-│  2 History      ││  "OPENAI_API_KEY"                                         │
-│  3 Dictionary   ││  cleanup.app_context                                      │
-│  4 Snippets     ││  true                                                     │
-│  5 Styles       ││  cleanup.endpoint                                         │
-│  6 Providers    ││  (unset)                                                  │
-│› 7 Settings     │╰───────────────────────────────────────────────────────────╯
-│  8 Overlay      │╭Details · [ / ] scroll─────────────────────────────────────╮
-│  9 Stats        ││cleanup.api_key_env                                        │
-│  0 Doctor       ││                                                           │
-│                 ││"OPENAI_API_KEY"                                           │
-│                 ││                                                           │
-│                 ││Enter edits with schema validation.                        │
-│                 ││←/→ cycles form choices.                                   │
-│                 ││u resets to the default.                                   │
-╰─────────────────╯╰───────────────────────────────────────────────────────────╯
- Enter Edit   u Reset   Ctrl+S Save   Ctrl+R Revert
+ xflow  ·  Settings                                                      ✓ Done
+╭────────────────╮╭ Settings ──────────────────────────────────────────────────╮
+│ 1  Home        ││› Start     Guided setup          Run again                 │
+│ 2  History     ││  Speech    Service               Groq — fast, with a free t│
+│ 3  Dictionary  ││            Model                 Recommended               │
+│ 4  Snippets    ││            API key               Added                     │
+│ 5  Styles      ││            Language              Automatic                 │
+│ 6  Settings    ││            Microphone            System default            │
+│ 7  Pill        ││            Check connection      Run check                 │
+│ 8  Your stats  ││  Shortcut  Key                   Needs a newer xflow       │
+│ 9  Check-up    ││            Shortcut              Needs a newer xflow       │
+│                ││            Double-tap speed      Needs a newer xflow       │
+│                ││            Hold delay            Needs a newer xflow       │
+│                │╰────────────────────────────────────────────────────────────╯
+│                │╭ About ─────────────────────────────────────────────────────╮
+│                ││ Start · Guided setup                                       │
+│                ││ Run again                                                  │
+│                ││                                                            │
+│                ││ Walk through the speech service, key, microphone and       │
+│                ││ shortcut again.                                            │
+│                ││                                                            │
+╰────────────────╯╰────────────────────────────────────────────────────────────╯
 
-? Help  ·  Ctrl+P Actions  ·  t Theme  ·  Ctrl+S Save  ·  q Quit
-
+ ↑↓ move · Enter change · Esc back · Tab next page · ? help · q quit

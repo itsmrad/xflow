@@ -8,8 +8,7 @@ pub struct Provider {
     pub id: String,
     pub name: String,
     pub models: Vec<String>,
-    pub key: String,
-    pub note: String,
+    pub key_url: String,
 }
 pub fn catalog(cleanup: bool) -> Vec<Provider> {
     let catalog = if cleanup {
@@ -23,18 +22,7 @@ pub fn catalog(cleanup: bool) -> Vec<Provider> {
             id: p.id.into(),
             name: p.name.into(),
             models: p.models.iter().map(|m| m.id.into()).collect(),
-            key: "Checking credentials…".into(),
-            note: format!(
-                "Endpoint: {}\n{}\n{}\n{}",
-                p.endpoint,
-                p.models
-                    .iter()
-                    .map(|m| format!("{} — {}", m.label, m.note))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                p.key_url,
-                p.docs_url
-            ),
+            key_url: p.key_url.into(),
         })
         .collect()
 }
@@ -78,58 +66,50 @@ pub fn selection(config: &Config, id: &str, cleanup: bool, model: Option<&str>) 
     selected.validate()?;
     Ok(selected)
 }
-pub async fn providers(config: &Config, cleanup: bool) -> Vec<Provider> {
-    // Catalog appears immediately; bounded credential lookups stay off the UI task.
-    futures_util::future::join_all(catalog(cleanup).into_iter().map(|mut p| async move {
-        let selected = selection(config, &p.id, cleanup, None).expect("static catalog provider");
-        let env = if cleanup {
-            let value = &selected.cleanup.api_key_env;
-            if value.is_empty() {
+/// Whether the active speech and writing services lack a usable key.
+pub async fn missing_keys(config: &Config) -> (bool, bool) {
+    // Custom servers can be anonymous on loopback; their connection check is
+    // authoritative. Built-in local servers need no default credential.
+    let stt = !matches!(config.stt.provider.as_str(), "local" | "custom")
+        && matches!(
+            xflow_providers::key_status(&config.stt.provider, config.stt.api_key_env.as_deref())
+                .await,
+            KeySource::Missing
+        );
+    let cleanup = match config.cleanup.provider.as_deref() {
+        Some(id) if config.cleanup.mode != xflow_core::CleanupMode::Raw => {
+            let configured = &config.cleanup.api_key_env;
+            let env = if configured.is_empty() {
                 None
-            } else if value == "OPENAI_API_KEY" {
-                find_provider(ProviderKind::Cleanup, &p.id).and_then(|p| p.env_var)
+            } else if configured == "OPENAI_API_KEY" {
+                find_provider(ProviderKind::Cleanup, id).and_then(|p| p.env_var)
             } else {
-                Some(value.as_str())
-            }
-        } else {
-            selected.stt.api_key_env.as_deref()
-        };
-        p.key = match xflow_providers::key_status(&p.id, env).await {
-            KeySource::Environment(name) => format!("Environment: {name}"),
-            KeySource::Keyring => "Keyring: saved".into(),
-            KeySource::NotRequired => "Key not required".into(),
-            KeySource::Missing => "Missing key — k adds one".into(),
-        };
-        p
-    }))
-    .await
+                Some(configured.as_str())
+            };
+            matches!(
+                xflow_providers::key_status(id, env).await,
+                KeySource::Missing
+            )
+        }
+        _ => false,
+    };
+    (stt, cleanup)
 }
+/// Non-billable key/reachability probe, answered in plain words.
 pub async fn check(config: &Config, cleanup: bool) -> Result<String> {
     let report = if cleanup {
         xflow_providers::check_cleanup(&config.cleanup, config.privacy.offline).await?
     } else {
         xflow_providers::check_stt(&config.stt, config.privacy.offline).await?
     };
-    Ok(format!(
-        "{} · {} ms · {}",
-        if report.ok { "✓" } else { "!" },
-        report.latency_ms,
-        report.detail
-    ))
-}
-pub async fn missing_key(config: &Config) -> bool {
-    // Custom servers can be anonymous on loopback; their connection check is
-    // authoritative. Built-in local servers need no default credential.
-    if matches!(config.stt.provider.as_str(), "local" | "custom") {
-        return false;
+    if report.ok {
+        Ok(format!(
+            "Connected — everything works ({:.1} s).",
+            report.latency_ms as f64 / 1000.0
+        ))
+    } else {
+        bail!("{}", report.detail)
     }
-    matches!(
-        xflow_providers::key_status(&config.stt.provider, config.stt.api_key_env.as_deref()).await,
-        KeySource::Missing
-    )
-}
-pub async fn delete_key(id: &str) -> Result<()> {
-    xflow_providers::delete_key(id).await
 }
 pub fn devices() -> Result<Vec<String>> {
     // Device enumeration never opens or records from an input stream.
