@@ -390,32 +390,46 @@ export function demoLevel(nowMs) {
  * Dictation hotkey state machine.
  *  - toggle: every press toggles.
  *  - hold: press starts, release stops (push-to-talk).
- *  - smart: press starts at once; a release after `thresholdMs` stops
- *    (push-to-talk), a quicker tap leaves hands-free recording running until
- *    the next press.
+ *  - smart: press starts at once; hold/release stops, double-tap latches
+ *    hands-free, and a lone quick tap cancels after `doubleTapMs`.
  * press(nowMs, active) takes whether recording is active (including the
  * optimistic state) and returns the daemon command to send, or null.
  */
 export class HotkeyMachine {
-    constructor(mode = 'smart', thresholdMs = 300) {
-        this.configure(mode, thresholdMs);
+    constructor(mode = 'smart', thresholdMs = 500, doubleTapMs = 500) {
+        this.configure(mode, thresholdMs, doubleTapMs);
         this.reset();
     }
 
-    configure(mode, thresholdMs) {
+    configure(mode, thresholdMs, doubleTapMs = 500) {
         this.mode = ['smart', 'hold', 'toggle'].includes(mode) ? mode : 'smart';
-        this.thresholdMs = clamp(finite(thresholdMs, 300), 0, 10000);
+        this.thresholdMs = clamp(finite(thresholdMs, 500), 0, 10000);
+        this.doubleTapMs = clamp(finite(doubleTapMs, 500), 1, 2000);
     }
 
     reset() {
         this.holding = false;
         this.pressedAt = 0;
+        this.tapAt = null;
+        this.handsFree = false;
+        this.latchedAt = 0;
     }
 
     press(nowMs, active) {
         if (this.mode === 'toggle') return 'toggle';
         if (this.holding) return null; // stale: the previous release was never seen
-        if (active) return 'stop';
+        if (this.mode === 'smart' && active && this.tapAt !== null && nowMs - this.tapAt <= this.doubleTapMs) {
+            this.tapAt = null;
+            this.handsFree = true;
+            this.latchedAt = nowMs;
+            this.holding = true;
+            return null;
+        }
+        // A third rapid press discards a just-latched session instead of stopping it.
+        const quick = this.mode === 'smart' && this.handsFree && nowMs - this.latchedAt <= this.doubleTapMs;
+        this.tapAt = null;
+        this.handsFree = false;
+        if (active) return quick ? 'cancel' : 'stop';
         this.holding = true;
         this.pressedAt = nowMs;
         return 'start';
@@ -425,7 +439,20 @@ export class HotkeyMachine {
         if (!this.holding) return null;
         this.holding = false;
         if (this.mode === 'hold') return 'stop';
-        return nowMs - this.pressedAt >= this.thresholdMs ? 'stop' : null;
+        if (this.handsFree) return null;
+        if (nowMs - this.pressedAt >= this.thresholdMs) return 'stop';
+        this.tapAt = nowMs; // the double-tap window starts at the quick tap's release
+        return null;
+    }
+
+    deadline() {
+        return this.tapAt === null ? null : this.tapAt + this.doubleTapMs;
+    }
+
+    expire(nowMs) {
+        if (this.deadline() === null || nowMs <= this.deadline()) return null;
+        this.reset();
+        return 'cancel';
     }
 }
 

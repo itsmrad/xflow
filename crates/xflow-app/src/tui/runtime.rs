@@ -1,7 +1,7 @@
 use super::{
-    integrations,
+    integrations, options,
     render::{self, HitMap},
-    state::{Action, App, Effect, Page, Tag},
+    state::{Action, App, Effect, Modal, Page, Step, Tag},
     theme::ColorMode,
 };
 use crate::{
@@ -14,7 +14,8 @@ use crossterm::{
     cursor::Show,
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, EventStream, KeyEventKind, MouseButton, MouseEventKind,
+        Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+        MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -22,7 +23,7 @@ use crossterm::{
 use futures_util::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{
-    io::{IsTerminal, Write},
+    io::IsTerminal,
     path::Path,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -31,7 +32,10 @@ use std::{
     time::Duration,
 };
 use tokio::{io::BufReader, net::UnixStream, sync::mpsc, task::JoinSet};
-use xflow_core::ipc::{HistoryEntry, Request, Response};
+use xflow_core::{
+    config::Config,
+    ipc::{Request, Response},
+};
 
 enum Update {
     Loaded(Result<(ConfigFile, Option<String>)>),
@@ -40,11 +44,11 @@ enum Update {
     Event(Response),
     Connection(bool, String),
     Overlay(Result<Vec<Setting>>),
-    Providers(bool, Vec<integrations::Provider>),
-    ActiveKey(xflow_core::config::SttConfig, bool),
+    KeyStatus(Box<Config>, (bool, bool)),
     Devices(Result<Vec<String>>),
     Doctor(Vec<String>),
     Notice(Result<String>),
+    MicTimeout,
 }
 
 fn restore() {
@@ -172,8 +176,6 @@ pub async fn run() -> Result<()> {
     let mut hits = HitMap::default();
     let mut redraw = true;
     let mut mouse = false;
-    let mut ticks = tokio::time::interval(Duration::from_millis(80));
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     loop {
         if app.quit {
@@ -193,54 +195,184 @@ pub async fn run() -> Result<()> {
         }
         let mut effects = vec![];
         tokio::select! {
-            update=rx.recv()=>{
-                let Some(update)=update else{break;};redraw=true;
-                match update {
-                    Update::Loaded(result)=>match result {Ok((file,disk))=>match app.load(file,disk){Ok(())=>effects.push(Effect::ActiveKey(app.config.clone())),Err(e)=>app.toast=Some(format!("Invalid configuration: {e:#}"))},Err(e)=>app.toast=Some(format!("Cannot load configuration: {e:#}"))},
-                    Update::Saved(file,result)=>{
-                        app.saving=false;
-                        match result {Ok(())=>{app.disk=Some(file.to_string());app.dirty=false;app.toast=Some("Saved; reloading daemon…".into());effects.push(Effect::Request(Request::Reload,Tag::Reload));effects.push(Effect::ActiveKey(app.config.clone()));},Err(e)=>app.toast=Some(format!("Save failed; edits retained: {e:#}"))}
-                        app.file=Some(file);
-                    },
-                    Update::Reply(tag,result)=>match result{Ok(response)=>effects=app.response(response,tag),Err(error)=>app.toast=Some(format!("Request failed: {error:#}"))},
-                    Update::Event(response)=>{
-                        redraw=app.page==Page::Home || app.status.state!=response.state || response.text.is_some();
-                        let final_event=response.text.is_some();app.event(response);
-                        if final_event && matches!(app.page,Page::History|Page::Stats){effects=app.refresh();}
-                    },
-                    Update::Connection(connected,message)=>{app.connected=connected;app.connection=message;if connected{effects=app.refresh();}},
-                    Update::Overlay(result)=>match result{Ok(rows)=>app.overlay=rows,Err(e)=>app.toast=Some(format!("{e:#}"))},
-                    Update::Providers(cleanup, rows)=>if cleanup==app.cleanup{app.providers=rows;},
-                    Update::ActiveKey(stt, missing)=>app.key_status(&stt, missing),
-                    Update::Devices(result)=>match result{Ok(devices)=>app.devices(devices),Err(e)=>app.toast=Some(format!("{e:#}"))},
-                    Update::Doctor(rows)=>app.diagnostics=rows,
-                    Update::Notice(result)=>{app.toast=Some(match result{Ok(text)=>text,Err(e)=>format!("{e:#}")});if app.page==Page::Providers{effects=app.refresh();effects.push(Effect::ActiveKey(app.config.clone()));}},
-                }
+            update = rx.recv() => {
+                let Some(update) = update else { break };
+                redraw = true;
+                effects = handle(&mut app, update, &mut redraw);
             },
-            event=input.next()=>{
-                let Some(event)=event else{break;};redraw=true;
+            event = input.next() => {
+                let Some(event) = event else { break };
+                redraw = true;
                 match event? {
-                    Event::Key(key) if key.kind!=KeyEventKind::Release=>effects=app.key(key),
-                    Event::Paste(text)=>{let text=zeroize::Zeroizing::new(text);app.paste(&text);},Event::Resize(_,_)=>(),
-                    Event::Mouse(event) if mouse=>match event.kind {
-                        MouseEventKind::ScrollUp=>effects=app.select(-1),MouseEventKind::ScrollDown=>effects=app.select(1),
-                        MouseEventKind::Down(MouseButton::Left)=>{
-                            let point=ratatui::layout::Position::new(event.column,event.row);
-                            if let Some((_,page))=hits.tabs.iter().find(|(rect,_)|rect.contains(point)){effects=app.action(Action::Go(*page));}
-                            else if let Some((_,action))=hits.actions.iter().find(|(rect,_)|rect.contains(point)){effects=app.action(*action);}
-                            else if let Some((_,index))=hits.rows.iter().find(|(rect,_)|rect.contains(point)){effects=app.select(*index as isize-app.selected() as isize);}
-                        },_=>redraw=false,
-                    },_=>redraw=false,
+                    Event::Key(key) if key.kind != KeyEventKind::Release => effects = app.key(key),
+                    Event::Paste(text) => {
+                        let text = zeroize::Zeroizing::new(text);
+                        app.paste(&text);
+                    }
+                    Event::Resize(_, _) => (),
+                    Event::Mouse(event) if mouse => {
+                        let point = ratatui::layout::Position::new(event.column, event.row);
+                        let arrow = |code| KeyEvent::new(code, KeyModifiers::NONE);
+                        match event.kind {
+                            MouseEventKind::ScrollUp => effects = app.key(arrow(KeyCode::Up)),
+                            MouseEventKind::ScrollDown => effects = app.key(arrow(KeyCode::Down)),
+                            MouseEventKind::Down(MouseButton::Left) => {
+                                if let Some((_, index)) = hits.options.iter().find(|(r, _)| r.contains(point)) {
+                                    effects = app.pick(*index);
+                                } else if let Some((_, page)) = hits.tabs.iter().find(|(r, _)| r.contains(point)) {
+                                    effects = app.action(Action::Go(*page));
+                                } else if let Some((_, action)) = hits.actions.iter().find(|(r, _)| r.contains(point)) {
+                                    effects = app.action(*action);
+                                } else if let Some((_, index)) = hits.rows.iter().find(|(r, _)| r.contains(point)) {
+                                    effects = if *index == app.selected() {
+                                        app.action(Action::Choose)
+                                    } else {
+                                        app.select(*index as isize - app.selected() as isize)
+                                    };
+                                }
+                            }
+                            _ => redraw = false,
+                        }
+                    }
+                    _ => redraw = false,
                 }
             },
-            _=ticks.tick(),if app.active()=>{app.phase=app.phase.wrapping_add(1);redraw=app.page==Page::Home;},
-            _=term.recv()=>{effects=app.action(Action::Quit);redraw=true;},
-            Some(result)=jobs.join_next(),if !jobs.is_empty()=>{if let Err(error)=result{app.toast=Some(format!("Background operation failed: {error}"));redraw=true;}},
+            _ = term.recv() => {
+                effects = app.action(Action::Quit);
+                redraw = true;
+            },
+            Some(result) = jobs.join_next(), if !jobs.is_empty() => {
+                match result {
+                    // The panic hook already restored the terminal; drawing on would corrupt it.
+                    Err(error) if error.is_panic() => break,
+                    Err(error) => {
+                        app.toast = Some(options::plain(&error.to_string()));
+                        redraw = true;
+                    }
+                    Ok(()) => (),
+                }
+            },
+        }
+        // Every staged choice is saved right away; there is no separate save step.
+        if app.dirty && !app.saving && app.file.is_some() {
+            effects.extend(app.action(Action::Save));
         }
         dispatch(effects, &tx, &mut jobs, &generation);
     }
     jobs.abort_all();
     Ok(())
+}
+
+fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
+    let mut effects = vec![];
+    match update {
+        Update::Loaded(result) => match result.and_then(|(file, disk)| app.load(file, disk)) {
+            Ok(()) => {
+                effects.push(Effect::KeyStatus(app.config.clone()));
+                if app.disk.is_none() && !app.setup_offered && app.modal.is_none() {
+                    effects.extend(app.open_setup(Step::Welcome));
+                }
+            }
+            Err(e) => {
+                app.toast = Some(format!(
+                    "Your settings file has a problem, so defaults are shown: {}",
+                    options::plain(&format!("{e:#}"))
+                ))
+            }
+        },
+        Update::Saved(file, result) => {
+            app.saving = false;
+            match result {
+                Ok(()) => {
+                    app.disk = Some(file.to_string());
+                    app.dirty = false;
+                    app.toast.get_or_insert_with(|| "Saved.".into());
+                    effects.push(Effect::Request(Request::Reload, Tag::Reload));
+                    effects.push(Effect::KeyStatus(app.config.clone()));
+                    app.file = Some(file);
+                }
+                Err(e) => {
+                    // Never leave an unsaved choice on screen: go back to what's on disk.
+                    app.toast = Some(format!(
+                        "That change wasn't saved. {}",
+                        options::plain(&format!("{e:#}"))
+                    ));
+                    app.file = Some(file);
+                    app.dirty = false;
+                    effects.push(Effect::Load(app.path.clone()));
+                }
+            }
+        }
+        Update::Reply(tag, result) => {
+            match result {
+                Ok(response) => effects = app.response(response, tag),
+                Err(_) if matches!(tag, Tag::Reload) => app.toast = Some(
+                    "Saved. It takes effect when xflow's background helper starts (run xflowd)."
+                        .into(),
+                ),
+                Err(error) => app.toast = Some(options::plain(&format!("{error:#}"))),
+            }
+        }
+        Update::Event(response) => {
+            *redraw = app.status.state != response.state
+                || response.text.is_some()
+                || response.state == xflow_core::State::Listening;
+            let final_event = response.text.is_some();
+            app.event(response);
+            if app.reload_pending && !app.active() {
+                app.reload_pending = false;
+                effects.push(Effect::Request(Request::Reload, Tag::Reload));
+            }
+            if final_event && matches!(app.page, Page::History | Page::Stats) {
+                effects = app.refresh();
+            }
+        }
+        Update::Connection(connected, message) => {
+            app.connected = connected;
+            app.connection = message;
+            if connected {
+                effects = app.refresh();
+            }
+        }
+        Update::Overlay(result) => match result {
+            Ok(rows) => {
+                app.overlay = rows;
+                app.overlay_error = false;
+            }
+            Err(_) => app.overlay_error = true,
+        },
+        Update::KeyStatus(config, missing) => {
+            app.key_status(&config, missing);
+            if app.missing_key && !app.setup_offered && app.modal.is_none() {
+                effects.extend(app.open_setup(Step::Welcome));
+            }
+        }
+        Update::Devices(result) => match result {
+            Ok(devices) => app.devices(devices),
+            Err(e) => {
+                app.toast = Some(options::plain(&format!("{e:#}")));
+                if app.setup == Some(Step::Microphone) {
+                    app.devices(vec![]);
+                }
+            }
+        },
+        Update::Doctor(rows) => app.diagnostics = rows,
+        Update::MicTimeout => {
+            if matches!(app.modal, Some(Modal::Setup(Step::MicCheck)))
+                && app.status.state == xflow_core::State::Listening
+            {
+                effects = app.action(Action::Cancel);
+            }
+        }
+        Update::Notice(result) => {
+            app.toast = Some(match result {
+                Ok(text) => text,
+                Err(e) => options::plain(&format!("{e:#}")),
+            });
+            effects.push(Effect::KeyStatus(app.config.clone()));
+        }
+    }
+    effects
 }
 
 fn dispatch(
@@ -296,49 +428,28 @@ fn dispatch(
                     })
                     .await,
                 ),
-                Effect::Providers(config, cleanup) => {
-                    Update::Providers(cleanup, integrations::providers(&config, cleanup).await)
-                }
-                Effect::ActiveKey(config) => {
-                    let missing = integrations::missing_key(&config).await;
-                    Update::ActiveKey(config.stt, missing)
+                Effect::KeyStatus(config) => {
+                    let missing = integrations::missing_keys(&config).await;
+                    Update::KeyStatus(Box::new(config), missing)
                 }
                 Effect::SaveKey(id, secret) => Update::Notice(
                     xflow_providers::save_key(&id, &secret)
                         .await
-                        .map(|()| "Key saved securely; Ctrl+S reloads the daemon".into()),
-                ),
-                Effect::DeleteKey(id) => Update::Notice(
-                    integrations::delete_key(&id)
-                        .await
-                        .map(|()| "Key deleted".into()),
+                        .map(|()| "Key saved in your system keychain.".into()),
                 ),
                 Effect::CheckProvider(config, cleanup) => {
                     Update::Notice(integrations::check(&config, cleanup).await)
                 }
+                Effect::MicTimeout(after) => {
+                    tokio::time::sleep(after).await;
+                    Update::MicTimeout
+                }
                 Effect::Devices => Update::Devices(blocking(integrations::devices).await),
-                Effect::Export(path, entry) => Update::Notice(
-                    blocking(move || {
-                        export(&path, &entry)?;
-                        Ok(format!("Exported {}", path.display()))
-                    })
-                    .await,
-                ),
-                Effect::ExportDraft(path, text) => Update::Notice(
-                    blocking(move || {
-                        write_new(&path, text.as_bytes())?;
-                        Ok(format!(
-                            "Exported configuration draft to {}",
-                            path.display()
-                        ))
-                    })
-                    .await,
-                ),
-                Effect::Doctor => Update::Doctor(
-                    blocking(doctor)
-                        .await
-                        .unwrap_or_else(|e| vec![format!("! Diagnostics: {e:#}")]),
-                ),
+                Effect::Doctor => {
+                    Update::Doctor(blocking(doctor).await.unwrap_or_else(|e| {
+                        vec![format!("! {}", options::plain(&format!("{e:#}")))]
+                    }))
+                }
             };
             let _ = tx.send(update).await;
         });
@@ -354,55 +465,59 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
         Err(e) => Err(e.into()),
     }
 }
+/// Write only what the daemon would accept on reload: the same services are
+/// built here (no network, no audio) so a bad combination is refused up front.
 pub(super) fn save(file: &ConfigFile, expected: Option<&str>) -> Result<()> {
     if read_optional(file.path())?.as_deref() != expected {
-        bail!("Configuration changed outside the TUI; export your edits before reverting and reapplying them");
+        bail!("Configuration changed outside the TUI");
     }
+    let config = file.config()?;
+    xflow_providers::build_stt(&config.stt, config.privacy.offline)?;
+    crate::daemon::build_transformer(&config)?;
     file.save()
 }
-pub(super) fn export(path: &Path, entry: &HistoryEntry) -> Result<()> {
-    let text = serde_json::to_vec_pretty(entry)?;
-    write_new(path, &text)
-}
-fn write_new(path: &Path, text: &[u8]) -> Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    use std::os::unix::fs::OpenOptionsExt;
-    options.mode(0o600);
-    let mut file = options
-        .open(path)
-        .context("Choose a new writable export path")?;
-    file.write_all(text)?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    Ok(())
-}
 fn doctor() -> Result<Vec<String>> {
+    let (ok, warn) = (options::glyph("✓", "+"), "!");
     let mut rows = vec![];
     let path = crate::paths::config_path()?;
     rows.push(match ConfigFile::load(&path).and_then(|f| f.config()) {
-        Ok(_) => format!("✓ Config valid: {}", path.display()),
-        Err(e) => format!("! Config: {e:#}; repair config.toml"),
+        Ok(_) => format!("{ok} Your settings are valid"),
+        Err(e) => format!(
+            "{warn} Your settings file has a problem: {}",
+            options::plain(&format!("{e:#}"))
+        ),
     });
-    rows.push(match GSettings::detect() {
-        Ok(_) => "✓ GNOME extension schema installed".into(),
-        Err(_) => "! GNOME extension missing; xflow extension install".into(),
-    });
-    for (tool, fix) in [
-        ("wl-copy", "install wl-clipboard"),
-        ("ydotool", "install ydotool or enable the GNOME extension"),
-        ("gsettings", "install libglib2.0-bin"),
-    ] {
-        let found = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .any(|p| p.join(tool).is_file());
-        rows.push(if found {
-            format!("✓ {tool} available")
-        } else {
-            format!("! {tool} missing; {fix}")
+    #[cfg(target_os = "linux")]
+    {
+        rows.push(match GSettings::detect() {
+            Ok(_) => format!("{ok} Recording pill is installed"),
+            Err(_) => {
+                format!("{warn} Recording pill isn't installed — run: xflow extension install")
+            }
         });
+        for (tool, what, fix) in [
+            (
+                "wl-copy",
+                "Clipboard tool",
+                "install the wl-clipboard package",
+            ),
+            (
+                "ydotool",
+                "Typing tool",
+                "install ydotool, or install the recording pill",
+            ),
+        ] {
+            let found = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .any(|p| p.join(tool).is_file());
+            rows.push(if found {
+                format!("{ok} {what} found")
+            } else {
+                format!("{warn} {what} missing — {fix}")
+            });
+        }
     }
-    rows.push("Daemon connection is shown in the header; xflow service start when offline".into());
-    rows.push("Keys: see 6 Providers for environment/keyring status and connection checks".into());
+    #[cfg(target_os = "macos")]
+    rows.push("• On a Mac, allow Microphone and Accessibility for your terminal in System Settings → Privacy & Security.".into());
     Ok(rows)
 }
 

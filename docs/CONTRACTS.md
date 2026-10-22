@@ -18,6 +18,7 @@ history disabled; it must never silently erase saved rows at startup.
 | `[stt]` | provider, model, endpoint, protocol, api_key_env, language, vocabulary, timeout_secs | providers |
 | `[cleanup]` | mode (raw/light/polished/custom), provider, endpoint, model, api_key_env, prompt, timeout_secs, app_context | providers, daemon |
 | `[recording]` | max_seconds, silence_threshold, device, min_ms, auto_stop_secs, keep_warm_secs | platform audio, daemon |
+| `[hotkey]` | key, double_tap_ms (500), hold_threshold_ms (500), enabled (true) | macOS event tap, daemon |
 | `[injection]` | method (paste/type/clipboard), clipboard_only, restore_clipboard, restore_delay_ms, trailing_space | platform desktop, extension |
 | `[formatting]` | remove_fillers, fillers, spoken_punctuation | daemon text pipeline |
 | `[dictionary]` | words, replacements = [{from, to}] | daemon text pipeline, providers (hints) |
@@ -28,8 +29,11 @@ history disabled; it must never silently erase saved rows at startup.
 | `[privacy]` | history, history_limit, offline | daemon, providers |
 | `[ui]` | theme, themes = {name = {slot = color}}, mouse | TUI only |
 
-Overlay appearance and global shortcuts are **not** in TOML: they are GSettings keys of
+Linux overlay appearance and shortcuts remain GSettings keys of
 `org.gnome.shell.extensions.xflow` owned by the extension (CLI/TUI edit them via `gsettings`).
+macOS uses `[hotkey]` for global input and a separate `overlay.json` appearance file
+behind the same `xflow overlay` API. See [hotkey behavior](hotkeys.md); a hotkey reload
+whose replacement event tap fails keeps the old binding and reports a status warning.
 CLI/TUI edit TOML with comment-preserving writes (toml_edit), validate by deserializing the edited
 document, write atomically (temp file + rename, mode 0600), then send `Reload`.
 
@@ -93,6 +97,9 @@ safety check stay in Rust (`safe_target`).
   fails. The daemon checks it on its existing listening-level tick, then calls `stop()` to retrieve
   the buffered clip or original error. Reset on start/stop/cancel; no new idle polling.
 - `InjectionOutcome::Typed`, `CleanupMode::Custom`, `Mode::{Dictation, Command}`.
+- `GlobalHotkeys::next_action()` adds `HandsFree` (latch notification without restarting capture);
+  `reset()` clears a gesture when another control ends a session. Physical events are
+  processed by the platform's pure timestamp state machine before reaching the actor.
 
 ## Ownership map (v1 workers)
 

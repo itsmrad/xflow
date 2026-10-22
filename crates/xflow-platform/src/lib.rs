@@ -4,8 +4,13 @@ mod audio;
 #[cfg(target_os = "linux")]
 mod bridge;
 mod desktop;
+pub mod hotkey;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_hotkey;
+#[cfg(target_os = "macos")]
+pub use macos_hotkey::MacHotkeys;
 pub mod notifications;
 pub mod sounds;
 
