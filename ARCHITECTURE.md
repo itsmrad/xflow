@@ -43,6 +43,13 @@ The canonical declarations are in `crates/xflow-core/src/lib.rs`:
 | `GlobalHotkeys` | Event-based `next_action -> HotkeyAction`; actions are start/stop/toggle/cancel/paste-last |
 | `Overlay` | `update(DesktopEvent)` with state, normalized level, mode and optional message |
 
+On macOS a passive CGEventTap has its own CFRunLoop thread and feeds the pure
+timestamp gesture machine; the daemon consumes `GlobalHotkeys` actions directly.
+Only a pending lone tap creates a one-shot timer. The recording pill runs in a
+transient sibling `xflow overlay-pill` helper, with AppKit loaded dynamically in
+that helper only. Its bounded stdin contains state/level, never transcript text.
+Linux retains the GNOME extension and its existing D-Bus path.
+
 `AppContext` contains optional app/window identifiers and selected text. An empty context is an honest capability limitation, not proof of context discovery. The MVP's combined `Desktop` trait is intentionally small; split clipboard/context/injection interfaces only when a real second implementation requires independent ownership.
 
 `supports_streaming` currently distinguishes batch from streaming, but cannot on its own expose language, vocabulary, selection, hotkey-release or overlay support. Future adapters should add tested capability descriptions and typed unsupported/permission errors. Until then, diagnostics and returned errors must make missing capability visible; do not set a flag just because a protocol-shaped method exists.
@@ -107,11 +114,11 @@ GNOME overlay rendering must not become the active window. Hide it when idle and
 `[dictionary] auto_learn = true` (default). Two inputs share one pure core (`xflow_core::learn`):
 
 1. **Corrected paste (macOS).** After a dictation is pasted or typed, xflowd reads the focused field (`Desktop::focused_text`, Accessibility `AXValue`) about 120 ms later, only if the focused app/element still matches the paste target. It locates the pasted text (it must occur exactly once) and keeps a `Receipt`: the pasted text plus 16 characters of context on each side, never the field. One one-shot timer then waits for the next dictation start or 60 s; at idle there are no timers. The final read re-finds the span between the two anchors (each must occur exactly once, an empty anchor means the field edge) and drops everything else. Each read has a 100 ms budget. Secure fields and terminals return no text.
-2. **History edit (all platforms).** `history_update` (`xflow history edit`, later the TUI) saves the corrected transcript and passes old/new text to the same function.
+2. **History edit (all platforms).** `history_update` (`xflow history edit`, or History → "Correct this transcript" in the TUI) saves the corrected transcript and passes old/new text to the same function.
 
 `corrections()` runs a case-insensitive word-level LCS (nothing is learned unless at least half the original words survive, and an anchor-less receipt needs at least four words) and keeps edits of 1-3 words that replace 1-3 plain words with a close spelling (at most a third of the letters changed) or the same consonant skeleton (`cooper netties` → `Kubernetes`). Insertions, deletions, case/punctuation-only edits, digits, URLs, paths, code-like tokens, everyday words/names/acronyms (so homophone/grammar fixes like their/there or a/an), known words and removed words are skipped; at most four per dictation. History edits of command-mode entries learn nothing. `DictionaryConfig::learn` puts the corrected word first in `words` (provider hint limits keep the newest) and tags it in `learned`. Learning adds vocabulary only: it never creates replacements, which would rewrite every future transcript. The daemon writes config.toml under an advisory lock on `config.toml.lock` (shared with CLI dictionary edits) with the comment-preserving editor, updates its running dictionary and emits an event: "Added 'Kubernetes' to your dictionary". `xflow dictionary remove` on a learned word records it in `never_learn`.
 
-Not done yet: focus changes are noticed only at the final read (an AXObserver could end the window earlier); Linux observation would use AT-SPI `Text.GetText` with the same two reads; Electron/Chromium fields without AX values learn nothing; the TUI "Correct transcript" action will call `history_update`.
+Not done yet: focus changes are noticed only at the final read (an AXObserver could end the window earlier); Linux observation would use AT-SPI `Text.GetText` with the same two reads; Electron/Chromium fields without AX values learn nothing.
 
 ## Main implementation risks
 

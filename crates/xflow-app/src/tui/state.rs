@@ -1,5 +1,6 @@
 use super::{
-    integrations::Provider,
+    integrations,
+    options::{self, value_text},
     theme::{ColorMode, Theme, BUILTINS},
 };
 use crate::{
@@ -24,19 +25,17 @@ pub enum Page {
     Dictionary,
     Snippets,
     Styles,
-    Providers,
     Settings,
     Overlay,
     Stats,
     Doctor,
 }
-pub const PAGES: [Page; 10] = [
+pub const PAGES: [Page; 9] = [
     Page::Home,
     Page::History,
     Page::Dictionary,
     Page::Snippets,
     Page::Styles,
-    Page::Providers,
     Page::Settings,
     Page::Overlay,
     Page::Stats,
@@ -50,11 +49,10 @@ impl Page {
             Self::Dictionary => "Dictionary",
             Self::Snippets => "Snippets",
             Self::Styles => "Styles",
-            Self::Providers => "Providers",
             Self::Settings => "Settings",
-            Self::Overlay => "Overlay",
-            Self::Stats => "Stats",
-            Self::Doctor => "Doctor",
+            Self::Overlay => "Pill",
+            Self::Stats => "Your stats",
+            Self::Doctor => "Check-up",
         }
     }
     pub fn index(self) -> usize {
@@ -67,32 +65,22 @@ pub enum Action {
     Toggle,
     Command,
     Cancel,
-    Last,
     Copy,
     Paste,
     Add,
-    AddReplacement,
+    AddCorrection,
+    Choose,
     Edit,
     Delete,
-    Export,
+    Search,
     NextPage,
     PrevPage,
     Save,
-    Revert,
-    Unset,
-    Theme,
     Help,
     Palette,
     Refresh,
-    Search,
-    ProviderKind,
-    Model,
-    Key,
-    DeleteKey,
-    CheckProvider,
-    Devices,
-    ScrollUp,
-    ScrollDown,
+    Setup,
+    Back,
     Quit,
 }
 #[derive(Clone)]
@@ -108,45 +96,24 @@ pub fn commands() -> Vec<Command> {
         .map(|(i, p)| Command {
             action: Action::Go(*p),
             title: format!("Go to {}", p.title()),
-            key: [
-                "1/h", "2/H", "3/d", "4/n", "5/y", "6/v", "7/s", "8/o", "9/a", "0/D",
-            ][i],
+            key: ["1", "2", "3", "4", "5", "6", "7", "8", "9"][i],
         })
         .collect();
     for (action, title, key) in [
-        (Action::Toggle, "Toggle dictation", "Space"),
-        (Action::Command, "Start command mode", "C"),
-        (Action::Cancel, "Cancel recording", "x"),
-        (Action::Last, "Load last transcript", "l"),
-        (Action::Copy, "Copy transcript", "c"),
-        (Action::Paste, "Paste transcript", "p"),
-        (Action::Add, "Add entry", "N"),
-        (Action::AddReplacement, "Add replacement", "A"),
-        (Action::Edit, "Edit or activate selection", "Enter"),
-        (Action::Delete, "Delete selected entry", "Delete"),
-        (
-            Action::Export,
-            "Export history selection / config draft",
-            "e",
-        ),
-        (Action::NextPage, "Next history page", "PgDn"),
-        (Action::PrevPage, "Previous history page", "PgUp"),
-        (Action::Save, "Save config and reload daemon", "Ctrl+S"),
-        (Action::Revert, "Revert unsaved edits", "Ctrl+R"),
-        (Action::Unset, "Reset setting to default", "u"),
-        (Action::Theme, "Switch theme", "t"),
-        (Action::Help, "Show help", "?"),
-        (Action::Palette, "Command palette", "Ctrl+P / :"),
-        (Action::Refresh, "Refresh current screen", "r"),
+        (Action::Toggle, "Start or stop dictation", "Space"),
+        (Action::Cancel, "Cancel dictation", "x"),
+        (Action::Command, "Edit selected text by voice", "C"),
+        (Action::Copy, "Copy text", "c"),
+        (Action::Paste, "Paste text into the app you were using", "p"),
+        (Action::Choose, "Open or change the selected item", "Enter"),
+        (Action::Add, "Add something new", "n"),
+        (Action::Delete, "Delete the selected item", "Del"),
         (Action::Search, "Search history", "/"),
-        (Action::ProviderKind, "Switch STT / cleanup catalog", "b"),
-        (Action::Model, "Choose provider model", "m"),
-        (Action::Key, "Set provider key", "k"),
-        (Action::DeleteKey, "Delete provider key", "K"),
-        (Action::CheckProvider, "Check provider connection", "T"),
-        (Action::Devices, "Choose microphone", "i"),
-        (Action::ScrollUp, "Scroll detail up", "["),
-        (Action::ScrollDown, "Scroll detail down", "]"),
+        (Action::Setup, "Guided setup", "Settings"),
+        (Action::Refresh, "Refresh this screen", "r"),
+        (Action::Back, "Go back", "Esc"),
+        (Action::Help, "Help", "?"),
+        (Action::Palette, "Find an action", "Ctrl+P"),
         (Action::Quit, "Quit", "q"),
     ] {
         out.push(Command {
@@ -168,6 +135,8 @@ pub fn fuzzy(query: &str, text: &str) -> bool {
 #[derive(Clone, Debug)]
 pub enum Tag {
     Ordinary,
+    Done(&'static str),
+    Last,
     History(u64),
     Detail(i64),
     Mutation,
@@ -181,15 +150,24 @@ pub enum Effect {
     Load(PathBuf),
     Overlay,
     OverlaySet(String, String),
-    Providers(Config, bool),
-    ActiveKey(Config),
+    KeyStatus(Config),
     SaveKey(String, Zeroizing<String>),
-    DeleteKey(String),
     CheckProvider(Config, bool),
+    MicTimeout(std::time::Duration),
     Devices,
-    Export(PathBuf, HistoryEntry),
-    ExportDraft(PathBuf, String),
     Doctor,
+}
+/// The guided first-run flow. Every step is a choice except pasting the key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Welcome,
+    Provider,
+    Key,
+    Microphone,
+    MicCheck,
+    Shortcut,
+    Try,
+    Done,
 }
 #[derive(Clone, Debug)]
 pub enum EditTarget {
@@ -199,17 +177,17 @@ pub enum EditTarget {
     Snippet(Option<usize>),
     Style(Option<usize>),
     Overlay(String),
-    Model(String, bool),
-    Key(String),
-    Export(HistoryEntry),
-    Draft,
-    Theme,
+    Key { id: String, cleanup: bool },
     Device,
+    Menu(Vec<Action>),
+    Setup(Step),
+    Transcript(i64),
 }
 pub struct Field {
     pub label: String,
     pub value: Zeroizing<String>,
     pub choices: Vec<String>,
+    pub labels: Vec<String>,
     pub secret: bool,
     pub cursor: usize,
 }
@@ -221,15 +199,33 @@ impl Field {
             label: label.into(),
             value: Zeroizing::new(value),
             choices: vec![],
+            labels: vec![],
             secret: false,
             cursor,
         }
     }
-    fn choices(label: &str, value: impl Into<String>, choices: Vec<String>) -> Self {
+    /// A closed list; the current value is always listed so nothing is lost.
+    fn pick(
+        label: &str,
+        value: impl Into<String>,
+        mut choices: Vec<String>,
+        name: impl Fn(&str) -> String,
+    ) -> Self {
+        let value = value.into();
+        if !choices.contains(&value) {
+            choices.insert(0, value.clone());
+        }
         Self {
+            labels: choices.iter().map(|c| name(c)).collect(),
             choices,
             ..Self::new(label, value)
         }
+    }
+    pub fn position(&self) -> usize {
+        self.choices
+            .iter()
+            .position(|c| c == self.value.as_str())
+            .unwrap_or(0)
     }
     pub fn display(&self) -> String {
         if self.secret {
@@ -279,9 +275,17 @@ impl Field {
 }
 pub struct Editor {
     pub target: EditTarget,
+    pub title: String,
+    pub intro: String,
     pub fields: Vec<Field>,
     pub focus: usize,
     pub error: Option<String>,
+    pub capturing: bool,
+}
+impl Editor {
+    pub fn picking(&self) -> bool {
+        !self.fields[self.focus].choices.is_empty()
+    }
 }
 pub enum Modal {
     Help,
@@ -289,23 +293,25 @@ pub enum Modal {
     Search,
     Editor(Box<Editor>),
     Confirm { action: Action, prompt: String },
+    Setup(Step),
 }
 pub struct App {
     pub page: Page,
-    pub selected: [usize; 10],
+    pub selected: [usize; 9],
     pub file: Option<ConfigFile>,
     pub config: Config,
     pub path: PathBuf,
     pub disk: Option<String>,
     pub dirty: bool,
     pub saving: bool,
+    /// The daemon was busy when we asked it to reload; ask again once it's idle.
+    pub reload_pending: bool,
     pub connected: bool,
     pub connection: String,
     pub status: Response,
     pub transcript: String,
     pub timings: Option<Timings>,
     pub levels: VecDeque<u64>,
-    pub phase: usize,
     pub history: Vec<HistoryEntry>,
     pub detail: Option<HistoryEntry>,
     pub query: String,
@@ -316,9 +322,12 @@ pub struct App {
     pub stats_loaded: bool,
     pub activity: Vec<u64>,
     pub overlay: Vec<Setting>,
-    pub providers: Vec<Provider>,
-    pub cleanup: bool,
+    pub overlay_error: bool,
     pub missing_key: bool,
+    pub missing_cleanup_key: bool,
+    pub advanced: bool,
+    pub setup: Option<Step>,
+    pub setup_offered: bool,
     pub diagnostics: Vec<String>,
     pub modal: Option<Modal>,
     pub toast: Option<String>,
@@ -326,6 +335,8 @@ pub struct App {
     pub colors: ColorMode,
     pub theme: Theme,
     pub scroll: u16,
+    /// Fixed clock for tests; `None` reads the system clock.
+    pub now: Option<i64>,
 }
 impl App {
     pub fn new(path: PathBuf, colors: ColorMode) -> Self {
@@ -333,7 +344,7 @@ impl App {
         let theme = Theme::resolve("paper", &config.ui.themes, colors).expect("built-in theme");
         Self {
             page: Page::Home,
-            selected: [0; 10],
+            selected: [0; 9],
             file: None,
             config,
             path,
@@ -346,7 +357,6 @@ impl App {
             transcript: String::new(),
             timings: None,
             levels: VecDeque::from(vec![0; 48]),
-            phase: 0,
             history: vec![],
             detail: None,
             query: String::new(),
@@ -357,26 +367,27 @@ impl App {
             stats_loaded: false,
             activity: vec![],
             overlay: vec![],
-            providers: vec![],
-            cleanup: false,
+            overlay_error: false,
             missing_key: false,
+            missing_cleanup_key: false,
+            advanced: false,
+            setup: None,
+            setup_offered: false,
             diagnostics: vec![],
             modal: None,
             toast: None,
             quit: false,
+            reload_pending: false,
             colors,
             theme,
             scroll: 0,
+            now: None,
         }
-    }
-    pub fn active(&self) -> bool {
-        self.connected && matches!(self.status.state, State::Listening | State::Processing)
     }
     pub fn load(&mut self, file: ConfigFile, disk: Option<String>) -> Result<()> {
         let config = file.config()?;
         let theme = Theme::resolve(&config.ui.theme, &config.ui.themes, self.colors);
-        self.theme = theme.unwrap_or_else(|error| {
-            self.toast = Some(error.to_string());
+        self.theme = theme.unwrap_or_else(|_| {
             Theme::resolve("paper", &Default::default(), self.colors).expect("paper theme")
         });
         self.config = config;
@@ -384,102 +395,184 @@ impl App {
         self.disk = disk;
         self.file = Some(file);
         self.dirty = false;
-        self.saving = false;
         Ok(())
+    }
+    pub fn now(&self) -> i64 {
+        self.now.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+        })
+    }
+    pub fn active(&self) -> bool {
+        self.connected && matches!(self.status.state, State::Listening | State::Processing)
+    }
+    pub fn needs_setup(&self) -> bool {
+        self.file.is_some() && (self.disk.is_none() || self.missing_key)
+    }
+    /// The effective (default-filled) value at a dotted key, as TOML text.
+    pub fn effective(&self, key: &str) -> Option<String> {
+        self.file.as_ref()?.effective(key).ok().flatten()
+    }
+    /// Plain "Hold Fn and speak" guidance for the configured shortcut.
+    pub fn shortcut(&self) -> Option<String> {
+        let key = self.effective("hotkey.key")?;
+        (self.effective("hotkey.enabled").as_deref() != Some("false"))
+            .then(|| options::key_label(key.trim_matches('"')))
     }
     pub fn selected(&self) -> usize {
         self.selected[self.page.index()]
     }
-    pub fn key_status(&mut self, stt: &xflow_core::config::SttConfig, missing: bool) {
+    pub fn key_status(&mut self, config: &Config, missing: (bool, bool)) {
         // An older lookup must not replace onboarding for a newly edited route.
-        if stt == &self.config.stt {
-            self.missing_key = missing;
+        if config.stt == self.config.stt {
+            self.missing_key = missing.0;
+        }
+        if config.cleanup == self.config.cleanup {
+            self.missing_cleanup_key = missing.1;
+        }
+    }
+    /// Leading "+ Add" rows on editable list pages.
+    pub fn adds(&self) -> usize {
+        match self.page {
+            Page::Dictionary => 2,
+            Page::Snippets | Page::Styles => 1,
+            _ => 0,
         }
     }
     pub fn rows(&self) -> Vec<(String, String)> {
+        let add = |label: &str, hint: &str| (format!("+ {label}"), hint.to_string());
         match self.page {
-            Page::History => self
-                .history
-                .iter()
-                .map(|h| {
+            Page::History => {
+                let now = self.now();
+                self.history
+                    .iter()
+                    .map(|h| {
+                        let mut meta = options::ago(h.created_at, now);
+                        if let Some(app) = &h.app_id {
+                            meta = format!("{meta} · {}", options::app_name(app));
+                        }
+                        (h.text.lines().next().unwrap_or("").into(), meta)
+                    })
+                    .collect()
+            }
+            Page::Dictionary => [
+                add("Add a word", "Names and terms xflow should know"),
+                add("Add a correction", "Fix a word xflow keeps getting wrong"),
+            ]
+            .into_iter()
+            .chain(
+                self.config
+                    .dictionary
+                    .words
+                    .iter()
+                    .map(|w| (w.clone(), "Word".into())),
+            )
+            .chain(
+                self.config
+                    .dictionary
+                    .replacements
+                    .iter()
+                    .map(|r| (format!("{} → {}", r.from, r.to), "Correction".into())),
+            )
+            .collect(),
+            Page::Snippets => {
+                std::iter::once(add("Add a snippet", "Say a short phrase, get longer text"))
+                    .chain(self.config.snippets.iter().map(|s| {
+                        (
+                            s.trigger.clone(),
+                            s.text.lines().next().unwrap_or("").into(),
+                        )
+                    }))
+                    .collect()
+            }
+            Page::Styles => std::iter::once(add("Add a style", "A writing tone for specific apps"))
+                .chain(self.config.styles.iter().map(|s| {
                     (
-                        h.text.lines().next().unwrap_or("").into(),
-                        format!("#{}  {}  {}ms", h.id, h.provider, h.latency_ms.unwrap_or(0)),
+                        s.name.clone(),
+                        s.apps
+                            .iter()
+                            .map(|a| options::app_name(a))
+                            .collect::<Vec<_>>()
+                            .join(", "),
                     )
-                })
-                .collect(),
-            Page::Dictionary => self
-                .config
-                .dictionary
-                .words
-                .iter()
-                .map(|w| (w.clone(), "Recognition hint".into()))
-                .chain(
-                    self.config
-                        .dictionary
-                        .replacements
-                        .iter()
-                        .map(|r| (format!("{} → {}", r.from, r.to), "Replacement".into())),
-                )
-                .collect(),
-            Page::Snippets => self
-                .config
-                .snippets
-                .iter()
-                .map(|s| (s.trigger.clone(), s.text.clone()))
-                .collect(),
-            Page::Styles => self
-                .config
-                .styles
-                .iter()
-                .map(|s| (s.name.clone(), s.apps.join(", ")))
-                .collect(),
-            Page::Providers => self
-                .providers
-                .iter()
-                .map(|p| (p.name.clone(), p.key.clone()))
+                }))
                 .collect(),
             Page::Settings => self.settings(),
             Page::Overlay => self
                 .overlay
                 .iter()
-                .map(|s| (s.key.clone(), s.value.clone()))
+                .map(|s| (s.summary.clone(), overlay_value(&s.value)))
                 .collect(),
-            Page::Doctor => self
-                .diagnostics
-                .iter()
-                .map(|s| (s.clone(), String::new()))
-                .collect(),
+            Page::Doctor => {
+                let ok = options::glyph("✓", "+");
+                let helper = if self.connected {
+                    format!("{ok} xflow's background helper is running")
+                } else {
+                    "! xflow's background helper isn't running — open a terminal and run: xflowd"
+                        .into()
+                };
+                let key = if self.missing_key {
+                    "! Your speech service has no API key — Settings → Speech → API key".into()
+                } else {
+                    format!("{ok} Your speech service is ready")
+                };
+                [helper, key]
+                    .into_iter()
+                    .chain(self.diagnostics.iter().cloned())
+                    .map(|s| (s, String::new()))
+                    .collect()
+            }
             _ => vec![],
         }
     }
+    /// (key, display value) for every visible settings row.
     pub fn settings(&self) -> Vec<(String, String)> {
-        let mut rows = self
-            .file
-            .as_ref()
-            .and_then(|f| f.list_effective().ok())
-            .unwrap_or_default();
-        for key in [
-            "stt.model",
-            "stt.endpoint",
-            "stt.protocol",
-            "stt.api_key_env",
-            "stt.language",
-            "cleanup.provider",
-            "cleanup.endpoint",
-            "cleanup.model",
-            "cleanup.prompt",
-            "recording.device",
-            "sounds.start",
-            "sounds.stop",
-            "sounds.error",
-        ] {
-            if !rows.iter().any(|(k, _)| k == key) {
-                rows.push((key.into(), "(unset)".into()));
-            }
-        }
-        rows.sort();
-        rows
+        let rows = options::SETTINGS.iter().flat_map(|row| {
+            let advanced = if row.0 == options::ADVANCED && self.advanced {
+                options::ADVANCED_SETTINGS
+            } else {
+                &[]
+            };
+            std::iter::once(row).chain(advanced)
+        });
+        rows.map(|(key, ..)| {
+            let value = match *key {
+                "action.setup" => if self.needs_setup() {
+                    "Start here"
+                } else {
+                    "Run again"
+                }
+                .into(),
+                "action.stt_key" => {
+                    if matches!(self.config.stt.provider.as_str(), "local" | "custom") {
+                        "Not needed"
+                    } else if self.missing_key {
+                        "Missing — add one"
+                    } else {
+                        "Added"
+                    }
+                    .into()
+                }
+                "action.cleanup_key" => if self.config.cleanup.provider.is_none() {
+                    "Choose a service first"
+                } else if self.missing_cleanup_key {
+                    "Missing — add one"
+                } else {
+                    "Added"
+                }
+                .into(),
+                "action.stt_test" => "Run check".into(),
+                options::ADVANCED => if self.advanced { "Hide" } else { "Show" }.into(),
+                _ => match self.effective(key) {
+                    Some(value) => value_text(key, &value),
+                    None => value_text(key, ""),
+                },
+            };
+            (key.to_string(), value)
+        })
+        .collect()
     }
     pub fn select(&mut self, delta: isize) -> Vec<Effect> {
         let count = self.rows().len();
@@ -523,12 +616,15 @@ impl App {
                     Tag::Activity,
                 ),
             ],
-            Page::Providers => {
-                self.providers = super::integrations::catalog(self.cleanup);
-                vec![Effect::Providers(self.config.clone(), self.cleanup)]
-            }
+            // Pick up edits made elsewhere (CLI, editor) before showing values.
+            Page::Settings if !self.dirty && !self.saving => vec![Effect::Load(self.path.clone())],
+            Page::Settings => vec![Effect::KeyStatus(self.config.clone())],
             Page::Overlay => vec![Effect::Overlay],
             Page::Doctor => vec![Effect::Doctor],
+            Page::Home => vec![
+                Effect::Request(Request::Status, Tag::Ordinary),
+                Effect::Request(Request::Last, Tag::Last),
+            ],
             _ => vec![Effect::Request(Request::Status, Tag::Ordinary)],
         }
     }
@@ -543,12 +639,21 @@ impl App {
                 return vec![];
             }
         }
+        if !response.ok && matches!(tag, Tag::Last) {
+            return vec![]; // Nothing dictated yet is not an error.
+        }
         if !response.ok {
-            self.toast = Some(
-                response
-                    .message
-                    .unwrap_or_else(|| "Daemon rejected the request".into()),
-            );
+            let message = response
+                .message
+                .unwrap_or_else(|| "xflow couldn't do that".into());
+            self.toast = Some(match tag {
+                Tag::Reload if message.contains("idle daemon") => {
+                    self.reload_pending = true;
+                    "Saved — applies when this dictation finishes.".into()
+                }
+                Tag::Reload => format!("Saved, but not applied yet: {}", options::plain(&message)),
+                _ => options::plain(&message),
+            });
             return vec![];
         }
         match tag {
@@ -579,7 +684,33 @@ impl App {
                 }
             }
             Tag::Mutation => return self.refresh(),
-            Tag::Reload => self.toast = Some("Saved and reloaded".into()),
+            Tag::Reload => {
+                if std::mem::take(&mut self.reload_pending) {
+                    return vec![Effect::Request(Request::Reload, Tag::Reload)];
+                }
+                // The mic check starts only once the daemon listens to the chosen device.
+                if matches!(self.modal, Some(Modal::Setup(Step::MicCheck))) {
+                    return mic_check(&self.config);
+                }
+            }
+            Tag::Done(text) => {
+                let changed = response.entry.is_some();
+                self.toast = Some(
+                    response
+                        .message
+                        .map(|m| options::plain(&m))
+                        .unwrap_or_else(|| text.into()),
+                );
+                // A corrected transcript replies with its updated entry.
+                if changed && self.page == Page::History {
+                    return self.refresh();
+                }
+            }
+            Tag::Last => {
+                if self.transcript.is_empty() {
+                    self.transcript = response.text.unwrap_or_default();
+                }
+            }
             Tag::Ordinary => {
                 // The subscription owns session state; a delayed command reply
                 // must never roll a newer state event back to an older state.
@@ -587,7 +718,7 @@ impl App {
                     self.transcript = text;
                 }
                 if let Some(message) = response.message {
-                    self.toast = Some(message);
+                    self.toast = Some(options::plain(&message));
                 }
             }
         }
@@ -620,194 +751,24 @@ impl App {
         self.status = response;
     }
     pub fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
-        if let Some(mut modal) = self.modal.take() {
-            let mut keep = true;
-            let mut effects = vec![];
-            match &mut modal {
-                Modal::Help => match key.code {
-                    KeyCode::PageDown | KeyCode::Down => {
-                        self.scroll = self.scroll.saturating_add(8)
-                    }
-                    KeyCode::PageUp | KeyCode::Up => self.scroll = self.scroll.saturating_sub(8),
-                    _ => {
-                        keep = false;
-                        self.scroll = 0;
-                    }
-                },
-                Modal::Confirm { action, .. } => match key.code {
-                    KeyCode::Char('y') | KeyCode::Enter => {
-                        keep = false;
-                        effects = self.confirmed(*action);
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => keep = false,
-                    _ => (),
-                },
-                Modal::Search => match key.code {
-                    KeyCode::Esc | KeyCode::Enter => keep = false,
-                    KeyCode::Backspace => {
-                        self.query.pop();
-                        self.offset = 0;
-                        effects = self.refresh();
-                    }
-                    KeyCode::Char(c)
-                        if !key.modifiers.contains(KeyModifiers::CONTROL)
-                            && self.query.len() + c.len_utf8() <= 1024 =>
-                    {
-                        self.query.push(c);
-                        self.offset = 0;
-                        effects = self.refresh();
-                    }
-                    _ => (),
-                },
-                Modal::Palette { query, selected } => match key.code {
-                    KeyCode::Esc => keep = false,
-                    KeyCode::Backspace => {
-                        query.pop();
-                        *selected = 0;
-                    }
-                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if query.len() < 256 {
-                            query.push(c);
-                            *selected = 0;
-                        }
-                    }
-                    KeyCode::Down => {
-                        *selected = selected.saturating_add(1).min(
-                            commands()
-                                .iter()
-                                .filter(|c| fuzzy(query, &c.title))
-                                .count()
-                                .saturating_sub(1),
-                        )
-                    }
-                    KeyCode::Up => *selected = selected.saturating_sub(1),
-                    KeyCode::Enter => {
-                        let action = commands()
-                            .into_iter()
-                            .filter(|c| fuzzy(query, &c.title))
-                            .nth(*selected)
-                            .map(|c| c.action);
-                        keep = false;
-                        if let Some(action) = action {
-                            effects = self.action(action);
-                        }
-                    }
-                    _ => (),
-                },
-                Modal::Editor(editor) => {
-                    if key.code == KeyCode::Esc {
-                        keep = false;
-                    } else if key.code == KeyCode::Tab {
-                        editor.focus = (editor.focus + 1) % editor.fields.len();
-                    } else if key.code == KeyCode::BackTab {
-                        editor.focus =
-                            (editor.focus + editor.fields.len() - 1) % editor.fields.len();
-                    } else if key.code == KeyCode::F(2)
-                        || (key.code == KeyCode::Char('s')
-                            && key.modifiers.contains(KeyModifiers::CONTROL))
-                        || (key.code == KeyCode::Enter
-                            && (editor.fields.len() == 1
-                                || key.modifiers.contains(KeyModifiers::CONTROL)))
-                    {
-                        match self.apply_editor(editor) {
-                            Ok(next) => {
-                                keep = false;
-                                effects = next;
-                            }
-                            Err(error) => editor.error = Some(format!("{error:#}")),
-                        }
-                    } else {
-                        let field = &mut editor.fields[editor.focus];
-                        match key.code {
-                            KeyCode::Left | KeyCode::Right if !field.choices.is_empty() => {
-                                let pos = field
-                                    .choices
-                                    .iter()
-                                    .position(|c| c == field.value.as_str())
-                                    .unwrap_or(0);
-                                let count = field.choices.len();
-                                let pos = if key.code == KeyCode::Right {
-                                    (pos + 1) % count
-                                } else {
-                                    (pos + count - 1) % count
-                                };
-                                *field.value = field.choices[pos].clone();
-                                field.cursor = field.value.len();
-                            }
-                            KeyCode::Left => field.left(),
-                            KeyCode::Right => field.right(),
-                            KeyCode::Home => field.cursor = 0,
-                            KeyCode::End => field.cursor = field.value.len(),
-                            KeyCode::Delete => field.delete(),
-                            KeyCode::Backspace => {
-                                field.backspace();
-                            }
-                            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                field.value.clear();
-                                field.cursor = 0;
-                            }
-                            KeyCode::Char('j')
-                                if key.modifiers.contains(KeyModifiers::CONTROL)
-                                    && !field.secret =>
-                            {
-                                if field.value.len() < 16 * 1024 {
-                                    field.insert('\n');
-                                }
-                            }
-                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                if field.value.len() + c.len_utf8() <= 16 * 1024 && !c.is_control()
-                                {
-                                    field.insert(c);
-                                }
-                            }
-                            KeyCode::Enter => {
-                                editor.focus = (editor.focus + 1) % editor.fields.len()
-                            }
-                            _ => (),
-                        }
-                    }
-                }
-            }
-            if keep {
-                self.modal = Some(modal);
-            }
-            return effects;
+        if let Some(modal) = self.modal.take() {
+            return self.modal_key(modal, key);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
-                KeyCode::Char('s') => self.action(Action::Save),
-                KeyCode::Char('r') => self.action(Action::Revert),
                 KeyCode::Char('p') => self.action(Action::Palette),
                 KeyCode::Char('c') => self.action(Action::Quit),
                 _ => vec![],
             };
         }
         let action = match key.code {
-            KeyCode::Char('1'..='9') => {
-                if let KeyCode::Char(c) = key.code {
-                    Action::Go(PAGES[(c as u8 - b'1') as usize])
-                } else {
-                    unreachable!()
-                }
+            KeyCode::Char(c @ '1'..='9') => Action::Go(PAGES[(c as u8 - b'1') as usize]),
+            KeyCode::Tab => Action::Go(PAGES[(self.page.index() + 1) % PAGES.len()]),
+            KeyCode::BackTab => {
+                Action::Go(PAGES[(self.page.index() + PAGES.len() - 1) % PAGES.len()])
             }
-            KeyCode::Char('0') => Action::Go(Page::Doctor),
-            KeyCode::Char('h') => Action::Go(Page::Home),
-            KeyCode::Char('H') => Action::Go(Page::History),
-            KeyCode::Char('d') => Action::Go(Page::Dictionary),
-            KeyCode::Char('n') => Action::Go(Page::Snippets),
-            KeyCode::Char('y') => Action::Go(Page::Styles),
-            KeyCode::Char('v') => Action::Go(Page::Providers),
-            KeyCode::Char('s') => Action::Go(Page::Settings),
-            KeyCode::Char('o') => Action::Go(Page::Overlay),
-            KeyCode::Char('a') => Action::Go(Page::Stats),
-            KeyCode::Char('D') => Action::Go(Page::Doctor),
-            KeyCode::Tab => Action::Go(PAGES[(self.page.index() + 1) % 10]),
-            KeyCode::BackTab => Action::Go(PAGES[(self.page.index() + 9) % 10]),
-            KeyCode::Up | KeyCode::Char('k') if self.page != Page::Providers => {
-                return self.select(-1)
-            }
+            KeyCode::Up | KeyCode::Char('k') => return self.select(-1),
             KeyCode::Down | KeyCode::Char('j') => return self.select(1),
-            KeyCode::Up => return self.select(-1),
             KeyCode::Home => return self.select(-(self.selected() as isize)),
             KeyCode::End => return self.select(self.rows().len() as isize),
             KeyCode::PageDown if self.page == Page::History => Action::NextPage,
@@ -822,39 +783,232 @@ impl App {
             }
             KeyCode::Char(' ') => Action::Toggle,
             KeyCode::Char('C') => Action::Command,
-            KeyCode::Esc | KeyCode::Char('x') => Action::Cancel,
-            KeyCode::Char('l') => Action::Last,
+            KeyCode::Char('x') => Action::Cancel,
+            KeyCode::Esc => Action::Back,
             KeyCode::Char('c') => Action::Copy,
             KeyCode::Char('p') => Action::Paste,
-            KeyCode::Char('N') => Action::Add,
-            KeyCode::Char('A') => Action::AddReplacement,
-            KeyCode::Enter => Action::Edit,
-            KeyCode::Delete => Action::Delete,
-            KeyCode::Char('e') => Action::Export,
-            KeyCode::Char('u') => Action::Unset,
-            KeyCode::Char('t') => Action::Theme,
+            KeyCode::Char('n') | KeyCode::Char('N') => Action::Add,
+            KeyCode::Enter => Action::Choose,
+            KeyCode::Delete | KeyCode::Backspace => Action::Delete,
             KeyCode::Char('?') => Action::Help,
             KeyCode::Char(':') => Action::Palette,
             KeyCode::Char('r') => Action::Refresh,
             KeyCode::Char('/') => Action::Search,
-            KeyCode::Char('b') => Action::ProviderKind,
-            KeyCode::Char('m') => Action::Model,
-            KeyCode::Char('k') => Action::Key,
-            KeyCode::Char('K') => Action::DeleteKey,
-            KeyCode::Char('T') => Action::CheckProvider,
-            KeyCode::Char('i') => Action::Devices,
-            KeyCode::Char('[') => Action::ScrollUp,
-            KeyCode::Char(']') => Action::ScrollDown,
             KeyCode::Char('q') => Action::Quit,
             _ => return vec![],
         };
         self.action(action)
     }
+    fn modal_key(&mut self, mut modal: Modal, key: KeyEvent) -> Vec<Effect> {
+        let mut keep = true;
+        let mut effects = vec![];
+        match &mut modal {
+            Modal::Help => match key.code {
+                KeyCode::PageDown | KeyCode::Down => self.scroll = self.scroll.saturating_add(4),
+                KeyCode::PageUp | KeyCode::Up => self.scroll = self.scroll.saturating_sub(4),
+                _ => {
+                    keep = false;
+                    self.scroll = 0;
+                }
+            },
+            Modal::Confirm { action, .. } => match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    keep = false;
+                    effects = self.confirmed(*action);
+                }
+                KeyCode::Char('n') | KeyCode::Esc => keep = false,
+                _ => (),
+            },
+            Modal::Search => match key.code {
+                KeyCode::Enter => keep = false,
+                KeyCode::Esc => {
+                    keep = false;
+                    self.query.clear();
+                    self.offset = 0;
+                    effects = self.refresh();
+                }
+                KeyCode::Backspace => {
+                    self.query.pop();
+                    self.offset = 0;
+                    effects = self.refresh();
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.query.clear();
+                    self.offset = 0;
+                    effects = self.refresh();
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && self.query.len() + c.len_utf8() <= 1024 =>
+                {
+                    self.query.push(c);
+                    self.offset = 0;
+                    effects = self.refresh();
+                }
+                _ => (),
+            },
+            Modal::Palette { query, selected } => match key.code {
+                KeyCode::Esc => keep = false,
+                KeyCode::Backspace => {
+                    query.pop();
+                    *selected = 0;
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if query.len() < 256 {
+                        query.push(c);
+                        *selected = 0;
+                    }
+                }
+                KeyCode::Down => {
+                    *selected = selected.saturating_add(1).min(
+                        commands()
+                            .iter()
+                            .filter(|c| fuzzy(query, &c.title))
+                            .count()
+                            .saturating_sub(1),
+                    )
+                }
+                KeyCode::Up => *selected = selected.saturating_sub(1),
+                KeyCode::Enter => {
+                    let action = commands()
+                        .into_iter()
+                        .filter(|c| fuzzy(query, &c.title))
+                        .nth(*selected)
+                        .map(|c| c.action);
+                    keep = false;
+                    if let Some(action) = action {
+                        effects = self.action(action);
+                    }
+                }
+                _ => (),
+            },
+            Modal::Setup(step) => {
+                let step = *step;
+                keep = false;
+                effects = self.setup_key(step, key);
+            }
+            Modal::Editor(editor) => {
+                if editor.capturing {
+                    if key.code == KeyCode::Esc {
+                        editor.capturing = false;
+                    } else if let Some(chord) = options::chord(key) {
+                        let field = &mut editor.fields[editor.focus];
+                        if !field.choices.contains(&chord) {
+                            field.choices.push(chord.clone());
+                            field.labels.push(options::key_label(&chord));
+                        }
+                        *field.value = chord;
+                        editor.capturing = false;
+                        editor.error = None;
+                    } else {
+                        editor.error = Some(
+                            "Your terminal keeps that key for itself. Choose a key from the list or try another combination."
+                                .into(),
+                        );
+                    }
+                } else {
+                    let last = editor.focus + 1 == editor.fields.len();
+                    let picking = editor.picking();
+                    match key.code {
+                        KeyCode::Esc => {
+                            keep = false;
+                            if matches!(editor.target, EditTarget::Setup(_)) {
+                                self.setup = None;
+                            }
+                        }
+                        KeyCode::Enter
+                            if picking
+                                && editor.fields[editor.focus].value.as_str()
+                                    == options::CAPTURE =>
+                        {
+                            editor.capturing = true;
+                            editor.error = None;
+                        }
+                        KeyCode::Enter
+                            if !last && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
+                            editor.focus += 1
+                        }
+                        KeyCode::Enter | KeyCode::F(2) => match self.apply_editor(editor) {
+                            Ok(next) => {
+                                keep = false;
+                                effects = next;
+                            }
+                            Err(error) => {
+                                editor.error = Some(options::plain(&format!("{error:#}")))
+                            }
+                        },
+                        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            match self.apply_editor(editor) {
+                                Ok(next) => {
+                                    keep = false;
+                                    effects = next;
+                                }
+                                Err(error) => {
+                                    editor.error = Some(options::plain(&format!("{error:#}")))
+                                }
+                            }
+                        }
+                        KeyCode::Tab => editor.focus = (editor.focus + 1) % editor.fields.len(),
+                        KeyCode::BackTab => {
+                            editor.focus =
+                                (editor.focus + editor.fields.len() - 1) % editor.fields.len()
+                        }
+                        KeyCode::Up
+                        | KeyCode::Down
+                        | KeyCode::Left
+                        | KeyCode::Right
+                        | KeyCode::Home
+                        | KeyCode::End
+                            if picking =>
+                        {
+                            let field = &mut editor.fields[editor.focus];
+                            let count = field.choices.len();
+                            let pos = field.position();
+                            let pos = match key.code {
+                                KeyCode::Home => 0,
+                                KeyCode::End => count - 1,
+                                KeyCode::Down | KeyCode::Right => (pos + 1).min(count - 1),
+                                _ => pos.saturating_sub(1),
+                            };
+                            *field.value = field.choices[pos].clone();
+                        }
+                        // Choice fields never accept typing.
+                        _ if picking => (),
+                        KeyCode::Up if editor.focus > 0 => editor.focus -= 1,
+                        KeyCode::Down if !last => editor.focus += 1,
+                        _ => text_key(&mut editor.fields[editor.focus], key),
+                    }
+                }
+            }
+        }
+        if keep {
+            self.modal = Some(modal);
+        }
+        effects
+    }
+    /// Mouse click on an option row in the open picker: choose it.
+    pub fn pick(&mut self, index: usize) -> Vec<Effect> {
+        if let Some(Modal::Editor(editor)) = &mut self.modal {
+            let field = &mut editor.fields[editor.focus];
+            if let Some(choice) = field.choices.get(index) {
+                *field.value = choice.clone();
+                return self.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            }
+        }
+        vec![]
+    }
     pub fn paste(&mut self, text: &str) {
         if let Some(Modal::Editor(editor)) = &mut self.modal {
             let field = &mut editor.fields[editor.focus];
+            if !field.choices.is_empty() || editor.capturing {
+                return;
+            }
             let multiline = !field.secret;
+            let text = if field.secret { text.trim() } else { text };
             if field.value.len() + text.len() <= 16 * 1024 {
+                // Grow once so a pasted secret never leaves reallocated copies behind.
+                field.value.reserve(text.len());
                 for c in text
                     .chars()
                     .filter(|c| !c.is_control() || (multiline && (*c == '\n' || *c == '\t')))
@@ -862,21 +1016,30 @@ impl App {
                     field.insert(c);
                 }
             } else {
-                editor.error = Some("Input exceeds 16 KiB".into());
+                editor.error = Some("That's too long to paste here.".into());
             }
         }
     }
-    fn edit(&mut self, target: EditTarget, fields: Vec<Field>) {
+    fn edit(
+        &mut self,
+        target: EditTarget,
+        title: &str,
+        intro: impl Into<String>,
+        fields: Vec<Field>,
+    ) {
         self.modal = Some(Modal::Editor(Box::new(Editor {
             target,
+            title: title.into(),
+            intro: intro.into(),
             fields,
             focus: 0,
             error: None,
+            capturing: false,
         })));
     }
     fn editable(&mut self) -> bool {
         if self.saving || self.file.is_none() {
-            self.toast = Some("Configuration is loading or saving; please wait".into());
+            self.toast = Some("One moment — saving your last change.".into());
             false
         } else {
             true
@@ -903,25 +1066,35 @@ impl App {
                 )]
             }
             Action::Cancel => return vec![Effect::Request(Request::Cancel, Tag::Ordinary)],
-            Action::Last => return vec![Effect::Request(Request::Last, Tag::Ordinary)],
+            Action::Back => {
+                if self.active() && self.page == Page::Home {
+                    return self.action(Action::Cancel);
+                } else if self.page == Page::History && !self.query.is_empty() {
+                    self.query.clear();
+                    self.offset = 0;
+                    return self.refresh();
+                } else if self.page != Page::Home {
+                    return self.action(Action::Go(Page::Home));
+                }
+            }
             Action::Copy | Action::Paste => {
-                let request = if self.page == Page::History {
-                    match self.history.get(self.selected()) {
-                        Some(h) => {
-                            if action == Action::Copy {
-                                Request::HistoryCopy { id: h.id }
-                            } else {
-                                Request::HistoryPaste { id: h.id }
-                            }
-                        }
+                let copy = action == Action::Copy;
+                let request = match self.page {
+                    Page::History => match self.history.get(self.selected()) {
+                        Some(h) if copy => Request::HistoryCopy { id: h.id },
+                        Some(h) => Request::HistoryPaste { id: h.id },
                         None => return vec![],
-                    }
-                } else if action == Action::Copy {
-                    Request::CopyLast
-                } else {
-                    Request::PasteLast
+                    },
+                    Page::Home if copy => Request::CopyLast,
+                    Page::Home => Request::PasteLast,
+                    _ => return vec![],
                 };
-                return vec![Effect::Request(request, Tag::Ordinary)];
+                let done = if copy {
+                    "Copied — paste it anywhere."
+                } else {
+                    "Pasted."
+                };
+                return vec![Effect::Request(request, Tag::Done(done))];
             }
             Action::Save => {
                 if !self.editable() {
@@ -932,44 +1105,36 @@ impl App {
                     return vec![Effect::Save(file, self.disk.clone())];
                 }
             }
-            Action::Revert => {
-                if self.saving {
-                    return vec![];
-                }
-                if self.dirty {
-                    self.modal = Some(Modal::Confirm {
-                        action,
-                        prompt: "Discard unsaved configuration edits?".into(),
-                    });
-                } else {
-                    return vec![Effect::Load(self.path.clone())];
-                }
-            }
             Action::Quit => {
                 if self.saving {
-                    self.toast = Some("Wait for the save to finish before quitting".into());
+                    self.toast = Some("One moment — saving your last change.".into());
                 } else if self.dirty {
                     self.modal = Some(Modal::Confirm {
                         action,
-                        prompt: "Quit and discard unsaved edits? Ctrl+S saves first.".into(),
+                        prompt: "Your last change wasn't saved. Quit anyway?".into(),
                     });
                 } else {
                     self.quit = true;
                 }
             }
-            Action::Delete | Action::DeleteKey => {
-                if matches!(
-                    self.page,
-                    Page::History
-                        | Page::Dictionary
-                        | Page::Snippets
-                        | Page::Styles
-                        | Page::Providers
-                ) && !self.rows().is_empty()
-                {
+            Action::Delete => {
+                let pos = self.selected();
+                let deletable = match self.page {
+                    Page::History => pos < self.history.len(),
+                    Page::Dictionary | Page::Snippets | Page::Styles => {
+                        pos >= self.adds() && pos < self.rows().len()
+                    }
+                    _ => false,
+                };
+                if deletable {
+                    let row = &self.rows()[pos].0;
+                    let mut name = row.chars().take(40).collect::<String>();
+                    if name.len() < row.len() {
+                        name.push('…');
+                    }
                     self.modal = Some(Modal::Confirm {
                         action,
-                        prompt: "Delete the selected entry? This cannot be undone.".into(),
+                        prompt: format!("Delete “{name}”? This can't be undone."),
                     });
                 }
             }
@@ -977,121 +1142,274 @@ impl App {
                 self.scroll = 0;
                 self.modal = Some(Modal::Help);
             }
-            Action::ScrollUp => self.scroll = self.scroll.saturating_sub(4),
-            Action::ScrollDown => self.scroll = self.scroll.saturating_add(4),
             Action::Palette => {
                 self.modal = Some(Modal::Palette {
                     query: String::new(),
                     selected: 0,
                 })
             }
-            Action::Search if self.page == Page::History => self.modal = Some(Modal::Search),
+            Action::Search => {
+                if self.page != Page::History {
+                    self.page = Page::History;
+                    self.modal = Some(Modal::Search);
+                    return self.refresh();
+                }
+                self.modal = Some(Modal::Search);
+            }
             Action::NextPage if self.page == Page::History => {
                 if ((self.offset + PAGE_SIZE) as u64) < self.total {
                     self.offset += PAGE_SIZE;
-                    self.selected[1] = 0;
+                    self.selected[Page::History.index()] = 0;
                     return self.refresh();
                 }
             }
             Action::PrevPage if self.page == Page::History => {
                 self.offset = self.offset.saturating_sub(PAGE_SIZE);
-                self.selected[1] = 0;
+                self.selected[Page::History.index()] = 0;
                 return self.refresh();
             }
             Action::Refresh => return self.refresh(),
-            Action::ProviderKind => {
-                self.cleanup = !self.cleanup;
-                self.providers = super::integrations::catalog(self.cleanup);
-                self.selected[5] = 0;
-                self.page = Page::Providers;
-                return self.refresh();
-            }
-            Action::CheckProvider => {
-                if let Some(p) = self.providers.get(self.selected()) {
-                    match super::integrations::selection(&self.config, &p.id, self.cleanup, None) {
-                        Ok(config) => return vec![Effect::CheckProvider(config, self.cleanup)],
-                        Err(error) => self.toast = Some(error.to_string()),
-                    }
+            Action::Setup => return self.open_setup(Step::Welcome),
+            Action::Choose => return self.choose(),
+            Action::Add | Action::AddCorrection | Action::Edit => return self.open_editor(action),
+            _ => (),
+        }
+        vec![]
+    }
+    fn choose(&mut self) -> Vec<Effect> {
+        let pos = self.selected();
+        match self.page {
+            Page::Home if self.needs_setup() => return self.open_setup(Step::Welcome),
+            Page::Home => return self.action(Action::Toggle),
+            Page::History => {
+                if let Some(h) = self.history.get(pos) {
+                    let preview = h.text.trim().chars().take(60).collect::<String>();
+                    self.menu(
+                        &preview,
+                        vec![
+                            (Action::Copy, "Copy"),
+                            (Action::Paste, "Paste into the app you were using"),
+                            (Action::Edit, "Correct this transcript"),
+                            (Action::Delete, "Delete"),
+                        ],
+                    );
                 }
             }
-            Action::Devices => return vec![Effect::Devices],
-            Action::Theme => {
-                let mut choices = BUILTINS.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-                choices.extend(self.config.ui.themes.keys().cloned());
-                self.edit(
-                    EditTarget::Theme,
-                    vec![Field::choices(
-                        "Theme ←/→",
-                        self.config.ui.theme.clone(),
-                        choices,
-                    )],
-                );
-            }
-            Action::Key => {
-                if let Some(p) = self.providers.get(self.selected()) {
-                    let mut field = Field::new("API key (masked; never written to config)", "");
-                    field.secret = true;
-                    self.edit(EditTarget::Key(p.id.clone()), vec![field]);
-                }
-            }
-            Action::Model => {
-                if let Some(p) = self.providers.get(self.selected()) {
-                    let selected =
-                        super::integrations::selection(&self.config, &p.id, self.cleanup, None)
-                            .expect("catalog provider");
-                    let current = if self.cleanup {
-                        selected.cleanup.model
+            Page::Dictionary | Page::Snippets | Page::Styles => {
+                let adds = self.adds();
+                if pos < adds {
+                    let action = if pos == 1 {
+                        Action::AddCorrection
                     } else {
-                        selected.stt.model
+                        Action::Add
+                    };
+                    return self.open_editor(action);
+                }
+                if let Some((name, _)) = self.rows().get(pos) {
+                    let name = name.clone();
+                    self.menu(
+                        &name,
+                        vec![(Action::Edit, "Edit"), (Action::Delete, "Delete")],
+                    );
+                }
+            }
+            Page::Settings => return self.open_setting(pos),
+            Page::Overlay => {
+                if let Some(setting) = self.overlay.get(pos).cloned() {
+                    let choices = overlay_choices(&setting);
+                    if choices.is_empty() {
+                        self.toast = Some(
+                            "This one can only be changed from the pill's own preferences.".into(),
+                        );
+                    } else {
+                        self.edit(
+                            EditTarget::Overlay(setting.key.clone()),
+                            &setting.summary,
+                            "Applies right away.",
+                            vec![Field::pick(
+                                "",
+                                setting.value.clone(),
+                                choices,
+                                overlay_value,
+                            )],
+                        );
                     }
-                    .unwrap_or_else(|| p.models.first().cloned().unwrap_or_default());
-                    self.edit(
-                        EditTarget::Model(p.id.clone(), self.cleanup),
-                        vec![Field::choices(
-                            "Model ←/→ or type custom id",
-                            current,
-                            p.models.clone(),
-                        )],
-                    );
                 }
             }
-            Action::Export if self.page == Page::History => {
-                if let Some(h) = self.history.get(self.selected()) {
-                    self.edit(
-                        EditTarget::Export(h.clone()),
-                        vec![Field::new(
-                            "New export file (JSON; existing files are never overwritten)",
-                            format!("xflow-history-{}.json", h.id),
-                        )],
-                    );
-                }
+            _ => (),
+        }
+        vec![]
+    }
+    fn menu(&mut self, title: &str, items: Vec<(Action, &str)>) {
+        let choices = (0..items.len()).map(|i| i.to_string()).collect();
+        let labels: Vec<String> = items.iter().map(|(_, l)| l.to_string()).collect();
+        self.edit(
+            EditTarget::Menu(items.iter().map(|(a, _)| *a).collect()),
+            title,
+            "",
+            vec![Field::pick("", "0", choices, |i| {
+                labels[i.parse::<usize>().unwrap_or(0)].clone()
+            })],
+        );
+    }
+    fn open_setting(&mut self, pos: usize) -> Vec<Effect> {
+        let Some((key, _)) = self.settings().into_iter().nth(pos) else {
+            return vec![];
+        };
+        let cleanup = key.starts_with("action.cleanup");
+        match key.as_str() {
+            "action.setup" => return self.open_setup(Step::Welcome),
+            options::ADVANCED => self.advanced = !self.advanced,
+            "action.stt_test" => return vec![Effect::CheckProvider(self.config.clone(), false)],
+            "action.stt_key" | "action.cleanup_key" => {
+                let id = if cleanup {
+                    match self.config.cleanup.provider.clone() {
+                        Some(id) => id,
+                        None => {
+                            self.toast = Some("Choose a writing service first.".into());
+                            return vec![];
+                        }
+                    }
+                } else {
+                    self.config.stt.provider.clone()
+                };
+                self.key_editor(id, cleanup, false);
             }
-            Action::Export => {
-                if let Some(file) = &self.file {
-                    let _ = file;
-                    self.edit(
-                        EditTarget::Draft,
-                        vec![Field::new(
-                            "New file for configuration draft",
-                            "xflow-config-draft.toml",
-                        )],
-                    );
-                }
-            }
-            Action::Unset if self.page == Page::Settings => {
+            "recording.device" => return vec![Effect::Devices],
+            _ => {
                 if !self.editable() {
                     return vec![];
                 }
-                if let Some((key, _)) = self.settings().get(self.selected()) {
-                    let key = key.clone();
-                    match self.file.as_mut().unwrap().unset(&key) {
-                        Ok(_) => self.sync_config(),
-                        Err(e) => self.toast = Some(format!("{e:#}")),
-                    };
+                let field = self.setting_field(&key);
+                let (_, group, label, help) =
+                    options::row(&key).copied().unwrap_or(("", "", "", ""));
+                self.edit(
+                    EditTarget::Setting(key),
+                    &format!("{group} · {label}"),
+                    help,
+                    vec![field],
+                );
+            }
+        }
+        vec![]
+    }
+    fn key_editor(&mut self, id: String, cleanup: bool, setup: bool) {
+        let provider = integrations::catalog(cleanup)
+            .into_iter()
+            .find(|p| p.id == id);
+        let name = provider
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| id.clone());
+        let url = provider.map(|p| p.key_url).filter(|u| !u.is_empty());
+        let mut intro = format!("Paste your {name} API key.");
+        if let Some(url) = url {
+            intro.push_str(&format!(" Get one at {url}"));
+        }
+        intro.push_str("\nIt's kept in your system keychain, never in a file.");
+        if setup {
+            intro.push_str("\nAlready added one? Leave this empty and press Enter.");
+        }
+        let mut field = Field::new("API key", "");
+        field.secret = true;
+        let target = if setup {
+            EditTarget::Setup(Step::Key)
+        } else {
+            EditTarget::Key { id, cleanup }
+        };
+        self.edit(target, &format!("{name} API key"), intro, vec![field]);
+    }
+    pub fn open_setup(&mut self, step: Step) -> Vec<Effect> {
+        self.setup = Some(step);
+        self.setup_offered = true;
+        match step {
+            Step::Welcome | Step::MicCheck | Step::Try | Step::Done => {
+                self.modal = Some(Modal::Setup(step))
+            }
+            Step::Provider => {
+                let choices = integrations::catalog(false)
+                    .into_iter()
+                    .map(|p| p.id)
+                    .filter(|id| id != "custom" && id != "local")
+                    .collect();
+                self.edit(
+                    EditTarget::Setup(step),
+                    "Step 1 of 4 · Speech service",
+                    "Choose the service that turns your voice into text. You can change this later.",
+                    vec![Field::pick("", self.config.stt.provider.clone(), choices, |v| value_text("stt.provider", v))],
+                );
+            }
+            Step::Key => {
+                let id = self.config.stt.provider.clone();
+                self.key_editor(id, false, true);
+                if let Some(Modal::Editor(editor)) = &mut self.modal {
+                    editor.title = format!("Step 2 of 4 · {}", editor.title);
                 }
             }
-            Action::Add | Action::AddReplacement | Action::Edit => return self.open_editor(action),
-            _ => (),
+            Step::Microphone => return vec![Effect::Devices],
+            Step::Shortcut => {
+                let current = self
+                    .effective("hotkey.key")
+                    .map(|v| v.trim_matches('"').to_string())
+                    .unwrap_or_else(|| "fn".into());
+                self.edit(
+                    EditTarget::Setup(step),
+                    "Step 4 of 4 · Shortcut",
+                    "Hold this key and speak anywhere; let go to finish. Double-tap it for hands-free.",
+                    vec![Field::pick("", current, options::presets("hotkey.key"), options::key_label)],
+                );
+            }
+        }
+        vec![]
+    }
+    fn setup_key(&mut self, step: Step, key: KeyEvent) -> Vec<Effect> {
+        let cancel = || Effect::Request(Request::Cancel, Tag::Ordinary);
+        match (step, key.code) {
+            (_, KeyCode::Esc) => {
+                self.setup = None;
+                return if self.active() {
+                    vec![cancel()]
+                } else {
+                    vec![]
+                };
+            }
+            (Step::Welcome, KeyCode::Enter) => return self.open_setup(Step::Provider),
+            (Step::MicCheck, KeyCode::Enter) => {
+                let mut effects = if self.active() {
+                    vec![cancel()]
+                } else {
+                    vec![]
+                };
+                effects.extend(self.open_setup(Step::Shortcut));
+                return effects;
+            }
+            (Step::Try, KeyCode::Char(' ')) => {
+                self.modal = Some(Modal::Setup(step));
+                return vec![Effect::Request(
+                    Request::Toggle {
+                        mode: Mode::Dictation,
+                        context: None,
+                        t0_us: None,
+                        delivery: Delivery::None,
+                    },
+                    Tag::Ordinary,
+                )];
+            }
+            (Step::Try, KeyCode::Enter) => {
+                let effects = if self.active() {
+                    vec![cancel()]
+                } else {
+                    vec![]
+                };
+                self.open_setup(Step::Done);
+                return effects;
+            }
+            (Step::Done, _) => {
+                self.setup = None;
+                self.page = Page::Home;
+                return vec![];
+            }
+            _ => self.modal = Some(Modal::Setup(step)),
         }
         vec![]
     }
@@ -1109,9 +1427,9 @@ impl App {
     }
     fn choose_provider(&mut self, id: &str, cleanup: bool, model: Option<&str>) -> Result<()> {
         if self.saving {
-            bail!("Wait for the current save to finish");
+            bail!("One moment — saving your last change");
         }
-        let config = super::integrations::selection(&self.config, id, cleanup, model)?;
+        let config = integrations::selection(&self.config, id, cleanup, model)?;
         let before = toml::Value::try_from(&self.config)?;
         let after = toml::Value::try_from(&config)?;
         let section = if cleanup { "cleanup" } else { "stt" };
@@ -1123,7 +1441,7 @@ impl App {
         let file = self
             .file
             .as_mut()
-            .ok_or_else(|| anyhow!("Configuration unavailable"))?;
+            .ok_or_else(|| anyhow!("Settings are still loading"))?;
         // Edit only changed leaves so existing comments and other settings survive.
         let mut changed: Vec<(String, Option<String>)> = Vec::new();
         for field in fields {
@@ -1150,19 +1468,36 @@ impl App {
             changed.push((key, old));
         }
         self.sync_config();
-        self.toast =
-            Some("Provider/model staged; Ctrl+S saves. Cleanup mode is set in Settings.".into());
-        self.missing_key = false;
         Ok(())
+    }
+    /// Turning cleanup on without a writing service reuses the speech service
+    /// when it also offers cleanup, so the same key keeps working.
+    fn ensure_cleanup_service(&mut self) -> Result<()> {
+        if let Some(id) = cleanup_fallback(&self.config)? {
+            self.choose_provider(&id, true, None)?;
+        }
+        Ok(())
+    }
+    fn set_optional(&mut self, key: &str, value: &str) -> Result<()> {
+        if value.is_empty() {
+            if !self.editable() {
+                bail!("Settings are still loading");
+            }
+            self.file.as_mut().unwrap().unset(key)?;
+            self.sync_config();
+            Ok(())
+        } else {
+            self.set(key, value)
+        }
     }
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if self.saving {
-            bail!("Wait for the current save to finish");
+            bail!("One moment — saving your last change");
         }
         let file = self
             .file
             .as_mut()
-            .ok_or_else(|| anyhow!("Configuration unavailable"))?;
+            .ok_or_else(|| anyhow!("Settings are still loading"))?;
         let old = file.get(key);
         file.set(key, value)?;
         let config = file.config()?;
@@ -1185,41 +1520,81 @@ impl App {
         self.sync_config();
         Ok(())
     }
+    /// Stage a setting chosen from a list.
+    fn set_choice(&mut self, key: &str, value: &str) -> Result<()> {
+        let result = match key {
+            "stt.provider" | "cleanup.provider" => {
+                self.choose_provider(value, key == "cleanup.provider", None)
+            }
+            "stt.model" | "cleanup.model" if !value.is_empty() => {
+                let cleanup = key == "cleanup.model";
+                let id = if cleanup {
+                    self.config.cleanup.provider.clone().unwrap_or_default()
+                } else {
+                    self.config.stt.provider.clone()
+                };
+                self.choose_provider(&id, cleanup, Some(value))
+            }
+            _ => self.set_optional(key, value),
+        };
+        result?;
+        if key == "cleanup.mode" {
+            if let Err(error) = self.ensure_cleanup_service() {
+                self.set_optional(key, "raw")?;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
     fn open_editor(&mut self, action: Action) -> Vec<Effect> {
+        if self.page == Page::History {
+            if let Some(h) = self
+                .history
+                .get(self.selected())
+                .filter(|_| action == Action::Edit)
+            {
+                let (id, text) = (h.id, h.text.clone());
+                self.edit(
+                    EditTarget::Transcript(id),
+                    "Correct transcript",
+                    "Fix any misheard words. xflow saves the change and learns the corrected words.",
+                    vec![Field::new("Transcript (Ctrl+J for a new line)", text)],
+                );
+            }
+            return vec![];
+        }
         if !self.editable() {
             return vec![];
         }
-        let pos = self.selected();
         let new = action != Action::Edit;
+        let pos = self.selected().saturating_sub(self.adds());
         match self.page {
-            Page::Home => {
-                self.page = Page::Providers;
-                return self.refresh();
-            }
             Page::Dictionary => {
                 let words = self.config.dictionary.words.len();
-                if action == Action::AddReplacement || (!new && pos >= words) {
+                if action == Action::AddCorrection || (!new && pos >= words) {
                     let index = (!new).then_some(pos.saturating_sub(words));
                     let r = index.and_then(|i| self.config.dictionary.replacements.get(i));
                     let fields = vec![
-                        Field::new("From", r.map(|r| r.from.as_str()).unwrap_or("")),
-                        Field::new(
-                            "To (empty deletes the word)",
-                            r.map(|r| r.to.as_str()).unwrap_or(""),
-                        ),
+                        Field::new("When I say", r.map(|r| r.from.as_str()).unwrap_or("")),
+                        Field::new("Write", r.map(|r| r.to.as_str()).unwrap_or("")),
                     ];
-                    self.edit(EditTarget::Replacement(index), fields);
+                    self.edit(
+                        EditTarget::Replacement(index),
+                        "Correction",
+                        "Whenever xflow hears the first phrase, it writes the second instead. Leave “Write” empty to drop the phrase.",
+                        fields,
+                    );
                 } else {
                     let index = (!new).then_some(pos);
+                    let word = index
+                        .and_then(|i| self.config.dictionary.words.get(i))
+                        .cloned()
+                        .unwrap_or_default();
                     self.edit(
                         EditTarget::Word(index),
-                        vec![Field::new(
-                            "Word",
-                            index
-                                .and_then(|i| self.config.dictionary.words.get(i))
-                                .cloned()
-                                .unwrap_or_default(),
-                        )],
+                        "Word",
+                        "A name, brand or term xflow should recognize and spell exactly like this.",
+                        vec![Field::new("Word", word)],
                     );
                 }
             }
@@ -1227,75 +1602,116 @@ impl App {
                 let index = (!new).then_some(pos);
                 let s = index.and_then(|i| self.config.snippets.get(i));
                 let fields = vec![
-                    Field::new("Trigger", s.map(|s| s.trigger.as_str()).unwrap_or("")),
+                    Field::new("When I say", s.map(|s| s.trigger.as_str()).unwrap_or("")),
                     Field::new(
-                        "Text (Ctrl+J adds a new line)",
+                        "Insert (Ctrl+J for a new line)",
                         s.map(|s| s.text.as_str()).unwrap_or(""),
                     ),
                 ];
-                self.edit(EditTarget::Snippet(index), fields);
+                self.edit(
+                    EditTarget::Snippet(index),
+                    "Snippet",
+                    "Say a short phrase while dictating and xflow inserts the full text.",
+                    fields,
+                );
             }
             Page::Styles => {
                 let index = (!new).then_some(pos);
-                let s = index.and_then(|i| self.config.styles.get(i));
+                let style = index.and_then(|i| self.config.styles.get(i));
+                let mut apps: Vec<String> = [
+                    "com.apple.mail",
+                    "com.apple.Notes",
+                    "com.apple.Safari",
+                    "com.google.Chrome",
+                    "com.tinyspeck.slackmacgap",
+                    "com.microsoft.VSCode",
+                    "slack",
+                    "discord",
+                    "telegram",
+                    "code",
+                    "firefox",
+                    "thunderbird",
+                    "org.gnome.Terminal",
+                ]
+                .into_iter()
+                .map(String::from)
+                .collect();
+                apps.extend(self.history.iter().filter_map(|h| h.app_id.clone()));
+                apps.extend(
+                    self.config
+                        .styles
+                        .iter()
+                        .flat_map(|s| s.apps.iter().cloned()),
+                );
+                apps.sort();
+                apps.dedup();
+                let current_apps = style
+                    .map(|s| s.apps.join(", "))
+                    .unwrap_or_else(|| apps[0].clone());
+                let mut modes: Vec<String> = ["inherit", "raw", "light", "polished"]
+                    .map(String::from)
+                    .to_vec();
+                if style.and_then(|s| s.prompt.as_deref()).is_some() {
+                    modes.push("custom".into());
+                }
                 let fields = vec![
-                    Field::new("Name", s.map(|s| s.name.as_str()).unwrap_or("")),
-                    Field::new(
-                        "Apps (comma separated)",
-                        s.map(|s| s.apps.join(", ")).unwrap_or_default(),
-                    ),
-                    Field::choices(
-                        "Mode ←/→",
-                        s.and_then(|s| s.mode).map(mode_name).unwrap_or("inherit"),
-                        ["inherit", "raw", "light", "polished", "custom"]
+                    Field::pick(
+                        "Name",
+                        style
+                            .map(|s| s.name.clone())
+                            .unwrap_or_else(|| "Chat".into()),
+                        ["Chat", "Email", "Notes", "Code", "Formal"]
                             .map(String::from)
                             .to_vec(),
+                        str::to_string,
                     ),
-                    Field::new(
-                        "Prompt (Ctrl+J adds a new line)",
-                        s.and_then(|s| s.prompt.as_deref()).unwrap_or(""),
+                    Field::pick("App", current_apps, apps, |a| {
+                        a.split(", ")
+                            .map(options::app_name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }),
+                    Field::pick(
+                        "Cleanup",
+                        style
+                            .and_then(|s| s.mode)
+                            .map(mode_label)
+                            .unwrap_or("inherit"),
+                        modes,
+                        |m| {
+                            if m == "inherit" {
+                                "Same as Settings".into()
+                            } else {
+                                value_text("cleanup.mode", m)
+                            }
+                        },
+                    ),
+                    Field::pick(
+                        "Tone",
+                        style.and_then(|s| s.prompt.as_deref()).unwrap_or(""),
+                        [
+                            "",
+                            "Use a friendly conversational tone.",
+                            "Use professional, concise language.",
+                            "Preserve technical terms and code identifiers.",
+                        ]
+                        .map(String::from)
+                        .to_vec(),
+                        |t| {
+                            if t.is_empty() {
+                                "No extra instructions".into()
+                            } else {
+                                t.into()
+                            }
+                        },
                     ),
                 ];
-                self.edit(EditTarget::Style(index), fields);
-            }
-            Page::Settings => {
-                if let Some((key, value)) = self.settings().get(pos) {
-                    let field = setting_field(key, value);
-                    self.edit(EditTarget::Setting(key.clone()), vec![field]);
-                }
-            }
-            Page::Overlay => {
-                if let Some(s) = self.overlay.get(pos) {
-                    let choices = match &s.kind {
-                        Kind::Bool => vec!["true".into(), "false".into()],
-                        Kind::Choice(c) => c.clone(),
-                        _ => vec![],
-                    };
-                    let hint = match s.kind {
-                        Kind::Int { min, max } => format!("{} ({min}..{max})", s.key),
-                        Kind::Double { min, max } => format!("{} ({min}..{max})", s.key),
-                        _ => s.key.clone(),
-                    };
-                    self.edit(
-                        EditTarget::Overlay(s.key.clone()),
-                        vec![Field::choices(&hint, s.value.clone(), choices)],
-                    );
-                }
-            }
-            Page::Providers => {
-                if let Some(p) = self.providers.get(pos) {
-                    let id = p.id.clone();
-                    match self.choose_provider(&id, self.cleanup, None) {
-                        Ok(()) => {
-                            self.toast = Some("Provider selected; Ctrl+S saves and reloads".into())
-                        }
-                        Err(error) => self.toast = Some(format!("{error:#}")),
-                    };
-                }
-            }
-            Page::Doctor => {
-                self.toast =
-                    Some("Fix hints are shown beside each check; r runs checks again".into())
+                self.edit(
+                    EditTarget::Style(index),
+                    "Style",
+                    "Pick an app and how text written there should sound. The first matching style wins.",
+                    fields,
+                );
             }
             _ => (),
         }
@@ -1304,79 +1720,101 @@ impl App {
     fn apply_editor(&mut self, editor: &mut Editor) -> Result<Vec<Effect>> {
         // Move secrets directly into a zeroizing payload; never clone them into
         // ordinary form strings or surface provider errors containing the key.
-        if let EditTarget::Key(id) = &editor.target {
-            if editor.fields[0].value.trim().is_empty() {
-                bail!("API key cannot be empty");
+        let secret = |editor: &mut Editor| {
+            let raw = Zeroizing::new(std::mem::take(&mut *editor.fields[0].value));
+            Zeroizing::new(raw.trim().to_owned())
+        };
+        match editor.target.clone() {
+            EditTarget::Key { id, cleanup } => {
+                if editor.fields[0].value.trim().is_empty() {
+                    bail!("Paste your API key first");
+                }
+                // A custom cleanup server has its own keyring entry, never the STT one.
+                let id = if cleanup {
+                    xflow_providers::cleanup_key_id(&id).into()
+                } else {
+                    id
+                };
+                return Ok(vec![Effect::SaveKey(id, secret(editor))]);
             }
-            return Ok(vec![Effect::SaveKey(
-                id.clone(),
-                Zeroizing::new(std::mem::take(&mut *editor.fields[0].value)),
-            )]);
+            EditTarget::Setup(Step::Key) => {
+                let mut effects = vec![];
+                if !editor.fields[0].value.trim().is_empty() {
+                    effects.push(Effect::SaveKey(
+                        self.config.stt.provider.clone(),
+                        secret(editor),
+                    ));
+                }
+                effects.extend(self.open_setup(Step::Microphone));
+                return Ok(effects);
+            }
+            EditTarget::Transcript(id) => {
+                let text = editor.fields[0].value.trim().to_owned();
+                if text.is_empty() {
+                    bail!("Type the corrected transcript first");
+                }
+                return Ok(vec![Effect::Request(
+                    Request::HistoryUpdate { id, text },
+                    Tag::Done("Transcript corrected."),
+                )]);
+            }
+            _ => (),
         }
         let values: Vec<_> = editor.fields.iter().map(|f| f.value.to_string()).collect();
         let value = &values[0];
+        if values.iter().any(|v| v == options::CAPTURE) {
+            bail!("Press Enter, then press the key or combination you want");
+        }
         let mut config = self.config.clone();
         let key = match &editor.target {
-            EditTarget::Setting(key) => {
-                if key.starts_with("ui.") {
-                    let mut candidate = config.clone();
-                    if key == "ui.theme" {
-                        candidate.ui.theme = value.trim_matches('"').into();
-                        Theme::resolve(&candidate.ui.theme, &candidate.ui.themes, self.colors)?;
-                    }
-                }
-                self.set(key, value)?;
-                return Ok(vec![]);
+            EditTarget::Menu(actions) => {
+                let action = actions[value.parse::<usize>().unwrap_or(0)];
+                return Ok(self.action(action));
             }
-            EditTarget::Theme => {
-                Theme::resolve(value, &config.ui.themes, self.colors)?;
-                self.set("ui.theme", value)?;
+            EditTarget::Setup(Step::Provider) => {
+                self.choose_provider(value, false, None)?;
+                return Ok(self.open_setup(Step::Key));
+            }
+            EditTarget::Setup(Step::Microphone) => {
+                self.set_optional("recording.device", value)?;
+                self.modal = Some(Modal::Setup(Step::MicCheck));
+                self.setup = Some(Step::MicCheck);
+                // Unchanged device: no save/reload will follow, so start the check now.
+                return Ok(if self.dirty {
+                    vec![]
+                } else {
+                    mic_check(&self.config)
+                });
+            }
+            EditTarget::Setup(Step::Shortcut) => {
+                self.set_choice("hotkey.key", value)?;
+                return Ok(self.open_setup(Step::Try));
+            }
+            EditTarget::Setup(_) => return Ok(vec![]),
+            EditTarget::Setting(key) => {
+                let key = key.clone();
+                self.set_choice(&key, value)?;
                 return Ok(vec![]);
             }
             EditTarget::Device => {
-                self.set("recording.device", value)?;
+                self.set_optional("recording.device", value)?;
                 return Ok(vec![]);
             }
-            EditTarget::Model(id, cleanup) => {
-                self.choose_provider(id, *cleanup, Some(value))?;
-                return Ok(vec![]);
-            }
-            EditTarget::Key(id) => {
-                if value.trim().is_empty() {
-                    bail!("API key cannot be empty");
-                }
-                return Ok(vec![Effect::SaveKey(
-                    id.clone(),
-                    Zeroizing::new(std::mem::take(&mut *editor.fields[0].value)),
-                )]);
-            }
+            EditTarget::Key { .. } | EditTarget::Transcript(_) => unreachable!(),
             EditTarget::Overlay(key) => {
                 return Ok(vec![Effect::OverlaySet(key.clone(), value.clone())])
             }
-            EditTarget::Export(entry) => {
-                if value.trim().is_empty() {
-                    bail!("Choose a file path");
-                }
-                return Ok(vec![Effect::Export(PathBuf::from(value), entry.clone())]);
-            }
-            EditTarget::Draft => {
-                if value.trim().is_empty() {
-                    bail!("Choose a file path");
-                }
-                let file = self
-                    .file
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("Wait for save to finish"))?;
-                return Ok(vec![Effect::ExportDraft(
-                    PathBuf::from(value),
-                    file.to_string(),
-                )]);
-            }
             EditTarget::Word(index) => {
+                if value.trim().is_empty() {
+                    bail!("Type a word first");
+                }
                 replace(&mut config.dictionary.words, *index, value.trim().into())?;
                 "dictionary.words"
             }
             EditTarget::Replacement(index) => {
+                if value.trim().is_empty() {
+                    bail!("Type what you say first");
+                }
                 replace(
                     &mut config.dictionary.replacements,
                     *index,
@@ -1388,6 +1826,9 @@ impl App {
                 "dictionary.replacements"
             }
             EditTarget::Snippet(index) => {
+                if value.trim().is_empty() || values[1].trim().is_empty() {
+                    bail!("Fill in both the phrase and the text to insert");
+                }
                 replace(
                     &mut config.snippets,
                     *index,
@@ -1404,8 +1845,7 @@ impl App {
                     "raw" => Some(CleanupMode::Raw),
                     "light" => Some(CleanupMode::Light),
                     "polished" => Some(CleanupMode::Polished),
-                    "custom" => Some(CleanupMode::Custom),
-                    _ => bail!("Mode must be inherit/raw/light/polished/custom"),
+                    _ => Some(CleanupMode::Custom),
                 };
                 replace(
                     &mut config.styles,
@@ -1426,10 +1866,11 @@ impl App {
             }
         };
         config.validate()?;
+        cleanup_fallback(&config)?;
         let file = self
             .file
             .as_mut()
-            .ok_or_else(|| anyhow!("Wait for configuration to load"))?;
+            .ok_or_else(|| anyhow!("Settings are still loading"))?;
         match key {
             "dictionary.words" => file.set_typed(key, &config.dictionary.words)?,
             "dictionary.replacements" => file.set_typed(key, &config.dictionary.replacements)?,
@@ -1438,18 +1879,14 @@ impl App {
             _ => unreachable!(),
         }
         self.sync_config();
-        self.toast = Some("Edit staged; Ctrl+S saves and reloads".into());
+        if key == "styles" {
+            self.ensure_cleanup_service()?;
+        }
         Ok(vec![])
     }
     fn confirmed(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::Quit => self.quit = true,
-            Action::Revert => return vec![Effect::Load(self.path.clone())],
-            Action::DeleteKey => {
-                if let Some(p) = self.providers.get(self.selected()) {
-                    return vec![Effect::DeleteKey(p.id.clone())];
-                }
-            }
             Action::Delete => {
                 let pos = self.selected();
                 if self.page == Page::History {
@@ -1463,13 +1900,25 @@ impl App {
                 if !self.editable() {
                     return vec![];
                 }
+                let pos = pos.saturating_sub(self.adds());
                 let file = self.file.as_mut().unwrap();
                 let result = match self.page {
                     Page::Dictionary => {
                         let mut dictionary = self.config.dictionary.clone();
                         if pos < dictionary.words.len() {
-                            dictionary.words.remove(pos);
+                            // Same as `xflow dictionary remove`: a learned word is never learned again.
+                            let word = dictionary.words[pos].clone();
+                            dictionary.forget(&word);
                             file.set_typed("dictionary.words", &dictionary.words)
+                                .and_then(|()| {
+                                    file.set_typed("dictionary.learned", &dictionary.learned)
+                                })
+                                .and_then(|()| {
+                                    file.set_typed(
+                                        "dictionary.never_learn",
+                                        &dictionary.never_learn,
+                                    )
+                                })
                         } else if pos - dictionary.words.len() < dictionary.replacements.len() {
                             dictionary.replacements.remove(pos - dictionary.words.len());
                             file.set_typed("dictionary.replacements", &dictionary.replacements)
@@ -1495,7 +1944,7 @@ impl App {
                 };
                 match result {
                     Ok(()) => self.sync_config(),
-                    Err(e) => self.toast = Some(format!("{e:#}")),
+                    Err(e) => self.toast = Some(options::plain(&format!("{e:#}"))),
                 };
                 let _ = self.select(0);
             }
@@ -1503,15 +1952,152 @@ impl App {
         }
         vec![]
     }
-    pub fn devices(&mut self, devices: Vec<String>) {
-        self.edit(
-            EditTarget::Device,
-            vec![Field::choices(
-                "Microphone ←/→",
-                self.config.recording.device.clone().unwrap_or_default(),
-                devices,
-            )],
-        );
+    fn setting_field(&self, key: &str) -> Field {
+        let value = match self.effective(key) {
+            None => String::new(),
+            Some(value) => format!("value = {value}")
+                .parse::<toml::Table>()
+                .ok()
+                .and_then(|doc| {
+                    doc.get("value")
+                        .and_then(toml::Value::as_str)
+                        .map(String::from)
+                })
+                .unwrap_or(value),
+        };
+        let choices = match key {
+            "stt.provider" | "cleanup.provider" => {
+                integrations::catalog(key.starts_with("cleanup."))
+                    .into_iter()
+                    .map(|p| p.id)
+                    .filter(|id| id != "custom")
+                    .collect()
+            }
+            "stt.model" | "cleanup.model" => {
+                let cleanup = key.starts_with("cleanup.");
+                let id = if cleanup {
+                    self.config.cleanup.provider.as_deref().unwrap_or_default()
+                } else {
+                    &self.config.stt.provider
+                };
+                let mut models = vec![String::new()];
+                if let Some(p) = integrations::catalog(cleanup)
+                    .into_iter()
+                    .find(|p| p.id == id)
+                {
+                    models.extend(p.models.into_iter().filter(|m| !m.is_empty()));
+                }
+                models
+            }
+            "stt.language" => options::LANGUAGES
+                .iter()
+                .map(|(code, _)| code.to_string())
+                .collect(),
+            "ui.theme" => BUILTINS
+                .iter()
+                .map(|s| s.to_string())
+                .chain(self.config.ui.themes.keys().cloned())
+                .collect(),
+            "cleanup.mode" => {
+                let mut modes = options::presets(key);
+                if self.config.cleanup.prompt.is_some() {
+                    modes.push("custom".into());
+                }
+                modes
+            }
+            _ => options::presets(key),
+        };
+        let key = key.to_string();
+        Field::pick("", value, choices, move |v| value_text(&key, v))
+    }
+    pub fn devices(&mut self, mut devices: Vec<String>) {
+        devices.insert(0, String::new());
+        let current = self.config.recording.device.clone().unwrap_or_default();
+        let field = Field::pick("", current, devices, |d| value_text("recording.device", d));
+        if self.setup == Some(Step::Microphone) {
+            self.edit(
+                EditTarget::Setup(Step::Microphone),
+                "Step 3 of 4 · Microphone",
+                "Choose the microphone you'll speak into. Next you'll see a level meter to check it hears you.",
+                vec![field],
+            );
+        } else {
+            self.edit(
+                EditTarget::Device,
+                "Speech · Microphone",
+                options::row("recording.device").map(|r| r.3).unwrap_or(""),
+                vec![field],
+            );
+        }
+    }
+}
+/// The writing service to add when cleanup is needed but none is set: the
+/// speech service, when it also offers cleanup without extra setup.
+fn cleanup_fallback(config: &Config) -> Result<Option<String>> {
+    let needs = config.cleanup.mode != CleanupMode::Raw
+        || config
+            .styles
+            .iter()
+            .any(|s| s.mode.is_some_and(|m| m != CleanupMode::Raw));
+    if !needs || config.cleanup.provider.is_some() || config.cleanup.endpoint.is_some() {
+        return Ok(None);
+    }
+    let id = &config.stt.provider;
+    if id != "custom" && integrations::catalog(true).iter().any(|p| &p.id == id) {
+        Ok(Some(id.clone()))
+    } else {
+        bail!("cleanup endpoint or provider is required")
+    }
+}
+/// Listen without transcribing so the meter can move; Enter cancels before any upload,
+/// and a timer cancels before the daemon's own max-length or silence stop would upload.
+fn mic_check(config: &Config) -> Vec<Effect> {
+    let recording = &config.recording;
+    let limit = match recording.auto_stop_secs {
+        0 => recording.max_seconds,
+        secs => secs.min(recording.max_seconds),
+    }
+    .min(10);
+    vec![
+        Effect::Request(
+            Request::Start {
+                mode: Mode::Dictation,
+                context: None,
+                t0_us: None,
+                delivery: Delivery::None,
+            },
+            Tag::Ordinary,
+        ),
+        Effect::MicTimeout(std::time::Duration::from_millis(
+            u64::from(limit) * 1000 - 300,
+        )),
+    ]
+}
+fn text_key(field: &mut Field, key: KeyEvent) {
+    match key.code {
+        KeyCode::Left => field.left(),
+        KeyCode::Right => field.right(),
+        KeyCode::Home => field.cursor = 0,
+        KeyCode::End => field.cursor = field.value.len(),
+        KeyCode::Delete => field.delete(),
+        KeyCode::Backspace => field.backspace(),
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            field.value.clear();
+            field.cursor = 0;
+        }
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) && !field.secret => {
+            if field.value.len() < 16 * 1024 {
+                field.insert('\n');
+            }
+        }
+        KeyCode::Char(c)
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && field.value.len() + c.len_utf8() <= 16 * 1024
+                && !c.is_control() =>
+        {
+            field.insert(c)
+        }
+        _ => (),
     }
 }
 fn replace<T>(rows: &mut Vec<T>, index: Option<usize>, value: T) -> Result<()> {
@@ -1519,14 +2105,14 @@ fn replace<T>(rows: &mut Vec<T>, index: Option<usize>, value: T) -> Result<()> {
         Some(i) => {
             let item = rows
                 .get_mut(i)
-                .ok_or_else(|| anyhow!("Selection no longer exists"))?;
+                .ok_or_else(|| anyhow!("That item no longer exists"))?;
             *item = value;
         }
         None => rows.push(value),
     };
     Ok(())
 }
-fn mode_name(mode: CleanupMode) -> &'static str {
+pub fn mode_label(mode: CleanupMode) -> &'static str {
     match mode {
         CleanupMode::Raw => "raw",
         CleanupMode::Light => "light",
@@ -1534,38 +2120,66 @@ fn mode_name(mode: CleanupMode) -> &'static str {
         CleanupMode::Custom => "custom",
     }
 }
-fn setting_field(key: &str, value: &str) -> Field {
-    let value = if value == "(unset)" {
-        String::new()
-    } else if let Ok(doc) = format!("value = {value}").parse::<toml::Table>() {
-        doc.get("value")
-            .and_then(toml::Value::as_str)
-            .map(String::from)
-            .unwrap_or_else(|| value.into())
-    } else {
-        value.into()
-    };
-    let choices = match key {
-        "cleanup.mode" => vec!["raw", "light", "polished", "custom"],
-        "injection.method" => vec!["paste", "type", "clipboard"],
-        _ if value == "true" || value == "false" => vec!["true", "false"],
+/// GSettings values in plain words: `['<Super>space']` → "Super+Space".
+pub fn overlay_value(value: &str) -> String {
+    let value = value.trim_matches('\'');
+    match value {
+        "true" => "On".into(),
+        "false" => "Off".into(),
+        "[]" | "@as []" => "Not set".into(),
+        _ if value.starts_with('[') => value
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .map(|s| {
+                s.trim()
+                    .trim_matches('\'')
+                    .replace('>', "+")
+                    .replace('<', "")
+                    .split('+')
+                    .map(|p| {
+                        let mut c = p.chars();
+                        c.next()
+                            .map(|f| f.to_uppercase().chain(c).collect())
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<String>>()
+                    .join("+")
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => {
+            let text = value.replace('-', " ");
+            let mut c = text.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+fn overlay_choices(setting: &Setting) -> Vec<String> {
+    match &setting.kind {
+        Kind::Bool => vec!["true".into(), "false".into()],
+        Kind::Choice(choices) => choices.clone(),
+        Kind::Int { min, max } => [*min, 0, 100, 200, 300, 500, 1000, *max]
+            .into_iter()
+            .filter(|v| v >= min && v <= max)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
+        Kind::Double { min, max } => [*min, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, *max]
+            .into_iter()
+            .filter(|v| v >= min && v <= max)
+            .map(|v| v.to_string())
+            .collect(),
+        Kind::Type(kind) if kind == "as" => [
+            "[]",
+            "['<Super>space']",
+            "['<Control><Alt>space']",
+            "['<Shift><Super>space']",
+        ]
+        .map(String::from)
+        .to_vec(),
         _ => vec![],
-    };
-    let hint = match key {
-        "recording.max_seconds" => "1..600",
-        "recording.min_ms" => "0..5000",
-        "recording.auto_stop_secs" => "0..60",
-        "recording.keep_warm_secs" => "0..600",
-        "recording.silence_threshold" | "sounds.volume" => "0..1",
-        "injection.restore_delay_ms" => "0..10000",
-        "stt.timeout_secs" => "1..300",
-        "cleanup.timeout_secs" => "1..120",
-        "privacy.history_limit" => "0..100000",
-        _ => "text / TOML; u resets",
-    };
-    Field::choices(
-        &format!("{key} ({hint})"),
-        value,
-        choices.into_iter().map(String::from).collect(),
-    )
+    }
 }

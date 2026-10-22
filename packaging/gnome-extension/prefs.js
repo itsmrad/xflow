@@ -139,8 +139,9 @@ export default class XFlowPreferences extends ExtensionPreferences {
         const behavior = page('Behavior', 'preferences-system-symbolic');
         const recording = group(behavior, 'Recording');
         combo(recording, 'hotkey-mode', 'Dictate and command shortcuts', ['smart', 'hold', 'toggle'],
-            ['Smart: tap to toggle, hold to talk', 'Hold to talk', 'Tap to toggle']);
+            ['Smart: double-tap hands-free, hold to talk', 'Hold to talk', 'Tap to toggle']);
         number(recording, 'ptt-threshold-ms', 'Smart hold threshold (ms)', 0, 10000, 10);
+        number(recording, 'double-tap-ms', 'Smart double-tap window (ms)', 1, 2000, 10);
         const feedback = group(behavior, 'Feedback');
         combo(feedback, 'idle-style', 'When idle', ['hidden', 'minimal'], ['Hidden', 'Minimal handle']);
         toggle(feedback, 'animations', 'Animations', 'Also respects the system’s Reduce Motion setting.');

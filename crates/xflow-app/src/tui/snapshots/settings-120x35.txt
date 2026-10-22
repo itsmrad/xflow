@@ -1,35 +1,35 @@
- xflow                ╭Control center──────────────────────────────────────────────────────────────────────────────────╮
- Voice, at your pace. │Settings  ·  Connected                                                                          │
-                      ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭Navigate─────────╮╭Settings───────────────────────────────────╮╭Details · [ / ] scroll────────────────────────────────╮
-│  1 Home         ││› cleanup.api_key_env                      ││cleanup.api_key_env                                   │
-│  2 History      ││  "OPENAI_API_KEY"                         ││                                                      │
-│  3 Dictionary   ││  cleanup.app_context                      ││"OPENAI_API_KEY"                                      │
-│  4 Snippets     ││  true                                     ││                                                      │
-│  5 Styles       ││  cleanup.endpoint                         ││Enter edits with schema validation.                   │
-│  6 Providers    ││  (unset)                                  ││←/→ cycles form choices.                              │
-│› 7 Settings     ││  cleanup.mode                             ││u resets to the default.                              │
-│  8 Overlay      ││  "raw"                                    ││                                                      │
-│  9 Stats        ││  cleanup.model                            ││Ctrl+S saves + reloads                                │
-│  0 Doctor       ││  (unset)                                  ││Ctrl+R reverts unsaved edits                          │
-│                 ││  cleanup.prompt                           ││i chooses the microphone                              │
-│                 ││  (unset)                                  ││                                                      │
-│                 ││  cleanup.provider                         ││Config: /isolated/xflow/config.toml                   │
-│                 ││  (unset)                                  ││                                                      │
-│                 ││  cleanup.timeout_secs                     ││                                                      │
-│                 ││  20                                       ││                                                      │
-│                 ││  dictionary.auto_learn                    ││                                                      │
-│                 ││  true                                     ││                                                      │
-│                 ││  dictionary.learned                       ││                                                      │
-│                 ││  []                                       ││                                                      │
-│                 ││  dictionary.never_learn                   ││                                                      │
-│                 ││  []                                       ││                                                      │
-│                 ││  dictionary.replacements                  ││                                                      │
-│                 ││  []                                       ││                                                      │
-│                 ││  dictionary.words                         ││                                                      │
-│                 ││  ["xflow", "Ratatui"]                     ││                                                      │
-╰─────────────────╯╰───────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
- Enter Edit   u Reset   Ctrl+S Save   Ctrl+R Revert
+ xflow  ·  Settings                                                                                              ✓ Done
+╭────────────────╮╭ Settings ───────────────────────────────────────────────╮╭ About ──────────────────────────────────╮
+│ 1  Home        ││› Start     Guided setup          Run again              ││ Start · Guided setup                    │
+│ 2  History     ││  Speech    Service               Groq — fast, with a fre││ Run again                               │
+│ 3  Dictionary  ││            Model                 Recommended            ││                                         │
+│ 4  Snippets    ││            API key               Added                  ││ Walk through the speech service, key,   │
+│ 5  Styles      ││            Language              Automatic              ││ microphone and shortcut again.          │
+│ 6  Settings    ││            Microphone            System default         ││                                         │
+│ 7  Pill        ││            Check connection      Run check              ││ Enter to open.                          │
+│ 8  Your stats  ││  Shortcut  Key                   Fn (Globe)             ││                                         │
+│ 9  Check-up    ││            Shortcut              On                     ││                                         │
+│                ││            Double-tap speed      500 ms                 ││                                         │
+│                ││            Hold delay            500 ms                 ││                                         │
+│                ││  Writing   Cleanup               Off — exact words      ││                                         │
+│                ││            Service               None chosen            ││                                         │
+│                ││            Model                 Recommended            ││                                         │
+│                ││            API key               Choose a service first ││                                         │
+│                ││            Remove um and uh      On                     ││                                         │
+│                ││            Spoken punctuation    Off                    ││                                         │
+│                ││  Delivery  Text arrives by       Paste                  ││                                         │
+│                ││            Space after text      On                     ││                                         │
+│                ││            Restore clipboard     On                     ││                                         │
+│                ││  Sounds    Sounds                On                     ││                                         │
+│                ││            Volume                50%                    ││                                         │
+│                ││            Notifications         Off                    ││                                         │
+│                ││  Privacy   Save history          On                     ││                                         │
+│                ││            Keep last             500 dictations         ││                                         │
+│                ││            Local services only   Off                    ││                                         │
+│                ││            Share app name        On                     ││                                         │
+│                ││  Look      Theme                 Paper                  ││                                         │
+│                ││            Mouse                 On                     ││                                         │
+│                ││  Advanced  Advanced settings     Hide                   ││                                         │
+╰────────────────╯╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────╯
 
-? Help  ·  Ctrl+P Actions  ·  t Theme  ·  Ctrl+S Save  ·  q Quit
-
+ ↑↓ move · Enter change · Esc back · Tab next page · ? help · q quit

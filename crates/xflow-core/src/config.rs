@@ -15,14 +15,15 @@ pub const MAX_SNIPPETS: usize = 500;
 pub const MAX_STYLES: usize = 100;
 
 /// Everything the daemon, CLI and TUI read from `config.toml`. Desktop-shell
-/// settings (overlay look, global shortcuts) belong to the GNOME extension's
-/// GSettings schema instead; see packaging/gnome-extension.
+/// settings for the Linux overlay/shortcuts belong to the GNOME extension's
+/// GSettings schema; macOS global input is configured by `hotkey`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub stt: SttConfig,
     pub cleanup: CleanupConfig,
     pub recording: RecordingConfig,
+    pub hotkey: HotkeyConfig,
     pub injection: InjectionConfig,
     pub formatting: FormattingConfig,
     pub dictionary: DictionaryConfig,
@@ -34,6 +35,78 @@ pub struct Config {
     pub snippets: Vec<Snippet>,
     /// Per-app cleanup styles; the first style whose `apps` matches wins.
     pub styles: Vec<Style>,
+}
+
+pub const HOTKEY_KEYS: &[&str] = &[
+    "fn",
+    "right_option",
+    "left_option",
+    "right_command",
+    "right_control",
+    "right_shift",
+    "caps_lock",
+    "f13",
+    "f14",
+    "f15",
+    "f16",
+    "f17",
+    "f18",
+    "f19",
+];
+pub const HOTKEY_ALLOWED: &str = "fn, right_option, left_option, right_command, right_control, right_shift, caps_lock, f13..f19, or a chord such as ctrl+alt+space (ctrl/alt/shift/cmd + a-z, 0-9, space, tab, enter, escape, backspace, f1..f20)";
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct HotkeyConfig {
+    pub key: String,
+    pub double_tap_ms: u64,
+    pub hold_threshold_ms: u64,
+    pub enabled: bool,
+}
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        Self {
+            key: "fn".into(),
+            double_tap_ms: 500,
+            hold_threshold_ms: 500,
+            enabled: true,
+        }
+    }
+}
+impl HotkeyConfig {
+    pub fn validate(&self) -> Result<()> {
+        let valid_key = HOTKEY_KEYS.contains(&self.key.as_str()) || {
+            let mut parts: Vec<_> = self.key.split('+').collect();
+            let key = parts.pop().unwrap_or_default();
+            let mut seen = HashSet::new();
+            !parts.is_empty()
+                && parts.iter().all(|part| {
+                    matches!(*part, "ctrl" | "alt" | "shift" | "cmd") && seen.insert(*part)
+                })
+                && ((key.len() == 1
+                    && key
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()))
+                    || matches!(key, "space" | "tab" | "enter" | "escape" | "backspace")
+                    || key
+                        .strip_prefix('f')
+                        .and_then(|n| n.parse::<u8>().ok())
+                        .is_some_and(|n| (1..=20).contains(&n) && key == format!("f{n}")))
+        };
+        if !valid_key {
+            bail!(
+                "invalid hotkey.key {:?}; allowed values: {HOTKEY_ALLOWED}",
+                self.key
+            );
+        }
+        if !(1..=2000).contains(&self.double_tap_ms) {
+            bail!("hotkey.double_tap_ms must be 1..2000");
+        }
+        if !(1..=2000).contains(&self.hold_threshold_ms) {
+            bail!("hotkey.hold_threshold_ms must be 1..2000");
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -323,6 +396,7 @@ impl Config {
         Ok(config)
     }
     pub fn validate(&self) -> Result<()> {
+        self.hotkey.validate()?;
         if !(1..=600).contains(&self.recording.max_seconds) {
             bail!("recording.max_seconds must be 1..600");
         }
@@ -448,6 +522,41 @@ mod tests {
             toml::from_str(include_str!("../../../config/default.toml")).unwrap();
         template.validate().unwrap();
         assert_eq!(template, Config::default());
+    }
+
+    #[test]
+    fn hotkeys_validate_named_keys_chords_and_timing_bounds() {
+        let mut config = HotkeyConfig::default();
+        for key in HOTKEY_KEYS
+            .iter()
+            .copied()
+            .chain(["ctrl+alt+space", "cmd+shift+k", "ctrl+f20"])
+        {
+            config.key = key.into();
+            config.validate().unwrap();
+        }
+        for key in [
+            "option",
+            "ctrl+ctrl+space",
+            "ctrl+",
+            "f20",
+            "ctrl+fn",
+            "ctrl+f01",
+            "CTRL+space",
+        ] {
+            config.key = key.into();
+            assert!(config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains(HOTKEY_ALLOWED));
+        }
+        config = HotkeyConfig::default();
+        config.double_tap_ms = 0;
+        assert!(config.validate().is_err());
+        config.double_tap_ms = 500;
+        config.hold_threshold_ms = 2001;
+        assert!(config.validate().is_err());
     }
 
     #[test]

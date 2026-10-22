@@ -103,7 +103,7 @@ try:
  evaluate('xflowTest._key(57,false);xflowTest._key(56,false);xflowTest._key(125,false);true')
  time.sleep(.15)
  assert evaluate('JSON.stringify(xflowDriver.requests.slice(-2).map(r=>r.command))')=='["start","stop"]','Push-to-talk did not stop on release'
- # Modifier-first release and tap-to-toggle exercise the real compositor path.
+ # Modifier-first release and double-tap exercise the real compositor path.
  evaluate('xflowTest._update({state:"idle"});xflowTest._key(125,true);xflowTest._key(56,true);xflowTest._key(57,true);true')
  time.sleep(.16)
  evaluate('xflowTest._key(56,false);true')
@@ -114,7 +114,12 @@ try:
  time.sleep(.035)
  evaluate('xflowTest._key(57,false);xflowTest._key(56,false);xflowTest._key(125,false);true')
  time.sleep(.06)
- assert evaluate('JSON.stringify(xflowTest._state)')=='"listening"','Quick tap did not latch'
+ assert evaluate('JSON.stringify(xflowTest._state)')=='"listening"','First tap did not wait for a second press'
+ evaluate('xflowTest._key(125,true);xflowTest._key(56,true);xflowTest._key(57,true);true')
+ time.sleep(.05)
+ evaluate('xflowTest._key(57,false);xflowTest._key(56,false);xflowTest._key(125,false);true')
+ time.sleep(.06)
+ assert evaluate('JSON.stringify(xflowTest._state)')=='"listening"','Double tap did not latch hands-free'
  evaluate('xflowTest._key(125,true);xflowTest._key(56,true);xflowTest._key(57,true);true')
  time.sleep(.05)
  evaluate('xflowTest._key(57,false);xflowTest._key(56,false);xflowTest._key(125,false);true')

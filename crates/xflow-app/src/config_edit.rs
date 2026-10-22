@@ -293,6 +293,8 @@ mod tests {
         file.set("stt.model", "whisper-large-v3").unwrap();
         file.set("recording.auto_stop_secs", "5").unwrap();
         file.set("sounds.enabled", "false").unwrap();
+        file.set("hotkey.key", "right_option").unwrap();
+        assert!(file.set("hotkey.key", "not_a_key").is_err());
         file.set("dictionary.words", r#"["Postgres", "xflow"]"#)
             .unwrap();
         assert!(file.set("recording.auto_stop_secs", "999").is_err());
@@ -313,6 +315,7 @@ mod tests {
         assert_eq!(config.stt.model.as_deref(), Some("whisper-large-v3"));
         assert_eq!(config.recording.auto_stop_secs, 5);
         assert!(!config.sounds.enabled);
+        assert_eq!(config.hotkey.key, "right_option");
         assert_eq!(config.dictionary.words, ["Postgres", "xflow"]);
         assert_eq!(config.snippets[0].text, "me@example.com");
 

@@ -38,6 +38,25 @@ jobs:
       # Runs on a private session bus, including the ignored D-Bus bridge test.
       - run: scripts/check.sh test
 
+  macos:
+    name: macOS clippy, test
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      # Short, predictable Unix socket paths for the daemon tests (SUN_LEN is 104 bytes).
+      TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --no-self-update
+          rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo clippy --workspace --all-targets --locked --features xflow-app/test-support -- -D warnings
+      - run: cargo test --workspace --locked --features xflow-app/test-support
+
   extension:
     name: GNOME extension
     runs-on: ubuntu-24.04

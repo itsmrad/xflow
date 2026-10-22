@@ -1,7 +1,6 @@
 # xflow configuration. Edit here, with `xflow config set <key> <value>`, or in the TUI.
 # Secrets are read from OS credential storage or environment variables, never this file.
-# Overlay look and global shortcuts are GNOME extension settings (`xflow overlay`, or the
-# extension's preferences window).
+# Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings.
 
 [stt]
 provider = "groq"            # `xflow providers` lists every provider
@@ -22,6 +21,12 @@ api_key_env = "OPENAI_API_KEY"
 # prompt = "Keep my British spelling."
 timeout_secs = 20
 app_context = true           # tell the model the focused app id (never window contents)
+
+[hotkey]
+key = "fn"                  # macOS Fn/Globe; see docs/hotkeys.md for allowed keys/chords
+double_tap_ms = 500          # second press within this long after a quick tap's release latches hands-free
+hold_threshold_ms = 500      # releases sooner than this are taps (Wispr Flow's defaults)
+enabled = true
 
 [recording]
 max_seconds = 120

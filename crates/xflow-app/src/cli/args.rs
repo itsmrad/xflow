@@ -100,7 +100,7 @@ pub enum Command {
     },
     /// List a provider's models, marking the selected and default model.
     Models { provider: Option<String> },
-    /// Manage provider credentials in OS credential storage.
+    /// Manage provider credentials in OS credential storage; a custom cleanup endpoint uses the `cleanup` entry.
     Key {
         #[command(subcommand)]
         action: Option<Key>,
@@ -123,11 +123,14 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<Styles>,
     },
-    /// Inspect and change GNOME overlay/shortcut settings.
+    /// Inspect and change native overlay settings.
     Overlay {
         #[command(subcommand)]
         action: Option<Overlay>,
     },
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    OverlayPill,
     /// List available microphone input devices.
     Devices,
     /// Show local dictation statistics.
@@ -354,9 +357,20 @@ pub enum Cleanup {
 #[derive(Subcommand, Debug)]
 pub enum Overlay {
     List,
-    Get { key: String },
-    Set { key: String, value: String },
-    Reset { key: Option<String> },
+    Get {
+        key: String,
+    },
+    Set {
+        key: String,
+        value: String,
+    },
+    Reset {
+        key: Option<String>,
+    },
+    /// Show the recording pill cycling through its states, without dictating.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    Preview,
 }
 #[derive(Subcommand, Debug)]
 pub enum Daemon {
