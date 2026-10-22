@@ -308,7 +308,8 @@ async fn handle_provider_request(
     let mut reader = BufReader::new(stream);
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line).await.unwrap() == 0 {
+        // An aborted warm-up probe resets its connection; treat that like EOF.
+        if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
             return;
         }
         let mut request = line.split_ascii_whitespace();
