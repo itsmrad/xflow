@@ -325,6 +325,8 @@ pub struct App {
     pub overlay_error: bool,
     pub missing_key: bool,
     pub missing_cleanup_key: bool,
+    /// The keychain didn't answer, e.g. its Always Allow prompt is still open.
+    pub key_locked: bool,
     pub advanced: bool,
     pub setup: Option<Step>,
     pub setup_offered: bool,
@@ -370,6 +372,7 @@ impl App {
             overlay_error: false,
             missing_key: false,
             missing_cleanup_key: false,
+            key_locked: false,
             advanced: false,
             setup: None,
             setup_offered: false,
@@ -424,7 +427,8 @@ impl App {
     pub fn selected(&self) -> usize {
         self.selected[self.page.index()]
     }
-    pub fn key_status(&mut self, config: &Config, missing: (bool, bool)) {
+    pub fn key_status(&mut self, config: &Config, missing: (bool, bool, bool)) {
+        self.key_locked = missing.2;
         // An older lookup must not replace onboarding for a newly edited route.
         if config.stt == self.config.stt {
             self.missing_key = missing.0;
@@ -513,7 +517,9 @@ impl App {
                     "! xflow's background helper isn't running — open a terminal and run: xflowd"
                         .into()
                 };
-                let key = if self.missing_key {
+                let key = if self.key_locked {
+                    format!("! {}", xflow_providers::KEYCHAIN_WAITING)
+                } else if self.missing_key {
                     "! Your speech service has no API key — Settings → Speech → API key".into()
                 } else {
                     format!("{ok} Your speech service is ready")
@@ -548,6 +554,8 @@ impl App {
                 "action.stt_key" => {
                     if matches!(self.config.stt.provider.as_str(), "local" | "custom") {
                         "Not needed"
+                    } else if self.key_locked {
+                        "Waiting for Keychain — click Always Allow"
                     } else if self.missing_key {
                         "Missing — add one"
                     } else {
@@ -1346,7 +1354,11 @@ impl App {
                     editor.title = format!("Step 2 of 4 · {}", editor.title);
                 }
             }
-            Step::Microphone => return vec![Effect::Devices],
+            Step::Microphone => {
+                // Show the step at once; the device list replaces it when it arrives.
+                self.devices(vec![]);
+                return vec![Effect::Devices];
+            }
             Step::Shortcut => {
                 let current = self
                     .effective("hotkey.key")
@@ -1744,6 +1756,8 @@ impl App {
                         self.config.stt.provider.clone(),
                         secret(editor),
                     ));
+                } else if self.missing_key {
+                    bail!("No saved key was found. Paste your key, or press Esc to finish setup later");
                 }
                 effects.extend(self.open_setup(Step::Microphone));
                 return Ok(effects);
@@ -2015,13 +2029,20 @@ impl App {
         let current = self.config.recording.device.clone().unwrap_or_default();
         let field = Field::pick("", current, devices, |d| value_text("recording.device", d));
         if self.setup == Some(Step::Microphone) {
+            // The user may have opened something else over the placeholder step.
+            if self.modal.as_ref().is_some_and(|m| {
+                !matches!(m, Modal::Editor(e) if matches!(e.target, EditTarget::Setup(Step::Microphone)))
+            }) {
+                return;
+            }
             self.edit(
                 EditTarget::Setup(Step::Microphone),
                 "Step 3 of 4 · Microphone",
                 "Choose the microphone you'll speak into. Next you'll see a level meter to check it hears you.",
                 vec![field],
             );
-        } else {
+        } else if self.modal.is_none() {
+            // A list arriving after the wizard moved on must not cover its next step.
             self.edit(
                 EditTarget::Device,
                 "Speech · Microphone",

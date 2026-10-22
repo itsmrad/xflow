@@ -8,10 +8,13 @@ use xflow_core::{
 };
 
 pub fn block_on<T>(future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
-    tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()?
-        .block_on(future)
+        .build()?;
+    let result = runtime.block_on(future);
+    // Don't wait on a blocking task stuck behind an OS prompt (e.g. a Keychain read).
+    runtime.shutdown_background();
+    result
 }
 pub fn request(request: &Request) -> Result<Response> {
     block_on(send(request))

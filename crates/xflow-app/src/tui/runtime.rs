@@ -44,7 +44,7 @@ enum Update {
     Event(Response),
     Connection(bool, String),
     Overlay(Result<Vec<Setting>>),
-    KeyStatus(Box<Config>, (bool, bool)),
+    KeyStatus(Box<Config>, (bool, bool, bool)),
     Devices(Result<Vec<String>>),
     Doctor(Vec<String>),
     Notice(Result<String>),
@@ -343,6 +343,9 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
         },
         Update::KeyStatus(config, missing) => {
             app.key_status(&config, missing);
+            if app.key_locked {
+                app.toast = Some(xflow_providers::KEYCHAIN_WAITING.into());
+            }
             if app.missing_key && !app.setup_offered && app.modal.is_none() {
                 effects.extend(app.open_setup(Step::Welcome));
             }

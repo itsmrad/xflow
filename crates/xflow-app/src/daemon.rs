@@ -49,6 +49,24 @@ fn retire(hotkeys: Option<Box<dyn GlobalHotkeys>>) {
 }
 /// Status message while a double-tap has latched recording; the macOS pill keys off it.
 pub const HANDS_FREE: &str = "Hands-free recording";
+/// Status message once a capture open is slow, typically behind the macOS microphone prompt.
+const MIC_WAITING: &str = "Waiting for microphone permission";
+const MIC_SLOW: Duration = Duration::from_secs(1);
+/// An IPC start still opening after this is refused (the CLI gives up at 9 s), so a
+/// late permission grant never records for a client that already left.
+const START_GRACE: Duration = Duration::from_secs(5);
+struct Opening {
+    mode: Mode,
+    context: Option<AppContext>,
+    t0_us: Option<u64>,
+    delivery: Delivery,
+    since: Instant,
+    /// The IPC requester; None for a hotkey start, which Stop/Cancel abandons.
+    reply: Option<oneshot::Sender<Response>>,
+    waiting: bool,
+    abandoned: bool,
+    hands_free: bool,
+}
 struct Reloaded {
     config: Config,
     services: Services,
@@ -57,6 +75,7 @@ struct Reloaded {
     hotkeys: Option<std::result::Result<Option<Box<dyn GlobalHotkeys>>, String>>,
 }
 enum Completion {
+    Opened(Result<()>),
     Ready {
         generation: u64,
         result: Result<Processed>,
@@ -96,6 +115,7 @@ pub struct Engine {
     hotkey_factory: Option<HotkeyFactory>,
     hotkeys: Option<Box<dyn GlobalHotkeys>>,
     hotkey_warning: Option<String>,
+    opening: Option<Opening>,
     /// A hotkey session not yet revealed: capture runs, but no cue or pill.
     quiet: bool,
     reloading: bool,
@@ -141,6 +161,7 @@ impl Engine {
             hotkey_factory: None,
             hotkeys: None,
             hotkey_warning: None,
+            opening: None,
             quiet: false,
             reloading: false,
             delivering: false,
@@ -258,15 +279,21 @@ impl Engine {
         self.generation = self.generation.wrapping_add(1);
         self.epoch.store(self.generation, Ordering::SeqCst);
     }
-    async fn start(
+    /// Opens capture off the actor: the first open can wait on the macOS microphone
+    /// prompt indefinitely. `opened` begins the session once it returns.
+    fn start(
         &mut self,
         mode: Mode,
         context: Option<AppContext>,
         t0_us: Option<u64>,
         delivery: Delivery,
+        completion: &mpsc::Sender<Completion>,
     ) -> Result<()> {
         if self.active() {
             bail!("a recording is already active");
+        }
+        if self.opening.is_some() {
+            bail!("{MIC_WAITING}; the microphone is still opening");
         }
         if self.delivering {
             bail!("previous delivery is finishing; retry shortly");
@@ -277,12 +304,60 @@ impl Engine {
         if mode == Mode::Command && self.services.transformer.is_none() {
             bail!("command mode requires a configured cleanup provider");
         }
-        let opened = Instant::now();
-        if let Err(error) = self.services.audio.start().await {
-            let _ = self.services.audio.cancel().await;
-            self.set_state(State::Error, Some(format!("{error:#}")));
-            return Err(error);
+        let (audio, tx) = (self.services.audio.clone(), completion.clone());
+        tokio::spawn(async move {
+            let result = audio.start().await;
+            let _ = tx.send(Completion::Opened(result)).await;
+        });
+        self.opening = Some(Opening {
+            mode,
+            context,
+            t0_us,
+            delivery,
+            since: Instant::now(),
+            reply: None,
+            waiting: false,
+            abandoned: false,
+            hands_free: false,
+        });
+        Ok(())
+    }
+    async fn opened(&mut self, result: Result<()>) {
+        let Some(mut opening) = self.opening.take() else {
+            return;
+        };
+        let reply = opening.reply.take();
+        // Never record for a requester that left, timed out, released the key or canceled.
+        let live = !opening.abandoned && reply.as_ref().is_none_or(|r| !r.is_closed());
+        let response = match result {
+            Ok(()) if live => {
+                self.capture(opening);
+                self.status()
+            }
+            result => {
+                let _ = self.services.audio.cancel().await;
+                match result {
+                    Err(error) if live => self.set_state(State::Error, Some(format!("{error:#}"))),
+                    _ => self.set_state(State::Idle, None),
+                }
+                self.reset_hotkeys();
+                Response::error(self.state, self.message.as_deref().unwrap_or("canceled"))
+            }
+        };
+        if let Some(reply) = reply {
+            let _ = reply.send(response);
         }
+    }
+    fn capture(&mut self, opening: Opening) {
+        let Opening {
+            mode,
+            context,
+            t0_us,
+            delivery,
+            since: opened,
+            hands_free,
+            ..
+        } = opening;
         // The user is done editing the last dictation; read the field once more.
         if let Some(finalize) = self.observing.take() {
             let _ = finalize.send(());
@@ -333,11 +408,10 @@ impl Engine {
         });
         self.context_abort = Some(task.abort_handle());
         self.context_job = Some(task);
-        self.set_state(State::Listening, None);
+        self.set_state(State::Listening, hands_free.then(|| HANDS_FREE.into()));
         if !self.quiet {
             self.cue(xflow_platform::Cue::Start);
         }
-        Ok(())
     }
     async fn stop(&mut self, completion: mpsc::Sender<Completion>) -> Result<()> {
         if self.state != State::Listening {
@@ -515,25 +589,45 @@ impl Engine {
         self.abort_context();
         self.started = None;
         self.silent_since = None;
-        if let Err(e) = self.services.audio.cancel().await {
+        // An open in flight still owns the audio thread; `opened` discards it instead.
+        if let Some(opening) = &mut self.opening {
+            opening.abandoned = true;
+        } else if let Err(e) = self.services.audio.cancel().await {
             self.set_state(State::Error, Some(format!("{e:#}")));
             return Err(e);
         }
         self.set_state(State::Idle, None);
         Ok(())
     }
+    /// `Ok(None)` defers the reply until the microphone opens (see `opened`).
     async fn handle(
         &mut self,
         request: Request,
         completion: &mpsc::Sender<Completion>,
-    ) -> Result<Response> {
+    ) -> Result<Option<Response>> {
+        if let Some(opening) = self.opening.as_mut().filter(|_| {
+            matches!(
+                request,
+                Request::Stop | Request::Cancel | Request::Toggle { .. }
+            )
+        }) {
+            // Released or canceled before capture began: this session never records.
+            opening.abandoned = true;
+            if let Some(reply) = opening.reply.take() {
+                let _ = reply.send(Response::error(self.state, "canceled"));
+            }
+            return Ok(Some(self.status()));
+        }
         match request {
             Request::Start {
                 mode,
                 context,
                 t0_us,
                 delivery,
-            } => self.start(mode, context, t0_us, delivery).await?,
+            } => {
+                self.start(mode, context, t0_us, delivery, completion)?;
+                return Ok(None);
+            }
             Request::Stop => self.stop(completion.clone()).await?,
             Request::Toggle {
                 mode,
@@ -544,19 +638,20 @@ impl Engine {
                 if self.state == State::Listening {
                     self.stop(completion.clone()).await?;
                 } else {
-                    self.start(mode, context, t0_us, delivery).await?;
+                    self.start(mode, context, t0_us, delivery, completion)?;
+                    return Ok(None);
                 }
             }
             Request::Cancel => self.cancel().await?,
             Request::Last => {
                 let mut r = self.status();
                 r.text = self.last.clone();
-                return Ok(r);
+                return Ok(Some(r));
             }
             Request::Status | Request::Subscribe | Request::Shutdown => (),
             _ => bail!("invalid actor request"),
         }
-        Ok(self.status())
+        Ok(Some(self.status()))
     }
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>) {
         let (completion_tx, mut completion_rx) = mpsc::channel(8);
@@ -572,6 +667,18 @@ impl Engine {
                     s + Duration::from_secs(self.config.recording.max_seconds as u64),
                 )
             });
+            // First the waiting message, then (IPC only) the start grace.
+            let opening = self
+                .opening
+                .as_ref()
+                .filter(|o| !o.abandoned)
+                .and_then(|o| {
+                    if o.waiting {
+                        o.reply.as_ref().map(|_| o.since + START_GRACE)
+                    } else {
+                        Some(o.since + MIC_SLOW)
+                    }
+                });
             tokio::select! { biased;
                 command = commands.recv() => {
                     let Some(Command { request, reply }) = command else { break; };
@@ -585,7 +692,7 @@ impl Engine {
                         continue;
                     }
                     if matches!(request, Request::Reload) {
-                        if self.active() || self.reloading { let _ = reply.send(Response::error(self.state, "reload requires an idle daemon")); continue; }
+                        if self.active() || self.reloading || self.opening.is_some() { let _ = reply.send(Response::error(self.state, "reload requires an idle daemon")); continue; }
                         let Some(path) = self.config_path.clone() else { let _ = reply.send(Response::error(self.state, "reload config path is unavailable")); continue; };
                         self.reloading = true;
                         let old = self.config.clone(); let services = self.services.clone(); let store = self.store.clone(); let factory = self.reload_factory.clone(); let hotkey_factory = self.hotkey_factory.clone(); let retry_hotkeys = self.hotkeys.is_none() || self.hotkey_warning.is_some(); let tx = completion_tx.clone();
@@ -617,11 +724,17 @@ impl Engine {
                     }
                     if matches!(request, Request::Start { .. } | Request::Toggle { .. }) && !self.active() && !desktop_ops.is_empty() { let _ = reply.send(Response::error(self.state, "desktop delivery is busy")); continue; }
                     let shutdown = matches!(request, Request::Shutdown);
-                    let response = self.handle(request, &completion_tx).await.unwrap_or_else(|e| Response::error(self.state, format!("{e:#}")));
-                    if self.state != State::Listening { self.reset_hotkeys(); }
-                    let _ = reply.send(response); if shutdown { break; }
+                    match self.handle(request, &completion_tx).await {
+                        Ok(Some(response)) => { let _ = reply.send(response); }
+                        Ok(None) => if let Some(opening) = &mut self.opening { opening.reply = Some(reply); },
+                        Err(e) => { let _ = reply.send(Response::error(self.state, format!("{e:#}"))); }
+                    }
+                    // A hotkey open in flight still needs the gesture's release (Stop).
+                    if self.state != State::Listening && self.opening.is_none() { self.reset_hotkeys(); }
+                    if shutdown { break; }
                 }
                 Some(completion) = completion_rx.recv() => match completion {
+                    Completion::Opened(result) => self.opened(result).await,
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
                         match result { Ok(processed) => { self.last = Some(processed.text.clone()); pending = Some(processed); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
@@ -688,7 +801,10 @@ impl Engine {
                 action = async { self.hotkeys.as_mut().unwrap().next_action().await }, if self.hotkeys.is_some() => {
                     match action {
                         Ok(action @ (HotkeyAction::Reveal | HotkeyAction::HandsFree)) => {
-                            if self.state == State::Listening {
+                            if let Some(opening) = &mut self.opening {
+                                opening.hands_free |= action == HotkeyAction::HandsFree;
+                                self.quiet = false;
+                            } else if self.state == State::Listening {
                                 if action == HotkeyAction::HandsFree { self.message = Some(HANDS_FREE.into()); }
                                 if std::mem::take(&mut self.quiet) { self.cue(xflow_platform::Cue::Start); }
                                 self.publish();
@@ -727,6 +843,16 @@ impl Engine {
                     if self.config.recording.auto_stop_secs > 0 && self.silent_since.is_some_and(|s| s.elapsed() >= Duration::from_secs(self.config.recording.auto_stop_secs as u64)) {
                         if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
                         self.reset_hotkeys();
+                    }
+                }
+                _ = async { if let Some(at) = opening { tokio::time::sleep_until(at.into()).await; } }, if opening.is_some() => {
+                    if let Some(opening) = &mut self.opening {
+                        if !std::mem::replace(&mut opening.waiting, true) {
+                            self.set_state(State::Idle, Some(MIC_WAITING.into()));
+                        } else if let Some(reply) = opening.reply.take() {
+                            opening.abandoned = true;
+                            let _ = reply.send(Response::error(self.state, format!("{MIC_WAITING}. Allow xflowd to use the microphone, then start again")));
+                        }
                     }
                 }
                 _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } }, if deadline.is_some() => {
@@ -1323,18 +1449,25 @@ async fn connection(
     let mut receiver = events.subscribe();
     let (reply_tx, reply_rx) = oneshot::channel();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(9);
-    tokio::time::timeout_at(
-        deadline,
-        commands.send(Command {
-            request,
-            reply: reply_tx,
-        }),
-    )
-    .await
-    .context("daemon command queue timed out")??;
-    let response = tokio::time::timeout_at(deadline, reply_rx)
-        .await
-        .context("daemon request timed out")??;
+    let answer = tokio::time::timeout_at(deadline, async {
+        commands
+            .send(Command {
+                request,
+                reply: reply_tx,
+            })
+            .await?;
+        reply_rx.await.context("daemon is shutting down")
+    })
+    .await;
+    // A live but busy daemon says so; closing silently reads as "daemon not running".
+    let response = answer.unwrap_or_else(|_| {
+        let mut r = Response::error(
+            State::Idle,
+            "xflowd is running but busy and did not answer in time; try again in a moment",
+        );
+        r.protocol = Some(PROTOCOL_VERSION);
+        Ok(r)
+    })?;
     write_frame(&mut write, &response).await?;
     if subscribe {
         // Keep one read future alive across broadcasts. Dropping read_line after a
@@ -2483,6 +2616,91 @@ mod tests {
         .unwrap();
         let task = tokio::spawn(engine.run(rx));
         assert_eq!(ask(&tx, Request::Status).await.state, State::Idle);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// Open blocks until released, like CoreAudio behind the microphone permission prompt.
+    #[derive(Default)]
+    struct GatedAudio {
+        open: Notify,
+        cancels: AtomicUsize,
+    }
+    #[async_trait]
+    impl AudioCapture for GatedAudio {
+        async fn start(&self) -> Result<()> {
+            self.open.notified().await;
+            Ok(())
+        }
+        async fn stop(&self) -> Result<AudioClip> {
+            bail!("fixture never records")
+        }
+        async fn cancel(&self) -> Result<()> {
+            self.cancels.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn level(&self) -> f32 {
+            0.0
+        }
+    }
+    #[tokio::test]
+    async fn pending_mic_open_keeps_ipc_responsive_and_never_records_for_a_gone_requester() {
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let audio = Arc::new(GatedAudio::default());
+        engine.services.audio = audio.clone();
+        let (keys, key_events) = mpsc::channel(4);
+        engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
+        let task = tokio::spawn(engine.run(rx));
+        // The discarded open publishes Idle with the waiting message cleared.
+        let discarded = |mut events: broadcast::Receiver<Response>| {
+            tokio::spawn(async move {
+                let event = tokio::time::timeout(Duration::from_secs(3), async {
+                    loop {
+                        let event = events.recv().await.unwrap();
+                        if event.message.is_none() {
+                            return event;
+                        }
+                    }
+                });
+                assert_eq!(event.await.unwrap().state, State::Idle);
+            })
+        };
+        // An IPC client starts, the open hangs, and the client gives up.
+        let (reply, response) = oneshot::channel();
+        tx.send(Command {
+            request: Request::start(),
+            reply,
+        })
+        .await
+        .unwrap();
+        assert_eq!(ask(&tx, Request::Status).await.state, State::Idle);
+        let waiting = hotkey_state(&mut events, State::Idle).await;
+        assert_eq!(waiting.message.as_deref(), Some(MIC_WAITING));
+        assert_eq!(
+            ask(&tx, Request::Status).await.message.as_deref(),
+            Some(MIC_WAITING)
+        );
+        drop(response);
+        let idle = discarded(events.resubscribe());
+        audio.open.notify_one();
+        idle.await.unwrap();
+        assert_eq!(audio.cancels.load(Ordering::SeqCst), 1);
+        // A hotkey start whose key is released before the open completes.
+        keys.send(HotkeyAction::Start).await.unwrap();
+        keys.send(HotkeyAction::Stop).await.unwrap();
+        // The actor has taken the release once the channel drains.
+        while keys.capacity() < keys.max_capacity() {
+            tokio::task::yield_now().await;
+        }
+        let idle = discarded(events.resubscribe());
+        audio.open.notify_one();
+        idle.await.unwrap();
+        assert_eq!(audio.cancels.load(Ordering::SeqCst), 2);
+        let status = ask(&tx, Request::Status).await;
+        assert_eq!((status.state, status.message), (State::Idle, None));
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }

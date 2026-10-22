@@ -66,16 +66,16 @@ pub fn selection(config: &Config, id: &str, cleanup: bool, model: Option<&str>) 
     selected.validate()?;
     Ok(selected)
 }
-/// Whether the active speech and writing services lack a usable key.
-pub async fn missing_keys(config: &Config) -> (bool, bool) {
+/// Whether the active speech and writing services lack a usable key, and whether
+/// the keychain couldn't answer (a pending prompt is neither "missing" nor "added").
+pub async fn missing_keys(config: &Config) -> (bool, bool, bool) {
     // Custom servers can be anonymous on loopback; their connection check is
     // authoritative. Built-in local servers need no default credential.
-    let stt = !matches!(config.stt.provider.as_str(), "local" | "custom")
-        && matches!(
-            xflow_providers::key_status(&config.stt.provider, config.stt.api_key_env.as_deref())
-                .await,
-            KeySource::Missing
-        );
+    let stt = if matches!(config.stt.provider.as_str(), "local" | "custom") {
+        KeySource::NotRequired
+    } else {
+        xflow_providers::key_status(&config.stt.provider, config.stt.api_key_env.as_deref()).await
+    };
     let cleanup = match config.cleanup.provider.as_deref() {
         Some(id) if config.cleanup.mode != xflow_core::CleanupMode::Raw => {
             let configured = &config.cleanup.api_key_env;
@@ -86,14 +86,15 @@ pub async fn missing_keys(config: &Config) -> (bool, bool) {
             } else {
                 Some(configured.as_str())
             };
-            matches!(
-                xflow_providers::key_status(xflow_providers::cleanup_key_id(id), env).await,
-                KeySource::Missing
-            )
+            xflow_providers::key_status(xflow_providers::cleanup_key_id(id), env).await
         }
-        _ => false,
+        _ => KeySource::NotRequired,
     };
-    (stt, cleanup)
+    (
+        stt == KeySource::Missing,
+        cleanup == KeySource::Missing,
+        [stt, cleanup].contains(&KeySource::Locked),
+    )
 }
 /// Non-billable key/reachability probe, answered in plain words.
 pub async fn check(config: &Config, cleanup: bool) -> Result<String> {
