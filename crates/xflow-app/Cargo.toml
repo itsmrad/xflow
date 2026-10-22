@@ -29,6 +29,7 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 tempfile = "3"
 zeroize = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
 toml = "0.8"
 toml_edit = "0.22"
 fs2 = "0.4"
@@ -37,9 +38,3 @@ ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 futures-util = "0.3"
 rpassword = "7"
-
-# macOS ships SQLite in the dyld shared cache; bundling another copy adds ~1 MB to xflowd.
-[target.'cfg(target_os = "macos")'.dependencies]
-rusqlite = "0.32"
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-rusqlite = { version = "0.32", features = ["bundled"] }
