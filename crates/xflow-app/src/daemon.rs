@@ -825,7 +825,7 @@ fn native_services(old: &Config, config: &Config, services: Services) -> Result<
         transformer,
     })
 }
-fn build_transformer(config: &Config) -> Result<Option<Arc<dyn TextTransformer>>> {
+pub(crate) fn build_transformer(config: &Config) -> Result<Option<Arc<dyn TextTransformer>>> {
     let mut cleanup = config.cleanup.clone();
     if cleanup.mode == CleanupMode::Raw
         && (cleanup.provider.is_some()
