@@ -1031,7 +1031,12 @@ impl App {
                 if let Some(p) = self.providers.get(self.selected()) {
                     let mut field = Field::new("API key (masked; never written to config)", "");
                     field.secret = true;
-                    self.edit(EditTarget::Key(p.id.clone()), vec![field]);
+                    let id = if self.cleanup {
+                        xflow_providers::cleanup_key_id(&p.id)
+                    } else {
+                        &p.id
+                    };
+                    self.edit(EditTarget::Key(id.into()), vec![field]);
                 }
             }
             Action::Model => {
@@ -1447,7 +1452,12 @@ impl App {
             Action::Revert => return vec![Effect::Load(self.path.clone())],
             Action::DeleteKey => {
                 if let Some(p) = self.providers.get(self.selected()) {
-                    return vec![Effect::DeleteKey(p.id.clone())];
+                    let id = if self.cleanup {
+                        xflow_providers::cleanup_key_id(&p.id)
+                    } else {
+                        &p.id
+                    };
+                    return vec![Effect::DeleteKey(id.into())];
                 }
             }
             Action::Delete => {

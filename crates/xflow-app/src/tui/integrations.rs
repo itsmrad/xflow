@@ -94,7 +94,12 @@ pub async fn providers(config: &Config, cleanup: bool) -> Vec<Provider> {
         } else {
             selected.stt.api_key_env.as_deref()
         };
-        p.key = match xflow_providers::key_status(&p.id, env).await {
+        let id = if cleanup {
+            xflow_providers::cleanup_key_id(&p.id)
+        } else {
+            &p.id
+        };
+        p.key = match xflow_providers::key_status(id, env).await {
             KeySource::Environment(name) => format!("Environment: {name}"),
             KeySource::Keyring => "Keyring: saved".into(),
             KeySource::NotRequired => "Key not required".into(),
