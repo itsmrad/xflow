@@ -662,13 +662,8 @@ async fn query(
             query,
         } => {
             let (rows, total) = store.history(limit, offset, query).await?;
-            r.history = rows;
             r.total = Some(total);
-            while serde_json::to_vec(&r)?.len() + 1 > MAX_MESSAGE_BYTES {
-                if r.history.pop().is_none() {
-                    bail!("history response exceeds frame limit");
-                }
-            }
+            fit_history(&mut r, rows)?;
         }
         Request::HistoryGet { id } => {
             r.entry = Some(store.get(id).await?.context("history entry not found")?);
@@ -708,6 +703,27 @@ async fn query(
         _ => bail!("invalid history request"),
     }
     Ok(r)
+}
+/// Keep the longest prefix of `rows` that fits one IPC frame, serializing each row once.
+fn fit_history(r: &mut Response, rows: Vec<HistoryEntry>) -> Result<()> {
+    r.history.clear();
+    let mut used = serde_json::to_vec(r)?.len() + 1;
+    if used > MAX_MESSAGE_BYTES {
+        bail!("history response exceeds frame limit");
+    }
+    // `,"history":[]` plus one comma or newline byte per row.
+    used += r#","history":[]"#.len() - 1;
+    let mut fit = 0;
+    for row in &rows {
+        used += serde_json::to_vec(row)?.len() + 1;
+        if used > MAX_MESSAGE_BYTES {
+            break;
+        }
+        fit += 1;
+    }
+    r.history = rows;
+    r.history.truncate(fit);
+    Ok(())
 }
 fn delivery_message(warning: Option<String>, outcome: Option<InjectionOutcome>) -> Option<String> {
     if outcome == Some(InjectionOutcome::ClipboardOnly) {
@@ -2122,6 +2138,25 @@ mod tests {
         fit_final(&mut r);
         assert!(serde_json::to_vec(&r).unwrap().len() < MAX_MESSAGE_BYTES);
         assert!(r.text.is_some() && r.timings.is_some());
+    }
+
+    #[test]
+    fn history_page_is_longest_prefix_that_fits_frame() {
+        let rows: Vec<_> = (1..=40)
+            .map(|id| HistoryEntry {
+                id,
+                text: "x".repeat(4000),
+                ..HistoryEntry::default()
+            })
+            .collect();
+        let mut r = Response::status(State::Idle, 0.0);
+        r.total = Some(40);
+        fit_history(&mut r, rows.clone()).unwrap();
+        let n = r.history.len();
+        assert!(n > 0 && n < rows.len());
+        assert!(serde_json::to_vec(&r).unwrap().len() < MAX_MESSAGE_BYTES);
+        r.history.push(rows[n].clone());
+        assert!(serde_json::to_vec(&r).unwrap().len() >= MAX_MESSAGE_BYTES);
     }
 
     #[test]
