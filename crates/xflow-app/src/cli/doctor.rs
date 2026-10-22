@@ -61,13 +61,23 @@ fn checks(
         format!("desktop={desktop}; session={session}"),
         "Desktop delivery requires a graphical login; file transcription works headlessly",
     ));
-    checks.push(check(
-        "systemd",
-        has_tool("systemctl"),
-        false,
-        "Optional user service management",
-        "Without systemd, run xflowd in the foreground",
-    ));
+    if session != "macos" {
+        checks.push(check(
+            "systemd",
+            has_tool("systemctl"),
+            false,
+            "Optional user service management",
+            "Without systemd, run xflowd in the foreground",
+        ));
+    } else {
+        checks.push(check(
+            "launchd",
+            has_tool("launchctl"),
+            false,
+            "LaunchAgent user service management",
+            "Use xflow service install --enable in a graphical login",
+        ));
+    }
     if gnome {
         checks.push(check(
             "GNOME tools",
@@ -114,6 +124,18 @@ fn checks(
             "Cloud transcription uploads audio to the configured provider"
         };
         checks.push(check("privacy", true, false, detail, "Review xflow config show; keys belong in environment variables or OS credential storage"));
+        // Over-budget dictionary words are optional; an unbuildable provider fails every dictation.
+        let hints = super::config::hint_warning(&config);
+        checks.push(check(
+            "dictionary hints",
+            hints == Ok(None),
+            hints.is_err(),
+            match hints {
+                Ok(None) => "All dictionary words fit the provider hint limit".into(),
+                Ok(Some(text)) | Err(text) => text,
+            },
+            "Shorten stt.vocabulary or pick a supported provider; remove rarely used dictionary words",
+        ));
     }
     checks
 }
@@ -127,9 +149,25 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
             )
         })
         .map_err(|e| e.message);
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    let (desktop, session) = (
+        std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
+        std::env::var("XDG_SESSION_TYPE").unwrap_or_default(),
+    );
+    #[cfg(target_os = "macos")]
+    let (desktop, session) = ("macOS".to_string(), "macos".to_string());
     let mut checks = checks(path, &desktop, &session, present, daemon);
+    #[cfg(target_os = "macos")]
+    {
+        // TCC grants are per executable: these describe this terminal, not launchd's
+        // xflowd, so they are informational (xflowd logs its own missing grants).
+        let (accessibility, input) = xflow_platform::permissions();
+        let microphone = xflow_platform::microphone_permission();
+        let state = |ok: bool| if ok { "granted" } else { "not granted" };
+        checks.push(check("Microphone", microphone == "authorized", false, format!("This terminal: {microphone}; xflowd has its own grant"), "System Settings > Privacy & Security > Microphone: allow xflowd (the first recording asks), then xflow daemon restart"));
+        checks.push(check("Accessibility", accessibility, false, format!("This terminal: {}; xflowd has its own grant (xflow daemon logs warns when missing)", state(accessibility)), "System Settings > Privacy & Security > Accessibility: add/enable the installed xflowd, then xflow daemon restart"));
+        checks.push(check("Input Monitoring", input, false, format!("This terminal: {}; needed by xflowd for global hotkeys", state(input)), "System Settings > Privacy & Security > Input Monitoring: add/enable xflowd, then xflow daemon restart"));
+    }
     if let Ok(cfg) = super::config::load(path).and_then(|f| f.config().map_err(Error::config)) {
         let known = super::provider::info(&cfg.stt.provider);
         checks.push(check(
@@ -148,6 +186,23 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
             true,
             extension.unwrap_or_else(|e| e.message),
             "Run xflow extension install; on Wayland log out/back in, then xflow extension enable",
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // 0 = Do Nothing; absent means the default "Show Emoji & Symbols".
+        let usage = std::process::Command::new("defaults")
+            .args(["read", "com.apple.HIToolbox", "AppleFnUsageType"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+        checks.push(check(
+            "Globe key",
+            usage.as_deref() == Some("0"),
+            false,
+            format!("AppleFnUsageType={}", usage.as_deref().unwrap_or("unset")),
+            "For the fn hotkey: System Settings → Keyboard → Press 🌐 key to: Do Nothing",
         ));
     }
     let ok = checks.iter().all(|c| c.ok || !c.required);
@@ -200,6 +255,11 @@ mod tests {
         let result = checks(&path, "GNOME", "wayland", |_| true, Ok("v1".into()));
         assert!(result.iter().all(|c| c.ok || !c.required));
         assert!(!result.iter().any(|c| c.name == "Wayland injection"));
+        let mac = checks(&path, "macOS", "macos", |_| true, Ok("v1".into()));
+        assert!(mac.iter().any(|c| c.name == "launchd"));
+        assert!(!mac
+            .iter()
+            .any(|c| c.name == "systemd" || c.name.contains("GNOME")));
         std::fs::write(&path, "[recording]\nmax_seconds = 0").unwrap();
         let result = checks(
             &path,
@@ -216,5 +276,33 @@ mod tests {
             .iter()
             .find(|c| c.name == "Wayland injection")
             .is_some_and(|c| !c.required));
+        let words: Vec<_> = (0..30).map(|i| format!("\"word{i:02}\"")).collect();
+        std::fs::write(
+            &path,
+            format!("[dictionary]\nwords = [{}]", words.join(",")),
+        )
+        .unwrap();
+        let result = checks(&path, "sway", "wayland", |_| true, Ok("v1".into()));
+        let hints = result
+            .iter()
+            .find(|c| c.name == "dictionary hints")
+            .unwrap();
+        assert!(!hints.ok && !hints.required);
+        assert!(hints
+            .detail
+            .starts_with("30 dictionary words exceed the groq hint limit"));
+        let long = "a".repeat(120);
+        std::fs::write(
+            &path,
+            format!("[stt]\nvocabulary = [\"{long}\", \"b{long}\"]"),
+        )
+        .unwrap();
+        let result = checks(&path, "sway", "wayland", |_| true, Ok("v1".into()));
+        let hints = result
+            .iter()
+            .find(|c| c.name == "dictionary hints")
+            .unwrap();
+        assert!(!hints.ok && hints.required);
+        assert!(hints.detail.contains("224-byte"));
     }
 }

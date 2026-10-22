@@ -1,9 +1,15 @@
-//! The GNOME extension's settings (overlay look, global shortcuts) for the CLI
-//! and TUI, through the stock `gsettings` tool so every write applies live.
+//! Shared CLI/TUI overlay preferences: GNOME GSettings on Linux, a separate
+//! appearance file on macOS (applied when the next recording pill starts).
+#[cfg(not(target_os = "macos"))]
 use anyhow::{bail, Context, Result};
+#[cfg(not(target_os = "macos"))]
 use std::{path::PathBuf, process::Command};
 
+#[cfg(target_os = "macos")]
+pub use crate::macos_settings::GSettings;
+
 pub const SCHEMA: &str = "org.gnome.shell.extensions.xflow";
+#[cfg(not(target_os = "macos"))]
 const EXTENSION_UUID: &str = "xflow@xflow.local";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +39,7 @@ pub struct Setting {
 
 /// A handle on the extension schema: its private schema directory when the
 /// extension is installed per-user, otherwise the system schema path.
+#[cfg(not(target_os = "macos"))]
 pub struct GSettings {
     schema_dir: Option<PathBuf>,
     memory_backend: bool,
@@ -40,6 +47,7 @@ pub struct GSettings {
     test_config_home: Option<PathBuf>,
 }
 
+#[cfg(not(target_os = "macos"))]
 impl GSettings {
     pub fn detect() -> Result<Self> {
         let mut roots: Vec<PathBuf> = std::env::var_os("XDG_DATA_HOME")
@@ -83,7 +91,7 @@ impl GSettings {
     }
 
     /// For tests: a compiled schema and a persistent keyfile in a private directory.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn with_test_schema_dir(dir: PathBuf, config_home: PathBuf) -> Self {
         Self {
             schema_dir: Some(dir),
@@ -152,6 +160,7 @@ impl GSettings {
     }
 }
 
+#[cfg(any(test, not(target_os = "macos")))]
 fn parse_range(text: &str) -> Kind {
     let mut lines = text.lines();
     let head = lines.next().unwrap_or_default();
@@ -202,6 +211,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn reads_and_writes_a_compiled_schema() {
         let dir = tempfile::tempdir().unwrap();
         let config_home = dir.path().join("config");

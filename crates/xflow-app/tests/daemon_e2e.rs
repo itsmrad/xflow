@@ -54,7 +54,7 @@ impl Daemon {
         audio: &str,
         customize: impl FnOnce(&mut Command, &Path),
     ) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         for subdir in ["run", "config/xflow", "data", "home"] {
             fs::create_dir_all(root.path().join(subdir)).unwrap();

@@ -566,7 +566,6 @@ impl App {
                 options::ADVANCED => if self.advanced { "Hide" } else { "Show" }.into(),
                 _ => match self.effective(key) {
                     Some(value) => value_text(key, &value),
-                    None if key.starts_with("hotkey.") => "Needs a newer xflow".into(),
                     None => value_text(key, ""),
                 },
             };
@@ -1514,7 +1513,7 @@ impl App {
         self.sync_config();
         Ok(())
     }
-    /// Stage a setting chosen from a list; unsupported hotkey keys get a clear message.
+    /// Stage a setting chosen from a list.
     fn set_choice(&mut self, key: &str, value: &str) -> Result<()> {
         let result = match key {
             "stt.provider" | "cleanup.provider" => {
@@ -1531,12 +1530,7 @@ impl App {
             }
             _ => self.set_optional(key, value),
         };
-        if let Err(error) = result {
-            if key.starts_with("hotkey.") {
-                bail!("This needs a newer version of xflow. Update xflow to change the global shortcut.");
-            }
-            return Err(error);
-        }
+        result?;
         if key == "cleanup.mode" {
             if let Err(error) = self.ensure_cleanup_service() {
                 self.set_optional(key, "raw")?;
@@ -1713,8 +1707,8 @@ impl App {
                     bail!("Paste your API key first");
                 }
                 // A custom cleanup server has its own keyring entry, never the STT one.
-                let id = if cleanup && id == "custom" {
-                    "cleanup".into()
+                let id = if cleanup {
+                    xflow_providers::cleanup_key_id(&id).into()
                 } else {
                     id
                 };
@@ -1760,9 +1754,7 @@ impl App {
                 });
             }
             EditTarget::Setup(Step::Shortcut) => {
-                if self.set_choice("hotkey.key", value).is_err() {
-                    self.toast = Some("Global shortcuts need a newer xflow. For now, press Space here to dictate.".into());
-                }
+                self.set_choice("hotkey.key", value)?;
                 return Ok(self.open_setup(Step::Try));
             }
             EditTarget::Setup(_) => return Ok(vec![]),
@@ -1918,13 +1910,7 @@ impl App {
     }
     fn setting_field(&self, key: &str) -> Field {
         let value = match self.effective(key) {
-            None => match key {
-                "hotkey.key" => "fn".into(),
-                "hotkey.enabled" => "true".into(),
-                "hotkey.double_tap_ms" => "350".into(),
-                "hotkey.hold_threshold_ms" => "200".into(),
-                _ => String::new(),
-            },
+            None => String::new(),
             Some(value) => format!("value = {value}")
                 .parse::<toml::Table>()
                 .ok()

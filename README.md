@@ -1,8 +1,12 @@
 # xflow
 
-Native, local-first dictation for Linux, written in Rust. This is a v1 development build for Ubuntu GNOME, with provider and platform interfaces for later Fedora/macOS/Windows adapters. It is not yet a production release; real desktop and provider acceptance tests remain required.
+Native, local-first dictation for macOS and Linux, written in Rust. This is a v1 development build with macOS Accessibility/CGEvent delivery and Ubuntu GNOME integration; Fedora and Windows desktop validation remain future work. It is not yet a production release; real desktop and provider acceptance tests remain required.
 
 The workspace includes a small daemon, clap CLI, event-driven ratatui TUI, CPAL microphone capture, ten cloud batch transcription adapters plus custom/local servers, optional LLM cleanup, dictionary/snippets/per-app styles, SQLite history and statistics, and a native GNOME Shell recording pill. No Electron, WebView, telemetry, or resident local model runtime.
+
+macOS now has configurable Fn/Globe hold-to-talk and double-tap hands-free input,
+with an on-demand recording pill. See [hotkey setup and verification](docs/hotkeys.md)
+for Input Monitoring, the Globe keyboard setting, live rebinding and current manual checks.
 
 ## Build and run
 
@@ -44,6 +48,20 @@ Daemon status retains `success` or `error` until the next recording or cancel. T
 Cancel discards an active capture or pending provider job. Once a transcript has been finalized and saved, cancel cannot undo its history entry; a queued cancel is handled before injection starts when possible. `clear-history` cancels active work before clearing persisted history.
 
 GNOME Wayland needs the bundled Shell extension for native shortcuts, focus discovery and overlay. Follow [platform setup](docs/platform-setup.md) to install it and configure clipboard/uinput support. The extension implements toggle, hold-to-talk and smart press/release modes; physical shortcut and destination acceptance remain release gates. CLI `start`/`stop` can be bound to press/release events on compositors that expose them. Unavailable paste or changed/unknown focus falls back to copying; automatic multiline paste into terminals is refused.
+
+## macOS
+
+Build with `cargo build -p xflow-app --locked` (Xcode Command Line Tools required), then install both `xflow` and `xflowd` beside each other, for example in `~/.local/bin`. Run `xflow setup`, `xflow service install --enable`, and `xflow doctor`. Setup offers provider, microphone and launchd service configuration without GNOME extension steps.
+
+The LaunchAgent is `~/Library/LaunchAgents/com.xflow.daemon.plist`; installation replaces/adopts an existing file with that label. It uses RunAtLoad and KeepAlive, and writes logs to `~/Library/Logs/xflowd.log`. `xflow daemon start|stop|restart|status` uses `launchctl` in your graphical login; stop unloads the agent so KeepAlive cannot restart it. `xflow daemon logs --follow` tails its log. `daemon start` reinstalls a plist whose binary no longer exists. Uninstall with `xflow service uninstall`; logs are retained. Provider keys should use Keychain (`xflow key set`), since launchd does not inherit shell environment variables.
+
+Enable the installed `xflowd` executable in **System Settings > Privacy & Security > Accessibility**, **Microphone**, and **Input Monitoring** (global hotkeys). Foreground execution may instead require grants for your terminal. Restart the daemon after changing permissions. Doctor shows the terminal's grants for information only, without recording or prompting; launchd's xflowd has its own and logs a warning when Accessibility is missing. A first recording requests microphone access when authorization is not yet determined.
+
+Grants and Keychain "Always Allow" follow the code signature, and each build's ad-hoc signature is new. `xflow service install` re-signs `xflowd` with identifier `com.xflow.xflowd`, using a code-signing certificate named `xflow-dev` when one exists so grants survive rebuilds. Create it once in **Keychain Access > Certificate Assistant > Create a Certificate…** (Name `xflow-dev`, Identity Type *Self Signed Root*, Certificate Type *Code Signing*).
+
+Delivery uses the frontmost app's bundle ID/name, window and focused Accessibility element. With the destination focused, trigger recording and finish it with `xflow toggle`; paste uses synthetic Cmd+V at the cursor, with the key that types "v" under Command in the current keyboard layout. `injection.method = "type"` sends Unicode key events, and `clipboard` copies only. Electron/Chromium apps are asked to expose Accessibility (`AXManualAccessibility`); when the focused element is still unknown, xflow pastes blind into the same window. A changed app/window or a known non-editable element falls back to copying, as do terminal control characters (including multiline input); secure fields refuse injection. `xflow last` retains recovery text. Command mode reads Accessibility selected text; the correction-learning hook reads the focused editable value and returns no text for secure fields or terminals. Clipboard restoration preserves previous text only while the clipboard still holds our injected text; other formats are not restored.
+
+The daemon creates no application windows or NSApplication and runs no Accessibility polling loop. Optional notifications and sound cues run short-lived system helpers. Physical delivery and permission behavior depend on the destination app exposing Accessibility; unsupported apps retain clipboard recovery.
 
 ## Providers and privacy
 

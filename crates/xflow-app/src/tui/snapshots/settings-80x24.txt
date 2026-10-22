@@ -7,10 +7,10 @@
 │ 5  Styles      ││            Language              Automatic                 │
 │ 6  Settings    ││            Microphone            System default            │
 │ 7  Pill        ││            Check connection      Run check                 │
-│ 8  Your stats  ││  Shortcut  Key                   Needs a newer xflow       │
-│ 9  Check-up    ││            Shortcut              Needs a newer xflow       │
-│                ││            Double-tap speed      Needs a newer xflow       │
-│                ││            Hold delay            Needs a newer xflow       │
+│ 8  Your stats  ││  Shortcut  Key                   Fn (Globe)                │
+│ 9  Check-up    ││            Shortcut              On                        │
+│                ││            Double-tap speed      500 ms                    │
+│                ││            Hold delay            500 ms                    │
 │                │╰────────────────────────────────────────────────────────────╯
 │                │╭ About ─────────────────────────────────────────────────────╮
 │                ││ Start · Guided setup                                       │

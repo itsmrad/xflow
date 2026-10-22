@@ -87,7 +87,7 @@ pub async fn missing_keys(config: &Config) -> (bool, bool) {
                 Some(configured.as_str())
             };
             matches!(
-                xflow_providers::key_status(id, env).await,
+                xflow_providers::key_status(xflow_providers::cleanup_key_id(id), env).await,
                 KeySource::Missing
             )
         }

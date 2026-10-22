@@ -184,27 +184,38 @@ fn every_setting_is_an_option_list_that_ignores_typing_and_stages_a_choice() {
             before,
             "{name} accepted typing"
         );
-        let file = app.file.as_ref().unwrap().to_string();
         key(&mut app, KeyCode::Down);
         let effects = key_enter(&mut app);
         assert!(effects.is_empty());
-        if name.starts_with("hotkey.") {
-            // This build has no [hotkey]; the change is refused in plain words.
-            let e = editor(&app);
-            assert!(
-                e.error
-                    .as_deref()
-                    .unwrap()
-                    .contains("newer version of xflow"),
-                "{name}"
-            );
-            assert_eq!(file, app.file.as_ref().unwrap().to_string());
-            key(&mut app, KeyCode::Esc);
-        } else {
-            assert!(app.modal.is_none(), "{name}: {:?}", editor_error(&app));
-        }
+        assert!(app.modal.is_none(), "{name}: {:?}", editor_error(&app));
     }
     assert!(app.dirty);
+}
+#[test]
+fn esc_keeps_recordings_off_home_and_busy_reloads_retry() {
+    let (_dir, mut app) = app();
+    app.connected = true;
+    app.event(Response::status(State::Listening, 0.1));
+    app.page = Page::Settings;
+    let cancels = |effects: &[Effect]| {
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Request(Request::Cancel, _)))
+    };
+    assert!(!cancels(&key(&mut app, KeyCode::Esc)));
+    assert_eq!(app.page, Page::Home);
+    assert!(cancels(&key(&mut app, KeyCode::Esc)));
+    // A reload refused while busy is remembered and retried after the in-flight one.
+    let refused = Response::error(State::Listening, "reload requires an idle daemon");
+    app.response(refused, Tag::Reload);
+    assert!(app.reload_pending);
+    assert_plain(app.toast.as_deref().unwrap());
+    let effects = app.response(Response::status(State::Idle, 0.0), Tag::Reload);
+    assert!(matches!(
+        &effects[..],
+        [Effect::Request(Request::Reload, Tag::Reload)]
+    ));
+    assert!(!app.reload_pending);
 }
 fn key_enter(app: &mut App) -> Vec<Effect> {
     key(app, KeyCode::Enter)
@@ -452,17 +463,21 @@ fn guided_setup_is_all_choices_except_the_key() {
     key_enter(&mut app);
     assert_eq!(app.config.recording.device.as_deref(), Some("USB Mic"));
     assert!(matches!(app.modal, Some(Modal::Setup(Step::MicCheck))));
-    // The level check starts once the daemon reloaded the new microphone.
+    // The level check starts once the daemon reloaded the new microphone, and is
+    // cancelled before the daemon's own 120 s limit could upload it.
     let effects = app.response(Response::status(State::Idle, 0.0), Tag::Reload);
     assert!(matches!(
         &effects[..],
-        [Effect::Request(
-            Request::Start {
-                delivery: Delivery::None,
-                ..
-            },
-            _
-        )]
+        [
+            Effect::Request(
+                Request::Start {
+                    delivery: Delivery::None,
+                    ..
+                },
+                _
+            ),
+            Effect::MicTimeout(after)
+        ] if after.as_secs() < 10
     ));
     app.event(Response::status(State::Listening, 0.7));
     assert!(screen(&app, 80, 24).contains('█'));
@@ -472,7 +487,7 @@ fn guided_setup_is_all_choices_except_the_key() {
         [Effect::Request(Request::Cancel, _)]
     ));
     app.event(Response::status(State::Idle, 0.0));
-    key_enter(&mut app); // Shortcut: unsupported here, still continues.
+    key_enter(&mut app); // Shortcut
     assert!(matches!(app.modal, Some(Modal::Setup(Step::Try))));
     let effects = key(&mut app, KeyCode::Char(' '));
     assert!(matches!(

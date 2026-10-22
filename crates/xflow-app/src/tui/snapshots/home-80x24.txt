@@ -8,7 +8,7 @@
 │ 6  Settings    ││                                                            │
 │ 7  Pill        │╰────────────────────────────────────────────────────────────╯
 │ 8  Your stats  │╭ Your setup ────────────────────────────────────────────────╮
-│ 9  Check-up    ││ Shortcut    Space in this window                           │
+│ 9  Check-up    ││ Shortcut    Fn (Globe) — hold to talk, double-tap for hand │
 │                ││ Speech      Groq · Whisper Large v3 Turbo                  │
 │                ││ Cleanup     Off — exact words                              │
 │                ││ Microphone  System default                                 │
