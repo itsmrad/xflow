@@ -35,6 +35,7 @@ export default class XFlowExtension extends Extension {
         this._bindings = new Map();
         this._grabs = new Map();
         this._frameSource = this._holdSource = this._releaseSource = this._restoreSource = 0;
+        this._tapSource = 0;
         this._revision = 0;
         this._queue = Promise.resolve();
         this._injectQueue = Promise.resolve();
@@ -61,7 +62,7 @@ export default class XFlowExtension extends Extension {
         this._connect(this._settings, 'changed', (_settings, key) => {
             if (Object.hasOwn(SHORTCUTS, key)) this._bind(key);
             else {
-                if (key === 'hotkey-mode' || key === 'ptt-threshold-ms') this._resetHeld();
+                if (key === 'hotkey-mode' || key === 'ptt-threshold-ms' || key === 'double-tap-ms') this._resetHeld();
                 this._configure();
             }
         });
@@ -168,8 +169,8 @@ export default class XFlowExtension extends Extension {
         const s = this._settings;
         this._geometry = L.pillGeometry({barCount: s.get_int('waveform-bars'),
             barStyle: s.get_string('waveform-style'), scale: s.get_double('scale')});
-        this._hotkey.configure(s.get_string('hotkey-mode'), s.get_int('ptt-threshold-ms'));
-        this._commandHotkey.configure(s.get_string('hotkey-mode'), s.get_int('ptt-threshold-ms'));
+        this._hotkey.configure(s.get_string('hotkey-mode'), s.get_int('ptt-threshold-ms'), s.get_int('double-tap-ms'));
+        this._commandHotkey.configure(s.get_string('hotkey-mode'), s.get_int('ptt-threshold-ms'), s.get_int('double-tap-ms'));
         for (const child of this._wave.get_children()) child.destroy();
         const g = this._geometry;
         this._bars = [];
@@ -345,6 +346,16 @@ export default class XFlowExtension extends Extension {
             if (this._state === 'processing') return;
             const machine = binding.command === 'command' ? this._commandHotkey : this._hotkey;
             const t0Us = GLib.get_monotonic_time();
+            this._cancelSource('_tapSource');
+            // The other shortcut's pending tap is a lone tap: discard it rather than stop it.
+            const other = machine === this._hotkey ? this._commandHotkey : this._hotkey;
+            if (other.deadline() !== null) {
+                other.reset();
+                this._command('cancel');
+            }
+            // A second press after the window (before its timer fired) discards the tap, then starts afresh.
+            const expired = machine.expire(t0Us / 1000);
+            if (expired) this._command(expired);
             const command = machine.press(t0Us / 1000, this._state === 'listening');
             if (command) this._command(command, binding.command === 'command' ? 'command' : 'dictation', t0Us);
             if (machine.holding) {
@@ -368,15 +379,26 @@ export default class XFlowExtension extends Extension {
 
     _release(action) {
         if (action !== this._heldAction) return;
-        const command = this._heldMachine.release(GLib.get_monotonic_time() / 1000);
+        const machine = this._heldMachine;
+        const now = GLib.get_monotonic_time() / 1000;
+        const command = machine.release(now);
         this._cancelSource('_releaseSource');
         this._heldAction = 0;
         this._heldMachine = null;
         if (command) this._command(command);
+        if (machine.deadline() !== null) {
+            this._cancelSource('_tapSource');
+            this._tapSource = this._timeout(Math.max(1, Math.ceil(machine.deadline() - now + 1)), () => {
+                this._tapSource = 0;
+                const expired = machine.expire(GLib.get_monotonic_time() / 1000);
+                if (expired) this._command(expired);
+            });
+        }
     }
 
     _resetHeld() {
         this._cancelSource('_releaseSource');
+        this._cancelSource('_tapSource');
         this._heldAction = 0;
         this._heldMachine = null;
         this._hotkey.reset();
