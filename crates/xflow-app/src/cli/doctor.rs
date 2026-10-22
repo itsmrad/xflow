@@ -61,13 +61,23 @@ fn checks(
         format!("desktop={desktop}; session={session}"),
         "Desktop delivery requires a graphical login; file transcription works headlessly",
     ));
-    checks.push(check(
-        "systemd",
-        has_tool("systemctl"),
-        false,
-        "Optional user service management",
-        "Without systemd, run xflowd in the foreground",
-    ));
+    if session != "macos" {
+        checks.push(check(
+            "systemd",
+            has_tool("systemctl"),
+            false,
+            "Optional user service management",
+            "Without systemd, run xflowd in the foreground",
+        ));
+    } else {
+        checks.push(check(
+            "launchd",
+            has_tool("launchctl"),
+            false,
+            "LaunchAgent user service management",
+            "Use xflow service install --enable in a graphical login",
+        ));
+    }
     if gnome {
         checks.push(check(
             "GNOME tools",
@@ -127,9 +137,22 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
             )
         })
         .map_err(|e| e.message);
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    let (desktop, session) = (
+        std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
+        std::env::var("XDG_SESSION_TYPE").unwrap_or_default(),
+    );
+    #[cfg(target_os = "macos")]
+    let (desktop, session) = ("macOS".to_string(), "macos".to_string());
     let mut checks = checks(path, &desktop, &session, present, daemon);
+    #[cfg(target_os = "macos")]
+    {
+        let (accessibility, input) = xflow_platform::permissions();
+        let microphone = xflow_platform::microphone_permission();
+        checks.push(check("Microphone", microphone == "authorized", true, microphone, "System Settings > Privacy & Security > Microphone: allow xflowd (or the terminal when running in the foreground); start a recording to request access when not determined"));
+        checks.push(check("Accessibility", accessibility, true, "Permission for this process; launchd xflowd may have a separate grant", "System Settings > Privacy & Security > Accessibility: add/enable the installed xflowd executable (and terminal for foreground use), then xflow daemon restart"));
+        checks.push(check("Input Monitoring", input, false, "Permission for this process; required for global hotkey monitoring", "System Settings > Privacy & Security > Input Monitoring: add/enable xflowd (and terminal for foreground use), then xflow daemon restart"));
+    }
     if let Ok(cfg) = super::config::load(path).and_then(|f| f.config().map_err(Error::config)) {
         let known = super::provider::info(&cfg.stt.provider);
         checks.push(check(
@@ -200,6 +223,11 @@ mod tests {
         let result = checks(&path, "GNOME", "wayland", |_| true, Ok("v1".into()));
         assert!(result.iter().all(|c| c.ok || !c.required));
         assert!(!result.iter().any(|c| c.name == "Wayland injection"));
+        let mac = checks(&path, "macOS", "macos", |_| true, Ok("v1".into()));
+        assert!(mac.iter().any(|c| c.name == "launchd"));
+        assert!(!mac
+            .iter()
+            .any(|c| c.name == "systemd" || c.name.contains("GNOME")));
         std::fs::write(&path, "[recording]\nmax_seconds = 0").unwrap();
         let result = checks(
             &path,

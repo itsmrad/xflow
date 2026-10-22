@@ -134,7 +134,7 @@ pub enum Command {
     Stats,
     /// Diagnose configuration and desktop dependencies without recording.
     Doctor,
-    /// Control the systemd user daemon or view its logs.
+    /// Control the systemd/launchd user daemon or view its logs.
     Daemon {
         #[command(subcommand)]
         action: Daemon,

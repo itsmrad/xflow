@@ -738,7 +738,7 @@ fn native_services(old: &Config, config: &Config, services: Services) -> Result<
     };
     Ok(Services {
         audio,
-        desktop: Arc::new(xflow_platform::LinuxDesktop::new(&config.injection)),
+        desktop: Arc::new(xflow_platform::NativeDesktop::new(&config.injection)),
         stt,
         transformer,
     })
@@ -888,7 +888,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let native_adapters = || -> Result<(Arc<dyn AudioCapture>, Arc<dyn Desktop>)> {
         Ok((
             Arc::new(xflow_platform::CpalCapture::new(&config.recording)?),
-            Arc::new(xflow_platform::LinuxDesktop::new(&config.injection)),
+            Arc::new(xflow_platform::NativeDesktop::new(&config.injection)),
         ))
     };
     #[cfg(feature = "test-support")]
@@ -946,8 +946,10 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let (stream, _) = accepted?;
-                if stream.peer_cred()?.uid() != unsafe { libc::geteuid() } { continue; }
+                // Transient accept errors (EMFILE, ECONNABORTED) must not end the daemon.
+                let Ok((stream, _)) = accepted else { log("warn", "IPC accept failed"); tokio::time::sleep(Duration::from_millis(50)).await; continue; };
+                // macOS loses peer credentials when a probe disconnects before accept.
+                if !stream.peer_cred().is_ok_and(|peer| peer.uid() == unsafe { libc::geteuid() }) { continue; }
                 let Ok(permit) = capacity.clone().try_acquire_owned() else { continue; };
                 let commands = commands_tx.clone(); let events = events_tx.clone();
                 clients.spawn(async move { let _permit = permit; let _ = connection(stream, commands, events).await; });

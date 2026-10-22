@@ -1,11 +1,16 @@
+#[cfg(target_os = "macos")]
+pub use super::launchd::{daemon, service};
 use super::{args, output::Output, Error, Result};
 use anyhow::Context;
+#[cfg(target_os = "linux")]
+use std::io::BufRead;
 use std::{
-    io::{BufRead, Write},
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
 const UUID: &str = "xflow@xflow.local";
+#[cfg(any(target_os = "linux", test))]
 const UNIT: &str = include_str!("../../../../packaging/xflow.service");
 const ASSETS: &[(&str, &[u8])] = &[
     ("logic.js", include_bytes!("../../../../packaging/gnome-extension/logic.js")),
@@ -23,6 +28,7 @@ fn xdg(name: &str, fallback: &str) -> Result<PathBuf> {
         .context("HOME or an XDG path is required")
         .map_err(Into::into)
 }
+#[cfg(target_os = "linux")]
 fn unit_path() -> Result<PathBuf> {
     Ok(xdg("XDG_CONFIG_HOME", ".config")?.join("systemd/user/xflow.service"))
 }
@@ -36,7 +42,7 @@ pub fn tool(program: &str, args: &[&str]) -> Result<String> {
         Error::new(
             1,
             format!("Cannot run {program}: {e}"),
-            "Install the tool, or run xflowd in the foreground when systemd is unavailable",
+            "Install the tool, or run xflowd in the foreground",
         )
     })?;
     if !output.status.success() {
@@ -51,7 +57,7 @@ pub fn tool(program: &str, args: &[&str]) -> Result<String> {
     }
     Ok(String::from_utf8(output.stdout)?)
 }
-fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("install path has no parent")?;
     if !parent.exists() {
         xflow_app::paths::private_dir(parent)?;
@@ -62,6 +68,7 @@ fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     file.persist(path)?;
     Ok(())
 }
+#[cfg(target_os = "linux")]
 pub fn service(action: &args::Service, out: &Output) -> Result<()> {
     match action {
         args::Service::Install { enable } => {
@@ -87,6 +94,7 @@ pub fn service(action: &args::Service, out: &Output) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(target_os = "linux")]
 pub fn daemon(action: &args::Daemon, out: &Output) -> Result<()> {
     use args::Daemon::*;
     let verb = match action {

@@ -1,6 +1,6 @@
 # xflow
 
-Native, local-first dictation for Linux, written in Rust. This is a v1 development build for Ubuntu GNOME, with provider and platform interfaces for later Fedora/macOS/Windows adapters. It is not yet a production release; real desktop and provider acceptance tests remain required.
+Native, local-first dictation for macOS and Linux, written in Rust. This is a v1 development build with macOS Accessibility/CGEvent delivery and Ubuntu GNOME integration; Fedora and Windows desktop validation remain future work. It is not yet a production release; real desktop and provider acceptance tests remain required.
 
 The workspace includes a small daemon, clap CLI, event-driven ratatui TUI, CPAL microphone capture, ten cloud batch transcription adapters plus custom/local servers, optional LLM cleanup, dictionary/snippets/per-app styles, SQLite history and statistics, and a native GNOME Shell recording pill. No Electron, WebView, telemetry, or resident local model runtime.
 
@@ -44,6 +44,18 @@ Daemon status retains `success` or `error` until the next recording or cancel. T
 Cancel discards an active capture or pending provider job. Once a transcript has been finalized and saved, cancel cannot undo its history entry; a queued cancel is handled before injection starts when possible. `clear-history` cancels active work before clearing persisted history.
 
 GNOME Wayland needs the bundled Shell extension for native shortcuts, focus discovery and overlay. Follow [platform setup](docs/platform-setup.md) to install it and configure clipboard/uinput support. The extension implements toggle, hold-to-talk and smart press/release modes; physical shortcut and destination acceptance remain release gates. CLI `start`/`stop` can be bound to press/release events on compositors that expose them. Unavailable paste or changed/unknown focus falls back to copying; automatic multiline paste into terminals is refused.
+
+## macOS
+
+Build with `cargo build -p xflow-app --locked` (Xcode Command Line Tools required), then install both `xflow` and `xflowd` beside each other, for example in `~/.local/bin`. Run `xflow setup`, `xflow service install --enable`, and `xflow doctor`. Setup offers provider, microphone and launchd service configuration without GNOME extension steps.
+
+The LaunchAgent is `~/Library/LaunchAgents/com.xflow.daemon.plist`; installation replaces/adopts an existing file with that label. It uses RunAtLoad and KeepAlive, and writes logs to `~/Library/Logs/xflowd.log`. `xflow daemon start|stop|restart|status` uses `launchctl` in your graphical login; stop unloads the agent so KeepAlive cannot restart it. `xflow daemon logs --follow` tails its log. Uninstall with `xflow service uninstall`; logs are retained. Provider keys should use Keychain (`xflow key set`), since launchd does not inherit shell environment variables.
+
+Enable the installed `xflowd` executable in **System Settings > Privacy & Security > Accessibility**, **Microphone**, and **Input Monitoring** (global hotkeys). Foreground execution may instead require grants for your terminal. Restart the daemon after changing permissions. Doctor checks authorization without recording or requesting permission; its process may have different grants from launchd's daemon. A first recording requests microphone access when authorization is not yet determined.
+
+Delivery uses the frontmost app's bundle ID/name and focused Accessibility element. With the destination focused, trigger recording and finish it with `xflow toggle`; paste uses synthetic Cmd+V at the cursor. `injection.method = "type"` sends Unicode key events, and `clipboard` copies only. Missing editable context or changed app/element falls back to copying; secure fields and terminal control characters (including multiline input) refuse injection. `xflow last` retains recovery text. Command mode reads Accessibility selected text; the correction-learning hook reads the focused editable value and returns no text for secure fields or terminals. Clipboard restoration preserves previous text only while the clipboard still holds our injected text; other formats are not restored.
+
+The daemon creates no application windows or NSApplication and runs no Accessibility polling loop. Optional notifications and sound cues run short-lived system helpers. Physical delivery and permission behavior depend on the destination app exposing Accessibility; unsupported apps retain clipboard recovery.
 
 ## Providers and privacy
 

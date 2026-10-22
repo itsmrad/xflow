@@ -31,9 +31,13 @@ impl Store {
             bail!("history_limit must be positive when history is enabled");
         }
         let mut connection = if enabled {
-            if let Some(parent) = path.parent() {
-                crate::paths::private_dir(parent)?;
-            }
+            let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+                bail!("history path needs a parent directory and file name");
+            };
+            crate::paths::private_dir(parent)?;
+            // SQLite NOFOLLOW rejects symlinked ancestors such as macOS /var -> /private/var.
+            // Resolve only the validated parent; NOFOLLOW still guards the database file.
+            let path = &parent.canonicalize()?.join(name);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt;
@@ -666,7 +670,15 @@ mod tests {
     #[test]
     fn refuses_database_symlinks_without_changing_target_permissions() {
         use std::os::unix::fs::{symlink, PermissionsExt};
+        #[cfg(target_os = "macos")]
+        let dir = tempfile::tempdir_in("/var/tmp").unwrap();
+        #[cfg(not(target_os = "macos"))]
         let dir = tempfile::tempdir().unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            assert_ne!(dir.path(), dir.path().canonicalize().unwrap());
+            Store::open(&dir.path().join("regular.db"), true, 10).unwrap();
+        }
         let target = dir.path().join("target.db");
         std::fs::write(&target, "keep").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
