@@ -60,29 +60,35 @@ a missing tap, e.g. after granting Input Monitoring. Timing values are bounded:
 
 ## Recording pill
 
-The macOS pill shows listening/processing and microphone level during either a
-hold or hands-free recording. It is borderless, non-activating and click-through.
-It runs as a transient sibling `xflow overlay-pill` process, fed only state and
-level over bounded stdin frames. It exits on idle, completion, input closure or
-daemon shutdown. A missing/crashed helper does not prevent recording.
+The macOS pill is a small dark capsule just above the Dock on the screen under
+the mouse, modeled on Wispr Flow's bar. While you are listening it shows a live
+waveform. In hands-free mode it gets wider and adds ✕ (cancel) and ■ (stop)
+buttons. While processing, the bars collapse into shimmering dots. On error it
+flashes red with a shake, then fades. It never takes focus. Clicks pass through
+it, except on the hands-free buttons. With Reduce Motion it shows and hides
+without animating.
 
-`xflowd` does not load AppKit; only the helper loads it on demand. No hotkey or
-pill polling timer runs at idle. The helper blocks on native events, awakened
-by its input thread. `xflow` must be installed alongside `xflowd` for the helper
-to be found.
+| Listening | Hands-free | Processing | Error |
+|---|---|---|---|
+| ![](img/pill-listening.png) | ![](img/pill-hands-free.png) | ![](img/pill-processing.png) | ![](img/pill-error.png) |
+
+The pill runs as a transient sibling process, `xflow overlay-pill`. It receives
+only state, level and a hands-free flag, over bounded stdin frames. It is drawn
+with CALayers and animates at about 60 fps only while it is visible. It exits
+when the session ends. `xflowd` never loads AppKit, and a missing or crashed
+helper does not stop recording. `xflow` must be installed next to `xflowd` so
+the helper can be found.
 
 ```sh
+xflow overlay preview            # hidden: cycles listening, hands-free, processing, error
 xflow overlay set enabled false
 xflow overlay set position bottom-center
 xflow overlay set scale 1.2
 xflow overlay set opacity 0.9
-xflow overlay set theme dark
 ```
 
-On macOS these appearance settings are stored beside `config.toml` in
-`overlay.json` and apply to the next pill. The pill uses the main screen's visible
-area and supports the existing top/bottom/left/right position names. GNOME keeps
-its existing native renderer, appearance settings and richer waveform options.
+On macOS these settings are stored in `overlay.json` next to `config.toml` and
+apply to the next pill. GNOME keeps its own renderer and appearance settings.
 
 ## Linux
 

@@ -350,9 +350,20 @@ pub enum Cleanup {
 #[derive(Subcommand, Debug)]
 pub enum Overlay {
     List,
-    Get { key: String },
-    Set { key: String, value: String },
-    Reset { key: Option<String> },
+    Get {
+        key: String,
+    },
+    Set {
+        key: String,
+        value: String,
+    },
+    Reset {
+        key: Option<String>,
+    },
+    /// Show the recording pill cycling through its states, without dictating.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    Preview,
 }
 #[derive(Subcommand, Debug)]
 pub enum Daemon {

@@ -20,6 +20,8 @@ const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
 struct PillEvent {
     state: State,
     level: f32,
+    #[serde(default)]
+    hands_free: bool,
 }
 
 impl PillEvent {
@@ -35,6 +37,9 @@ impl PillEvent {
             } else {
                 0.0
             },
+            hands_free: event
+                .message
+                .is_some_and(|m| m.starts_with(crate::daemon::HANDS_FREE)),
         }
     }
 }
@@ -51,6 +56,10 @@ pub async fn run(mut events: broadcast::Receiver<DesktopEvent>) {
             Err(broadcast::error::RecvError::Closed) => break,
         };
         if !event.active() {
+            // The final success/error frame lets the pill play its exit animation.
+            if let Some(child) = &mut helper {
+                let _ = send(child, event).await;
+            }
             close(&mut helper).await;
             session_active = false;
             continue;
@@ -98,10 +107,7 @@ async fn send(child: &mut Child, event: PillEvent) -> Result<()> {
 async fn close(helper: &mut Option<Child>) {
     if let Some(mut child) = helper.take() {
         drop(child.stdin.take());
-        if timeout(Duration::from_millis(200), child.wait())
-            .await
-            .is_err()
-        {
+        if timeout(Duration::from_secs(1), child.wait()).await.is_err() {
             let _ = child.kill().await;
         }
     }
@@ -142,6 +148,38 @@ pub fn helper() -> Result<()> {
     native::run(first, input, settings)
 }
 
+/// Hidden `xflow overlay preview`: cycles listening, hands-free, processing
+/// and error without dictating.
+pub fn preview() -> Result<()> {
+    use std::io::Write;
+    let mut child = std::process::Command::new(std::env::current_exe()?)
+        .arg("overlay-pill")
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("cannot start the recording pill")?;
+    let mut stdin = child.stdin.take().context("pill input closed")?;
+    for i in 0..=250 {
+        let t = i as f32 * 0.04; // 25 Hz, like the daemon's level tick
+        let (state, hands_free) = match i {
+            0..=99 => (State::Listening, false),
+            100..=174 => (State::Listening, true),
+            175..=249 => (State::Processing, false),
+            _ => (State::Error, false),
+        };
+        let level = 0.01 + 0.2 * ((t * 7.0).sin() * (t * 1.7).sin()).abs();
+        let event = PillEvent {
+            state,
+            level,
+            hands_free,
+        };
+        writeln!(stdin, "{}", serde_json::to_string(&event)?)?;
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    drop(stdin);
+    child.wait()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +195,7 @@ mod tests {
         let event = PillEvent {
             state: State::Listening,
             level: 0.5,
+            hands_free: false,
         };
         let mut stalled = false;
         for _ in 0..4096 {

@@ -39,6 +39,8 @@ struct Processed {
     stopped: Instant,
     warning: Option<String>,
 }
+/// Status message while a double-tap has latched recording; the macOS pill keys off it.
+pub const HANDS_FREE: &str = "Hands-free recording";
 struct Reloaded {
     config: Config,
     services: Services,
@@ -626,7 +628,7 @@ impl Engine {
                 _ = self.notifications.join_next(), if !self.notifications.is_empty() => (),
                 action = async { self.hotkeys.as_mut().unwrap().next_action().await }, if self.hotkeys.is_some() => {
                     match action {
-                        Ok(HotkeyAction::HandsFree) => { if self.state == State::Listening { self.message = Some("Hands-free recording".into()); self.publish(); } }
+                        Ok(HotkeyAction::HandsFree) => { if self.state == State::Listening { self.message = Some(HANDS_FREE.into()); self.publish(); } }
                         Ok(HotkeyAction::PasteLast) => {
                             if !self.active() && !self.delivering && desktop_ops.is_empty() {
                                 let status = self.status(); let store = self.store.clone(); let desktop = self.services.desktop.clone(); let last = self.last.clone();

@@ -46,12 +46,6 @@ fn defaults() -> Vec<Setting> {
             Kind::Double { min: 0.5, max: 3.0 },
             "Pill size",
         ),
-        (
-            "theme",
-            "'light'",
-            Kind::Choice(["light", "dark", "auto"].map(str::to_owned).to_vec()),
-            "Pill theme",
-        ),
     ]
     .into_iter()
     .map(|(key, value, kind, summary)| Setting {
@@ -196,7 +190,6 @@ mod tests {
         for (key, value) in [
             ("enabled", "false"),
             ("position", "top-right"),
-            ("theme", "dark"),
             ("scale", "1.5"),
             ("opacity", "0.5"),
         ] {
