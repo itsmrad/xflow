@@ -124,10 +124,15 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         );
         return hits;
     }
+    // Long toasts wrap onto a second line instead of being clipped.
+    let toast_lines = match &app.toast {
+        Some(toast) if toast.chars().count() + 1 > area.width as usize => 2,
+        _ => 1,
+    };
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(5),
-        Constraint::Length(1),
+        Constraint::Length(toast_lines),
         Constraint::Length(1),
     ])
     .split(area);
@@ -190,7 +195,9 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
     }
     if let Some(toast) = &app.toast {
         frame.render_widget(
-            Paragraph::new(format!(" {toast}")).style(accent(app).add_modifier(Modifier::BOLD)),
+            Paragraph::new(format!(" {toast}"))
+                .wrap(Wrap { trim: true })
+                .style(accent(app).add_modifier(Modifier::BOLD)),
             rows[2],
         );
     }
@@ -298,9 +305,9 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ("Enter options", Some(Action::Choose)),
                     ("/ search", Some(Action::Search)),
                 ],
+                // No "↑↓ move" here: the footer must fit "q quit" at 80 columns.
                 Page::Dictionary | Page::Snippets | Page::Styles => {
                     vec![
-                        ("↑↓ move", None),
                         ("Enter choose", Some(Action::Choose)),
                         ("Del delete", Some(Action::Delete)),
                     ]

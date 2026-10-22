@@ -1,7 +1,7 @@
 use super::{
     integrations, options,
     render::{self, HitMap},
-    state::{Action, App, Effect, Page, Step, Tag},
+    state::{Action, App, Effect, Modal, Page, Step, Tag},
     theme::ColorMode,
 };
 use crate::{
@@ -48,6 +48,7 @@ enum Update {
     Devices(Result<Vec<String>>),
     Doctor(Vec<String>),
     Notice(Result<String>),
+    MicTimeout,
 }
 
 fn restore() {
@@ -241,9 +242,14 @@ pub async fn run() -> Result<()> {
                 redraw = true;
             },
             Some(result) = jobs.join_next(), if !jobs.is_empty() => {
-                if let Err(error) = result {
-                    app.toast = Some(options::plain(&error.to_string()));
-                    redraw = true;
+                match result {
+                    // The panic hook already restored the terminal; drawing on would corrupt it.
+                    Err(error) if error.is_panic() => break,
+                    Err(error) => {
+                        app.toast = Some(options::plain(&error.to_string()));
+                        redraw = true;
+                    }
+                    Ok(()) => (),
                 }
             },
         }
@@ -292,6 +298,7 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
                         options::plain(&format!("{e:#}"))
                     ));
                     app.file = Some(file);
+                    app.dirty = false;
                     effects.push(Effect::Load(app.path.clone()));
                 }
             }
@@ -312,6 +319,10 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
                 || response.state == xflow_core::State::Listening;
             let final_event = response.text.is_some();
             app.event(response);
+            if app.reload_pending && !app.active() {
+                app.reload_pending = false;
+                effects.push(Effect::Request(Request::Reload, Tag::Reload));
+            }
             if final_event && matches!(app.page, Page::History | Page::Stats) {
                 effects = app.refresh();
             }
@@ -346,6 +357,13 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             }
         },
         Update::Doctor(rows) => app.diagnostics = rows,
+        Update::MicTimeout => {
+            if matches!(app.modal, Some(Modal::Setup(Step::MicCheck)))
+                && app.status.state == xflow_core::State::Listening
+            {
+                effects = app.action(Action::Cancel);
+            }
+        }
         Update::Notice(result) => {
             app.toast = Some(match result {
                 Ok(text) => text,
@@ -421,6 +439,10 @@ fn dispatch(
                 ),
                 Effect::CheckProvider(config, cleanup) => {
                     Update::Notice(integrations::check(&config, cleanup).await)
+                }
+                Effect::MicTimeout(after) => {
+                    tokio::time::sleep(after).await;
+                    Update::MicTimeout
                 }
                 Effect::Devices => Update::Devices(blocking(integrations::devices).await),
                 Effect::Doctor => {

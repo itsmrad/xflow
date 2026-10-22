@@ -76,7 +76,6 @@ pub enum Action {
     NextPage,
     PrevPage,
     Save,
-    Unset,
     Help,
     Palette,
     Refresh,
@@ -154,6 +153,7 @@ pub enum Effect {
     KeyStatus(Config),
     SaveKey(String, Zeroizing<String>),
     CheckProvider(Config, bool),
+    MicTimeout(std::time::Duration),
     Devices,
     Doctor,
 }
@@ -303,6 +303,8 @@ pub struct App {
     pub disk: Option<String>,
     pub dirty: bool,
     pub saving: bool,
+    /// The daemon was busy when we asked it to reload; ask again once it's idle.
+    pub reload_pending: bool,
     pub connected: bool,
     pub connection: String,
     pub status: Response,
@@ -374,6 +376,7 @@ impl App {
             modal: None,
             toast: None,
             quit: false,
+            reload_pending: false,
             colors,
             theme,
             scroll: 0,
@@ -391,7 +394,6 @@ impl App {
         self.disk = disk;
         self.file = Some(file);
         self.dirty = false;
-        self.saving = false;
         Ok(())
     }
     pub fn now(&self) -> i64 {
@@ -645,6 +647,10 @@ impl App {
                 .message
                 .unwrap_or_else(|| "xflow couldn't do that".into());
             self.toast = Some(match tag {
+                Tag::Reload if message.contains("idle daemon") => {
+                    self.reload_pending = true;
+                    "Saved — applies when this dictation finishes.".into()
+                }
                 Tag::Reload => format!("Saved, but not applied yet: {}", options::plain(&message)),
                 _ => options::plain(&message),
             });
@@ -679,9 +685,12 @@ impl App {
             }
             Tag::Mutation => return self.refresh(),
             Tag::Reload => {
+                if std::mem::take(&mut self.reload_pending) {
+                    return vec![Effect::Request(Request::Reload, Tag::Reload)];
+                }
                 // The mic check starts only once the daemon listens to the chosen device.
                 if matches!(self.modal, Some(Modal::Setup(Step::MicCheck))) {
-                    return vec![mic_check()];
+                    return mic_check(&self.config);
                 }
             }
             Tag::Done(text) => {
@@ -776,7 +785,6 @@ impl App {
             KeyCode::Char('n') | KeyCode::Char('N') => Action::Add,
             KeyCode::Enter => Action::Choose,
             KeyCode::Delete | KeyCode::Backspace => Action::Delete,
-            KeyCode::Char('u') => Action::Unset,
             KeyCode::Char('?') => Action::Help,
             KeyCode::Char(':') => Action::Palette,
             KeyCode::Char('r') => Action::Refresh,
@@ -994,6 +1002,8 @@ impl App {
             let multiline = !field.secret;
             let text = if field.secret { text.trim() } else { text };
             if field.value.len() + text.len() <= 16 * 1024 {
+                // Grow once so a pasted secret never leaves reallocated copies behind.
+                field.value.reserve(text.len());
                 for c in text
                     .chars()
                     .filter(|c| !c.is_control() || (multiline && (*c == '\n' || *c == '\t')))
@@ -1052,7 +1062,7 @@ impl App {
             }
             Action::Cancel => return vec![Effect::Request(Request::Cancel, Tag::Ordinary)],
             Action::Back => {
-                if self.active() {
+                if self.active() && self.page == Page::Home {
                     return self.action(Action::Cancel);
                 } else if self.page == Page::History && !self.query.is_empty() {
                     self.query.clear();
@@ -1155,20 +1165,6 @@ impl App {
             }
             Action::Refresh => return self.refresh(),
             Action::Setup => return self.open_setup(Step::Welcome),
-            Action::Unset if self.page == Page::Settings => {
-                if !self.editable() {
-                    return vec![];
-                }
-                if let Some((key, _)) = self.settings().get(self.selected()) {
-                    if !key.starts_with("action.") {
-                        let key = key.clone();
-                        if let Err(e) = self.file.as_mut().unwrap().unset(&key) {
-                            self.toast = Some(options::plain(&format!("{e:#}")));
-                        }
-                        self.sync_config();
-                    }
-                }
-            }
             Action::Choose => return self.choose(),
             Action::Add | Action::AddCorrection | Action::Edit => return self.open_editor(action),
             _ => (),
@@ -1708,11 +1704,8 @@ impl App {
         // Move secrets directly into a zeroizing payload; never clone them into
         // ordinary form strings or surface provider errors containing the key.
         let secret = |editor: &mut Editor| {
-            Zeroizing::new(
-                std::mem::take(&mut *editor.fields[0].value)
-                    .trim()
-                    .to_string(),
-            )
+            let raw = Zeroizing::new(std::mem::take(&mut *editor.fields[0].value));
+            Zeroizing::new(raw.trim().to_owned())
         };
         match editor.target.clone() {
             EditTarget::Key { id, cleanup } => {
@@ -1763,7 +1756,7 @@ impl App {
                 return Ok(if self.dirty {
                     vec![]
                 } else {
-                    vec![mic_check()]
+                    mic_check(&self.config)
                 });
             }
             EditTarget::Setup(Step::Shortcut) => {
@@ -2026,17 +2019,29 @@ fn cleanup_fallback(config: &Config) -> Result<Option<String>> {
         bail!("cleanup endpoint or provider is required")
     }
 }
-/// Listen without transcribing so the meter can move; Enter cancels before any upload.
-fn mic_check() -> Effect {
-    Effect::Request(
-        Request::Start {
-            mode: Mode::Dictation,
-            context: None,
-            t0_us: None,
-            delivery: Delivery::None,
-        },
-        Tag::Ordinary,
-    )
+/// Listen without transcribing so the meter can move; Enter cancels before any upload,
+/// and a timer cancels before the daemon's own max-length or silence stop would upload.
+fn mic_check(config: &Config) -> Vec<Effect> {
+    let recording = &config.recording;
+    let limit = match recording.auto_stop_secs {
+        0 => recording.max_seconds,
+        secs => secs.min(recording.max_seconds),
+    }
+    .min(10);
+    vec![
+        Effect::Request(
+            Request::Start {
+                mode: Mode::Dictation,
+                context: None,
+                t0_us: None,
+                delivery: Delivery::None,
+            },
+            Tag::Ordinary,
+        ),
+        Effect::MicTimeout(std::time::Duration::from_millis(
+            u64::from(limit) * 1000 - 300,
+        )),
+    ]
 }
 fn text_key(field: &mut Field, key: KeyEvent) {
     match key.code {
