@@ -150,6 +150,23 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
             "Run xflow extension install; on Wayland log out/back in, then xflow extension enable",
         ));
     }
+    #[cfg(target_os = "macos")]
+    {
+        // 0 = Do Nothing; absent means the default "Show Emoji & Symbols".
+        let usage = std::process::Command::new("defaults")
+            .args(["read", "com.apple.HIToolbox", "AppleFnUsageType"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+        checks.push(check(
+            "Globe key",
+            usage.as_deref() == Some("0"),
+            false,
+            format!("AppleFnUsageType={}", usage.as_deref().unwrap_or("unset")),
+            "For the fn hotkey: System Settings → Keyboard → Press 🌐 key to: Do Nothing",
+        ));
+    }
     let ok = checks.iter().all(|c| c.ok || !c.required);
     if out.json {
         out.data(&serde_json::json!({"ok":ok,"checks":checks,"manual_checks":["Microphone quality","Desktop shortcuts and text delivery","Provider credentials: xflow key status"]}), "")?;

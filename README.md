@@ -4,6 +4,10 @@ Native, local-first dictation for Linux, written in Rust. This is a v1 developme
 
 The workspace includes a small daemon, clap CLI, event-driven ratatui TUI, CPAL microphone capture, ten cloud batch transcription adapters plus custom/local servers, optional LLM cleanup, dictionary/snippets/per-app styles, SQLite history and statistics, and a native GNOME Shell recording pill. No Electron, WebView, telemetry, or resident local model runtime.
 
+macOS now has configurable Fn/Globe hold-to-talk and double-tap hands-free input,
+with an on-demand recording pill. See [hotkey setup and verification](docs/hotkeys.md)
+for Input Monitoring, the Globe keyboard setting, live rebinding and current manual checks.
+
 ## Build and run
 
 The locked dependency set declares Rust 1.88 as its highest minimum compiler version (notably `instability`, `darling`, and ICU crates). Rust 1.88 is the declared lower bound; CI has not separately tested that compiler. Native development libraries are also required:

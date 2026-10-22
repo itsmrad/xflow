@@ -22,12 +22,13 @@ use tokio::{
 };
 pub use xflow_core::ipc::Command;
 use xflow_core::{
-    config::Config,
+    config::{Config, HotkeyConfig},
     ipc::{
         Delivery, HistoryEntry, Request, Response, Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     },
-    AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, InjectionOutcome,
-    Mode, SpeechToText, State, TextTransformer, TranscriptionOptions, TransformRequest,
+    AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, GlobalHotkeys,
+    HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
+    TranscriptionOptions, TransformRequest,
 };
 
 struct Processed {
@@ -37,6 +38,13 @@ struct Processed {
     timings: Timings,
     stopped: Instant,
     warning: Option<String>,
+}
+struct Reloaded {
+    config: Config,
+    services: Services,
+    store: Store,
+    /// None keeps the running adapter; Err keeps it too and becomes a status warning.
+    hotkeys: Option<std::result::Result<Option<Box<dyn GlobalHotkeys>>, String>>,
 }
 enum Completion {
     Ready {
@@ -49,7 +57,7 @@ enum Completion {
         result: Result<Option<InjectionOutcome>>,
     },
     Reloaded {
-        result: Box<Result<(Config, Services, Store)>>,
+        result: Box<Result<Reloaded>>,
         reply: oneshot::Sender<Response>,
     },
 }
@@ -62,12 +70,17 @@ pub struct Services {
 }
 // Injectable so reload tests never construct real desktop/audio/provider services.
 type ReloadFactory = Arc<dyn Fn(&Config, &Config, Services) -> Result<Services> + Send + Sync>;
+type HotkeyFactory =
+    Arc<dyn Fn(&HotkeyConfig) -> Result<Option<Box<dyn GlobalHotkeys>>> + Send + Sync>;
 pub struct Engine {
     config: Config,
     services: Services,
     store: Store,
     config_path: Option<PathBuf>,
     reload_factory: ReloadFactory,
+    hotkey_factory: Option<HotkeyFactory>,
+    hotkeys: Option<Box<dyn GlobalHotkeys>>,
+    hotkey_warning: Option<String>,
     reloading: bool,
     delivering: bool,
     state: State,
@@ -104,6 +117,9 @@ impl Engine {
             store,
             config_path: None,
             reload_factory: Arc::new(native_services),
+            hotkey_factory: None,
+            hotkeys: None,
+            hotkey_warning: None,
             reloading: false,
             delivering: false,
             state: State::Idle,
@@ -148,6 +164,12 @@ impl Engine {
             (None, Some(warning)) => Some(warning.clone()),
             (message, None) => message.clone(),
         };
+        if let Some(warning) = &self.hotkey_warning {
+            r.message = Some(bounded_message(&match r.message {
+                Some(message) => format!("{message}; {warning}"),
+                None => warning.clone(),
+            }));
+        }
         r.version = Some(env!("CARGO_PKG_VERSION").into());
         r.protocol = Some(PROTOCOL_VERSION);
         r.provider = Some(self.services.stt.name().into());
@@ -521,13 +543,15 @@ impl Engine {
                         if self.active() || self.reloading { let _ = reply.send(Response::error(self.state, "reload requires an idle daemon")); continue; }
                         let Some(path) = self.config_path.clone() else { let _ = reply.send(Response::error(self.state, "reload config path is unavailable")); continue; };
                         self.reloading = true;
-                        let old = self.config.clone(); let services = self.services.clone(); let store = self.store.clone(); let factory = self.reload_factory.clone(); let tx = completion_tx.clone();
+                        let old = self.config.clone(); let services = self.services.clone(); let store = self.store.clone(); let factory = self.reload_factory.clone(); let hotkey_factory = self.hotkey_factory.clone(); let retry_hotkeys = self.hotkeys.is_none() || self.hotkey_warning.is_some(); let tx = completion_tx.clone();
                         queries.spawn(async move {
                             let result = tokio::task::spawn_blocking(move || {
                                 let config = Config::load(&path)?;
                                 let services = factory(&old, &config, services)?;
+                                // Recreate the tap only when its config changed or it is missing (e.g. permission granted since).
+                                let hotkeys = hotkey_factory.filter(|_| old.hotkey != config.hotkey || retry_hotkeys).map(|factory| factory(&config.hotkey).map_err(|e| bounded_message(&format!("{e:#}"))));
                                 let store = if store.settings() == (config.privacy.history, config.privacy.history_limit) { store } else { store.reopen(config.privacy.history, config.privacy.history_limit)? };
-                                Ok((config, services, store))
+                                Ok(Reloaded { config, services, store, hotkeys })
                             }).await.unwrap_or_else(|e| Err(e.into()));
                             let _ = tx.send(Completion::Reloaded { result: Box::new(result), reply }).await;
                         }); continue;
@@ -548,6 +572,7 @@ impl Engine {
                     if matches!(request, Request::Start { .. } | Request::Toggle { .. }) && !self.active() && !desktop_ops.is_empty() { let _ = reply.send(Response::error(self.state, "desktop delivery is busy")); continue; }
                     let shutdown = matches!(request, Request::Shutdown);
                     let response = self.handle(request, &completion_tx).await.unwrap_or_else(|e| Response::error(self.state, format!("{e:#}")));
+                    if self.state != State::Listening { if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); } }
                     let _ = reply.send(response); if shutdown { break; }
                 }
                 Some(completion) = completion_rx.recv() => match completion {
@@ -576,7 +601,7 @@ impl Engine {
                     }
                     Completion::Reloaded { result, reply } => {
                         self.reloading = false;
-                        let r = match *result { Ok((config, services, store)) => { self.config = config; self.services = services; self.store = store; self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
+                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys = hotkeys; if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
                     }
                     _ => (),
@@ -599,9 +624,41 @@ impl Engine {
                 _ = deliveries.join_next(), if !deliveries.is_empty() => (),
                 _ = desktop_ops.join_next(), if !desktop_ops.is_empty() => (),
                 _ = self.notifications.join_next(), if !self.notifications.is_empty() => (),
+                action = async { self.hotkeys.as_mut().unwrap().next_action().await }, if self.hotkeys.is_some() => {
+                    match action {
+                        Ok(HotkeyAction::HandsFree) => { if self.state == State::Listening { self.message = Some("Hands-free recording".into()); self.publish(); } }
+                        Ok(HotkeyAction::PasteLast) => {
+                            if !self.active() && !self.delivering && desktop_ops.is_empty() {
+                                let status = self.status(); let store = self.store.clone(); let desktop = self.services.desktop.clone(); let last = self.last.clone();
+                                desktop_ops.spawn(async move { let _ = query(status, Request::PasteLast, store, desktop, last).await; });
+                            }
+                        }
+                        Ok(action) => {
+                            let request = match action {
+                                HotkeyAction::Start => Request::Start { mode: Mode::Dictation, context: None, t0_us: Some(monotonic_us()), delivery: Delivery::Inject },
+                                HotkeyAction::Stop => Request::Stop,
+                                HotkeyAction::Toggle => Request::Toggle { mode: Mode::Dictation, context: None, t0_us: Some(monotonic_us()), delivery: Delivery::Inject },
+                                HotkeyAction::Cancel => Request::Cancel,
+                                _ => unreachable!(),
+                            };
+                            if matches!(request, Request::Start { .. } | Request::Toggle { .. }) && !desktop_ops.is_empty() {
+                                if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); }
+                                continue;
+                            }
+                            if self.handle(request, &completion_tx).await.is_err() { if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); } }
+                        }
+                        Err(error) => {
+                            self.hotkeys = None;
+                            self.hotkey_warning = Some(bounded_message(&format!("{error:#}")));
+                            if !self.active() { self.state = State::Error; }
+                            self.publish();
+                        }
+                    }
+                }
                 _ = levels.tick(), if self.state == State::Listening => {
                     if self.services.audio.finished() {
                         if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
+                        if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); }
                         continue;
                     }
                     self.publish(); let level = self.services.audio.level();
@@ -609,10 +666,12 @@ impl Engine {
                     else { self.silent_since.get_or_insert_with(Instant::now); }
                     if self.config.recording.auto_stop_secs > 0 && self.silent_since.is_some_and(|s| s.elapsed() >= Duration::from_secs(self.config.recording.auto_stop_secs as u64)) {
                         if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
+                        if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); }
                     }
                 }
                 _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } }, if deadline.is_some() => {
                     if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
+                    if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); }
                 }
             }
         }
@@ -856,6 +915,10 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     config.validate()?;
     #[cfg(feature = "test-support")]
     let test_adapters = crate::test_support::adapters(&config.recording)?;
+    #[cfg(all(target_os = "macos", feature = "test-support"))]
+    let native = test_adapters.is_none();
+    #[cfg(all(target_os = "macos", not(feature = "test-support")))]
+    let native = true;
     let directory = crate::paths::runtime_dir()?;
     let lock = std::fs::OpenOptions::new()
         .read(true)
@@ -913,6 +976,15 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let (commands_tx, commands_rx) = mpsc::channel(32);
     let (events_tx, _) = broadcast::channel(64);
     let (desktop_tx, desktop_rx) = broadcast::channel(32);
+    #[cfg(target_os = "macos")]
+    let pill = {
+        let events = desktop_tx.subscribe();
+        tokio::spawn(async move {
+            if native {
+                crate::overlay_pill::run(events).await;
+            }
+        })
+    };
     let bridge_commands = commands_tx.downgrade();
     let bridge = tokio::spawn(async move {
         if xflow_platform::run_desktop_bridge(desktop_rx, bridge_commands)
@@ -936,6 +1008,32 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     );
     engine.config_path = Some(config_path);
     engine.persistence_warning = persistence_warning;
+    #[cfg(target_os = "macos")]
+    {
+        if native {
+            let factory: HotkeyFactory = Arc::new(|config| {
+                if config.enabled {
+                    Ok(Some(Box::new(xflow_platform::MacHotkeys::new(
+                        config.clone(),
+                    )?)))
+                } else {
+                    Ok(None)
+                }
+            });
+            match factory(&engine.config.hotkey) {
+                Ok(hotkeys) => engine.hotkeys = hotkeys,
+                Err(error) => {
+                    engine.state = State::Error;
+                    engine.hotkey_warning = Some(bounded_message(&format!("{error:#}")));
+                    log(
+                        "warn",
+                        "global hotkey unavailable; check xflow status for permission instructions",
+                    );
+                }
+            }
+            engine.hotkey_factory = Some(factory);
+        }
+    }
     let mut engine_task = tokio::spawn(engine.run(commands_rx));
     let capacity = Arc::new(tokio::sync::Semaphore::new(32));
     let mut clients = tokio::task::JoinSet::new();
@@ -982,6 +1080,11 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
             .context("daemon cleanup timed out")??;
     }
     bridge.abort();
+    #[cfg(target_os = "macos")]
+    {
+        // Let the Idle event close the helper rather than orphaning its window.
+        let _ = tokio::time::timeout(Duration::from_secs(2), pill).await;
+    }
     Ok(())
 }
 async fn connection(
@@ -1155,6 +1258,120 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+    }
+    struct FakeHotkeys(mpsc::Receiver<HotkeyAction>);
+    #[async_trait]
+    impl GlobalHotkeys for FakeHotkeys {
+        async fn next_action(&mut self) -> Result<HotkeyAction> {
+            self.0.recv().await.context("fixture hotkeys closed")
+        }
+    }
+    async fn hotkey_state(events: &mut broadcast::Receiver<Response>, state: State) -> Response {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.state == state {
+                    return event;
+                }
+            }
+        })
+        .await
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn hotkeys_drive_capture_and_reload_keeps_old_adapter_on_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
+        let options = Arc::new(Mutex::new(Vec::new()));
+        let called = Arc::new(Notify::new());
+        let (tx, rx) = mpsc::channel(8);
+        let (events, mut observed) = broadcast::channel(32);
+        let (desktop_events, _) = broadcast::channel(32);
+        let mut config = Config::default();
+        config.privacy.history = false;
+        config.privacy.history_limit = 5;
+        let mut engine = Engine::new(
+            config,
+            Services {
+                audio: audio.clone(),
+                desktop: desktop.clone(),
+                transformer: None,
+                stt: Arc::new(FakeStt {
+                    called: called.clone(),
+                    release: Arc::new(Notify::new()),
+                    options: options.clone(),
+                }),
+            },
+            Store::open(std::path::Path::new("unused"), false, 5).unwrap(),
+            events,
+            desktop_events,
+        );
+        engine.config_path = Some(path.clone());
+        engine.reload_factory = Arc::new(|_, _, services| Ok(services));
+        let (keys, key_events) = mpsc::channel(8);
+        engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
+        let (new_keys, new_events) = mpsc::channel(8);
+        let new_events = Mutex::new(Some(new_events));
+        engine.hotkey_factory = Some(Arc::new(move |config| {
+            if config.key == "caps_lock" {
+                bail!("fixture permission failure");
+            }
+            assert_eq!(config.key, "right_option");
+            Ok(Some(Box::new(FakeHotkeys(
+                new_events.lock().unwrap().take().unwrap(),
+            ))))
+        }));
+        let actor = tokio::spawn(engine.run(rx));
+        keys.send(HotkeyAction::Start).await.unwrap();
+        hotkey_state(&mut observed, State::Listening).await;
+        assert!(audio.0.load(Ordering::SeqCst));
+        keys.send(HotkeyAction::HandsFree).await.unwrap();
+        while hotkey_state(&mut observed, State::Listening)
+            .await
+            .message
+            .as_deref()
+            != Some("Hands-free recording")
+        {}
+        keys.send(HotkeyAction::Cancel).await.unwrap();
+        hotkey_state(&mut observed, State::Idle).await;
+        assert!(!audio.0.load(Ordering::SeqCst));
+        assert!(options.lock().unwrap().is_empty());
+
+        std::fs::write(
+            &path,
+            "[hotkey]\nkey = 'caps_lock'\n[privacy]\nhistory = false\nhistory_limit = 5\n",
+        )
+        .unwrap();
+        // A failed tap applies the rest of the config, warns, and keeps the old binding.
+        let reloaded = ask(&tx, Request::Reload).await;
+        assert!(reloaded.ok);
+        assert!(reloaded
+            .message
+            .unwrap()
+            .contains("fixture permission failure"));
+        keys.send(HotkeyAction::Start).await.unwrap();
+        hotkey_state(&mut observed, State::Listening).await;
+        keys.send(HotkeyAction::Stop).await.unwrap();
+        hotkey_state(&mut observed, State::Processing).await;
+        called.notified().await;
+        keys.send(HotkeyAction::Cancel).await.unwrap();
+        hotkey_state(&mut observed, State::Idle).await;
+        assert_eq!(desktop.0.load(Ordering::SeqCst), 0);
+
+        std::fs::write(
+            &path,
+            "[hotkey]\nkey = 'right_option'\n[privacy]\nhistory = false\nhistory_limit = 5\n",
+        )
+        .unwrap();
+        assert!(ask(&tx, Request::Reload).await.ok);
+        assert!(keys.send(HotkeyAction::Start).await.is_err());
+        new_keys.send(HotkeyAction::Start).await.unwrap();
+        hotkey_state(&mut observed, State::Listening).await;
+        assert!(ask(&tx, Request::Cancel).await.ok);
+        assert!(ask(&tx, Request::Shutdown).await.ok);
+        actor.await.unwrap();
     }
     #[tokio::test]
     async fn cancel_during_network_keeps_actor_responsive_and_prevents_injection() {

@@ -22,7 +22,8 @@
     <key name="waveform-bars" type="i"><range min="3" max="64"/><default>13</default><summary>Number of waveform bars</summary></key>
     <key name="success-hold-ms" type="i"><range min="0" max="60000"/><default>900</default><summary>Success display duration</summary></key>
     <key name="error-hold-ms" type="i"><range min="0" max="60000"/><default>4000</default><summary>Error display duration</summary></key>
-    <key name="ptt-threshold-ms" type="i"><range min="0" max="10000"/><default>300</default><summary>Smart shortcut hold threshold</summary></key>
+    <key name="ptt-threshold-ms" type="i"><range min="0" max="10000"/><default>500</default><summary>Smart shortcut hold threshold</summary></key>
+    <key name="double-tap-ms" type="i"><range min="1" max="2000"/><default>500</default><summary>Smart shortcut double-tap window</summary></key>
     <key name="animations" type="b"><default>true</default><summary>Animate the pill</summary></key>
     <key name="show-messages" type="b"><default>true</default><summary>Show short state messages</summary></key>
   </schema>

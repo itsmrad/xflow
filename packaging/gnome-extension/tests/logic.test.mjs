@@ -201,15 +201,24 @@ test('hold mode is push-to-talk', () => {
     assert.equal(m.release(60), null, 'duplicate release (key event + modifier watch)');
 });
 
-test('smart mode: long hold is push-to-talk, quick tap is hands-free', () => {
+test('smart mode: hold stops, double tap is hands-free, lone tap cancels', () => {
     const m = new L.HotkeyMachine('smart', 300);
     assert.equal(m.press(0, false), 'start');
     assert.equal(m.release(450), 'stop');
 
     assert.equal(m.press(1000, false), 'start');
-    assert.equal(m.release(1120), null, 'tap latches hands-free');
+    assert.equal(m.release(1120), null, 'tap waits for its second press');
+    assert.equal(m.deadline(), 1620);
+    assert.equal(m.press(1300, true), null, 'second tap latches hands-free');
+    assert.equal(m.press(1310, true), null, 'key repeats are ignored');
+    assert.equal(m.release(1400), null);
     assert.equal(m.press(5000, true), 'stop', 'next press ends hands-free');
     assert.equal(m.release(5100), null, 'release of the stopping press is ignored');
+    assert.equal(m.press(6000, false), 'start');
+    assert.equal(m.release(6050), null);
+    assert.equal(m.expire(6550), null);
+    assert.equal(m.expire(6551), 'cancel');
+    assert.equal(m.deadline(), null);
 });
 
 test('smart mode reset drops a hold after the daemon stops', () => {

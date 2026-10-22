@@ -2,6 +2,10 @@ pub mod config_edit;
 #[cfg(unix)]
 pub mod daemon;
 pub mod gsettings;
+#[cfg(target_os = "macos")]
+mod macos_settings;
+#[cfg(target_os = "macos")]
+pub mod overlay_pill;
 pub mod paths;
 pub mod store;
 #[cfg(all(unix, feature = "test-support"))]

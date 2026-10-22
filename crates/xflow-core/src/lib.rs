@@ -168,7 +168,7 @@ pub trait Desktop: Send + Sync {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HotkeyAction {
     Start,
@@ -176,11 +176,15 @@ pub enum HotkeyAction {
     Toggle,
     Cancel,
     PasteLast,
+    /// A second tap latched the current capture until the next press.
+    HandsFree,
 }
 
 #[async_trait]
 pub trait GlobalHotkeys: Send {
     async fn next_action(&mut self) -> Result<HotkeyAction>;
+    /// Forget a gesture after a recording ends through another control.
+    fn reset(&mut self) {}
 }
 
 #[async_trait]
