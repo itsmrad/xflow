@@ -347,6 +347,15 @@ export default class XFlowExtension extends Extension {
             const machine = binding.command === 'command' ? this._commandHotkey : this._hotkey;
             const t0Us = GLib.get_monotonic_time();
             this._cancelSource('_tapSource');
+            // The other shortcut's pending tap is a lone tap: discard it rather than stop it.
+            const other = machine === this._hotkey ? this._commandHotkey : this._hotkey;
+            if (other.deadline() !== null) {
+                other.reset();
+                this._command('cancel');
+            }
+            // A second press after the window (before its timer fired) discards the tap, then starts afresh.
+            const expired = machine.expire(t0Us / 1000);
+            if (expired) this._command(expired);
             const command = machine.press(t0Us / 1000, this._state === 'listening');
             if (command) this._command(command, binding.command === 'command' ? 'command' : 'dictation', t0Us);
             if (machine.holding) {

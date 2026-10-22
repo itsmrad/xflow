@@ -19,6 +19,8 @@ Defaults follow Wispr Flow's published gestures (500 ms tap and double-tap windo
 
 - Press and hold: capture starts immediately. Release after `hold_threshold_ms` to
   transcribe and deliver the result through the configured injection method.
+  The start sound and the pill wait until the key has been held for 150 ms or a
+  double-tap is detected. A lone tap or a Fn+key shortcut plays and shows nothing.
 - Double-tap: a quick tap (released before `hold_threshold_ms`) followed by a second
   press within `double_tap_ms` of that release. Recording stays on after release;
   the next press stops it, and a third press within `double_tap_ms` of the second
@@ -29,7 +31,9 @@ Defaults follow Wispr Flow's published gestures (500 ms tap and double-tap windo
   reach the focused app.
 - Pressing another key within 1 s of starting a hold (e.g. Fn+arrow) treats the
   hotkey as a modifier and cancels. A press arriving more than 10 s into a hold
-  is taken as a lost key-up and stops the session.
+  is taken as a lost key-up and stops the session. If macOS briefly disables the
+  event tap, a key that is still held keeps its hold. A key-up that was missed
+  meanwhile discards the hold.
 - Repeated key-down events do not start additional sessions. The existing
   `recording.min_ms`, silence detection, maximum duration and cancellation guards
   still apply. Existing recording start/stop sounds follow `[sounds]`.
@@ -93,8 +97,10 @@ apply to the next pill. GNOME keeps its own renderer and appearance settings.
 ## Linux
 
 GNOME keeps the Shell extension, D-Bus commands, compositor shortcut grabs and
-release handling. Its `smart` shortcut mode now uses the same hold/double-tap/
-lone-tap-cancel gestures. `hold` and `toggle` modes remain available. Linux
+release handling. Its `smart` shortcut mode uses the same hold, double-tap,
+third-press-cancel and lone-tap-cancel gestures, and a late second press discards
+the tap and starts again. The 150 ms feedback delay, the Fn+key cancel and
+stuck-key recovery are macOS-only. `hold` and `toggle` modes remain available. Linux
 bindings and timing remain extension settings, rather than the macOS TOML key:
 
 ```sh

@@ -46,7 +46,7 @@ impl PillEvent {
 
 /// Spawn this future with a dedicated desktop-event subscription. Failures are
 /// deliberately isolated from recording; no helper, timer or AppKit exists at idle.
-pub async fn run(mut events: broadcast::Receiver<DesktopEvent>) {
+pub async fn run(mut events: broadcast::Receiver<DesktopEvent>, config: std::path::PathBuf) {
     let mut helper: Option<Child> = None;
     let mut session_active = false;
     loop {
@@ -67,7 +67,7 @@ pub async fn run(mut events: broadcast::Receiver<DesktopEvent>) {
         if !session_active {
             session_active = true;
             // Retry only on the next session, not on every microphone-level event.
-            helper = spawn().ok();
+            helper = spawn(&config).ok();
         }
         if let Some(child) = &mut helper {
             if send(child, event).await.is_err() {
@@ -78,12 +78,14 @@ pub async fn run(mut events: broadcast::Receiver<DesktopEvent>) {
     close(&mut helper).await;
 }
 
-fn spawn() -> Result<Child> {
-    if crate::gsettings::GSettings::detect()?.get("enabled")? != "true" {
+fn spawn(config: &std::path::Path) -> Result<Child> {
+    if crate::gsettings::GSettings::beside(config).get("enabled")? != "true" {
         bail!("overlay disabled");
     }
     let executable = std::env::current_exe()?.with_file_name("xflow");
     Command::new(executable)
+        .arg("--config")
+        .arg(config)
         .arg("overlay-pill")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -133,7 +135,7 @@ fn read_event(reader: &mut impl BufRead) -> Result<Option<PillEvent>> {
 }
 
 /// Hidden CLI entry point; must run on the process main thread.
-pub fn helper() -> Result<()> {
+pub fn helper(config: &std::path::Path) -> Result<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
     let Some(first) = read_event(&mut input)? else {
         return Ok(());
@@ -141,7 +143,7 @@ pub fn helper() -> Result<()> {
     if !first.active() {
         return Ok(());
     }
-    let settings = crate::gsettings::GSettings::detect()?;
+    let settings = crate::gsettings::GSettings::beside(config);
     if settings.get("enabled")? != "true" {
         return Ok(());
     }

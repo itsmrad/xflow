@@ -178,6 +178,8 @@ pub enum HotkeyAction {
     PasteLast,
     /// A second tap latched the current capture until the next press.
     HandsFree,
+    /// The press is a real hold, not a tap or a modifier use: show feedback.
+    Reveal,
 }
 
 #[async_trait]

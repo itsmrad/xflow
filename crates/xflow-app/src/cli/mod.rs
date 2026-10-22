@@ -246,7 +246,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
         Command::Styles { action } => config::styles(&path(cli)?, action.as_ref(), out),
         Command::Overlay { action } => system::overlay(action.as_ref(), out),
         #[cfg(target_os = "macos")]
-        Command::OverlayPill => xflow_app::overlay_pill::helper().map_err(Into::into),
+        Command::OverlayPill => xflow_app::overlay_pill::helper(&path(cli)?).map_err(Into::into),
         Command::Providers { action } => provider::run(&path(cli)?, action.as_ref(), out),
         Command::Models { provider } => provider::models(&path(cli)?, provider.as_deref(), out),
         Command::Key {

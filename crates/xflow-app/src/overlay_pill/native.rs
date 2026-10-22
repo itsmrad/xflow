@@ -25,6 +25,7 @@ unsafe extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGColorCreateSRGB(red: f64, green: f64, blue: f64, alpha: f64) -> Id;
+    fn CGColorRelease(color: Id);
 }
 
 // Each invocation states the exact native ABI, including CGFloat=f64 and NSInteger=isize.
@@ -82,8 +83,8 @@ impl Rect {
 
 // Geometry in points before the `scale` setting. The window is sized for the
 // widest (hands-free) capsule so width changes never move the window.
-const WIN_W: f64 = 172.0;
-const WIN_H: f64 = 48.0;
+const WIN_W: f64 = 158.0;
+const WIN_H: f64 = 38.0;
 const PILL_H: f64 = 34.0;
 const LISTEN_W: f64 = 110.0;
 const HANDS_FREE_W: f64 = 150.0;
@@ -333,20 +334,22 @@ pub(super) fn run(
         msg!(view, c"setWantsLayer:", 1i8 => i8; ());
         let root = msg!(view, c"layer"; Id);
 
-        let dark = CGColorCreateSRGB(0.0, 0.0, 0.0, 0.85);
-        let alarm = CGColorCreateSRGB(0.62, 0.09, 0.09, 0.92);
-        let white = CGColorCreateSRGB(1.0, 1.0, 1.0, 1.0);
+        let mut colors = Vec::new(); // layers retain what they use; released at exit
+        let mut color = |r, g, b, a| {
+            let color = CGColorCreateSRGB(r, g, b, a);
+            colors.push(color);
+            color
+        };
+        let dark = color(0.0, 0.0, 0.0, 0.85);
+        let alarm = color(0.62, 0.09, 0.09, 0.92);
+        let white = color(1.0, 1.0, 1.0, 1.0);
         let capsule = layer(root, dark, PILL_H * s / 2.0);
         msg!(capsule, c"setBorderWidth:", 0.75 * s => f64; ());
-        msg!(capsule, c"setBorderColor:", CGColorCreateSRGB(1.0, 1.0, 1.0, 0.14) => Id; ());
+        msg!(capsule, c"setBorderColor:", color(1.0, 1.0, 1.0, 0.14) => Id; ());
         let bars: Vec<Id> = (0..BARS)
             .map(|_| layer(capsule, white, BAR_W * s / 2.0))
             .collect();
-        let cancel = layer(
-            capsule,
-            CGColorCreateSRGB(1.0, 1.0, 1.0, 0.16),
-            BUTTON * s / 2.0,
-        );
+        let cancel = layer(capsule, color(1.0, 1.0, 1.0, 0.16), BUTTON * s / 2.0);
         for angle in [std::f64::consts::FRAC_PI_4, -std::f64::consts::FRAC_PI_4] {
             let stroke = layer(cancel, white, 0.8 * s);
             place(
@@ -358,11 +361,7 @@ pub(super) fn run(
             );
             transform(stroke, 1.0, angle, 0.0);
         }
-        let stop = layer(
-            capsule,
-            CGColorCreateSRGB(1.0, 0.23, 0.19, 1.0),
-            BUTTON * s / 2.0,
-        );
+        let stop = layer(capsule, color(1.0, 0.23, 0.19, 1.0), BUTTON * s / 2.0);
         let square = layer(stop, white, 1.5 * s);
         place(square, BUTTON * s / 2.0, BUTTON * s / 2.0, 8.0 * s, 8.0 * s);
 
@@ -472,10 +471,12 @@ pub(super) fn run(
                     && msg!(event, c"window"; Id) == panel
                 {
                     let p = msg!(event, c"locationInWindow"; Point);
-                    let centre = WIN_W * s / 2.0;
-                    if (p.x - (centre - w / 2.0 + inset)).abs() <= BUTTON * s / 2.0 + 4.0 {
+                    let (centre, reach) = (WIN_W * s / 2.0, BUTTON * s / 2.0 + 2.0);
+                    let hit =
+                        |x: f64| (p.x - x).abs() <= reach && (p.y - WIN_H * s / 2.0).abs() <= reach;
+                    if hit(centre - w / 2.0 + inset) {
                         send(Request::Cancel);
-                    } else if (p.x - (centre + w / 2.0 - inset)).abs() <= BUTTON * s / 2.0 + 4.0 {
+                    } else if hit(centre + w / 2.0 - inset) {
                         send(Request::Stop);
                     }
                 }
@@ -486,6 +487,9 @@ pub(super) fn run(
         msg!(panel, c"orderOut:", std::ptr::null_mut::<c_void>() => Id; ());
         msg!(panel, c"close"; ());
         msg!(panel, c"release"; ());
+        for color in colors {
+            CGColorRelease(color);
+        }
         msg!(pool, c"drain"; ());
         // AppKit remains loaded until this short-lived helper exits.
     }

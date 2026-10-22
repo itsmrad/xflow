@@ -412,6 +412,7 @@ export class HotkeyMachine {
         this.pressedAt = 0;
         this.tapAt = null;
         this.handsFree = false;
+        this.latchedAt = 0;
     }
 
     press(nowMs, active) {
@@ -420,12 +421,15 @@ export class HotkeyMachine {
         if (this.mode === 'smart' && active && this.tapAt !== null && nowMs - this.tapAt <= this.doubleTapMs) {
             this.tapAt = null;
             this.handsFree = true;
+            this.latchedAt = nowMs;
             this.holding = true;
             return null;
         }
+        // A third rapid press discards a just-latched session instead of stopping it.
+        const quick = this.mode === 'smart' && this.handsFree && nowMs - this.latchedAt <= this.doubleTapMs;
         this.tapAt = null;
         this.handsFree = false;
-        if (active) return 'stop';
+        if (active) return quick ? 'cancel' : 'stop';
         this.holding = true;
         this.pressedAt = nowMs;
         return 'start';

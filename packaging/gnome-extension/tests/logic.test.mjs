@@ -219,6 +219,16 @@ test('smart mode: hold stops, double tap is hands-free, lone tap cancels', () =>
     assert.equal(m.expire(6550), null);
     assert.equal(m.expire(6551), 'cancel');
     assert.equal(m.deadline(), null);
+
+    assert.equal(m.press(8000, false), 'start');
+    assert.equal(m.release(8050), null);
+    assert.equal(m.press(8200, true), null, 'double tap latches');
+    assert.equal(m.release(8250), null);
+    assert.equal(m.press(8400, true), 'cancel', 'third rapid press cancels');
+    assert.equal(m.press(9000, false), 'start');
+    assert.equal(m.release(9050), null);
+    assert.equal(m.expire(9600), 'cancel', 'late second press: the tap expires first');
+    assert.equal(m.press(9600, false), 'start', '...then starts a new session');
 });
 
 test('smart mode reset drops a hold after the daemon stops', () => {

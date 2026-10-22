@@ -88,9 +88,14 @@ fn normalize(key: &str, value: &str) -> Result<String> {
 
 impl GSettings {
     pub fn detect() -> Result<Self> {
-        Ok(Self {
-            path: crate::paths::config_path()?.with_file_name("overlay.json"),
-        })
+        Ok(Self::beside(&crate::paths::config_path()?))
+    }
+
+    /// Settings next to a specific `config.toml` (the daemon's `--config`).
+    pub fn beside(config: &std::path::Path) -> Self {
+        Self {
+            path: config.with_file_name("overlay.json"),
+        }
     }
 
     fn read(&self) -> Result<BTreeMap<String, String>> {

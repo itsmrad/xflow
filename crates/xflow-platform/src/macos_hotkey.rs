@@ -11,7 +11,7 @@ use std::{
         Arc,
     },
     thread,
-    time::Instant,
+    time::Duration,
 };
 use tokio::sync::mpsc;
 use xflow_core::{config::HotkeyConfig, GlobalHotkeys, HotkeyAction};
@@ -32,6 +32,15 @@ extern "C" {
     fn CGEventGetFlags(event: Ref) -> u64;
     fn CGEventGetIntegerValueField(event: Ref, field: u32) -> i64;
     fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
+    fn CGEventGetTimestamp(event: Ref) -> u64;
+}
+extern "C" {
+    fn clock_gettime_nsec_np(clock: u32) -> u64;
+}
+/// CGEvent timestamps are CLOCK_UPTIME_RAW nanoseconds; gestures use them so
+/// delivery latency under load cannot stretch a double-tap.
+fn now_ms() -> u64 {
+    unsafe { clock_gettime_nsec_np(8) / 1_000_000 } // CLOCK_UPTIME_RAW
 }
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
@@ -175,20 +184,14 @@ struct TapContext {
     binding: Binding,
     down: bool,
     tap: Ref,
-    origin: Instant,
+    at_ms: u64,
     events: mpsc::Sender<Input>,
     overflow: Arc<AtomicBool>,
 }
 impl TapContext {
     fn send(&self, event: KeyEvent) {
-        if self
-            .events
-            .try_send(Input {
-                event,
-                at_ms: self.origin.elapsed().as_millis() as u64,
-            })
-            .is_err()
-        {
+        let at_ms = self.at_ms;
+        if self.events.try_send(Input { event, at_ms }).is_err() {
             self.overflow.store(true, Ordering::Release);
         }
     }
@@ -196,12 +199,20 @@ impl TapContext {
 unsafe extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, context: Ref) -> Ref {
     let context = &mut *(context as *mut TapContext);
     if kind == u32::MAX || kind == u32::MAX - 1 {
-        // Disabled by timeout/user input: re-enable; a key-up may have been missed.
+        // Disabled by timeout/user input: re-enable. A key still physically held
+        // keeps its hold; only a key-up we never saw resets the gesture.
         CGEventTapEnable(context.tap, true);
-        context.down = false;
-        context.send(KeyEvent::Release);
+        if context.down && !CGEventSourceKeyState(1, context.binding.code) {
+            context.down = false;
+            context.at_ms = now_ms();
+            context.send(KeyEvent::Lost);
+        }
         return event;
     }
+    context.at_ms = match CGEventGetTimestamp(event) {
+        0 => now_ms(),
+        ns => ns / 1_000_000,
+    };
     let code = CGEventGetIntegerValueField(event, 9) as u16;
     if kind == KEY_DOWN && code != context.binding.code {
         if code == 53 {
@@ -245,11 +256,18 @@ unsafe extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, context: Ref) 
     event
 }
 
+/// Frees the callback context once the tap thread is done with it.
+struct ContextGuard(*mut TapContext);
+impl Drop for ContextGuard {
+    fn drop(&mut self) {
+        unsafe { drop(Box::from_raw(self.0)) }
+    }
+}
+
 pub struct MacHotkeys {
     events: mpsc::Receiver<Input>,
     machine: HotkeyMachine,
     pending: VecDeque<HotkeyAction>,
-    origin: Instant,
     overflow: Arc<AtomicBool>,
     tap: usize,
     runloop: usize,
@@ -260,46 +278,47 @@ impl MacHotkeys {
         config.validate()?;
         let (events_tx, events) = mpsc::channel(32);
         let (ready_tx, ready) = std::sync::mpsc::sync_channel(1);
-        let origin = Instant::now();
         let overflow = Arc::new(AtomicBool::new(false));
         let binding = Binding::parse(&config.key);
         let thread_overflow = overflow.clone();
-        // The context pointer is only dereferenced on its owning run-loop thread.
+        // The context is only touched through this raw pointer, on its run-loop thread.
         let thread = thread::Builder::new().name("xflow-hotkey".into()).stack_size(256 * 1024).spawn(move || unsafe {
-            let mut context = Box::new(TapContext { binding, down: false, tap: ptr::null_mut(), origin,
-                events: events_tx, overflow: thread_overflow });
+            let context = Box::into_raw(Box::new(TapContext { binding, down: false, tap: ptr::null_mut(), at_ms: 0,
+                events: events_tx, overflow: thread_overflow }));
             let mask = (1 << FLAGS_CHANGED) | (1 << KEY_DOWN) | (1 << KEY_UP);
-            context.tap = CGEventTapCreate(1, 0, 1, mask, callback, &mut *context as *mut TapContext as Ref);
-            if context.tap.is_null() {
+            let tap = CGEventTapCreate(1, 0, 1, mask, callback, context as Ref);
+            (*context).tap = tap;
+            let _context = ContextGuard(context); // freed after the tap is invalidated
+            if tap.is_null() {
                 let _ = ready_tx.send(Err(anyhow::anyhow!("Global hotkey unavailable: allow xflowd (or its terminal) in System Settings → Privacy & Security → Input Monitoring, then restart xflowd or run xflow config set hotkey.enabled true")));
                 return;
             }
-            let source = CFMachPortCreateRunLoopSource(ptr::null_mut(), context.tap, 0);
+            let source = CFMachPortCreateRunLoopSource(ptr::null_mut(), tap, 0);
             if source.is_null() {
-                CFRelease(context.tap);
+                CFRelease(tap);
                 let _ = ready_tx.send(Err(anyhow::anyhow!("cannot create the global hotkey run-loop source")));
                 return;
             }
             let runloop = CFRunLoopGetCurrent();
             CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
-            CGEventTapEnable(context.tap, true);
-            let handles = (CFRetain(context.tap) as usize, CFRetain(runloop) as usize);
+            CGEventTapEnable(tap, true);
+            let handles = (CFRetain(tap) as usize, CFRetain(runloop) as usize);
             if ready_tx.send(Ok(handles)).is_ok() { CFRunLoopRun(); }
             else { CFRelease(handles.0 as Ref); CFRelease(handles.1 as Ref); }
-            CFMachPortInvalidate(context.tap);
+            CFMachPortInvalidate(tap);
                 CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
             CFRelease(source);
-            CFRelease(context.tap);
+            CFRelease(tap);
         }).context("cannot start the global hotkey thread")?;
+        // Bounded: a wedged WindowServer must not hang daemon startup or reload.
         let handles = ready
-            .recv()
-            .context("global hotkey thread exited during startup")?;
+            .recv_timeout(Duration::from_secs(2))
+            .context("global hotkey event tap did not start")?;
         match handles {
             Ok((tap, runloop)) => Ok(Self {
                 events,
                 machine: HotkeyMachine::new(config),
                 pending: VecDeque::new(),
-                origin,
                 overflow,
                 tap,
                 runloop,
@@ -318,9 +337,14 @@ impl GlobalHotkeys for MacHotkeys {
     async fn next_action(&mut self) -> Result<HotkeyAction> {
         loop {
             if self.overflow.swap(false, Ordering::AcqRel) {
+                // Events were dropped: abandon only a gesture in progress, never
+                // a session the machine no longer owns (e.g. processing).
+                let busy = !self.machine.idle();
                 self.reset();
                 while self.events.try_recv().is_ok() {}
-                return Ok(HotkeyAction::Cancel);
+                if busy {
+                    return Ok(HotkeyAction::Cancel);
+                }
             }
             if let Some(action) = self.pending.pop_front() {
                 return Ok(action);
@@ -332,14 +356,12 @@ impl GlobalHotkeys for MacHotkeys {
                     bail!("global hotkey event tap stopped; restart xflowd")
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {
-                    let deadline = self.machine.deadline_ms().map(|ms| {
-                        tokio::time::Instant::from_std(
-                            self.origin + std::time::Duration::from_millis(ms.saturating_add(1)),
-                        )
+                    let wait = self.machine.deadline_ms().map(|ms| {
+                        Duration::from_millis(ms.saturating_add(1).saturating_sub(now_ms()))
                     });
                     tokio::select! { biased;
                         input = self.events.recv() => input.context("global hotkey event tap stopped; restart xflowd")?,
-                        _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } }, if deadline.is_some() => Input { event: KeyEvent::Timeout, at_ms: self.origin.elapsed().as_millis() as u64 },
+                        _ = async { if let Some(wait) = wait { tokio::time::sleep(wait).await; } }, if wait.is_some() => Input { event: KeyEvent::Timeout, at_ms: now_ms() },
                     }
                 }
             };

@@ -39,6 +39,13 @@ struct Processed {
     stopped: Instant,
     warning: Option<String>,
 }
+const RELOAD_TIMEOUT: Duration = Duration::from_secs(60);
+/// Dropping a tap adapter joins its run-loop thread; keep that off the actor.
+fn retire(hotkeys: Option<Box<dyn GlobalHotkeys>>) {
+    if let Some(hotkeys) = hotkeys {
+        tokio::task::spawn_blocking(move || drop(hotkeys));
+    }
+}
 /// Status message while a double-tap has latched recording; the macOS pill keys off it.
 pub const HANDS_FREE: &str = "Hands-free recording";
 struct Reloaded {
@@ -83,6 +90,8 @@ pub struct Engine {
     hotkey_factory: Option<HotkeyFactory>,
     hotkeys: Option<Box<dyn GlobalHotkeys>>,
     hotkey_warning: Option<String>,
+    /// A hotkey session not yet revealed: capture runs, but no cue or pill.
+    quiet: bool,
     reloading: bool,
     delivering: bool,
     state: State,
@@ -122,6 +131,7 @@ impl Engine {
             hotkey_factory: None,
             hotkeys: None,
             hotkey_warning: None,
+            quiet: false,
             reloading: false,
             delivering: false,
             state: State::Idle,
@@ -186,18 +196,27 @@ impl Engine {
     fn active(&self) -> bool {
         matches!(self.state, State::Listening | State::Processing)
     }
+    fn reset_hotkeys(&mut self) {
+        if let Some(hotkeys) = &mut self.hotkeys {
+            hotkeys.reset();
+        }
+    }
     fn publish(&self) {
         let r = self.status();
-        let _ = self.desktop_events.send(DesktopEvent {
-            state: r.state,
-            level: r.level,
-            message: r.message.clone(),
-            mode: self.mode,
-        });
+        // A quiet (unrevealed) hotkey session is hidden from the pill until Reveal.
+        if !(self.quiet && r.state == State::Listening) {
+            let _ = self.desktop_events.send(DesktopEvent {
+                state: r.state,
+                level: r.level,
+                message: r.message.clone(),
+                mode: self.mode,
+            });
+        }
         let _ = self.events.send(r);
     }
     fn set_state(&mut self, state: State, message: Option<String>) {
         self.state = state;
+        self.quiet &= state == State::Listening;
         self.message = message.map(|s| bounded_message(&s));
         self.publish();
         if state == State::Error {
@@ -298,7 +317,9 @@ impl Engine {
         self.context_abort = Some(task.abort_handle());
         self.context_job = Some(task);
         self.set_state(State::Listening, None);
-        self.cue(xflow_platform::Cue::Start);
+        if !self.quiet {
+            self.cue(xflow_platform::Cue::Start);
+        }
         Ok(())
     }
     async fn stop(&mut self, completion: mpsc::Sender<Completion>) -> Result<()> {
@@ -547,14 +568,15 @@ impl Engine {
                         self.reloading = true;
                         let old = self.config.clone(); let services = self.services.clone(); let store = self.store.clone(); let factory = self.reload_factory.clone(); let hotkey_factory = self.hotkey_factory.clone(); let retry_hotkeys = self.hotkeys.is_none() || self.hotkey_warning.is_some(); let tx = completion_tx.clone();
                         queries.spawn(async move {
-                            let result = tokio::task::spawn_blocking(move || {
+                            // Bounded so a wedged provider/tap setup cannot leave `reloading` stuck.
+                            let result = tokio::time::timeout(RELOAD_TIMEOUT, tokio::task::spawn_blocking(move || {
                                 let config = Config::load(&path)?;
                                 let services = factory(&old, &config, services)?;
                                 // Recreate the tap only when its config changed or it is missing (e.g. permission granted since).
                                 let hotkeys = hotkey_factory.filter(|_| old.hotkey != config.hotkey || retry_hotkeys).map(|factory| factory(&config.hotkey).map_err(|e| bounded_message(&format!("{e:#}"))));
                                 let store = if store.settings() == (config.privacy.history, config.privacy.history_limit) { store } else { store.reopen(config.privacy.history, config.privacy.history_limit)? };
                                 Ok(Reloaded { config, services, store, hotkeys })
-                            }).await.unwrap_or_else(|e| Err(e.into()));
+                            })).await.unwrap_or_else(|_| Ok(Err(anyhow::anyhow!("configuration reload timed out")))).unwrap_or_else(|e| Err(e.into()));
                             let _ = tx.send(Completion::Reloaded { result: Box::new(result), reply }).await;
                         }); continue;
                     }
@@ -574,7 +596,7 @@ impl Engine {
                     if matches!(request, Request::Start { .. } | Request::Toggle { .. }) && !self.active() && !desktop_ops.is_empty() { let _ = reply.send(Response::error(self.state, "desktop delivery is busy")); continue; }
                     let shutdown = matches!(request, Request::Shutdown);
                     let response = self.handle(request, &completion_tx).await.unwrap_or_else(|e| Response::error(self.state, format!("{e:#}")));
-                    if self.state != State::Listening { if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); } }
+                    if self.state != State::Listening { self.reset_hotkeys(); }
                     let _ = reply.send(response); if shutdown { break; }
                 }
                 Some(completion) = completion_rx.recv() => match completion {
@@ -603,7 +625,7 @@ impl Engine {
                     }
                     Completion::Reloaded { result, reply } => {
                         self.reloading = false;
-                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys = hotkeys; if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
+                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
                     }
                     _ => (),
@@ -628,29 +650,28 @@ impl Engine {
                 _ = self.notifications.join_next(), if !self.notifications.is_empty() => (),
                 action = async { self.hotkeys.as_mut().unwrap().next_action().await }, if self.hotkeys.is_some() => {
                     match action {
-                        Ok(HotkeyAction::HandsFree) => { if self.state == State::Listening { self.message = Some(HANDS_FREE.into()); self.publish(); } }
-                        Ok(HotkeyAction::PasteLast) => {
-                            if !self.active() && !self.delivering && desktop_ops.is_empty() {
-                                let status = self.status(); let store = self.store.clone(); let desktop = self.services.desktop.clone(); let last = self.last.clone();
-                                desktop_ops.spawn(async move { let _ = query(status, Request::PasteLast, store, desktop, last).await; });
+                        Ok(action @ (HotkeyAction::Reveal | HotkeyAction::HandsFree)) => {
+                            if self.state == State::Listening {
+                                if action == HotkeyAction::HandsFree { self.message = Some(HANDS_FREE.into()); }
+                                if std::mem::take(&mut self.quiet) { self.cue(xflow_platform::Cue::Start); }
+                                self.publish();
                             }
                         }
-                        Ok(action) => {
+                        Ok(HotkeyAction::Start) if !desktop_ops.is_empty() => self.reset_hotkeys(),
+                        Ok(action @ (HotkeyAction::Start | HotkeyAction::Stop | HotkeyAction::Cancel)) => {
+                            // Capture starts at once; the cue and pill wait for Reveal, so a
+                            // lone tap or a Fn+key shortcut shows and plays nothing.
+                            self.quiet = action == HotkeyAction::Start && !self.active();
                             let request = match action {
                                 HotkeyAction::Start => Request::Start { mode: Mode::Dictation, context: None, t0_us: Some(monotonic_us()), delivery: Delivery::Inject },
                                 HotkeyAction::Stop => Request::Stop,
-                                HotkeyAction::Toggle => Request::Toggle { mode: Mode::Dictation, context: None, t0_us: Some(monotonic_us()), delivery: Delivery::Inject },
-                                HotkeyAction::Cancel => Request::Cancel,
-                                _ => unreachable!(),
+                                _ => Request::Cancel,
                             };
-                            if matches!(request, Request::Start { .. } | Request::Toggle { .. }) && !desktop_ops.is_empty() {
-                                if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); }
-                                continue;
-                            }
-                            if self.handle(request, &completion_tx).await.is_err() { if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); } }
+                            if self.handle(request, &completion_tx).await.is_err() { self.quiet = false; self.reset_hotkeys(); }
                         }
+                        Ok(_) => (), // Toggle/PasteLast are never produced by the gesture machine.
                         Err(error) => {
-                            self.hotkeys = None;
+                            retire(self.hotkeys.take());
                             self.hotkey_warning = Some(bounded_message(&format!("{error:#}")));
                             if !self.active() { self.state = State::Error; }
                             self.publish();
@@ -660,7 +681,7 @@ impl Engine {
                 _ = levels.tick(), if self.state == State::Listening => {
                     if self.services.audio.finished() {
                         if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
-                        if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); }
+                        self.reset_hotkeys();
                         continue;
                     }
                     self.publish(); let level = self.services.audio.level();
@@ -668,12 +689,12 @@ impl Engine {
                     else { self.silent_since.get_or_insert_with(Instant::now); }
                     if self.config.recording.auto_stop_secs > 0 && self.silent_since.is_some_and(|s| s.elapsed() >= Duration::from_secs(self.config.recording.auto_stop_secs as u64)) {
                         if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
-                        if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); }
+                        self.reset_hotkeys();
                     }
                 }
                 _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } }, if deadline.is_some() => {
                     if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
-                    if let Some(hotkeys) = &mut self.hotkeys { hotkeys.reset(); }
+                    self.reset_hotkeys();
                 }
             }
         }
@@ -980,10 +1001,10 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let (desktop_tx, desktop_rx) = broadcast::channel(32);
     #[cfg(target_os = "macos")]
     let pill = {
-        let events = desktop_tx.subscribe();
+        let (events, config) = (desktop_tx.subscribe(), config_path.clone());
         tokio::spawn(async move {
             if native {
-                crate::overlay_pill::run(events).await;
+                crate::overlay_pill::run(events, config).await;
             }
         })
     };
@@ -1022,7 +1043,9 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
                     Ok(None)
                 }
             });
-            match factory(&engine.config.hotkey) {
+            let (create, initial) = (factory.clone(), engine.config.hotkey.clone());
+            let created = tokio::task::spawn_blocking(move || create(&initial)).await;
+            match created.unwrap_or_else(|e| Err(e.into())) {
                 Ok(hotkeys) => engine.hotkeys = hotkeys,
                 Err(error) => {
                     engine.state = State::Error;
@@ -1290,7 +1313,7 @@ mod tests {
         let called = Arc::new(Notify::new());
         let (tx, rx) = mpsc::channel(8);
         let (events, mut observed) = broadcast::channel(32);
-        let (desktop_events, _) = broadcast::channel(32);
+        let (desktop_events, mut pill) = broadcast::channel(32);
         let mut config = Config::default();
         config.privacy.history = false;
         config.privacy.history_limit = 5;
@@ -1329,6 +1352,14 @@ mod tests {
         keys.send(HotkeyAction::Start).await.unwrap();
         hotkey_state(&mut observed, State::Listening).await;
         assert!(audio.0.load(Ordering::SeqCst));
+        // Capture runs at once, but the pill sees nothing until the gesture is revealed.
+        assert!(pill.try_recv().is_err());
+        keys.send(HotkeyAction::Reveal).await.unwrap();
+        let shown = tokio::time::timeout(Duration::from_secs(2), pill.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(shown.state, State::Listening);
         keys.send(HotkeyAction::HandsFree).await.unwrap();
         while hotkey_state(&mut observed, State::Listening)
             .await
@@ -1368,7 +1399,10 @@ mod tests {
         )
         .unwrap();
         assert!(ask(&tx, Request::Reload).await.ok);
-        assert!(keys.send(HotkeyAction::Start).await.is_err());
+        // The replaced adapter is dropped off the actor.
+        tokio::time::timeout(Duration::from_secs(2), keys.closed())
+            .await
+            .unwrap();
         new_keys.send(HotkeyAction::Start).await.unwrap();
         hotkey_state(&mut observed, State::Listening).await;
         assert!(ask(&tx, Request::Cancel).await.ok);
