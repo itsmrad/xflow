@@ -45,8 +45,12 @@ Language hints use lowercase ISO-639-1 codes; omission requests auto-detection.
 Together explicitly sends `auto`, since its omitted-language default is English.
 Dedicated Gemini ASR maps twelve common codes to locales; other codes require
 auto-detection. Vocabulary merges/deduplicates config and request hints before
-validation. OpenRouter rejects hints because upstream model support differs;
-Together Parakeet rejects ignored prompts. Whisper uses a conservative 224-byte
+validation. Configured `stt.vocabulary` must fit; request (dictionary) hints are
+never fail a dictation: a term the provider rejects on its own is skipped, the
+list ends at the total budget, and `xflow doctor`/config writes warn when words
+are dropped. OpenRouter rejects
+hints because upstream model support differs; Together Parakeet rejects ignored
+prompts. Whisper uses a conservative 224-byte
 prompt ceiling. Mistral allows 100 terms without spaces/commas; AssemblyAI permits
 100 terms / 8000 bytes; Deepgram uses a conservative 500-byte budget. ElevenLabs
 allows up to 1000 terms, each under 50 characters / five words without reserved
@@ -86,7 +90,7 @@ characters; its documented keyterm surcharge applies.
 | deepinfra | meta-llama/Llama-3.3-70B-Instruct |
 | gemini | gemini-3.5-flash-lite, minimal reasoning, OpenAI-compatible route |
 | ollama | llama3.2:3b, preinstall it |
-| custom | Explicit endpoint and model |
+| custom | Explicit endpoint and model; key via `xflow key set cleanup`, never the STT `custom` key |
 
 Presets fill missing endpoint/model/key defaults; explicit values override them.
 [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) replaces

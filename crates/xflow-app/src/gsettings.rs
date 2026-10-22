@@ -91,7 +91,7 @@ impl GSettings {
     }
 
     /// For tests: a compiled schema and a persistent keyfile in a private directory.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn with_test_schema_dir(dir: PathBuf, config_home: PathBuf) -> Self {
         Self {
             schema_dir: Some(dir),
@@ -211,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     fn reads_and_writes_a_compiled_schema() {
         let dir = tempfile::tempdir().unwrap();
         let config_home = dir.path().join("config");

@@ -166,6 +166,11 @@ pub trait Desktop: Send + Sync {
     async fn selection(&self) -> Result<Option<String>> {
         Ok(None)
     }
+    /// Full value of the focused editable text element, for learning user corrections;
+    /// None when unavailable or secure.
+    async fn focused_text(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

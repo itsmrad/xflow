@@ -2,6 +2,8 @@ mod args;
 mod config;
 mod doctor;
 mod ipc;
+#[cfg(target_os = "macos")]
+mod launchd;
 mod output;
 mod provider;
 mod setup;
