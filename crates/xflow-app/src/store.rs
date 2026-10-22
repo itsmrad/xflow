@@ -219,6 +219,30 @@ impl Store {
         self.run(move |conn| Ok(conn.execute("DELETE FROM history WHERE id = ?1", [id])? > 0))
             .await
     }
+    /// Replace an entry's text, keeping the first text as `raw_text`. Returns the
+    /// previous text, or `None` when there is no such entry.
+    pub async fn update(&self, id: i64, text: String) -> Result<Option<String>> {
+        if !self.enabled {
+            return Ok(None);
+        }
+        self.run(move |conn| {
+            let tx = conn.transaction()?;
+            let old: Option<String> = tx
+                .query_row("SELECT text FROM history WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            if old.is_some() {
+                tx.execute(
+                    "UPDATE history SET raw_text = COALESCE(raw_text, text), text = ?2, words = ?3 WHERE id = ?1",
+                    params![id, text, words(&text)],
+                )?;
+            }
+            tx.commit()?;
+            Ok(old)
+        })
+        .await
+    }
     pub async fn set_latency(&self, id: i64, latency_ms: u64) -> Result<()> {
         self.run(move |conn| {
             conn.execute(

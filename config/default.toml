@@ -46,6 +46,9 @@ spoken_punctuation = false   # "comma", "period", "new line", ... become punctua
 [dictionary]
 words = []                   # e.g. ["Postgres", "Kubernetes", "xflow"]
 replacements = []            # e.g. [{ from = "postgress", to = "Postgres" }]
+auto_learn = true            # learn words you correct after dictating (macOS) or in history
+learned = []                 # learned words; `xflow dictionary remove <word>` undoes one
+never_learn = []             # removed learned words, never learned again
 
 [sounds]
 enabled = true

@@ -184,13 +184,30 @@ impl Default for FormattingConfig {
         }
     }
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct DictionaryConfig {
     /// Names and terms sent as recognition hints and kept verbatim by cleanup.
     pub words: Vec<String>,
     /// Whole-word, case-insensitive corrections applied to every transcript.
     pub replacements: Vec<Replacement>,
+    /// Learn words you correct right after dictating, or in history.
+    pub auto_learn: bool,
+    /// Words that were learned; removing one also removes its replacements.
+    pub learned: Vec<String>,
+    /// Lowercase words you removed after they were learned; never learned again.
+    pub never_learn: Vec<String>,
+}
+impl Default for DictionaryConfig {
+    fn default() -> Self {
+        Self {
+            words: vec![],
+            replacements: vec![],
+            auto_learn: true,
+            learned: vec![],
+            never_learn: vec![],
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -363,6 +380,15 @@ impl Config {
             self.dictionary.replacements.len(),
             MAX_DICTIONARY_ITEMS,
         )?;
+        for (field, list) in [
+            ("dictionary.learned", &self.dictionary.learned),
+            ("dictionary.never_learn", &self.dictionary.never_learn),
+        ] {
+            check_count(field, list.len(), MAX_DICTIONARY_ITEMS)?;
+            for word in list {
+                check_text(field, word, MAX_WORD_BYTES)?;
+            }
+        }
         for replacement in &self.dictionary.replacements {
             check_text(
                 "dictionary replacement 'from'",

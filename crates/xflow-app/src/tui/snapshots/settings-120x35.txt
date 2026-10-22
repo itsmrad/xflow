@@ -18,16 +18,16 @@
 │                 ││  (unset)                                  ││                                                      │
 │                 ││  cleanup.timeout_secs                     ││                                                      │
 │                 ││  20                                       ││                                                      │
+│                 ││  dictionary.auto_learn                    ││                                                      │
+│                 ││  true                                     ││                                                      │
+│                 ││  dictionary.learned                       ││                                                      │
+│                 ││  []                                       ││                                                      │
+│                 ││  dictionary.never_learn                   ││                                                      │
+│                 ││  []                                       ││                                                      │
 │                 ││  dictionary.replacements                  ││                                                      │
 │                 ││  []                                       ││                                                      │
 │                 ││  dictionary.words                         ││                                                      │
 │                 ││  ["xflow", "Ratatui"]                     ││                                                      │
-│                 ││  formatting.fillers                       ││                                                      │
-│                 ││  ["um", "umm", "uh", "uhm", "er", "erm", "││                                                      │
-│                 ││  formatting.remove_fillers                ││                                                      │
-│                 ││  true                                     ││                                                      │
-│                 ││  formatting.spoken_punctuation            ││                                                      │
-│                 ││  false                                    ││                                                      │
 ╰─────────────────╯╰───────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
  Enter Edit   u Reset   Ctrl+S Save   Ctrl+R Revert
 

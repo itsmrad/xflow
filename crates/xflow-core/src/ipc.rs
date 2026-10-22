@@ -80,6 +80,13 @@ pub enum Request {
     HistoryPaste {
         id: i64,
     },
+    /// Replace an entry's text with the user's correction (its first text is kept
+    /// as `raw_text`) and, with `dictionary.auto_learn`, learn the corrected words.
+    /// Replies with the updated `entry`; `message` names any learned words.
+    HistoryUpdate {
+        id: i64,
+        text: String,
+    },
     ClearHistory,
     Stats,
     /// Re-read config.toml and rebuild providers/desktop services. On error the

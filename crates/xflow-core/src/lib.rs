@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod config;
 pub mod ipc;
+pub mod learn;
 pub mod text;
 
 /// Maximum uploadable mono 16-bit PCM WAV: 25 MB including the 44-byte header.

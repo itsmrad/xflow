@@ -1,4 +1,5 @@
 use crate::{
+    config_edit::ConfigFile,
     store::Store,
     transport::{read_frame, write_frame},
 };
@@ -22,7 +23,7 @@ use tokio::{
 };
 pub use xflow_core::ipc::Command;
 use xflow_core::{
-    config::Config,
+    config::{Config, DictionaryConfig},
     ipc::{
         Delivery, HistoryEntry, Request, Response, Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     },
@@ -51,6 +52,11 @@ enum Completion {
     Reloaded {
         result: Box<Result<(Config, Services, Store)>>,
         reply: oneshot::Sender<Response>,
+    },
+    /// Learned words were saved to config.toml; `message` says which.
+    Learned {
+        dictionary: DictionaryConfig,
+        message: String,
     },
 }
 #[derive(Clone)]
@@ -82,6 +88,8 @@ pub struct Engine {
     context_job: Option<JoinHandle<AppContext>>,
     context_abort: Option<tokio::task::AbortHandle>,
     warm_job: Option<JoinHandle<()>>,
+    /// Ends the observation of the last pasted field (see `observe`).
+    observing: Option<oneshot::Sender<()>>,
     notifications: tokio::task::JoinSet<()>,
     started: Option<Instant>,
     silent_since: Option<Instant>,
@@ -118,6 +126,7 @@ impl Engine {
             context_job: None,
             context_abort: None,
             warm_job: None,
+            observing: None,
             notifications: tokio::task::JoinSet::new(),
             started: None,
             silent_since: None,
@@ -191,10 +200,11 @@ impl Engine {
             xflow_platform::play(cue, &self.config.sounds);
         }
     }
-    fn notify(&mut self, summary: &'static str, body: &'static str) {
+    fn notify(&mut self, summary: &'static str, body: &str) {
         if !cfg!(test) && self.config.notifications.enabled && self.notifications.len() < 4 {
+            let body = body.to_owned();
             self.notifications.spawn(async move {
-                let _ = xflow_platform::notify(summary, body).await;
+                let _ = xflow_platform::notify(summary, &body).await;
             });
         }
     }
@@ -226,6 +236,10 @@ impl Engine {
             let _ = self.services.audio.cancel().await;
             self.set_state(State::Error, Some(format!("{error:#}")));
             return Err(error);
+        }
+        // The user is done editing the last dictation; read the field once more.
+        if let Some(finalize) = self.observing.take() {
+            let _ = finalize.send(());
         }
         self.advance();
         self.mode = mode;
@@ -517,6 +531,11 @@ impl Engine {
                     while queries.try_join_next().is_some() {}
                     while desktop_ops.try_join_next().is_some() {}
                     if (is_query(&request) || matches!(request, Request::Reload)) && queries.len() + desktop_ops.len() >= 32 { let _ = reply.send(Response::error(self.state, "daemon request capacity reached")); continue; }
+                    if let Request::HistoryUpdate { id, text } = request {
+                        let status = self.status(); let store = self.store.clone(); let path = self.config_path.clone(); let tx = completion_tx.clone();
+                        queries.spawn(async move { let state = status.state; let response = edit_history(status, store, id, text, path, tx).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
+                        continue;
+                    }
                     if matches!(request, Request::Reload) {
                         if self.active() || self.reloading { let _ = reply.send(Response::error(self.state, "reload requires an idle daemon")); continue; }
                         let Some(path) = self.config_path.clone() else { let _ = reply.send(Response::error(self.state, "reload config path is unavailable")); continue; };
@@ -565,6 +584,13 @@ impl Engine {
                                 let message = delivery_message(processed.warning.take(), outcome);
                                 // One final success event: subscribers can trust its complete payload.
                                 self.last_timings = Some(processed.timings.clone());
+                                if matches!(outcome, Some(InjectionOutcome::Pasted | InjectionOutcome::Typed)) && self.mode == Mode::Dictation && self.config.dictionary.auto_learn {
+                                    if let Some(path) = self.config_path.clone() {
+                                        let (finalize, finalized) = oneshot::channel();
+                                        self.observing = Some(finalize);
+                                        tokio::spawn(observe(self.services.desktop.clone(), processed.target.clone(), processed.text.clone(), finalized, path, completion_tx.clone()));
+                                    }
+                                }
                                 self.state = State::Success; self.message = message; let mut r = self.status();
                                 r.text = Some(processed.text); r.injection = outcome; r.entry = processed.entry; r.timings = Some(processed.timings);
                                 fit_final(&mut r);
@@ -578,6 +604,12 @@ impl Engine {
                         self.reloading = false;
                         let r = match *result { Ok((config, services, store)) => { self.config = config; self.services = services; self.store = store; self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
+                    }
+                    Completion::Learned { dictionary, message } => {
+                        // Event only: the state and status message stay with the current session.
+                        self.config.dictionary = dictionary;
+                        let mut r = self.status(); r.message = Some(message.clone()); let _ = self.events.send(r);
+                        self.notify("XFlow dictionary", &message);
                     }
                     _ => (),
                 },
@@ -644,6 +676,7 @@ fn is_query(r: &Request) -> bool {
             | Request::HistoryDelete { .. }
             | Request::HistoryCopy { .. }
             | Request::HistoryPaste { .. }
+            | Request::HistoryUpdate { .. }
             | Request::ClearHistory
             | Request::Stats
     )
@@ -707,6 +740,125 @@ async fn query(
         Request::Stats => r.stats = Some(store.stats().await?),
         _ => bail!("invalid history request"),
     }
+    Ok(r)
+}
+/// Watch the field a dictation was pasted into, without polling: read it ~120 ms
+/// after the paste to anchor the inserted span, then once more when the next
+/// dictation starts or after 60 s. Only the span and 16 characters on each side
+/// are kept in between.
+// ponytail: focus changes are noticed at the final read only; an AXObserver
+// (or AT-SPI on Linux) could end the window earlier.
+async fn observe(
+    desktop: Arc<dyn Desktop>,
+    target: AppContext,
+    inserted: String,
+    finalize: oneshot::Receiver<()>,
+    path: PathBuf,
+    completion: mpsc::Sender<Completion>,
+) {
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let Some(receipt) = focused_field(&*desktop, &target)
+        .await
+        .and_then(|field| xflow_core::learn::Receipt::new(&field, &inserted))
+    else {
+        return;
+    };
+    drop(inserted);
+    tokio::select! {
+        // A dropped sender means the daemon is stopping.
+        finalized = finalize => if finalized.is_err() { return; },
+        _ = tokio::time::sleep(Duration::from_secs(60)) => (),
+    }
+    let Some(corrected) = focused_field(&*desktop, &target)
+        .await
+        .and_then(|field| receipt.corrected(&field).map(str::to_owned))
+    else {
+        return;
+    };
+    if learn(path, receipt.inserted().to_owned(), corrected, completion)
+        .await
+        .is_err()
+    {
+        log("warn", "could not save learned dictionary words");
+    }
+}
+/// Text of the focused field while focus is still on the paste target; 100 ms budget.
+async fn focused_field(desktop: &dyn Desktop, target: &AppContext) -> Option<String> {
+    tokio::time::timeout(Duration::from_millis(100), async {
+        let now = desktop.context().await.ok()?;
+        if now.app_id != target.app_id || now.window_id != target.window_id {
+            return None;
+        }
+        desktop.focused_text().await.ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()
+}
+/// The one learning path for corrected pastes and history edits: find close word
+/// corrections, save them to config.toml, and hand the new dictionary to the actor.
+/// Returns the user-facing message.
+async fn learn(
+    path: PathBuf,
+    original: String,
+    corrected: String,
+    completion: mpsc::Sender<Completion>,
+) -> Result<Option<String>> {
+    let learned = tokio::task::spawn_blocking(move || -> Result<_> {
+        // ponytail: read-modify-write races a concurrent CLI edit; last writer wins.
+        let mut file = ConfigFile::load(&path)?;
+        let mut dictionary = file.config()?.dictionary;
+        if !dictionary.auto_learn {
+            return Ok(None);
+        }
+        let found = xflow_core::learn::corrections(&original, &corrected, &dictionary);
+        let added = dictionary.learn(&found);
+        if added.is_empty() {
+            return Ok(None);
+        }
+        file.set_typed("dictionary.words", &dictionary.words)?;
+        file.set_typed("dictionary.replacements", &dictionary.replacements)?;
+        file.set_typed("dictionary.learned", &dictionary.learned)?;
+        file.save()?;
+        Ok(Some((dictionary, added)))
+    })
+    .await??;
+    let Some((dictionary, added)) = learned else {
+        return Ok(None);
+    };
+    let words: Vec<_> = added.iter().map(|w| format!("'{w}'")).collect();
+    let message = format!("Added {} to your dictionary", words.join(", "));
+    let _ = completion
+        .send(Completion::Learned {
+            dictionary,
+            message: message.clone(),
+        })
+        .await;
+    Ok(Some(message))
+}
+/// Save a corrected history entry, then learn from the correction.
+async fn edit_history(
+    mut r: Response,
+    store: Store,
+    id: i64,
+    text: String,
+    path: Option<PathBuf>,
+    completion: mpsc::Sender<Completion>,
+) -> Result<Response> {
+    if text.trim().is_empty() || text.len() > 32 * 1024 {
+        bail!("corrected text must be non-empty and at most 32 KiB");
+    }
+    let original = store
+        .update(id, text.clone())
+        .await?
+        .context("history entry not found")?;
+    r.entry = store.get(id).await?;
+    if let Some(path) = path {
+        r.message = learn(path, original, text, completion)
+            .await
+            .unwrap_or_else(|e| Some(format!("Transcript saved; dictionary not updated: {e:#}")));
+    }
+    fit_final(&mut r);
     Ok(r)
 }
 fn delivery_message(warning: Option<String>, outcome: Option<InjectionOutcome>) -> Option<String> {
@@ -1383,6 +1535,8 @@ mod tests {
         injections: Mutex<Vec<String>>,
         block_context: Option<Arc<Notify>>,
         empty_selection: bool,
+        /// The focused text field; pastes append to it.
+        field: Mutex<Option<String>>,
     }
     #[async_trait]
     impl Desktop for RecordingDesktop {
@@ -1405,7 +1559,13 @@ mod tests {
         }
         async fn inject(&self, text: &str, _: &AppContext) -> Result<InjectionOutcome> {
             self.injections.lock().unwrap().push(text.into());
+            if let Some(field) = self.field.lock().unwrap().as_mut() {
+                field.push_str(text);
+            }
             Ok(InjectionOutcome::Pasted)
+        }
+        async fn focused_text(&self) -> Result<Option<String>> {
+            Ok(self.field.lock().unwrap().clone())
         }
     }
     struct ImmediateStt {
@@ -1494,6 +1654,80 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+    #[tokio::test]
+    async fn corrected_paste_and_history_edit_learn_dictionary_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let desktop = Arc::new(RecordingDesktop {
+            field: Mutex::new(Some("Notes: ".into())),
+            ..RecordingDesktop::default()
+        });
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop.clone(), store);
+        engine.config_path = Some(path.clone());
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        let id = success(&mut events).await.entry.unwrap().id;
+        // After the baseline read, the user fixes a word and edits elsewhere.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        *desktop.field.lock().unwrap() = Some("My Notes: Postgres is ready ".into());
+        ask(&tx, Request::start()).await;
+        let learned = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(message) = events.recv().await.unwrap().message {
+                    if message.starts_with("Added") {
+                        return message;
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(learned, "Added 'Postgres' to your dictionary");
+        ask(&tx, Request::Cancel).await;
+        // History edits go through the same learning path.
+        let edited = ask(
+            &tx,
+            Request::HistoryUpdate {
+                id,
+                text: "post Gress is ready".into(),
+            },
+        )
+        .await;
+        assert_eq!(
+            edited.message.as_deref(),
+            Some("Added 'Gress' to your dictionary")
+        );
+        let entry = edited.entry.unwrap();
+        assert_eq!(entry.text, "post Gress is ready");
+        assert_eq!(entry.raw_text.as_deref(), Some("um post gres is ready"));
+        let dictionary = Config::load(&path).unwrap().dictionary;
+        assert_eq!(dictionary.words, ["Gress", "Postgres"]);
+        assert_eq!(dictionary.learned, ["Postgres", "Gress"]);
+        assert_eq!(
+            dictionary
+                .replacements
+                .iter()
+                .map(|r| (r.from.as_str(), r.to.as_str()))
+                .collect::<Vec<_>>(),
+            [("post gres", "Postgres"), ("gres", "Gress")]
+        );
+        assert!(
+            !ask(
+                &tx,
+                Request::HistoryUpdate {
+                    id: 999,
+                    text: "x".into()
+                }
+            )
+            .await
+            .ok
+        );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
     }
     #[tokio::test]
     async fn ipc_history_crud_stats_and_final_payload() {
