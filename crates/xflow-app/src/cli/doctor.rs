@@ -147,11 +147,14 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
     let mut checks = checks(path, &desktop, &session, present, daemon);
     #[cfg(target_os = "macos")]
     {
+        // TCC grants are per executable: these describe this terminal, not launchd's
+        // xflowd, so they are informational (xflowd logs its own missing grants).
         let (accessibility, input) = xflow_platform::permissions();
         let microphone = xflow_platform::microphone_permission();
-        checks.push(check("Microphone", microphone == "authorized", true, microphone, "System Settings > Privacy & Security > Microphone: allow xflowd (or the terminal when running in the foreground); start a recording to request access when not determined"));
-        checks.push(check("Accessibility", accessibility, true, "Permission for this process; launchd xflowd may have a separate grant", "System Settings > Privacy & Security > Accessibility: add/enable the installed xflowd executable (and terminal for foreground use), then xflow daemon restart"));
-        checks.push(check("Input Monitoring", input, false, "Permission for this process; required for global hotkey monitoring", "System Settings > Privacy & Security > Input Monitoring: add/enable xflowd (and terminal for foreground use), then xflow daemon restart"));
+        let state = |ok: bool| if ok { "granted" } else { "not granted" };
+        checks.push(check("Microphone", microphone == "authorized", false, format!("This terminal: {microphone}; xflowd has its own grant"), "System Settings > Privacy & Security > Microphone: allow xflowd (the first recording asks), then xflow daemon restart"));
+        checks.push(check("Accessibility", accessibility, false, format!("This terminal: {}; xflowd has its own grant (xflow daemon logs warns when missing)", state(accessibility)), "System Settings > Privacy & Security > Accessibility: add/enable the installed xflowd, then xflow daemon restart"));
+        checks.push(check("Input Monitoring", input, false, format!("This terminal: {}; needed by xflowd for global hotkeys", state(input)), "System Settings > Privacy & Security > Input Monitoring: add/enable xflowd, then xflow daemon restart"));
     }
     if let Ok(cfg) = super::config::load(path).and_then(|f| f.config().map_err(Error::config)) {
         let known = super::provider::info(&cfg.stt.provider);

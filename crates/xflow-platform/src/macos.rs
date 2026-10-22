@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use std::{
     ffi::{c_char, c_void, CStr},
     ptr,
+    sync::{Once, OnceLock},
     time::Duration,
 };
 use xflow_core::{
@@ -34,6 +35,10 @@ extern "C" {
         external: bool,
     ) -> Ref;
     fn CFStringGetCString(value: Ref, buffer: *mut c_char, size: isize, encoding: u32) -> bool;
+    fn CFStringGetLength(value: Ref) -> isize;
+    fn CFStringGetMaximumSizeForEncoding(len: isize, encoding: u32) -> isize;
+    fn CFDataGetBytePtr(data: Ref) -> *const u8;
+    static kCFBooleanTrue: Ref;
     fn CFDictionaryGetValue(dict: Ref, key: Ref) -> Ref;
     fn CFBooleanGetTypeID() -> usize;
     fn CFBooleanGetValue(value: Ref) -> bool;
@@ -45,6 +50,8 @@ extern "C" {
     fn ProcessInformationCopyDictionary(psn: *const ProcessSerialNumber, mask: u32) -> Ref;
     fn AXIsProcessTrusted() -> bool;
     fn AXUIElementCreateApplication(pid: i32) -> Ref;
+    fn AXUIElementCreateSystemWide() -> Ref;
+    fn AXUIElementSetAttributeValue(element: Ref, attribute: Ref, value: Ref) -> i32;
     fn AXUIElementCopyAttributeValue(element: Ref, attribute: Ref, value: *mut Ref) -> i32;
     fn AXUIElementIsAttributeSettable(element: Ref, attribute: Ref, settable: *mut bool) -> i32;
     fn AXUIElementSetMessagingTimeout(element: Ref, timeout: f32) -> i32;
@@ -87,6 +94,10 @@ impl Owned {
         let mut settable = false;
         unsafe { AXUIElementIsAttributeSettable(self.0, name.0, &mut settable) == 0 && settable }
     }
+    fn enable(&self, name: &str) -> bool {
+        let name = Self::string(name);
+        unsafe { AXUIElementSetAttributeValue(self.0, name.0, kCFBooleanTrue) == 0 }
+    }
     fn flag(&self, name: &str) -> Option<bool> {
         let value = self.attribute(name)?;
         unsafe {
@@ -105,7 +116,12 @@ fn cf_text(value: Ref) -> Option<String> {
     if value.is_null() || unsafe { CFGetTypeID(value) != CFStringGetTypeID() } {
         return None;
     }
-    let mut bytes = vec![0_u8; MAX_TEXT + 1];
+    let len = unsafe { CFStringGetLength(value) };
+    if !(0..=MAX_TEXT as isize).contains(&len) {
+        return None;
+    }
+    let mut bytes =
+        vec![0_u8; unsafe { CFStringGetMaximumSizeForEncoding(len, 0x08000100) } as usize + 1];
     if !unsafe {
         CFStringGetCString(
             value,
@@ -128,11 +144,13 @@ fn cf_text(value: Ref) -> Option<String> {
 #[derive(Default)]
 struct Focus {
     context: AppContext,
-    editable: bool,
+    /// None: the app exposes no usable focused element (e.g. web content).
+    editable: Option<bool>,
     secure: bool,
     element: Option<Owned>,
 }
 fn focus() -> Focus {
+    static TIMEOUT: Once = Once::new();
     let mut focus = Focus::default();
     let mut psn = ProcessSerialNumber::default();
     let mut pid = 0;
@@ -152,36 +170,61 @@ fn focus() -> Focus {
     if !unsafe { AXIsProcessTrusted() } {
         return focus;
     }
+    // The system-wide timeout bounds every AX call, so a stalled app cannot block delivery.
+    TIMEOUT.call_once(|| {
+        if let Some(system) = Owned::new(unsafe { AXUIElementCreateSystemWide() }) {
+            unsafe { AXUIElementSetMessagingTimeout(system.0, 0.2) };
+        }
+    });
     let Some(app) = Owned::new(unsafe { AXUIElementCreateApplication(pid) }) else {
         return focus;
     };
-    unsafe {
-        AXUIElementSetMessagingTimeout(app.0, 0.2);
+    let role_of = |e: &Option<Owned>| e.as_ref().and_then(|e| e.text("AXRole"));
+    let mut element = app.attribute("AXFocusedUIElement");
+    let mut role = role_of(&element);
+    // Electron and Chromium build their AX tree only once an assistive client asks.
+    if role.as_deref().is_none_or(is_container) && app.enable("AXManualAccessibility") {
+        element = app.attribute("AXFocusedUIElement");
+        role = role_of(&element);
     }
-    let Some(element) = app.attribute("AXFocusedUIElement") else {
+    let window = element
+        .as_ref()
+        .and_then(|e| e.attribute("AXWindow"))
+        .or_else(|| app.attribute("AXFocusedWindow"));
+    focus.context.window_id = Some(format!(
+        "{pid}:{}",
+        window.as_ref().map_or(0, |w| unsafe { CFHash(w.0) })
+    ));
+    let Some(element) = element else {
         return focus;
     };
-    let role = element.text("AXRole").unwrap_or_default();
-    let subrole = element.text("AXSubrole").unwrap_or_default();
+    let role = role.unwrap_or_default();
     focus.secure = role == "AXSecureTextField"
-        || subrole == "AXSecureTextField"
+        || element.text("AXSubrole").as_deref() == Some("AXSecureTextField")
         || element.flag("AXProtectedContent") == Some(true);
-    focus.editable = !focus.secure
-        // NSTextView (TextEdit) omits AXEnabled; only an explicit false disables.
-        && element.flag("AXEnabled") != Some(false)
-        && matches!(role.as_str(), "AXTextField" | "AXTextArea" | "AXComboBox")
-        && (element.settable("AXValue")
-            || element.settable("AXSelectedText")
-            || element.flag("AXEditable") == Some(true)
-            || is_terminal(focus.context.app_id.as_deref()));
-    let window = element.attribute("AXWindow");
-    focus.context.window_id = Some(format!(
-        "{pid}:{}:{}:{role}",
-        window.as_ref().map_or(0, |w| unsafe { CFHash(w.0) }),
-        unsafe { CFHash(element.0) }
-    ));
+    focus.editable = if matches!(role.as_str(), "AXTextField" | "AXTextArea" | "AXComboBox") {
+        Some(
+            !focus.secure
+                // NSTextView (TextEdit) omits AXEnabled; only an explicit false disables.
+                && element.flag("AXEnabled") != Some(false)
+                && (element.settable("AXValue")
+                    || element.settable("AXSelectedText")
+                    || element.flag("AXEditable") == Some(true)
+                    || is_terminal(focus.context.app_id.as_deref())),
+        )
+    } else if is_container(&role) {
+        None
+    } else {
+        Some(false)
+    };
     focus.element = Some(element);
     focus
+}
+fn is_container(role: &str) -> bool {
+    matches!(
+        role,
+        "" | "AXWebArea" | "AXGroup" | "AXWindow" | "AXScrollArea" | "AXUnknown" | "AXApplication"
+    )
 }
 fn is_terminal(app: Option<&str>) -> bool {
     let app = app.unwrap_or_default().to_ascii_lowercase();
@@ -206,22 +249,23 @@ enum Decision {
     Refuse,
 }
 fn decision(text: &str, method: InjectionMethod, target: &AppContext, current: &Focus) -> Decision {
-    if current.secure {
-        return Decision::Refuse;
-    }
     if method == InjectionMethod::Clipboard {
         return Decision::Copy;
     }
+    if current.secure {
+        return Decision::Refuse;
+    }
+    // Unknown editability (web content without AX) pastes blind, like Wispr Flow;
+    // a changed window or a known non-editable element copies instead.
     if target.app_id.as_deref().is_none_or(str::is_empty)
         || target.window_id.is_none()
         || target.app_id != current.context.app_id
         || target.window_id != current.context.window_id
-        || !current.editable
+        || current.editable == Some(false)
+        // Terminal control characters can submit commands; leave them on the clipboard.
+        || (is_terminal(current.context.app_id.as_deref()) && text.chars().any(char::is_control))
     {
         return Decision::Copy;
-    }
-    if is_terminal(current.context.app_id.as_deref()) && text.chars().any(char::is_control) {
-        return Decision::Refuse;
     }
     if method == InjectionMethod::Type {
         Decision::Type
@@ -233,15 +277,12 @@ fn send_keys(text: &str, typed: bool) -> Result<()> {
     if !unsafe { CGPreflightPostEventAccess() } {
         bail!("Accessibility permission is required for text delivery; run xflow doctor");
     }
+    let key = if typed { 0 } else { paste_keycode() };
     // Allocate both events before posting so failure cannot leave a key down.
-    let down = Owned::new(unsafe {
-        CGEventCreateKeyboardEvent(ptr::null(), if typed { 0 } else { 9 }, true)
-    })
-    .context("cannot create keyboard event")?;
-    let up = Owned::new(unsafe {
-        CGEventCreateKeyboardEvent(ptr::null(), if typed { 0 } else { 9 }, false)
-    })
-    .context("cannot create keyboard event")?;
+    let down = Owned::new(unsafe { CGEventCreateKeyboardEvent(ptr::null(), key, true) })
+        .context("cannot create keyboard event")?;
+    let up = Owned::new(unsafe { CGEventCreateKeyboardEvent(ptr::null(), key, false) })
+        .context("cannot create keyboard event")?;
     for event in [&down, &up] {
         unsafe {
             CGEventSetFlags(event.0, if typed { 0 } else { 1 << 20 });
@@ -265,6 +306,91 @@ fn send_keys(text: &str, typed: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Virtual key that yields "v" with Command held in the current layout (Dvorak,
+/// AZERTY, "… QWERTY ⌘"); kVK_ANSI_V when the layout has none (e.g. Cyrillic).
+/// Carbon is loaded on first paste only, keeping it out of the idle daemon.
+fn paste_keycode() -> u16 {
+    type CopySource = unsafe extern "C" fn() -> Ref;
+    type GetProperty = unsafe extern "C" fn(Ref, Ref) -> Ref;
+    type KbdType = unsafe extern "C" fn() -> u8;
+    type Translate = unsafe extern "C" fn(
+        *const u8,
+        u16,
+        u16,
+        u32,
+        u32,
+        u32,
+        *mut u32,
+        usize,
+        *mut usize,
+        *mut u16,
+    ) -> i32;
+    struct Carbon(CopySource, GetProperty, KbdType, Translate, Ref);
+    unsafe impl Send for Carbon {}
+    unsafe impl Sync for Carbon {}
+    extern "C" {
+        fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+    }
+    const ANSI_V: u16 = 9;
+    static CARBON: OnceLock<Option<Carbon>> = OnceLock::new();
+    let carbon = CARBON.get_or_init(|| unsafe {
+        let lib = dlopen(
+            c"/System/Library/Frameworks/Carbon.framework/Carbon".as_ptr(),
+            1,
+        );
+        let sym = |name: &CStr| {
+            (!lib.is_null())
+                .then(|| dlsym(lib, name.as_ptr()))
+                .filter(|p| !p.is_null())
+        };
+        let key = sym(c"kTISPropertyUnicodeKeyLayoutData")?;
+        Some(Carbon(
+            std::mem::transmute::<*mut c_void, CopySource>(sym(
+                c"TISCopyCurrentKeyboardLayoutInputSource",
+            )?),
+            std::mem::transmute::<*mut c_void, GetProperty>(sym(c"TISGetInputSourceProperty")?),
+            std::mem::transmute::<*mut c_void, KbdType>(sym(c"LMGetKbdType")?),
+            std::mem::transmute::<*mut c_void, Translate>(sym(c"UCKeyTranslate")?),
+            *(key as *const Ref),
+        ))
+    });
+    let Some(Carbon(copy_source, property, kbd_type, translate, layout_key)) = carbon else {
+        return ANSI_V;
+    };
+    unsafe {
+        let Some(source) = Owned::new(copy_source()) else {
+            return ANSI_V;
+        };
+        let data = property(source.0, *layout_key);
+        if data.is_null() {
+            return ANSI_V;
+        }
+        let layout = CFDataGetBytePtr(data);
+        let translates_to_v = |key: u16| {
+            let (mut dead, mut len, mut out) = (0, 0, [0_u16; 4]);
+            // cmdKey >> 8; kUCKeyActionDown; kUCKeyTranslateNoDeadKeysMask.
+            translate(
+                layout,
+                key,
+                0,
+                1,
+                kbd_type().into(),
+                1,
+                &mut dead,
+                4,
+                &mut len,
+                out.as_mut_ptr(),
+            ) == 0
+                && out[..len] == [u16::from(b'v')]
+        };
+        std::iter::once(ANSI_V)
+            .chain(0..128)
+            .find(|&key| translates_to_v(key))
+            .unwrap_or(ANSI_V)
+    }
 }
 
 pub struct MacDesktop {
@@ -301,7 +427,7 @@ impl Desktop for MacDesktop {
         tokio::task::spawn_blocking(|| {
             let focus = focus();
             Ok(
-                if focus.secure || !focus.editable || is_terminal(focus.context.app_id.as_deref()) {
+                if focus.editable != Some(true) || is_terminal(focus.context.app_id.as_deref()) {
                     None
                 } else {
                     focus.element.and_then(|e| e.text("AXValue"))
@@ -328,9 +454,7 @@ impl Desktop for MacDesktop {
         })
         .await?;
         match action {
-            Decision::Refuse => {
-                bail!("refusing delivery into a secure field or terminal control input")
-            }
+            Decision::Refuse => bail!("refusing delivery into a secure field"),
             Decision::Copy => {
                 self.copy(text).await?;
                 return Ok(InjectionOutcome::ClipboardOnly);
@@ -347,10 +471,10 @@ impl Desktop for MacDesktop {
         }
         let target = target.clone();
         let text_owned = text.to_owned();
+        // Re-check just before the keys: focus may have moved to another window or a secure field.
         let delivered = tokio::task::spawn_blocking(move || {
             match decision(&text_owned, method, &target, &focus()) {
-                Decision::Refuse => bail!("focus moved to a secure field or unsafe terminal"),
-                Decision::Copy => Ok(false),
+                Decision::Refuse | Decision::Copy => Ok(false),
                 _ => send_keys(&text_owned, method == InjectionMethod::Type).map(|()| true),
             }
         })
@@ -474,66 +598,39 @@ mod tests {
         );
     }
     #[test]
-    fn delivery_requires_same_editable_nonsecure_focus_and_safe_terminal_input() {
+    fn delivery_requires_same_window_nonsecure_focus_and_safe_terminal_input() {
+        use Decision::*;
+        use InjectionMethod::{Clipboard, Paste as P, Type as T};
         let target = AppContext {
             app_id: Some("com.apple.TextEdit".into()),
-            window_id: Some("1:2:3:AXTextArea".into()),
+            window_id: Some("1:2".into()),
             selected_text: None,
         };
         let mut current = Focus {
             context: target.clone(),
-            editable: true,
+            editable: Some(true),
             ..Default::default()
         };
-        assert_eq!(
-            decision("hello", InjectionMethod::Paste, &target, &current),
-            Decision::Paste
-        );
-        assert_eq!(
-            decision("hé🦀", InjectionMethod::Type, &target, &current),
-            Decision::Type
-        );
-        assert_eq!(
-            decision("hello", InjectionMethod::Clipboard, &target, &current),
-            Decision::Copy
-        );
+        assert_eq!(decision("hello", P, &target, &current), Paste);
+        assert_eq!(decision("hé🦀", T, &target, &current), Type);
+        assert_eq!(decision("hello", Clipboard, &target, &current), Copy);
         current.secure = true;
-        assert_eq!(
-            decision("secret", InjectionMethod::Paste, &target, &current),
-            Decision::Refuse
-        );
+        assert_eq!(decision("secret", P, &target, &current), Refuse);
+        assert_eq!(decision("secret", Clipboard, &target, &current), Copy);
         current.secure = false;
-        current.editable = false;
-        assert_eq!(
-            decision("hello", InjectionMethod::Paste, &target, &current),
-            Decision::Copy
-        );
-        current.editable = true;
-        current.context.window_id = Some("other field".into());
-        assert_eq!(
-            decision("hello", InjectionMethod::Paste, &target, &current),
-            Decision::Copy
-        );
+        current.editable = Some(false);
+        assert_eq!(decision("hello", P, &target, &current), Copy);
+        // Electron/web content without an AX tree: paste blind into the same window.
+        current.editable = None;
+        assert_eq!(decision("hello", P, &target, &current), Paste);
+        current.context.window_id = Some("1:3".into());
+        assert_eq!(decision("hello", P, &target, &current), Copy);
         current.context.app_id = Some("com.googlecode.iterm2".into());
         let terminal = current.context.clone();
         for text in ["echo hi\n", "echo hi\r", "\u{1b}"] {
-            assert_eq!(
-                decision(text, InjectionMethod::Paste, &terminal, &current),
-                Decision::Refuse
-            );
+            assert_eq!(decision(text, P, &terminal, &current), Copy);
         }
-        assert_eq!(
-            decision("echo hi", InjectionMethod::Paste, &terminal, &current),
-            Decision::Paste
-        );
-        assert_eq!(
-            decision(
-                "hello",
-                InjectionMethod::Paste,
-                &AppContext::default(),
-                &current
-            ),
-            Decision::Copy
-        );
+        assert_eq!(decision("echo hi", P, &terminal, &current), Paste);
+        assert_eq!(decision("hello", P, &AppContext::default(), &current), Copy);
     }
 }

@@ -67,6 +67,37 @@ fn plist(binary: &Path, log: &Path) -> Result<String> {
 "#
     ))
 }
+/// First ProgramArguments entry of an installed plist.
+fn program(plist: &str) -> Option<&str> {
+    let (_, rest) = plist.split_once("<key>ProgramArguments</key>")?;
+    Some(rest.split_once("<string>")?.1.split_once("</string>")?.0)
+}
+/// TCC and Keychain grants follow the code signature; a stable identity keeps them
+/// across rebuilds, while the linker's ad-hoc signature changes with every build.
+const IDENTITY: &str = "xflow-dev";
+fn sign(binary: &Path) -> &'static str {
+    let named = tool("/usr/bin/security", &["find-identity", "-p", "codesigning"])
+        .is_ok_and(|ids| ids.contains(&format!("\"{IDENTITY}\"")));
+    let identity = if named { IDENTITY } else { "-" };
+    let signed = Command::new("/usr/bin/codesign")
+        .args([
+            "--force",
+            "--sign",
+            identity,
+            "--identifier",
+            "com.xflow.xflowd",
+        ])
+        .arg(binary)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    match (signed, named) {
+        (true, true) => "signed with xflow-dev",
+        (true, false) => "ad-hoc signed; grants reset on rebuild unless an \"xflow-dev\" code-signing certificate exists (see README)",
+        _ => "could not sign xflowd; permissions may need granting again",
+    }
+}
 fn bootout() -> Result<()> {
     tool("/bin/launchctl", &["bootout", &target()])?;
     // bootout can return before launchd has removed the job from the GUI domain.
@@ -115,14 +146,15 @@ pub fn service(action: &args::Service, out: &Output) -> Result<()> {
             if was_loaded {
                 bootout()?;
             }
+            // Sign while launchd's copy is stopped; never re-sign a running image.
+            let signature = sign(&binary);
             if *enable || was_loaded {
                 bootstrap()?;
             }
-            out.confirm(if *enable || was_loaded {
-                "LaunchAgent installed and loaded at ~/Library/LaunchAgents/com.xflow.daemon.plist"
-            } else {
-                "LaunchAgent installed at ~/Library/LaunchAgents/com.xflow.daemon.plist; start with xflow daemon start"
-            })?;
+            out.confirm(&format!(
+                "LaunchAgent installed at ~/Library/LaunchAgents/com.xflow.daemon.plist ({}); {signature}",
+                if *enable || was_loaded { "loaded" } else { "start with xflow daemon start" }
+            ))?;
         }
         args::Service::Uninstall => {
             if loaded()? {
@@ -141,7 +173,12 @@ pub fn daemon(action: &args::Daemon, out: &Output) -> Result<()> {
     use args::Daemon::*;
     match action {
         Start | Restart => {
-            if !unit_path()?.exists() {
+            // Install when missing or when the plist names a binary that no longer exists.
+            let stale = std::fs::read_to_string(unit_path()?)
+                .ok()
+                .and_then(|plist| program(&plist).map(|p| !Path::new(p).is_file()))
+                .unwrap_or(true);
+            if stale {
                 service(&args::Service::Install { enable: false }, out)?;
             }
             if !loaded()? {
@@ -237,5 +274,8 @@ mod tests {
                 && result.contains("<key>RunAtLoad</key><true/>")
         );
         assert!(result.contains(LABEL) && result.matches("/a/log file").count() == 2);
+        let plist = plist(Path::new("/bin/sh"), Path::new("/tmp/log")).unwrap();
+        assert_eq!(program(&plist), Some("/bin/sh"));
+        assert_eq!(program("<plist/>"), None);
     }
 }

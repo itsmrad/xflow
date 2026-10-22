@@ -943,11 +943,20 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
     let mut engine_finished = false;
+    let mut accept_failing = false;
     loop {
         tokio::select! {
             accepted = listener.accept() => {
                 // Transient accept errors (EMFILE, ECONNABORTED) must not end the daemon.
-                let Ok((stream, _)) = accepted else { log("warn", "IPC accept failed"); tokio::time::sleep(Duration::from_millis(50)).await; continue; };
+                // Log the first error of a burst only; the 50 ms pause bounds the retry rate.
+                let (stream, _) = match accepted {
+                    Ok(accepted) => { accept_failing = false; accepted }
+                    Err(error) => {
+                        if !std::mem::replace(&mut accept_failing, true) { log("warn", &format!("IPC accept failed: {error}")); }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                };
                 // macOS loses peer credentials when a probe disconnects before accept.
                 if !stream.peer_cred().is_ok_and(|peer| peer.uid() == unsafe { libc::geteuid() }) { continue; }
                 let Ok(permit) = capacity.clone().try_acquire_owned() else { continue; };

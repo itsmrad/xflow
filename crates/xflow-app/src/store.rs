@@ -36,8 +36,10 @@ impl Store {
             };
             crate::paths::private_dir(parent)?;
             // SQLite NOFOLLOW rejects symlinked ancestors such as macOS /var -> /private/var.
-            // Resolve only the validated parent; NOFOLLOW still guards the database file.
-            let path = &parent.canonicalize()?.join(name);
+            // Resolve only the validated parent, re-check it, and keep NOFOLLOW on the file.
+            let parent = parent.canonicalize()?;
+            crate::paths::private_dir(&parent)?;
+            let path = &parent.join(name);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt;
