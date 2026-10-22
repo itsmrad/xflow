@@ -40,6 +40,15 @@ pub fn build_transformer(
     }
     Ok(Some(Arc::new(HttpTransformer::new(config, offline)?)))
 }
+/// Keyring entry for a cleanup provider. Cleanup `custom` must never share the
+/// STT `custom` entry: that key belongs to a different host.
+pub fn cleanup_key_id(provider: &str) -> &str {
+    if provider == "custom" {
+        "cleanup"
+    } else {
+        provider
+    }
+}
 fn cleanup_env(provider: &str, configured: &str) -> Option<String> {
     if configured.is_empty() {
         return None;
@@ -194,7 +203,7 @@ impl Credentials {
         let provider = self.provider.clone();
         let value = tokio::task::spawn_blocking(move || {
             let entry = keyring::Entry::new(KEYRING_SERVICE, &provider).map_err(|_| anyhow!("OS credential storage is unavailable"))?;
-            entry.get_password().map(Zeroizing::new).map_err(|_| anyhow!("API key unavailable; set the provider environment variable or save a key with xflow key set"))
+            entry.get_password().map(Zeroizing::new).map_err(|_| anyhow!("API key unavailable; set the provider environment variable or run `xflow key set {provider}`"))
         }).await.map_err(|_| anyhow!("credential storage task failed"))??;
         Ok(Some(value))
     }
@@ -439,10 +448,7 @@ impl HttpTransformer {
                 .is_some_and(|u| u.host_str().is_some_and(|h| is_canonical_host(&url, h)))
         });
         let info = preset.or(inferred);
-        // Cleanup `custom` must never reuse the STT `custom` key on another host.
-        let provider = info
-            .filter(|p| p.id != "custom")
-            .map_or("cleanup", |p| p.id);
+        let provider = info.map_or("cleanup", |p| cleanup_key_id(p.id));
         let canonical = info.is_some_and(|p| {
             Url::parse(p.endpoint)
                 .ok()
@@ -800,6 +806,56 @@ mod tests {
         let cfg = config("openrouter", "http://127.0.0.1:9/x".into());
         assert_eq!(hint_fit(&cfg, &["Postgres".into()]).unwrap(), 0);
     }
+    #[test]
+    fn per_term_rejects_are_skipped_and_case_duplicates_count_as_sent() {
+        let mut cfg = config("mistral", "http://127.0.0.1:9/x".into());
+        cfg.vocabulary = vec!["Postgres".into()];
+        let words = ["Visual Studio", "postgres", "a,b", "XFlow"].map(String::from);
+        assert_eq!(hint_fit(&cfg, &words).unwrap(), 2);
+        cfg.vocabulary.clear();
+        let words: Vec<String> = (0..101).map(|i| format!("w{i}")).collect();
+        assert_eq!(hint_fit(&cfg, &words).unwrap(), 100);
+    }
+    #[tokio::test]
+    async fn gemini_body_bound_is_strict_at_the_limit() {
+        use stt::gemini_body_bound;
+        // 14_996_928 bytes -> 19_995_904 base64 + 4096 fixed = exactly 20 MB.
+        assert_eq!(gemini_body_bound(14_996_928, &[], false), 20_000_000);
+        assert!(gemini_body_bound(14_996_929, &[], false) > 20_000_000);
+        let (url, rx) = server(
+            "200 OK",
+            br#"{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"ok"}]}}]}"#,
+            Duration::ZERO,
+            "",
+        )
+        .await;
+        let mut cfg = config("gemini", url);
+        cfg.model = Some("gemini-2.5-flash-lite".into());
+        let env = set_test_key(&mut cfg);
+        let hints = vec!["\"\\".repeat(200), "\"".into()];
+        build_stt(&cfg, true)
+            .unwrap()
+            .transcribe(
+                clip(),
+                TranscriptionOptions {
+                    vocabulary: hints.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let request = rx.await.unwrap();
+        let value: Value = serde_json::from_slice(body(&request)).unwrap();
+        let audio = STANDARD
+            .decode(
+                value["contents"][0]["parts"][0]["inlineData"]["data"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(body(&request).len() <= gemini_body_bound(audio.len(), &hints, false));
+        std::env::remove_var(env);
+    }
     #[tokio::test]
     async fn named_provider_loopback_override_does_not_send_default_key() {
         let (url, rx) = server("200 OK", br#"{"text":"hello"}"#, Duration::ZERO, "").await;
@@ -1064,5 +1120,7 @@ mod tests {
         let transformer = HttpTransformer::new(&cfg, false).unwrap();
         assert_eq!(transformer.credential.provider, "cleanup");
         assert!(transformer.credential.allow_keyring);
+        assert_eq!(cleanup_key_id("custom"), "cleanup");
+        assert_eq!(cleanup_key_id("groq"), "groq");
     }
 }

@@ -114,13 +114,17 @@ fn checks(
             "Cloud transcription uploads audio to the configured provider"
         };
         checks.push(check("privacy", true, false, detail, "Review xflow config show; keys belong in environment variables or OS credential storage"));
-        let warning = super::config::hint_warning(&config);
+        // Over-budget dictionary words are optional; an unbuildable provider fails every dictation.
+        let hints = super::config::hint_warning(&config);
         checks.push(check(
             "dictionary hints",
-            warning.is_none(),
-            false,
-            warning.unwrap_or_else(|| "All dictionary words fit the provider hint limit".into()),
-            "Remove rarely used words with xflow dictionary remove",
+            hints == Ok(None),
+            hints.is_err(),
+            match hints {
+                Ok(None) => "All dictionary words fit the provider hint limit".into(),
+                Ok(Some(text)) | Err(text) => text,
+            },
+            "Shorten stt.vocabulary or pick a supported provider; remove rarely used dictionary words",
         ));
     }
     checks
@@ -239,5 +243,18 @@ mod tests {
         assert!(hints
             .detail
             .starts_with("30 dictionary words exceed the groq hint limit"));
+        let long = "a".repeat(120);
+        std::fs::write(
+            &path,
+            format!("[stt]\nvocabulary = [\"{long}\", \"b{long}\"]"),
+        )
+        .unwrap();
+        let result = checks(&path, "sway", "wayland", |_| true, Ok("v1".into()));
+        let hints = result
+            .iter()
+            .find(|c| c.name == "dictionary hints")
+            .unwrap();
+        assert!(!hints.ok && hints.required);
+        assert!(hints.detail.contains("224-byte"));
     }
 }

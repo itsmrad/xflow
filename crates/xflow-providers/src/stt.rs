@@ -71,8 +71,10 @@ fn validate_options(
     }
     Ok(())
 }
-/// Appends `extra` hints in order until the provider would reject one; returns how
-/// many were taken. Dictionary hints never fail a dictation, they are truncated.
+/// Appends `extra` hints in order and returns how many are sent. Dictionary hints
+/// never fail a dictation: a term the provider rejects on its own is skipped, and
+/// the first term past the total budget ends the list. Duplicates ignore ASCII case,
+/// matching the daemon's merge.
 fn push_hints(
     hints: &mut Vec<String>,
     extra: impl IntoIterator<Item = String>,
@@ -80,20 +82,25 @@ fn push_hints(
     protocol: Protocol,
     model: &str,
 ) -> usize {
-    let mut taken = 0;
+    let mut sent = 0;
     for term in extra {
-        if !hints.contains(&term) {
-            hints.push(term);
-            if validate_options(language, hints, protocol, model).is_err() {
-                hints.pop();
-                break;
-            }
+        if hints.iter().any(|h| h.eq_ignore_ascii_case(&term)) {
+            sent += 1;
+            continue;
         }
-        taken += 1;
+        if validate_options(language, std::slice::from_ref(&term), protocol, model).is_err() {
+            continue;
+        }
+        hints.push(term);
+        if validate_options(language, hints, protocol, model).is_err() {
+            hints.pop();
+            break;
+        }
+        sent += 1;
     }
-    taken
+    sent
 }
-/// How many leading `words` the configured provider sends after `stt.vocabulary`.
+/// How many of `words` the configured provider sends after `stt.vocabulary`.
 pub fn hint_fit(config: &SttConfig, words: &[String]) -> Result<usize> {
     let (_, model, protocol) = resolve(config)?;
     let mut hints = config.vocabulary.clone();
@@ -362,9 +369,8 @@ impl HttpProvider {
                 )
             }
             Protocol::Gemini => {
-                // Bound the request arithmetically: base64 audio, escaped hints, fixed JSON.
-                let hints: usize = options.vocabulary.iter().map(|v| v.len() * 2 + 4).sum();
-                if data.len().div_ceil(3) * 4 + hints + 4096 > 20_000_000 {
+                let transcribe = self.model == "gemini-3.5-transcribe";
+                if gemini_body_bound(data.len(), &options.vocabulary, transcribe) > 20_000_000 {
                     bail!("Gemini inline audio request exceeds 20 MB");
                 }
                 let audio = json!({"inlineData":{"mimeType":mime,"data":STANDARD.encode(&data)}});
@@ -603,6 +609,13 @@ fn audio_mime(format: &str) -> Result<&'static str> {
         "webm" => Ok("audio/webm"),
         _ => bail!("unsupported audio container"),
     }
+}
+/// Upper bound of the Gemini JSON body without serializing it: padded base64 audio,
+/// fully escaped hints (twice on the prompt route) and the fixed fields.
+pub(crate) fn gemini_body_bound(audio: usize, hints: &[String], transcribe: bool) -> usize {
+    let escape = if transcribe { 2 } else { 4 };
+    let hints: usize = hints.iter().map(|h| h.len() * escape + 6).sum();
+    audio.div_ceil(3) * 4 + hints + 4096
 }
 fn gemini_locale(code: &str) -> Result<&'static str> {
     match code {
