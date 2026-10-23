@@ -52,8 +52,7 @@ pub const HANDS_FREE: &str = "Hands-free recording";
 /// Status message once a capture open is slow, typically behind the macOS microphone prompt.
 const MIC_WAITING: &str = "Waiting for microphone permission";
 const MIC_SLOW: Duration = Duration::from_secs(1);
-/// An IPC start still opening after this is refused (the CLI gives up at 9 s), so a
-/// late permission grant never records for a client that already left.
+/// A late permission grant must not record for an expired request or gesture.
 const START_GRACE: Duration = Duration::from_secs(5);
 struct Opening {
     mode: Mode,
@@ -61,7 +60,7 @@ struct Opening {
     t0_us: Option<u64>,
     delivery: Delivery,
     since: Instant,
-    /// The IPC requester; None for a hotkey start, which Stop/Cancel abandons.
+    /// The IPC requester; None for a hotkey start.
     reply: Option<oneshot::Sender<Response>>,
     waiting: bool,
     abandoned: bool,
@@ -328,7 +327,9 @@ impl Engine {
         };
         let reply = opening.reply.take();
         // Never record for a requester that left, timed out, released the key or canceled.
-        let live = !opening.abandoned && reply.as_ref().is_none_or(|r| !r.is_closed());
+        let live = !opening.abandoned
+            && opening.since.elapsed() < START_GRACE
+            && reply.as_ref().is_none_or(|r| !r.is_closed());
         let response = match result {
             Ok(()) if live => {
                 self.capture(opening);
@@ -667,18 +668,12 @@ impl Engine {
                     s + Duration::from_secs(self.config.recording.max_seconds as u64),
                 )
             });
-            // First the waiting message, then (IPC only) the start grace.
+            // First the waiting message, then the start grace.
             let opening = self
                 .opening
                 .as_ref()
                 .filter(|o| !o.abandoned)
-                .and_then(|o| {
-                    if o.waiting {
-                        o.reply.as_ref().map(|_| o.since + START_GRACE)
-                    } else {
-                        Some(o.since + MIC_SLOW)
-                    }
-                });
+                .map(|o| o.since + if o.waiting { START_GRACE } else { MIC_SLOW });
             tokio::select! { biased;
                 command = commands.recv() => {
                     let Some(Command { request, reply }) = command else { break; };
@@ -692,7 +687,8 @@ impl Engine {
                         continue;
                     }
                     if matches!(request, Request::Reload) {
-                        if self.active() || self.reloading || self.opening.is_some() { let _ = reply.send(Response::error(self.state, "reload requires an idle daemon")); continue; }
+                        if self.opening.is_some() { let _ = reply.send(Response::error(self.state, MIC_WAITING)); continue; }
+                        if self.active() || self.reloading { let _ = reply.send(Response::error(self.state, "reload requires an idle daemon")); continue; }
                         let Some(path) = self.config_path.clone() else { let _ = reply.send(Response::error(self.state, "reload config path is unavailable")); continue; };
                         self.reloading = true;
                         let old = self.config.clone(); let services = self.services.clone(); let store = self.store.clone(); let factory = self.reload_factory.clone(); let hotkey_factory = self.hotkey_factory.clone(); let retry_hotkeys = self.hotkeys.is_none() || self.hotkey_warning.is_some(); let tx = completion_tx.clone();
@@ -849,9 +845,11 @@ impl Engine {
                     if let Some(opening) = &mut self.opening {
                         if !std::mem::replace(&mut opening.waiting, true) {
                             self.set_state(State::Idle, Some(MIC_WAITING.into()));
-                        } else if let Some(reply) = opening.reply.take() {
+                        } else {
                             opening.abandoned = true;
-                            let _ = reply.send(Response::error(self.state, format!("{MIC_WAITING}. Allow xflowd to use the microphone, then start again")));
+                            if let Some(reply) = opening.reply.take() {
+                                let _ = reply.send(Response::error(self.state, format!("{MIC_WAITING}. Allow xflowd to use the microphone, then start again")));
+                            }
                         }
                     }
                 }
@@ -1448,6 +1446,8 @@ async fn connection(
     // Subscribe first, then get an actor snapshot, avoiding missed state transitions.
     let mut receiver = events.subscribe();
     let (reply_tx, reply_rx) = oneshot::channel();
+    let closed = read_frame::<Request, _>(&mut reader);
+    tokio::pin!(closed);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(9);
     let answer = tokio::time::timeout_at(deadline, async {
         commands
@@ -1456,24 +1456,27 @@ async fn connection(
                 reply: reply_tx,
             })
             .await?;
-        reply_rx.await.context("daemon is shutting down")
+        tokio::select! { biased;
+            result = &mut closed => { let _ = result?; Ok(None) }
+            reply = reply_rx => reply.context("daemon is shutting down").map(Some),
+        }
     })
     .await;
     // A live but busy daemon says so; closing silently reads as "daemon not running".
-    let response = answer.unwrap_or_else(|_| {
+    let Some(response) = answer.unwrap_or_else(|_| {
         let mut r = Response::error(
             State::Idle,
             "xflowd is running but busy and did not answer in time; try again in a moment",
         );
         r.protocol = Some(PROTOCOL_VERSION);
-        Ok(r)
-    })?;
+        Ok(Some(r))
+    })?
+    else {
+        return Ok(());
+    };
     write_frame(&mut write, &response).await?;
     if subscribe {
-        // Keep one read future alive across broadcasts. Dropping read_line after a
-        // partial frame would discard bytes already consumed from the socket.
-        let closed = read_frame::<Request, _>(&mut reader);
-        tokio::pin!(closed);
+        // Keep the read future alive: canceling read_line can discard partial frames.
         loop {
             tokio::select! {
                 event = receiver.recv() => match event {
@@ -2651,6 +2654,8 @@ mod tests {
         );
         let audio = Arc::new(GatedAudio::default());
         engine.services.audio = audio.clone();
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let connection = tokio::spawn(connection(server, tx.clone(), engine.events.clone()));
         let (keys, key_events) = mpsc::channel(4);
         engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
         let task = tokio::spawn(engine.run(rx));
@@ -2669,13 +2674,7 @@ mod tests {
             })
         };
         // An IPC client starts, the open hangs, and the client gives up.
-        let (reply, response) = oneshot::channel();
-        tx.send(Command {
-            request: Request::start(),
-            reply,
-        })
-        .await
-        .unwrap();
+        write_frame(&mut client, &Request::start()).await.unwrap();
         assert_eq!(ask(&tx, Request::Status).await.state, State::Idle);
         let waiting = hotkey_state(&mut events, State::Idle).await;
         assert_eq!(waiting.message.as_deref(), Some(MIC_WAITING));
@@ -2683,7 +2682,12 @@ mod tests {
             ask(&tx, Request::Status).await.message.as_deref(),
             Some(MIC_WAITING)
         );
-        drop(response);
+        drop(client);
+        tokio::time::timeout(Duration::from_millis(500), connection)
+            .await
+            .expect("disconnected requester still owns the start reply")
+            .unwrap()
+            .unwrap();
         let idle = discarded(events.resubscribe());
         audio.open.notify_one();
         idle.await.unwrap();
@@ -2703,6 +2707,80 @@ mod tests {
         assert_eq!((status.state, status.message), (State::Idle, None));
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn start_grace_expires_for_ipc_and_hands_free_opens() {
+        for hotkey in [false, true] {
+            let (mut engine, tx, rx, mut events, calls) = fixture(
+                Config::default(),
+                Arc::new(RecordingDesktop::default()),
+                Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+            );
+            let audio = Arc::new(GatedAudio::default());
+            engine.services.audio = audio.clone();
+            let (keys, key_events) = mpsc::channel(4);
+            engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
+            let task = tokio::spawn(engine.run(rx));
+            let (reply, response) = oneshot::channel();
+            if hotkey {
+                keys.send(HotkeyAction::Start).await.unwrap();
+                keys.send(HotkeyAction::HandsFree).await.unwrap();
+            } else {
+                tx.send(Command {
+                    request: Request::start(),
+                    reply,
+                })
+                .await
+                .unwrap();
+            }
+            let waiting = hotkey_state(&mut events, State::Idle).await;
+            assert_eq!(waiting.message.as_deref(), Some(MIC_WAITING));
+            tokio::time::sleep(START_GRACE).await;
+            if !hotkey {
+                let refused = tokio::time::timeout(Duration::from_millis(500), response)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(!refused.ok);
+                assert!(refused.message.unwrap().contains("start again"));
+            }
+            let reload = ask(&tx, Request::Reload).await;
+            assert!(!reload.ok);
+            assert!(reload.message.unwrap().contains(MIC_WAITING));
+            audio.open.notify_one();
+            let discarded = hotkey_state(&mut events, State::Idle).await;
+            assert!(discarded.message.is_none());
+            assert_eq!(audio.cancels.load(Ordering::SeqCst), 1);
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            // Once the abandoned open returns, a fresh gesture can record.
+            audio.open.notify_one();
+            assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
+            ask(&tx, Request::Cancel).await;
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn busy_connection_returns_an_error_frame() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let (commands, mut pending) = mpsc::channel(1);
+        let (events, _) = broadcast::channel(1);
+        let task = tokio::spawn(connection(server, commands, events));
+        write_frame(&mut client, &Request::Status).await.unwrap();
+        let command = pending.recv().await.unwrap();
+        let response: Response = tokio::time::timeout(
+            Duration::from_secs(10),
+            read_frame(&mut BufReader::new(client)),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        assert!(!response.ok);
+        assert_eq!(response.protocol, Some(PROTOCOL_VERSION));
+        assert!(response.message.unwrap().contains("running but busy"));
+        assert!(command.reply.is_closed());
+        task.await.unwrap().unwrap();
     }
     struct FinishingAudio {
         finished: AtomicBool,
