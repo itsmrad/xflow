@@ -187,6 +187,7 @@ struct TapContext {
     at_ms: u64,
     events: mpsc::Sender<Input>,
     overflow: Arc<AtomicBool>,
+    received: Arc<AtomicBool>,
 }
 impl TapContext {
     fn send(&self, event: KeyEvent) {
@@ -209,6 +210,7 @@ unsafe extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, context: Ref) 
         }
         return event;
     }
+    context.received.store(true, Ordering::Relaxed);
     context.at_ms = match CGEventGetTimestamp(event) {
         0 => now_ms(),
         ns => ns / 1_000_000,
@@ -269,6 +271,7 @@ pub struct MacHotkeys {
     machine: HotkeyMachine,
     pending: VecDeque<HotkeyAction>,
     overflow: Arc<AtomicBool>,
+    received: Arc<AtomicBool>,
     tap: usize,
     runloop: usize,
     thread: Option<thread::JoinHandle<()>>,
@@ -279,37 +282,57 @@ impl MacHotkeys {
         let (events_tx, events) = mpsc::channel(32);
         let (ready_tx, ready) = std::sync::mpsc::sync_channel(1);
         let overflow = Arc::new(AtomicBool::new(false));
+        let received = Arc::new(AtomicBool::new(false));
+        let thread_received = received.clone();
         let binding = Binding::parse(&config.key);
         let thread_overflow = overflow.clone();
         // The context is only touched through this raw pointer, on its run-loop thread.
-        let thread = thread::Builder::new().name("xflow-hotkey".into()).stack_size(256 * 1024).spawn(move || unsafe {
-            let context = Box::into_raw(Box::new(TapContext { binding, down: false, tap: ptr::null_mut(), at_ms: 0,
-                events: events_tx, overflow: thread_overflow }));
-            let mask = (1 << FLAGS_CHANGED) | (1 << KEY_DOWN) | (1 << KEY_UP);
-            let tap = CGEventTapCreate(1, 0, 1, mask, callback, context as Ref);
-            (*context).tap = tap;
-            let _context = ContextGuard(context); // freed after the tap is invalidated
-            if tap.is_null() {
-                let _ = ready_tx.send(Err(anyhow::anyhow!("Global hotkey unavailable: allow xflowd (or its terminal) in System Settings → Privacy & Security → Input Monitoring, then restart xflowd or run xflow config set hotkey.enabled true")));
-                return;
-            }
-            let source = CFMachPortCreateRunLoopSource(ptr::null_mut(), tap, 0);
-            if source.is_null() {
-                CFRelease(tap);
-                let _ = ready_tx.send(Err(anyhow::anyhow!("cannot create the global hotkey run-loop source")));
-                return;
-            }
-            let runloop = CFRunLoopGetCurrent();
-            CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
-            CGEventTapEnable(tap, true);
-            let handles = (CFRetain(tap) as usize, CFRetain(runloop) as usize);
-            if ready_tx.send(Ok(handles)).is_ok() { CFRunLoopRun(); }
-            else { CFRelease(handles.0 as Ref); CFRelease(handles.1 as Ref); }
-            CFMachPortInvalidate(tap);
+        let thread = thread::Builder::new()
+            .name("xflow-hotkey".into())
+            .stack_size(256 * 1024)
+            .spawn(move || unsafe {
+                let context = Box::into_raw(Box::new(TapContext {
+                    binding,
+                    down: false,
+                    tap: ptr::null_mut(),
+                    at_ms: 0,
+                    events: events_tx,
+                    overflow: thread_overflow,
+                    received: thread_received,
+                }));
+                let mask = (1 << FLAGS_CHANGED) | (1 << KEY_DOWN) | (1 << KEY_UP);
+                let tap = CGEventTapCreate(1, 0, 1, mask, callback, context as Ref);
+                (*context).tap = tap;
+                let _context = ContextGuard(context); // freed after the tap is invalidated
+                if tap.is_null() {
+                    let _ =
+                        ready_tx.send(Err(anyhow::anyhow!(xflow_core::ipc::INPUT_MONITORING_FIX)));
+                    return;
+                }
+                let source = CFMachPortCreateRunLoopSource(ptr::null_mut(), tap, 0);
+                if source.is_null() {
+                    CFRelease(tap);
+                    let _ = ready_tx.send(Err(anyhow::anyhow!(
+                        "cannot create the global hotkey run-loop source"
+                    )));
+                    return;
+                }
+                let runloop = CFRunLoopGetCurrent();
+                CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
+                CGEventTapEnable(tap, true);
+                let handles = (CFRetain(tap) as usize, CFRetain(runloop) as usize);
+                if ready_tx.send(Ok(handles)).is_ok() {
+                    CFRunLoopRun();
+                } else {
+                    CFRelease(handles.0 as Ref);
+                    CFRelease(handles.1 as Ref);
+                }
+                CFMachPortInvalidate(tap);
                 CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
-            CFRelease(source);
-            CFRelease(tap);
-        }).context("cannot start the global hotkey thread")?;
+                CFRelease(source);
+                CFRelease(tap);
+            })
+            .context("cannot start the global hotkey thread")?;
         // Bounded: a wedged WindowServer must not hang daemon startup or reload.
         let handles = ready
             .recv_timeout(Duration::from_secs(2))
@@ -320,6 +343,7 @@ impl MacHotkeys {
                 machine: HotkeyMachine::new(config),
                 pending: VecDeque::new(),
                 overflow,
+                received,
                 tap,
                 runloop,
                 thread: Some(thread),
@@ -334,6 +358,9 @@ impl MacHotkeys {
 
 #[async_trait]
 impl GlobalHotkeys for MacHotkeys {
+    fn received_events(&self) -> Option<bool> {
+        Some(self.received.load(Ordering::Relaxed))
+    }
     async fn next_action(&mut self) -> Result<HotkeyAction> {
         loop {
             if self.overflow.swap(false, Ordering::AcqRel) {

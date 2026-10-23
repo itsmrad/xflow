@@ -1,5 +1,6 @@
 use crate::{
     config_edit::ConfigFile,
+    speech::{self, NOT_CAUGHT},
     store::Store,
     transport::{read_frame, write_frame},
 };
@@ -25,7 +26,8 @@ pub use xflow_core::ipc::Command;
 use xflow_core::{
     config::{Config, DictionaryConfig, HotkeyConfig},
     ipc::{
-        Delivery, HistoryEntry, Request, Response, Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
+        Delivery, HistoryEntry, Permissions, Request, Response, Timings, MAX_MESSAGE_BYTES,
+        PROTOCOL_VERSION,
     },
     AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, GlobalHotkeys,
     HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
@@ -78,7 +80,7 @@ enum Completion {
     Opened(Result<()>),
     Ready {
         generation: u64,
-        result: Result<Processed>,
+        result: Result<Option<Processed>>,
     },
     Finished {
         generation: u64,
@@ -115,6 +117,8 @@ pub struct Engine {
     hotkey_factory: Option<HotkeyFactory>,
     hotkeys: Option<Box<dyn GlobalHotkeys>>,
     hotkey_warning: Option<String>,
+    permissions: Option<Permissions>,
+    permission_probe: Option<fn() -> Permissions>,
     opening: Option<Opening>,
     /// A hotkey session not yet revealed: capture runs, but no cue or pill.
     quiet: bool,
@@ -161,6 +165,8 @@ impl Engine {
             hotkey_factory: None,
             hotkeys: None,
             hotkey_warning: None,
+            permissions: None,
+            permission_probe: None,
             opening: None,
             quiet: false,
             reloading: false,
@@ -214,6 +220,19 @@ impl Engine {
                 Some(message) => format!("{message}; {warning}"),
                 None => warning.clone(),
             }));
+        }
+        r.permissions = self.permissions.clone();
+        if let Some(permissions) = &mut r.permissions {
+            permissions.keyboard_events = self
+                .hotkeys
+                .as_ref()
+                .and_then(|keys| keys.received_events());
+            if let Some(warning) = permissions.warning() {
+                r.message = Some(bounded_message(&match r.message {
+                    Some(message) => format!("{message}; {warning}"),
+                    None => warning.into(),
+                }));
+            }
         }
         r.version = Some(env!("CARGO_PKG_VERSION").into());
         r.protocol = Some(PROTOCOL_VERSION);
@@ -435,15 +454,22 @@ impl Engine {
             self.set_state(State::Idle, Some("Recording too short; discarded".into()));
             return Ok(());
         }
+        let activity = speech::activity(&audio, self.config.recording.silence_threshold);
+        if !activity.speech {
+            self.abort_context();
+            self.set_state(State::Idle, Some(NOT_CAUGHT.into()));
+            return Ok(());
+        }
         self.timings.audio_ms = audio_ms;
         self.cue(xflow_platform::Cue::Stop);
         self.set_state(State::Processing, None);
-        self.transcribe(audio, stopped, completion);
+        self.transcribe(audio, activity.low_energy, stopped, completion);
         Ok(())
     }
     fn transcribe(
         &mut self,
         audio: AudioClip,
+        low_energy: bool,
         stopped: Instant,
         completion: mpsc::Sender<Completion>,
     ) {
@@ -464,11 +490,11 @@ impl Engine {
                 let transcript = services.stt.transcribe(audio, options).await?;
                 timings.stt_ms = ms(stopped.elapsed());
                 let raw = transcript.text;
-                if raw.trim().is_empty() {
-                    bail!("no speech recognized");
-                }
                 if raw.len() > 32 * 1024 {
                     bail!("transcript exceeds 32 KiB safety limit");
+                }
+                if raw.trim().is_empty() || low_energy && speech::suspect(&raw, &config) {
+                    return Ok(None);
                 }
                 let target = if let Some(ref mut job) = context {
                     match tokio::time::timeout(Duration::from_secs(2), &mut *job).await {
@@ -557,14 +583,14 @@ impl Engine {
                         None
                     }
                 };
-                Ok(Processed {
+                Ok(Some(Processed {
                     text,
                     target,
                     entry,
                     timings,
                     stopped,
                     warning,
-                })
+                }))
             }
             .await;
             let _ = completion
@@ -605,6 +631,14 @@ impl Engine {
         request: Request,
         completion: &mpsc::Sender<Completion>,
     ) -> Result<Option<Response>> {
+        if matches!(
+            request,
+            Request::Status | Request::Subscribe | Request::Start { .. } | Request::Toggle { .. }
+        ) {
+            if let Some(probe) = self.permission_probe {
+                self.permissions = Some(probe());
+            }
+        }
         if let Some(opening) = self.opening.as_mut().filter(|_| {
             matches!(
                 request,
@@ -737,7 +771,7 @@ impl Engine {
                     Completion::Opened(result) => self.opened(result).await,
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
-                        match result { Ok(processed) => { self.last = Some(processed.text.clone()); pending = Some(processed); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
+                        match result { Ok(Some(processed)) => { self.last = Some(processed.text.clone()); pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
                     Completion::Finished { generation, mut processed, result } => {
                         self.delivering = false;
@@ -1105,7 +1139,7 @@ fn native_services(old: &Config, config: &Config, services: Services) -> Result<
     let stt = xflow_providers::build_stt(&config.stt, config.privacy.offline)?;
     let transformer = build_transformer(config)?;
     #[cfg(feature = "test-support")]
-    if let Some((audio, desktop)) = crate::test_support::adapters(&config.recording)? {
+    if let Some((audio, desktop)) = crate::test_support::adapters()? {
         return Ok(Services {
             audio,
             desktop,
@@ -1237,7 +1271,7 @@ pub async fn serve(config: Config) -> Result<()> {
 pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()> {
     config.validate()?;
     #[cfg(feature = "test-support")]
-    let test_adapters = crate::test_support::adapters(&config.recording)?;
+    let test_adapters = crate::test_support::adapters()?;
     #[cfg(all(target_os = "macos", feature = "test-support"))]
     let native = test_adapters.is_none();
     #[cfg(all(target_os = "macos", not(feature = "test-support")))]
@@ -1334,6 +1368,11 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     #[cfg(target_os = "macos")]
     {
         if native {
+            engine.permission_probe = Some(xflow_platform::permissions);
+            engine.permissions = Some(xflow_platform::permissions());
+            if let Some(warning) = engine.permissions.as_ref().and_then(Permissions::warning) {
+                log("warn", warning);
+            }
             let factory: HotkeyFactory = Arc::new(|config| {
                 if config.enabled {
                     Ok(Some(Box::new(xflow_platform::MacHotkeys::new(
@@ -1987,6 +2026,7 @@ mod tests {
     }
     struct ImmediateStt {
         calls: Arc<AtomicUsize>,
+        text: &'static str,
     }
     #[async_trait]
     impl SpeechToText for ImmediateStt {
@@ -1999,7 +2039,7 @@ mod tests {
         async fn transcribe(&self, _: AudioClip, _: TranscriptionOptions) -> Result<Transcript> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(Transcript {
-                text: "um post gres is ready".into(),
+                text: self.text.into(),
                 language: Some("en".into()),
             })
         }
@@ -2050,6 +2090,7 @@ mod tests {
                 desktop,
                 stt: Arc::new(ImmediateStt {
                     calls: calls.clone(),
+                    text: "um post gres is ready",
                 }),
                 transformer: None,
             },
@@ -2072,6 +2113,191 @@ mod tests {
         .await
         .unwrap()
     }
+    #[tokio::test]
+    async fn status_and_subscription_report_daemon_permissions_and_tap_evidence() {
+        let (mut engine, tx, rx, _, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 5).unwrap(),
+        );
+        // A created tap does not prove the daemon's current signature is allowed.
+        let (_keys, key_events) = mpsc::channel(4);
+        engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
+        engine.permission_probe = Some(|| Permissions {
+            accessibility: false,
+            input_monitoring: false,
+            keyboard_events: None,
+        });
+        let task = tokio::spawn(engine.run(rx));
+        for request in [Request::Status, Request::Subscribe] {
+            let response = ask(&tx, request).await;
+            let permissions = response.permissions.unwrap();
+            assert!(!permissions.accessibility && !permissions.input_monitoring);
+            assert!(response
+                .message
+                .unwrap()
+                .contains(xflow_core::ipc::INPUT_MONITORING_FIX));
+        }
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+        for (accessibility, input, received, warning) in [
+            (
+                true,
+                false,
+                Some(true),
+                Some(xflow_core::ipc::INPUT_MONITORING_FIX),
+            ),
+            (
+                false,
+                true,
+                Some(true),
+                Some(xflow_core::ipc::ACCESSIBILITY_FIX),
+            ),
+            (
+                true,
+                true,
+                Some(false),
+                Some(xflow_core::ipc::UNVERIFIED_SHORTCUT),
+            ),
+            (true, true, Some(true), None),
+            (true, true, None, None),
+        ] {
+            let permissions = Permissions {
+                accessibility,
+                input_monitoring: input,
+                keyboard_events: received,
+            };
+            assert_eq!(permissions.warning(), warning);
+        }
+    }
+
+    struct ClipAudio(Vec<f32>);
+    #[async_trait]
+    impl AudioCapture for ClipAudio {
+        async fn start(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<AudioClip> {
+            Ok(AudioClip {
+                samples: self.0.clone(),
+                sample_rate: 16_000,
+                channels: 1,
+            })
+        }
+        async fn cancel(&self) -> Result<()> {
+            Ok(())
+        }
+        fn level(&self) -> f32 {
+            0.0
+        }
+    }
+    #[tokio::test]
+    async fn speech_free_sessions_never_upload_save_or_deliver() {
+        // Sine segments of (milliseconds, amplitude) at 16 kHz.
+        let tone = |parts: &[(usize, f32)]| -> Vec<f32> {
+            parts
+                .iter()
+                .flat_map(|&(ms, amplitude)| std::iter::repeat_n(amplitude, ms * 16))
+                .enumerate()
+                .map(|(i, a)| a * (i as f32 * std::f32::consts::TAU * 220.0 / 16_000.0).sin())
+                .collect()
+        };
+        let silence = vec![0.0; 40_000];
+        // #51's quiet-room median frame RMS was 0.00064–0.00154.
+        let hiss: Vec<_> = (0..40_000)
+            .map(|i| if i % 2 == 0 { 0.003 } else { -0.003 })
+            .collect();
+        let mut click = silence.clone();
+        click[400..720].fill(0.5);
+        // #51's silent sessions peaked near 0.03 RMS on a key thump; STT hallucinated on it.
+        let thump = tone(&[(500, 0.001), (300, 0.04), (1700, 0.001)]);
+        let soft = tone(&[(500, 0.001), (1000, 0.012), (1000, 0.001)]);
+        let mut cases = vec![
+            (silence, false, false, "unexpected"),
+            (hiss, false, false, "unexpected"),
+            (click, false, false, "unexpected"),
+            (thump, true, false, "Thank you."),
+            (soft.clone(), true, true, "soft speech passes"),
+            (soft.clone(), true, true, "PostgreSQL is ready"),
+            // Review of #55: speech with little surrounding quiet must not become the floor,
+            (
+                tone(&[(80, 0.001), (500, 0.015)]),
+                true,
+                true,
+                "soft speech passes",
+            ),
+            // loud short phrases are not hallucinations regardless of duration or occupancy,
+            (tone(&[(260, 0.2), (200, 0.001)]), true, true, "Thank you."),
+            (tone(&[(400, 0.2), (5000, 0.001)]), true, true, "Thank you."),
+            // and a brief word inside a longer clip reaches STT.
+            (
+                tone(&[(400, 0.001), (160, 0.2), (400, 0.001)]),
+                true,
+                true,
+                "OK.",
+            ),
+        ];
+        for text in [
+            "Thank you.",
+            "Thanks for watching!",
+            ".",
+            "O",
+            "Fox jumps over the lazy dog.",
+            "PostgreSQL",
+            "PostgreSQL, Anupam",
+            "custom hint",
+        ] {
+            cases.push((soft.clone(), true, false, text));
+            if text != "." {
+                cases.push((vec![0.2; 40_000], true, true, text));
+            }
+        }
+        for (samples, upload, deliver, text) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(&dir.path().join("history.db"), true, 5).unwrap();
+            let desktop = Arc::new(RecordingDesktop::default());
+            let mut config = Config::default();
+            config.dictionary.words = vec!["PostgreSQL".into(), "Anupam".into()];
+            config.stt.vocabulary = vec!["custom hint".into()];
+            let (mut engine, tx, rx, mut events, calls) =
+                fixture(config, desktop.clone(), store.clone());
+            engine.services.audio = Arc::new(ClipAudio(samples));
+            engine.services.stt = Arc::new(ImmediateStt {
+                calls: calls.clone(),
+                text,
+            });
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            let stopped = ask(&tx, Request::Stop).await;
+            if deliver {
+                success(&mut events).await;
+            } else {
+                let empty = if upload {
+                    hotkey_state(&mut events, State::Idle).await
+                } else {
+                    stopped
+                };
+                assert_eq!(empty.state, State::Idle);
+                assert_eq!(empty.message.as_deref(), Some("Didn't catch anything"));
+                assert!(ask(&tx, Request::Last).await.text.is_none());
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), usize::from(upload), "{text}");
+            assert_eq!(
+                store.stats().await.unwrap().sessions,
+                u64::from(deliver),
+                "{text}"
+            );
+            assert_eq!(
+                desktop.injections.lock().unwrap().len(),
+                usize::from(deliver),
+                "{text}"
+            );
+            assert!(desktop.copies.lock().unwrap().is_empty());
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn corrected_paste_and_history_edit_learn_dictionary_words() {
         let dir = tempfile::tempdir().unwrap();
@@ -2448,8 +2674,9 @@ mod tests {
         );
         let task = tokio::spawn(engine.run(rx));
         ask(&tx, Request::start()).await;
-        let r = success(&mut events).await;
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let r = hotkey_state(&mut events, State::Idle).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(r.message.as_deref(), Some(NOT_CAUGHT));
         assert_eq!(r.level, 0.0);
         assert!(
             tokio::time::timeout(Duration::from_millis(100), events.recv())

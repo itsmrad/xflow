@@ -14,6 +14,10 @@ use xflow_core::{
 
 const MAX_TEXT: usize = 64 * 1024;
 type Ref = *const c_void;
+#[link(name = "IOKit", kind = "framework")]
+extern "C" {
+    fn IOHIDCheckAccess(request: u32) -> u32;
+}
 #[repr(C)]
 #[derive(Default)]
 struct ProcessSerialNumber {
@@ -506,9 +510,14 @@ impl Desktop for MacDesktop {
     }
 }
 
-/// Nonprompting permission preflights for the calling process (doctor).
-pub fn permissions() -> (bool, bool) {
-    unsafe { (AXIsProcessTrusted(), CGPreflightListenEventAccess()) }
+/// Nonprompting preflights; called inside xflowd for its IPC diagnostics.
+pub fn permissions() -> xflow_core::ipc::Permissions {
+    xflow_core::ipc::Permissions {
+        accessibility: unsafe { AXIsProcessTrusted() },
+        // kIOHIDRequestTypeListenEvent = 1; kIOHIDAccessTypeGranted = 0.
+        input_monitoring: unsafe { IOHIDCheckAccess(1) == 0 && CGPreflightListenEventAccess() },
+        keyboard_events: None,
+    }
 }
 
 /// Read AVFoundation authorization without opening an input device or prompting.

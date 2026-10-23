@@ -449,9 +449,13 @@ fn dispatch(
                 }
                 Effect::Devices => Update::Devices(blocking(integrations::devices).await),
                 Effect::Doctor => {
-                    Update::Doctor(blocking(doctor).await.unwrap_or_else(|e| {
-                        vec![format!("! {}", options::plain(&format!("{e:#}")))]
-                    }))
+                    let permissions = transport::request(&Request::Status)
+                        .await
+                        .ok()
+                        .and_then(|r| r.permissions);
+                    Update::Doctor(blocking(move || doctor(permissions)).await.unwrap_or_else(
+                        |e| vec![format!("! {}", options::plain(&format!("{e:#}")))],
+                    ))
                 }
             };
             let _ = tx.send(update).await;
@@ -479,7 +483,7 @@ pub(super) fn save(file: &ConfigFile, expected: Option<&str>) -> Result<()> {
     crate::daemon::build_transformer(&config)?;
     file.save()
 }
-fn doctor() -> Result<Vec<String>> {
+fn doctor(_permissions: Option<xflow_core::ipc::Permissions>) -> Result<Vec<String>> {
     let (ok, warn) = (options::glyph("✓", "+"), "!");
     let mut rows = vec![];
     let path = crate::paths::config_path()?;
@@ -520,8 +524,40 @@ fn doctor() -> Result<Vec<String>> {
         }
     }
     #[cfg(target_os = "macos")]
-    rows.push("• On a Mac, allow Microphone and Accessibility for your terminal in System Settings → Privacy & Security.".into());
+    rows.extend(permission_rows(_permissions.as_ref()));
     Ok(rows)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn permission_rows(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<String> {
+    use xflow_core::ipc::{ACCESSIBILITY_FIX, INPUT_MONITORING_FIX, UNVERIFIED_SHORTCUT};
+    let Some(permissions) = permissions else {
+        return vec![
+            "! Cannot verify xflowd's permissions — start or update xflowd, then refresh".into(),
+        ];
+    };
+    let ok = options::glyph("✓", "+");
+    let mut rows = vec![
+        if permissions.input_monitoring {
+            format!("{ok} Input Monitoring is on for xflowd")
+        } else {
+            format!("! {INPUT_MONITORING_FIX}")
+        },
+        if permissions.accessibility {
+            format!("{ok} Accessibility is on for xflowd")
+        } else {
+            format!("! {ACCESSIBILITY_FIX}")
+        },
+    ];
+    if let Some(received) = permissions.keyboard_events {
+        rows.push(if received {
+            format!("{ok} xflowd has received keyboard events")
+        } else {
+            format!("! {UNVERIFIED_SHORTCUT}")
+        });
+    }
+    rows.push("• Microphone: allow xflowd in System Settings → Privacy & Security → Microphone (the first recording asks)".into());
+    rows
 }
 
 #[cfg(test)]
@@ -530,6 +566,51 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use xflow_core::State;
 
+    #[test]
+    fn checkup_reports_daemon_grants_and_unverified_input() {
+        use xflow_core::ipc::{
+            Permissions, ACCESSIBILITY_FIX, INPUT_MONITORING_FIX, UNVERIFIED_SHORTCUT,
+        };
+        let mut permissions = Permissions {
+            accessibility: false,
+            input_monitoring: false,
+            keyboard_events: Some(false),
+        };
+        let rows = permission_rows(Some(&permissions));
+        assert!(rows.iter().any(|r| r.contains(INPUT_MONITORING_FIX)));
+        assert!(rows.iter().any(|r| r.contains(ACCESSIBILITY_FIX)));
+        assert!(rows.iter().all(|r| !r.contains("terminal")));
+        // The selected row's Details pane must retain the fix at normal terminal sizes.
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().join("config.toml"), ColorMode::TrueColor);
+        app.connected = true;
+        app.page = Page::Doctor;
+        app.diagnostics = rows;
+        app.selected[Page::Doctor.index()] = 2;
+        for width in [80, 100] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 24)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render::draw(frame, &app);
+                })
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("add it again"), "{text}");
+        }
+        permissions.accessibility = true;
+        permissions.input_monitoring = true;
+        assert!(permission_rows(Some(&permissions))
+            .iter()
+            .any(|r| r.contains(UNVERIFIED_SHORTCUT)));
+        assert!(permission_rows(None)[0].starts_with("! Cannot verify"));
+    }
     #[tokio::test]
     async fn mock_subscription_keeps_fragmented_frames_and_final_timings() {
         let (client, mut server) = UnixStream::pair().unwrap();
