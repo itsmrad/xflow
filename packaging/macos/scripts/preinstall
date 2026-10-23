@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stop a running xflow worker before its program files are replaced.
+user=$(stat -f%Su /dev/console); uid=$(id -u "$user" 2>/dev/null) || exit 0
+launchctl bootout "gui/$uid/com.xflow.daemon" 2>/dev/null || true
+exit 0
