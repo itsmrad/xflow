@@ -209,13 +209,16 @@ fn key_status(path: &Path, id: Option<&str>, out: &Output) -> Result<()> {
         KeySource::Keyring => ("keyring", None),
         KeySource::NotRequired => ("not_required", None),
         KeySource::Missing => ("missing", None),
+        KeySource::Locked => ("locked", None),
+    };
+    let note = match &environment {
+        Some(name) => format!(" ({name})"),
+        None if source == "locked" => format!(" — {}", xflow_providers::KEYCHAIN_WAITING),
+        None => String::new(),
     };
     out.data(
         &serde_json::json!({"provider":id,"source":source,"environment":environment}),
-        &format!(
-            "{id}: {source}{}",
-            environment.map(|v| format!(" ({v})")).unwrap_or_default()
-        ),
+        &format!("{id}: {source}{note}"),
     )?;
     Ok(())
 }

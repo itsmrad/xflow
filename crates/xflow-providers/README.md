@@ -61,7 +61,10 @@ characters; its documented keyterm surcharge applies.
 - `stt_providers()`, `cleanup_providers()`, `find_provider(ProviderKind, id)`
   expose `ProviderInfo` / `ModelInfo`; factories retain existing signatures.
 - `key_status(provider, api_key_env)` returns only `Environment(name)`,
-  `Keyring`, `NotRequired` or `Missing`, never a secret.
+  `Keyring`, `NotRequired`, `Missing` or `Locked` (the store didn't answer within
+  3 s or refused access, e.g. a pending macOS Always Allow prompt), never a secret.
+  Every keyring call holds one lock until the OS returns, so prompts never stack;
+  a caller waiting longer than 3 s gets `KEYCHAIN_WAITING`.
   `save_key` / `delete_key` manage provider keyring accounts.
 - `check_stt` / `check_cleanup` return `CheckReport { ok, latency_ms, detail }`.
   They use non-billing GET/HEAD account, token or model probes, never audio uploads.

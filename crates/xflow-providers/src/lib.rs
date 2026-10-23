@@ -30,6 +30,30 @@ const MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_TEXT_BYTES: usize = 262_144;
 const KEYRING_SERVICE: &str = "xflow";
 static KEYRING_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// A read that doesn't answer by then is waiting on the user, not on the store.
+const KEYCHAIN_WAIT: Duration = Duration::from_secs(3);
+#[cfg(target_os = "macos")]
+pub const KEYCHAIN_WAITING: &str =
+    "xflow is waiting for Keychain access. Click Always Allow in the macOS prompt";
+#[cfg(not(target_os = "macos"))]
+pub const KEYCHAIN_WAITING: &str =
+    "xflow is waiting for credential storage access. Unlock your system keyring";
+
+/// Runs one credential-store call off the async thread. The lock is held until the
+/// call returns, so a pending OS prompt is never stacked by a second read.
+async fn keychain<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tokio::time::timeout(KEYCHAIN_WAIT, async {
+        let lock = KEYRING_LOCK.lock().await;
+        tokio::task::spawn_blocking(move || {
+            let _lock = lock;
+            call()
+        })
+        .await
+        .map_err(|_| anyhow!("credential storage task failed"))
+    })
+    .await
+    .map_err(|_| anyhow!(KEYCHAIN_WAITING))?
+}
 
 pub fn build_transformer(
     config: &CleanupConfig,
@@ -199,12 +223,15 @@ impl Credentials {
         if !self.allow_keyring {
             bail!("API key unavailable in the configured environment variable");
         }
-        let _lock = KEYRING_LOCK.lock().await;
         let provider = self.provider.clone();
-        let value = tokio::task::spawn_blocking(move || {
+        let value = keychain(move || {
             let entry = keyring::Entry::new(KEYRING_SERVICE, &provider).map_err(|_| anyhow!("OS credential storage is unavailable"))?;
-            entry.get_password().map(Zeroizing::new).map_err(|_| anyhow!("API key unavailable; set the provider environment variable or run `xflow key set {provider}`"))
-        }).await.map_err(|_| anyhow!("credential storage task failed"))??;
+            entry.get_password().map(Zeroizing::new).map_err(|e| match e {
+                keyring::Error::NoEntry => anyhow!("API key unavailable; set the provider environment variable or run `xflow key set {provider}`"),
+                // Denied or locked: the key may exist, so don't send the user to re-add it.
+                _ => anyhow!(KEYCHAIN_WAITING),
+            })
+        }).await??;
         Ok(Some(value))
     }
     #[cfg(test)]
@@ -270,6 +297,8 @@ pub enum KeySource {
     Keyring,
     NotRequired,
     Missing,
+    /// The store didn't answer or refused access, e.g. a pending Always Allow prompt.
+    Locked,
 }
 pub async fn key_status(provider: &str, api_key_env: Option<&str>) -> KeySource {
     if validate_provider(provider).is_err() {
@@ -295,31 +324,23 @@ pub async fn key_status(provider: &str, api_key_env: Option<&str>) -> KeySource 
         return KeySource::NotRequired;
     }
     let provider = provider.to_owned();
-    let result = tokio::time::timeout(Duration::from_secs(5), async {
-        let _lock = KEYRING_LOCK.lock().await;
-        tokio::task::spawn_blocking(move || {
-            keyring::Entry::new(KEYRING_SERVICE, &provider)
-                .ok()
-                .and_then(|e| e.get_password().ok())
-                .map(Zeroizing::new)
-                .is_some_and(|value| secret_header(value).is_ok())
-        })
-        .await
-        .unwrap_or(false)
+    keychain(move || {
+        match keyring::Entry::new(KEYRING_SERVICE, &provider)
+            .and_then(|e| e.get_password())
+            .map(Zeroizing::new)
+        {
+            Ok(value) if secret_header(value.clone()).is_ok() => KeySource::Keyring,
+            Ok(_) | Err(keyring::Error::NoEntry) => KeySource::Missing,
+            Err(_) => KeySource::Locked,
+        }
     })
     .await
-    .unwrap_or(false);
-    if result {
-        KeySource::Keyring
-    } else {
-        KeySource::Missing
-    }
+    .unwrap_or(KeySource::Locked)
 }
 pub async fn delete_key(provider: &str) -> Result<()> {
     validate_provider(provider)?;
     let provider = provider.to_owned();
-    let _lock = KEYRING_LOCK.lock().await;
-    tokio::task::spawn_blocking(move || {
+    keychain(move || {
         let entry = keyring::Entry::new(KEYRING_SERVICE, &provider)
             .map_err(|_| anyhow!("OS credential storage is unavailable"))?;
         match entry.delete_credential() {
@@ -327,8 +348,7 @@ pub async fn delete_key(provider: &str) -> Result<()> {
             Err(_) => bail!("could not delete API key from OS credential storage"),
         }
     })
-    .await
-    .map_err(|_| anyhow!("credential storage task failed"))??;
+    .await??;
     KEY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
@@ -340,16 +360,14 @@ pub async fn save_key(provider: &str, secret: &str) -> Result<()> {
     let value = Zeroizing::new(secret.to_owned());
     secret_header(value.clone())?;
     let provider = provider.to_owned();
-    let _lock = KEYRING_LOCK.lock().await;
-    tokio::task::spawn_blocking(move || {
+    keychain(move || {
         let entry = keyring::Entry::new(KEYRING_SERVICE, &provider)
             .map_err(|_| anyhow!("OS credential storage is unavailable"))?;
         entry
             .set_password(&value)
             .map_err(|_| anyhow!("could not save API key in OS credential storage"))
     })
-    .await
-    .map_err(|_| anyhow!("credential storage task failed"))??;
+    .await??;
     KEY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
@@ -882,11 +900,12 @@ mod tests {
             .contains("configured environment variable"));
     }
     #[tokio::test]
-    async fn deadline_includes_credential_wait() {
+    async fn pending_keychain_prompt_is_reported_not_a_provider_timeout() {
+        // Held lock = another read still waiting on the macOS Always Allow prompt.
         let lock = KEYRING_LOCK.lock().await;
         let cfg = SttConfig {
             api_key_env: Some("XFLOW_MISSING_TIMEOUT_KEY".into()),
-            timeout_secs: 1,
+            timeout_secs: 10,
             ..SttConfig::default()
         };
         let error = build_stt(&cfg, false)
@@ -894,7 +913,11 @@ mod tests {
             .transcribe(clip(), Default::default())
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("timed out"));
+        assert_eq!(error.to_string(), KEYCHAIN_WAITING);
+        assert_eq!(
+            key_status("groq", Some("XFLOW_MISSING_TIMEOUT_KEY")).await,
+            KeySource::Locked
+        );
         drop(lock);
     }
     #[tokio::test]
