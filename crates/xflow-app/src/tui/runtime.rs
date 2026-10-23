@@ -727,6 +727,8 @@ mod tests {
         let mut globe = reinstall(true, true);
         globe.microphone = Some(true);
         globe.globe = Some(false);
+        assert!(globe.permissions_changed().is_empty(), "not outside setup");
+        globe.start = Some(Step::Permissions);
         let effects = globe.permissions_changed();
         assert!(matches!(globe.modal, Some(Modal::Setup(Step::Globe))));
         assert!(effects
@@ -855,6 +857,13 @@ mod tests {
             effects[..],
             [Effect::AskAgain(Grant::InputMonitoring)]
         ));
+        // Never mid-dictation: a restart would drop it, so the running xflowd asks.
+        app.status.state = State::Listening;
+        assert!(matches!(
+            app.action(Action::Choose)[0],
+            Effect::Request(Request::Allow { .. }, _)
+        ));
+        app.status.state = State::Idle;
         // An undecided microphone keeps being asked until Allow flips its row.
         app.permissions.as_mut().unwrap().input_monitoring = true;
         app.selected[Page::Doctor.index()] = 4;

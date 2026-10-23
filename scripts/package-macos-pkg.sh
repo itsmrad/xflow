@@ -25,7 +25,8 @@ install -m755 "packaging/macos/Set up xflow.command" "$work/root/usr/local/share
 # certificate, stable across builds; ad-hoc it is the build's hash, so every new
 # build leaves a stale, switched-on row behind. An untrusted self-signed cert is fine.
 sign=${SIGN:-xflow-dev}
-if [ "$sign" != - ] && ! security find-identity -p codesigning | grep -qF "\"$sign\""; then
+# Matches the identity's quoted name or its SHA-1 hash.
+if [ "$sign" != - ] && ! security find-identity -p codesigning | grep -qiF -e "\"$sign\"" -e " $sign "; then
     echo "warning: no \"$sign\" code-signing identity; signing ad-hoc, so macOS forgets permissions on every new build (see README)" >&2
     sign=-
 fi

@@ -672,8 +672,9 @@ impl App {
     }
     /// One step: xflowd asks macOS (which lists xflowd) and the exact pane opens.
     /// `again` is a person asking: the running xflowd already used its one ask.
+    /// A restart would drop a dictation in progress, so then the running one asks.
     pub fn fix(&mut self, grant: Grant, again: bool) -> Vec<Effect> {
-        if again && grant != Grant::Microphone {
+        if again && grant != Grant::Microphone && !self.active() {
             return vec![Effect::AskAgain(grant)];
         }
         let mut effects = vec![Effect::Request(
@@ -752,7 +753,8 @@ impl App {
                 Tag::Permissions(Some(Grant::Microphone)),
             )];
         }
-        if missing.is_empty() && !self.globe_off() {
+        // Some keep the Globe key on purpose: it is only asked in setup and after installing.
+        if missing.is_empty() && !(self.globe_off() && self.start.is_some()) {
             return vec![];
         }
         self.permissions_offered = true;

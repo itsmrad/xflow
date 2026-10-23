@@ -89,9 +89,11 @@ pub fn trusted_apps() -> Vec<PathBuf> {
     apps
 }
 
-/// Add a generic password readable without a prompt by exactly `apps`.
-/// Fails with errSecDuplicateItem (-25299) when the item exists; delete it first.
-pub fn add(service: &str, account: &str, secret: &[u8], apps: &[PathBuf]) -> Result<()> {
+/// errSecDuplicateItem: an access list can only be given to a new item.
+pub const DUPLICATE: i32 = -25299;
+/// Add a generic password readable without a prompt by exactly `apps`; returns
+/// SecItemAdd's OSStatus (0 = added, [`DUPLICATE`] = the item already exists).
+pub fn add(service: &str, account: &str, secret: &[u8], apps: &[PathBuf]) -> Result<i32> {
     let mut owned = Owned(vec![]);
     let mut trusted = vec![];
     for path in apps {
@@ -148,11 +150,7 @@ pub fn add(service: &str, account: &str, secret: &[u8], apps: &[PathBuf]) -> Res
             &kCFTypeDictionaryValueCallBacks as *const u8 as Ref,
         )
     })?;
-    let status = unsafe { SecItemAdd(query, ptr::null_mut()) };
-    if status != 0 {
-        bail!("Keychain item could not be added ({status})");
-    }
-    Ok(())
+    Ok(unsafe { SecItemAdd(query, ptr::null_mut()) })
 }
 
 #[cfg(test)]
@@ -170,8 +168,10 @@ mod tests {
         };
         delete();
         // Another trusted binary reads it without a dialog (it would block here).
+        // security is Apple-signed, so this checks the access list, not the
+        // partition list a self-signed xflowd is also matched against.
         let apps = [super::trusted_apps(), vec!["/usr/bin/security".into()]].concat();
-        super::add(service, account, b"secret", &apps).unwrap();
+        assert_eq!(super::add(service, account, b"secret", &apps).unwrap(), 0);
         let read = std::process::Command::new("/usr/bin/security")
             .args(["find-generic-password", "-s", service, "-a", account, "-w"])
             .output()

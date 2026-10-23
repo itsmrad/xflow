@@ -17,10 +17,20 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
         color: false,
     };
     // People get the same guided setup as a first `xflow tui` (wizard, then
-    // permissions); --yes with flags stays the scripted path.
-    if cfg!(target_os = "macos") && interactive && std::io::stdout().is_terminal() {
+    // permissions); flags keep the prompts below, for scripts and old habits.
+    let flags = options.provider.is_some()
+        || options.model.is_some()
+        || options.endpoint.is_some()
+        || options.language.is_some()
+        || options.device.is_some()
+        || options.key_stdin
+        || options.test
+        || options.install_extension
+        || options.enable_service;
+    if cfg!(target_os = "macos") && interactive && !flags && std::io::stdout().is_terminal() {
+        // The TUI explains a helper that still isn't running.
         if ipc::request(&Request::Status).is_err() {
-            super::system::service(&args::Service::Install { enable: true }, &quiet)?;
+            let _ = super::system::service(&args::Service::Install { enable: true }, &quiet);
         }
         return ipc::block_on(async {
             xflow_app::tui::run(Some(xflow_app::tui::Step::Welcome))
@@ -162,7 +172,7 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
             && !provider::info(&id)?.local
             && config::ask(
                 &format!(
-                    "{}\nThat key didn't work. Try another? [Y/n] ",
+                    "{}\nTry a different key? [Y/n] ",
                     super::output::clean(&report.detail)
                 ),
                 "y",
