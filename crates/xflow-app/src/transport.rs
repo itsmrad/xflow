@@ -46,7 +46,12 @@ pub async fn connect() -> Result<UnixStream> {
     let stream = tokio::time::timeout(Duration::from_secs(2), UnixStream::connect(&path))
         .await
         .context("daemon connection timed out")?
-        .with_context(|| format!("cannot connect to {}; start xflowd", path.display()))?;
+        .with_context(|| {
+            format!(
+                "cannot connect to {}; run xflow daemon start",
+                path.display()
+            )
+        })?;
     if stream.peer_cred()?.uid() != unsafe { libc::geteuid() } {
         bail!("daemon belongs to another user");
     }

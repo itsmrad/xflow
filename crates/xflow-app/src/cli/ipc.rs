@@ -20,13 +20,9 @@ pub fn request(request: &Request) -> Result<Response> {
     block_on(send(request))
 }
 pub async fn send(request: &Request) -> Result<Response> {
-    let response = transport::request(request).await.map_err(|e| {
-        Error::new(
-            3,
-            e.to_string(),
-            "Run xflow daemon start, or start xflowd in a separate terminal",
-        )
-    })?;
+    let response = transport::request(request)
+        .await
+        .map_err(|e| Error::new(3, e.to_string(), "Run xflow daemon start"))?;
     validate(&response, matches!(request, Request::Status))?;
     Ok(response)
 }

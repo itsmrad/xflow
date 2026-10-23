@@ -54,6 +54,7 @@ enum Update {
     MicTimeout,
     Globe(Option<bool>),
     KeysShared(Result<bool>),
+    Started(Result<()>),
 }
 
 fn restore() {
@@ -297,8 +298,6 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
                     app.start
                 };
                 if let Some(step) = start.filter(|_| !app.setup_offered && app.modal.is_none()) {
-                    // The installer's checks are this session's permissions offer.
-                    app.permissions_offered |= step == Step::Permissions;
                     effects.extend(app.open_setup(step));
                 }
                 effects.extend(app.permissions_changed());
@@ -339,10 +338,11 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             }
             match result {
                 Ok(response) => effects = app.response(response, tag),
-                Err(_) if matches!(tag, Tag::Reload) => app.toast = Some(
-                    "Saved. It takes effect when xflow's background helper starts (run xflowd)."
-                        .into(),
-                ),
+                Err(_) if matches!(tag, Tag::Reload) => {
+                    app.toast = Some(
+                        "Saved. It takes effect once xflow's background helper is running.".into(),
+                    )
+                }
                 Err(error) => {
                     if matches!(tag, Tag::Permissions(Some(_))) {
                         app.asking = false;
@@ -369,9 +369,12 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
         Update::Connection(connected, message) => {
             app.connected = connected;
             app.connection = message;
-            if connected {
-                effects = app.refresh();
-            }
+            effects = if connected {
+                (app.downs, app.restarting, app.start_failed) = (0, false, false);
+                app.refresh()
+            } else {
+                app.disconnected()
+            };
         }
         Update::Overlay(result) => match result {
             Ok(rows) => {
@@ -422,6 +425,12 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
         Update::Globe(globe) => {
             app.globe = globe;
             effects = app.globe_changed();
+        }
+        Update::Started(result) => {
+            if let Err(e) = result {
+                app.start_failed = true;
+                app.toast = Some(options::plain(&format!("{e:#}")));
+            }
         }
         Update::KeysShared(result) => match result {
             Ok(true) => {
@@ -549,6 +558,7 @@ fn dispatch(
                 Effect::Open(url) => Update::Opened(blocking(move || open(url)).await),
                 Effect::Globe => Update::Globe(blocking(|| Ok(globe())).await.ok().flatten()),
                 Effect::ShareKeys(ids) => Update::KeysShared(integrations::share_keys(ids).await),
+                Effect::StartHelper => Update::Started(blocking(start_helper).await),
                 Effect::AskAgain(grant) => {
                     if blocking(restart).await.is_ok() {
                         // ponytail: fixed wait for the fresh xflowd's ask; poll its log if it proves short.
@@ -581,6 +591,25 @@ fn open(url: &str) -> Result<()> {
         .is_ok_and(|s| s.success());
     if !opened {
         bail!("System Settings didn't open — open it from the Apple menu");
+    }
+    Ok(())
+}
+/// `xflow daemon start` from this same binary: installs a missing LaunchAgent
+/// (or systemd unit) and starts xflowd; the subscription then connects by itself.
+fn start_helper() -> Result<()> {
+    let out = std::process::Command::new(std::env::current_exe()?)
+        .args(["daemon", "start", "--quiet"])
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if !out.status.success() {
+        let why = String::from_utf8_lossy(&out.stderr);
+        bail!(
+            "{}",
+            why.lines()
+                .next()
+                .unwrap_or("xflow couldn't start its background helper")
+                .trim_start_matches("error: ")
+        );
     }
     Ok(())
 }
@@ -728,7 +757,7 @@ mod tests {
         globe.microphone = Some(true);
         globe.globe = Some(false);
         assert!(globe.permissions_changed().is_empty(), "not outside setup");
-        globe.start = Some(Step::Permissions);
+        globe.start = Some(Step::Welcome);
         let effects = globe.permissions_changed();
         assert!(matches!(globe.modal, Some(Modal::Setup(Step::Globe))));
         assert!(effects
@@ -886,6 +915,29 @@ mod tests {
         app.response(reply, mic);
         assert!(app.permission_rows()[2].0.ends_with("Microphone is on"));
         assert!(!app.watching());
+    }
+    #[test]
+    fn a_lost_helper_is_started_once_and_a_restart_is_not_an_outage() {
+        let mut app = App::new("unused".into(), ColorMode::TrueColor);
+        let lost = |app: &mut App| handle(app, Update::Connection(false, String::new()), &mut true);
+        assert!(matches!(lost(&mut app)[..], [Effect::StartHelper]));
+        assert!(lost(&mut app).is_empty(), "once per outage");
+        assert_eq!(app.helper_down(), "Starting xflow…");
+        handle(&mut app, Update::Connection(true, String::new()), &mut true);
+        // Ask-again's restart: the first disconnect is expected; a second one starts it.
+        app.restarting = true;
+        assert!(lost(&mut app).is_empty());
+        assert_eq!(app.helper_down(), "Restarting xflow…");
+        assert!(matches!(lost(&mut app)[..], [Effect::StartHelper]));
+        // A failed start says so, and Enter tries again.
+        handle(
+            &mut app,
+            Update::Started(Err(anyhow::anyhow!("no"))),
+            &mut true,
+        );
+        assert!(app.helper_down().contains("Press Enter"));
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(app.key(enter)[..], [Effect::StartHelper]));
     }
     #[tokio::test]
     async fn quit_keeps_ownership_of_a_pending_start_but_not_another_clients_session() {

@@ -169,6 +169,8 @@ pub enum Effect {
     Globe,
     /// Re-save these Keychain keys so xflowd reads them without asking (macOS).
     ShareKeys(Vec<String>),
+    /// Start xflowd the way `xflow daemon start` does (launchd / systemd).
+    StartHelper,
 }
 /// System Settings › Keyboard, where "Press 🌐 key to" lives.
 pub const KEYBOARD_PANE: &str = "x-apple.systempreferences:com.apple.Keyboard-Settings.extension";
@@ -331,6 +333,12 @@ pub struct App {
     pub session_pending: bool,
     pub connected: bool,
     pub connection: String,
+    /// Ask-again restarted xflowd: its disconnect is expected, not a failure.
+    pub restarting: bool,
+    /// Disconnects in a row since the last connect; the first real one starts xflowd.
+    pub downs: u32,
+    /// Starting xflowd failed; Enter tries again.
+    pub start_failed: bool,
     pub status: Response,
     pub transcript: String,
     pub timings: Option<Timings>,
@@ -371,8 +379,7 @@ pub struct App {
     pub globe: Option<bool>,
     /// This session already re-saved its Keychain keys for xflowd.
     pub keys_shared: bool,
-    /// Step to open once settings load on a configured install: the wizard
-    /// (`xflow setup`) or the checks (`xflow tui --onboard`, after installing).
+    /// Step to open once settings load on a configured install: the wizard (`xflow setup`).
     pub start: Option<Step>,
     pub diagnostics: Vec<String>,
     pub modal: Option<Modal>,
@@ -399,6 +406,9 @@ impl App {
             saving: false,
             connected: false,
             connection: "Connecting…".into(),
+            restarting: false,
+            downs: 0,
+            start_failed: false,
             status: Response::status(State::Idle, 0.0),
             transcript: String::new(),
             timings: None,
@@ -572,8 +582,7 @@ impl App {
                 let helper = if self.connected {
                     format!("{ok} xflow's background helper is running")
                 } else {
-                    "! xflow's background helper isn't running — open a terminal and run: xflowd"
-                        .into()
+                    format!("! {}", self.helper_down())
                 };
                 let key = if self.key_locked {
                     format!("! {}", xflow_providers::KEYCHAIN_WAITING)
@@ -622,8 +631,7 @@ impl App {
         let Some(p) = &self.permissions else {
             return vec![(
                 "! Can't check permissions yet".into(),
-                "Start or update xflow's background helper (xflowd), then press r to refresh."
-                    .into(),
+                "They show up once xflow's background helper is running.".into(),
                 None,
             )];
         };
@@ -675,6 +683,7 @@ impl App {
     /// A restart would drop a dictation in progress, so then the running one asks.
     pub fn fix(&mut self, grant: Grant, again: bool) -> Vec<Effect> {
         if again && grant != Grant::Microphone && !self.active() {
+            self.restarting = true;
             return vec![Effect::AskAgain(grant)];
         }
         let mut effects = vec![Effect::Request(
@@ -797,6 +806,31 @@ impl App {
             )];
         }
         vec![Effect::Request(Request::Status, Tag::Permissions(None))]
+    }
+    /// Why the background helper isn't connected, the same on every screen.
+    pub fn helper_down(&self) -> String {
+        if self.restarting {
+            "Restarting xflow…".into()
+        } else if self.start_failed {
+            let retry = if self.modal.is_none() {
+                " Press Enter to try again."
+            } else {
+                ""
+            };
+            format!("xflow couldn't start its background helper.{retry}")
+        } else {
+            "Starting xflow…".into()
+        }
+    }
+    /// Lost (or never had) the helper: start it once per outage through launchd,
+    /// unless an ask-again restart explains the first disconnect.
+    pub fn disconnected(&mut self) -> Vec<Effect> {
+        self.downs += 1;
+        if self.downs == 1 + u32::from(self.restarting) {
+            self.restarting = false;
+            return vec![Effect::StartHelper];
+        }
+        vec![]
     }
     /// (key, display value) for every visible settings row.
     pub fn settings(&self) -> Vec<(String, String)> {
@@ -1064,6 +1098,10 @@ impl App {
         self.status = response;
     }
     pub fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        if self.start_failed && self.modal.is_none() && key.code == KeyCode::Enter {
+            self.start_failed = false;
+            return vec![Effect::StartHelper];
+        }
         if let Some(modal) = self.modal.take() {
             return self.modal_key(modal, key);
         }

@@ -51,7 +51,7 @@ fn checks(
         daemon.is_ok(),
         true,
         daemon.unwrap_or_else(|v| v),
-        "Run xflow daemon start, or run xflowd in a separate terminal",
+        "Run xflow daemon start",
     ));
     let gnome = desktop.to_lowercase().contains("gnome");
     checks.push(check(

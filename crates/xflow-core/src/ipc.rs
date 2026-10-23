@@ -187,9 +187,9 @@ pub struct Timings {
     pub total_ms: u32,
 }
 
-pub const INPUT_MONITORING_FIX: &str = "Input Monitoring is off for xflowd — run xflow tui, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
-pub const ACCESSIBILITY_FIX: &str = "Accessibility is off for xflowd — run xflow tui, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
-pub const UNVERIFIED_SHORTCUT: &str = "No keyboard events received by xflowd yet — press the shortcut to check it. If it stays silent, run xflow tui, open Check-up and fix Input Monitoring";
+pub const INPUT_MONITORING_FIX: &str = "Input Monitoring is off for xflowd — run xflow, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
+pub const ACCESSIBILITY_FIX: &str = "Accessibility is off for xflowd — run xflow, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
+pub const UNVERIFIED_SHORTCUT: &str = "No keyboard events received by xflowd yet — press the shortcut to check it. If it stays silent, run xflow, open Check-up and fix Input Monitoring";
 /// Bare executables are listed by path, so old copies leave look-alike rows behind.
 pub const STALE_ROWS: &str = "If you see xflowd already switched on, it's an old copy: select it and click −, then press Enter here.";
 
