@@ -351,7 +351,7 @@ pub struct App {
     pub asking: bool,
     /// Open the Microphone pane if the pending ask finds it switched off.
     pub mic_pane: bool,
-    /// The grant the permissions step is waiting for.
+    /// The grant a screen is waiting for (the permissions step, or a Check-up fix).
     pub grant: Option<Grant>,
     pub permissions_offered: bool,
     pub diagnostics: Vec<String>,
@@ -659,6 +659,9 @@ impl App {
             self.asking = true;
             self.mic_pane = true;
         }
+        if grant == Grant::Microphone {
+            self.grant = Some(grant); // re-asked until allowed (see `poll`)
+        }
         effects
     }
     /// Ask for the next missing grant; finish with the shortcut test.
@@ -697,15 +700,24 @@ impl App {
                 Some(Modal::Setup(Step::Permissions)) => true,
                 None => {
                     self.page == Page::Doctor
-                        && self.missing().iter().any(|g| *g != Grant::Microphone)
+                        && (self.missing().iter().any(|g| *g != Grant::Microphone)
+                            || self.waiting_for_microphone())
                 }
                 _ => false,
             }
     }
+    /// The microphone is only known by asking xflowd, so a pending fix keeps asking.
+    fn waiting_for_microphone(&self) -> bool {
+        self.grant == Some(Grant::Microphone) && self.microphone != Some(true)
+    }
     pub fn poll(&mut self) -> Vec<Effect> {
         let grant = Grant::Microphone;
-        if self.grant == Some(grant) && matches!(self.modal, Some(Modal::Setup(Step::Permissions)))
-        {
+        let screen = match self.modal {
+            Some(Modal::Setup(Step::Permissions)) => true,
+            None => self.page == Page::Doctor,
+            _ => false,
+        };
+        if screen && self.waiting_for_microphone() {
             if std::mem::replace(&mut self.asking, true) {
                 return vec![];
             }

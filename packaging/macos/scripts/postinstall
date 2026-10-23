@@ -1,16 +1,19 @@
 #!/bin/sh
 # Start the xflow background worker for the logged-in user, then open guided setup.
 user=$(stat -f%Su /dev/console)
-[ "$user" = root ] || [ -z "$user" ] && exit 0
-uid=$(id -u "$user"); home=$(dscl . -read "/Users/$user" NFSHomeDirectory | awk '{print $2}')
+if [ "$user" = root ] || [ -z "$user" ]; then exit 0; fi
+uid=$(id -u "$user")
+# getpwnam via the directory cache: handles spaces and network accounts.
+home=$(dscacheutil -q user -a name "$user" | sed -n 's/^dir: //p')
 # Older copies in ~/.local/bin would shadow /usr/local/bin on PATH; set them aside.
+# Everything under the user's home is done as the user, never as root.
 old="$home/.local/bin"
-if [ -e "$old/xflow" ] || [ -e "$old/xflowd" ]; then
+if [ -d "$home" ] && { [ -e "$old/xflow" ] || [ -e "$old/xflowd" ]; }; then
     keep="$home/.local/share/xflow-backup/replaced-$(date +%Y%m%d-%H%M%S)"
     sudo -u "$user" mkdir -p "$keep"
-    for b in xflow xflowd; do [ -e "$old/$b" ] && mv "$old/$b" "$keep/"; done
+    for b in xflow xflowd; do [ -e "$old/$b" ] && sudo -u "$user" mv "$old/$b" "$keep/"; done
 fi
-launchctl asuser "$uid" sudo -u "$user" HOME="$home" /usr/local/bin/xflow service install --enable || true
+launchctl asuser "$uid" sudo -H -u "$user" /usr/local/bin/xflow service install --enable || true
 # Guided setup opens System Settings at each permission xflowd still needs.
-launchctl asuser "$uid" sudo -u "$user" /usr/bin/open -a Terminal "/usr/local/share/xflow/Set up xflow.command" || true
+launchctl asuser "$uid" sudo -H -u "$user" /usr/bin/open -a Terminal "/usr/local/share/xflow/Set up xflow.command" || true
 exit 0

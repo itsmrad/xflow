@@ -710,6 +710,28 @@ mod tests {
         assert!(effects
             .iter()
             .any(|e| matches!(e, Effect::Open(url) if *url == Grant::InputMonitoring.pane())));
+        // An undecided microphone keeps being asked until Allow flips its row.
+        app.permissions.as_mut().unwrap().input_monitoring = true;
+        app.selected[Page::Doctor.index()] = 4;
+        app.action(Action::Choose);
+        let mic = Tag::Permissions(Some(Grant::Microphone));
+        let mut reply = Response::status(State::Idle, 0.0);
+        reply.permissions = app.permissions.clone();
+        app.response(reply.clone(), mic.clone());
+        assert!(app.watching());
+        assert!(matches!(
+            app.poll()[..],
+            [Effect::Request(
+                Request::Allow {
+                    grant: Grant::Microphone
+                },
+                _
+            )]
+        ));
+        reply.permissions.as_mut().unwrap().microphone = Some(true);
+        app.response(reply, mic);
+        assert!(app.permission_rows()[2].0.ends_with("Microphone is on"));
+        assert!(!app.watching());
     }
     #[tokio::test]
     async fn quit_keeps_ownership_of_a_pending_start_but_not_another_clients_session() {

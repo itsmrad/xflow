@@ -730,6 +730,9 @@ impl Engine {
                 r.text = self.last.clone();
                 return Ok(Some(r));
             }
+            #[cfg(not(target_os = "macos"))]
+            Request::Allow { .. } => bail!("allow is macOS only"),
+            #[cfg(target_os = "macos")]
             Request::Allow { grant } => {
                 if let Some(request) = self.permission_request {
                     // TCC may wait on its prompt; keep it off the actor.
