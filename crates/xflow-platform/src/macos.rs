@@ -358,11 +358,17 @@ fn inserted(before: &Snapshot, after: &Snapshot, text: &str) -> bool {
 /// After Cmd+V the delivery lock is held until the receipt or this bound, so no
 /// later clipboard write replaces text a slow app has yet to read.
 const PENDING_PASTE: Duration = Duration::from_secs(5);
-/// How long a reply waits for the receipt; keeps any accepted restore_delay_ms
-/// well inside the 10 s IPC request timeout.
-fn receipt_budget(restore_delay_ms: u32) -> Duration {
-    Duration::from_millis(u64::from(restore_delay_ms) + 2000).min(Duration::from_secs(4))
+/// How long a reply waits for the receipt. Counted from the request's start,
+/// including any wait for an earlier pending paste, so any accepted
+/// restore_delay_ms replies inside the 10 s IPC request timeout.
+fn receipt_budget(restore_delay_ms: u32, started: Instant) -> Duration {
+    Duration::from_millis(u64::from(restore_delay_ms) + 2000)
+        .min(Duration::from_secs(4))
+        .min((started + Duration::from_secs(8)).saturating_duration_since(Instant::now()))
 }
+/// Shared by every MacDesktop: a config reload must not drop a pending paste's lock.
+static DELIVERY: std::sync::LazyLock<std::sync::Arc<tokio::sync::Mutex<()>>> =
+    std::sync::LazyLock::new(Default::default);
 fn send_keys(text: &str, typed: bool) -> Result<()> {
     if !unsafe { CGPreflightPostEventAccess() } {
         bail!("Accessibility permission is required for text delivery; run xflow doctor");
@@ -502,7 +508,7 @@ impl MacDesktop {
         }
         Self {
             config: config.clone(),
-            delivery: Default::default(),
+            delivery: DELIVERY.clone(),
         }
     }
     async fn write(&self, text: &str) -> Result<()> {
@@ -549,6 +555,7 @@ impl Desktop for MacDesktop {
         if text.len() > MAX_TEXT {
             bail!("injection text exceeds 64 KiB");
         }
+        let started = Instant::now();
         let delivery = self.delivery.clone().lock_owned().await;
         let method = self.config.effective_method();
         let target_owned = target.clone();
@@ -582,11 +589,7 @@ impl Desktop for MacDesktop {
         let target = target.clone();
         let text_owned = text.to_owned();
         let restore = previous.is_some();
-        let budget = if restore {
-            receipt_budget(self.config.restore_delay_ms)
-        } else {
-            Duration::ZERO
-        };
+        let restore_delay_ms = self.config.restore_delay_ms;
         let runtime = tokio::runtime::Handle::current();
         let (reply, outcome) = tokio::sync::oneshot::channel();
         // Re-check focus just before the keys; the lock then stays with the pending paste.
@@ -639,7 +642,11 @@ impl Desktop for MacDesktop {
                         .as_ref()
                         .is_some_and(|(f, before)| inserted(before, &snapshot(f), &text_owned))
                 },
-                if opaque { Duration::ZERO } else { budget },
+                if opaque || !restore {
+                    Duration::ZERO
+                } else {
+                    receipt_budget(restore_delay_ms, started)
+                },
                 |confirmed| {
                     if confirmed {
                         restore_previous();
@@ -869,7 +876,7 @@ mod tests {
             let _guard = guard;
             await_paste(
                 || false,
-                receipt_budget(config.injection.restore_delay_ms),
+                receipt_budget(config.injection.restore_delay_ms, start),
                 |confirmed| reply.send((confirmed, start.elapsed())).unwrap(),
             );
         });
@@ -878,6 +885,20 @@ mod tests {
         assert!(!confirmed && at <= Duration::from_millis(4100), "{at:?}");
         drop(lock.blocking_lock());
         assert!(start.elapsed() >= PENDING_PASTE);
+    }
+    #[test]
+    fn delivery_lock_survives_reload_and_budget_counts_lock_wait() {
+        let config = InjectionConfig::default();
+        // A config reload builds a new desktop while a paste may still be pending.
+        assert!(std::sync::Arc::ptr_eq(
+            &MacDesktop::new(&config).delivery,
+            &MacDesktop::new(&config).delivery
+        ));
+        // 5 s spent waiting for an earlier pending paste leaves at most 3 s.
+        let waited = Instant::now() - Duration::from_secs(5);
+        assert!(receipt_budget(10_000, waited) <= Duration::from_secs(3));
+        let waited = Instant::now() - Duration::from_secs(9);
+        assert_eq!(receipt_budget(10_000, waited), Duration::ZERO);
     }
     #[test]
     fn delivery_requires_same_window_nonsecure_focus_and_safe_terminal_input() {
