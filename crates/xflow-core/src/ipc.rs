@@ -191,7 +191,7 @@ pub const INPUT_MONITORING_FIX: &str = "Input Monitoring is off for xflowd — r
 pub const ACCESSIBILITY_FIX: &str = "Accessibility is off for xflowd — run xflow tui, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
 pub const UNVERIFIED_SHORTCUT: &str = "No keyboard events received by xflowd yet — press the shortcut to check it. If it stays silent, run xflow tui, open Check-up and fix Input Monitoring";
 /// Bare executables are listed by path, so old copies leave look-alike rows behind.
-pub const STALE_ROWS: &str = "Already on, or more than one xflowd? Those are older copies: select each xflowd and click − to remove it, then ask again and switch on the one that appears.";
+pub const STALE_ROWS: &str = "If you see xflowd already switched on, it's an old copy: select it and click −, then press Enter here.";
 
 /// A macOS privacy grant xflowd needs.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

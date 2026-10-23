@@ -1,5 +1,6 @@
-use super::{args, config, output::Output, provider, Error, Result};
+use super::{args, config, ipc, output::Output, provider, Error, Result};
 use std::{io::IsTerminal, path::Path};
+use xflow_core::ipc::Request;
 
 pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     let interactive = !options.yes && !out.json && std::io::stdin().is_terminal();
@@ -9,6 +10,19 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
             "Setup needs an interactive terminal or --yes",
             "Use xflow setup --yes --provider groq --model whisper-large-v3-turbo",
         ));
+    }
+    let quiet = Output {
+        json: false,
+        quiet: true,
+        color: false,
+    };
+    // People get the same guided setup as a first `xflow tui` (wizard, then
+    // permissions); --yes with flags stays the scripted path.
+    if cfg!(target_os = "macos") && interactive && std::io::stdout().is_terminal() {
+        if ipc::request(&Request::Status).is_err() {
+            super::system::service(&args::Service::Install { enable: true }, &quiet)?;
+        }
+        return ipc::block_on(async { xflow_app::tui::run(true).await.map_err(Into::into) });
     }
     let mut file = config::load(path)?;
     let mut current = file.config().map_err(Error::config)?;
@@ -124,11 +138,6 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     file.set_typed("stt", &current.stt).map_err(Error::config)?;
     file.set_typed("recording", &current.recording)
         .map_err(Error::config)?;
-    let quiet = Output {
-        json: false,
-        quiet: true,
-        color: false,
-    };
     config::commit(&file, &quiet)?;
     let store_key = options.key_stdin
         || (interactive
@@ -142,7 +151,23 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
             && config::ask("Test provider connection (no audio upload)? [y/N] ", "")?
                 .eq_ignore_ascii_case("y"));
     let report = if test {
-        let report = provider::check(&current)?;
+        let mut report = provider::check(&current)?;
+        // Usually a typo: offer another key rather than exiting.
+        while !report.ok
+            && interactive
+            && !provider::info(&id)?.local
+            && config::ask(
+                &format!(
+                    "{}\nThat key didn't work. Try another? [Y/n] ",
+                    super::output::clean(&report.detail)
+                ),
+                "y",
+            )?
+            .eq_ignore_ascii_case("y")
+        {
+            provider::save_key(path, &id, false, &quiet)?;
+            report = provider::check(&current)?;
+        }
         if !report.ok {
             return Err(Error::new(
                 5,
@@ -177,11 +202,24 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     if service {
         super::system::service(&args::Service::Install { enable: true }, &quiet)?;
     }
-    let tip = "Start xflowd or run xflow daemon start, then xflow toggle. Repeat toggle to finish; xflow listen --once --seconds 5 prints text for scripts.";
+    let running = service || ipc::request(&Request::Status).is_ok();
+    let speak = if current.hotkey.enabled {
+        format!(
+            "hold {} and speak",
+            xflow_app::tui::key_label(&current.hotkey.key)
+        )
+    } else {
+        "run xflow toggle and speak".into()
+    };
+    let tip = if running {
+        format!("All set — {speak}.")
+    } else {
+        format!("Almost there: run xflow service install --enable, then {speak}.")
+    };
     if out.json {
         out.data(&serde_json::json!({"ok":true,"config":path,"provider":id,"key_stored":store_key,"connection":report,"extension_installed":extension,"service_enabled":service,"tip":tip,"extension_tip":if extension { Some("On Wayland, log out and back in before xflow extension enable") } else { None }}), "")?;
     } else {
-        out.confirm(&format!("Ready: {tip}"))?;
+        out.confirm(&tip)?;
         if extension {
             out.confirm("On Wayland, log out and back in, then run xflow extension enable.")?;
         }

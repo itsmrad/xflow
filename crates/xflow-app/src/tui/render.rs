@@ -861,17 +861,18 @@ fn setup(frame: &mut Frame, rect: Rect, app: &App, step: Step) {
         }
         Step::Permissions => {
             let ask = match app.grant {
-                Some(Grant::InputMonitoring) => "Switch on xflowd under Input Monitoring so your shortcut works in every app.",
-                Some(Grant::Accessibility) => "Switch on xflowd under Accessibility so xflow can type your words into apps.",
-                Some(Grant::Microphone) if app.microphone == Some(false) => "Switch on xflowd under Microphone so xflow can hear you.",
+                Some(Grant::InputMonitoring) => "In System Settings, switch on xflowd under Input Monitoring so your shortcut works in every app.",
+                Some(Grant::Accessibility) => "In System Settings, switch on xflowd under Accessibility so xflow can type your words into apps.",
+                Some(Grant::Microphone) if app.microphone == Some(false) => "In System Settings, switch on xflowd under Microphone so xflow can hear you.",
                 _ => "Checking the microphone… If your Mac asks, click Allow.",
             };
-            let open = if app.grant != Some(Grant::Microphone) || app.microphone == Some(false) {
-                format!("\n\nSystem Settings is open: find xflowd in the list and switch it on. You never need to add it yourself.\n\n{}", xflow_core::ipc::STALE_ROWS)
+            // Lead with the stale-row fix: an old xflowd that looks on is the usual trap.
+            let stale = if app.grant != Some(Grant::Microphone) || app.microphone == Some(false) {
+                format!("{}\n\n", xflow_core::ipc::STALE_ROWS)
             } else {
                 String::new()
             };
-            ("Almost done · Mac permissions", format!("{ask}{open}\n\nWaiting for the switch — this moves on by itself."))
+            ("Almost done · Mac permissions", format!("{stale}{ask}\n\nWaiting for the switch — this moves on by itself."))
         }
         _ => ("You're all set", format!("{speak} — your words appear where you're typing.\n\nEverything you dictate is also saved in History.\nPress Enter to go to Home.")),
     };

@@ -61,18 +61,29 @@ pub(crate) async fn check_request(
     timeout: Duration,
 ) -> Result<CheckReport> {
     let start = std::time::Instant::now();
-    let result=tokio::time::timeout(timeout,async {
-        let response=credential.apply(client.request(method,url),auth).await?.send().await.map_err(http_error)?;
-        let status=response.status();
-        if matches!(status.as_u16(),401|403) {credential.invalidate().await;}
-        read_bytes(response,false).await?;
-        Ok::<_,anyhow::Error>((status.is_success(),match status.as_u16() {
-            200..=299=>"Endpoint accepted the non-billing check; inference/model permissions may differ".to_owned(),
-            401=>"Authentication rejected; check the key".to_owned(),
-            403=>"Access denied; the key may be restricted or invalid".to_owned(),
-            code=>format!("Provider returned HTTP {code}; response details omitted"),
-        }))
-    }).await;
+    let result = tokio::time::timeout(timeout, async {
+        let response = credential
+            .apply(client.request(method, url), auth)
+            .await?
+            .send()
+            .await
+            .map_err(http_error)?;
+        let status = response.status();
+        if matches!(status.as_u16(), 401 | 403) {
+            credential.invalidate().await;
+        }
+        read_bytes(response, false).await?;
+        Ok::<_, anyhow::Error>((
+            status.is_success(),
+            match status.as_u16() {
+                200..=299 => "Connected to the service".to_owned(),
+                401 => "The service rejected this key; check it for typos".to_owned(),
+                403 => "Access denied; the key may be restricted or invalid".to_owned(),
+                code => format!("Provider returned HTTP {code}; response details omitted"),
+            },
+        ))
+    })
+    .await;
     let (ok, detail) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => (false, e.to_string()),

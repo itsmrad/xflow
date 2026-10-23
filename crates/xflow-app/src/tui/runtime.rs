@@ -157,11 +157,13 @@ async fn stream_events(mut stream: UnixStream, tx: &mpsc::Sender<Update>) -> Res
     Ok(())
 }
 
-pub async fn run() -> Result<()> {
+/// `setup` opens the setup wizard even when xflow is already configured.
+pub async fn run(setup: bool) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         bail!("xflow tui needs an interactive terminal");
     }
     let mut app = App::new(crate::paths::config_path()?, ColorMode::detect());
+    app.wizard = setup;
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     terminal.clear()?;
@@ -284,7 +286,7 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
         Update::Loaded(result) => match result.and_then(|(file, disk)| app.load(file, disk)) {
             Ok(()) => {
                 effects.push(Effect::KeyStatus(app.config.clone()));
-                if app.disk.is_none() && !app.setup_offered && app.modal.is_none() {
+                if (app.disk.is_none() || app.wizard) && !app.setup_offered && app.modal.is_none() {
                     effects.extend(app.open_setup(Step::Welcome));
                 }
                 effects.extend(app.permissions_changed());
@@ -498,23 +500,47 @@ fn dispatch(
                         vec![format!("! {}", options::plain(&format!("{e:#}")))]
                     }))
                 }
-                Effect::Open(url) => Update::Opened(
-                    blocking(move || {
-                        let opened = std::process::Command::new("/usr/bin/open")
-                            .arg(url)
-                            .status()
-                            .is_ok_and(|s| s.success());
-                        if !opened {
-                            bail!("System Settings didn't open — open it from the Apple menu");
-                        }
-                        Ok(())
-                    })
-                    .await,
-                ),
+                Effect::Open(url) => Update::Opened(blocking(move || open(url)).await),
+                Effect::AskAgain(grant) => {
+                    if blocking(restart).await.is_ok() {
+                        // ponytail: fixed wait for the fresh xflowd's ask; poll its log if it proves short.
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    } else {
+                        let reply = transport::request(&Request::Allow { grant }).await;
+                        let _ = tx
+                            .send(Update::Reply(Tag::Permissions(Some(grant)), reply))
+                            .await;
+                    }
+                    Update::Opened(blocking(move || open(grant.pane())).await)
+                }
             };
             let _ = tx.send(update).await;
         });
     }
+}
+fn open(url: &str) -> Result<()> {
+    let opened = std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .status()
+        .is_ok_and(|s| s.success());
+    if !opened {
+        bail!("System Settings didn't open — open it from the Apple menu");
+    }
+    Ok(())
+}
+/// Restart xflowd under launchd; the subscription reconnects by itself.
+fn restart() -> Result<()> {
+    let target = format!("gui/{}/com.xflow.daemon", unsafe { libc::getuid() });
+    let restarted = std::process::Command::new("/bin/launchctl")
+        .args(["kickstart", "-k", &target])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !restarted {
+        bail!("xflowd isn't running under launchd");
+    }
+    Ok(())
 }
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
     tokio::task::spawn_blocking(f).await?
@@ -613,6 +639,17 @@ mod tests {
         app.connected = true;
         // A configured (re)install: no wizard, so the permissions step opens by itself.
         app.disk = Some(String::new());
+        // Everything still granted after a reinstall: nothing is shown or asked.
+        app.event(status(true, true, None));
+        assert!(app.permissions_changed().is_empty() && app.modal.is_none());
+        // Granted steps are skipped: only Accessibility is missing here.
+        let mut other = App::new("unused".into(), ColorMode::TrueColor);
+        other.disk = Some(String::new());
+        other.event(status(true, false, None));
+        assert_eq!(
+            asks(&other.permissions_changed(), Grant::Accessibility),
+            (true, true)
+        );
         app.event(status(false, false, None));
         let effects = app.permissions_changed();
         assert!(matches!(app.modal, Some(Modal::Setup(Step::Permissions))));
@@ -644,6 +681,13 @@ mod tests {
             .is_empty());
         let effects = app.response(status(true, false, None), Tag::Permissions(None));
         assert_eq!(asks(&effects, Grant::Accessibility), (true, true));
+        // Enter asks again from a fresh xflowd: macOS asks once per process.
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(
+            app.key(enter)[..],
+            [Effect::AskAgain(Grant::Accessibility)]
+        ));
+        assert!(matches!(app.modal, Some(Modal::Setup(Step::Permissions))));
         // An undecided microphone gets the system prompt, not a pane.
         let effects = app.response(status(true, true, None), Tag::Permissions(None));
         assert_eq!(asks(&effects, Grant::Microphone), (true, false));
@@ -706,10 +750,12 @@ mod tests {
             }
             assert!(lines.iter().any(|l| l.contains("Enter fix")), "{width}");
         }
+        // The running xflowd already used its one ask: Enter restarts it.
         let effects = app.action(Action::Choose);
-        assert!(effects
-            .iter()
-            .any(|e| matches!(e, Effect::Open(url) if *url == Grant::InputMonitoring.pane())));
+        assert!(matches!(
+            effects[..],
+            [Effect::AskAgain(Grant::InputMonitoring)]
+        ));
         // An undecided microphone keeps being asked until Allow flips its row.
         app.permissions.as_mut().unwrap().input_monitoring = true;
         app.selected[Page::Doctor.index()] = 4;

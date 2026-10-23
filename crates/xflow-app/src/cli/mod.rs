@@ -235,7 +235,9 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
             seconds,
             command,
         } => ipc::block_on(ipc::listen(*once, *seconds, *command, out)),
-        Command::Tui => ipc::block_on(async { xflow_app::tui::run().await.map_err(Into::into) }),
+        Command::Tui => {
+            ipc::block_on(async { xflow_app::tui::run(false).await.map_err(Into::into) })
+        }
         Command::History { page, action } => ipc::history(page, action.as_ref(), out),
         Command::ClearHistory { yes } => {
             config::confirm(*yes, "Delete all dictation history?")?;

@@ -162,6 +162,9 @@ pub enum Effect {
     Doctor,
     /// Open a URL, e.g. a System Settings pane.
     Open(&'static str),
+    /// macOS asks once per process: restart xflowd, which asks as it starts, then
+    /// open the grant's pane. Without launchd, asks the running xflowd instead.
+    AskAgain(Grant),
 }
 /// The guided first-run flow. Every step is a choice except pasting the key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -354,6 +357,8 @@ pub struct App {
     /// The grant a screen is waiting for (the permissions step, or a Check-up fix).
     pub grant: Option<Grant>,
     pub permissions_offered: bool,
+    /// `xflow setup`: open the wizard once settings load, even on a configured install.
+    pub wizard: bool,
     pub diagnostics: Vec<String>,
     pub modal: Option<Modal>,
     pub toast: Option<String>,
@@ -407,6 +412,7 @@ impl App {
             mic_pane: false,
             grant: None,
             permissions_offered: false,
+            wizard: false,
             diagnostics: vec![],
             modal: None,
             toast: None,
@@ -620,7 +626,7 @@ impl App {
                 ),
                 Some(false) => (
                     format!("! {label} off — Enter to fix"),
-                    format!("{about}\n\nPress Enter: your Mac adds xflowd to the list and System Settings opens at {pane}. Find xflowd in the list and switch it on — you never need to add it yourself.\n\n{STALE_ROWS}"),
+                    format!("{about}\n\n{STALE_ROWS}\n\nOtherwise press Enter and System Settings opens at {pane}: find xflowd in the list and switch it on. You never need to add it yourself."),
                     Some(grant),
                 ),
             }
@@ -647,7 +653,11 @@ impl App {
         rows.get(pos.checked_sub(2)?)?.2
     }
     /// One step: xflowd asks macOS (which lists xflowd) and the exact pane opens.
-    pub fn fix(&mut self, grant: Grant) -> Vec<Effect> {
+    /// `again` is a person asking: the running xflowd already used its one ask.
+    pub fn fix(&mut self, grant: Grant, again: bool) -> Vec<Effect> {
+        if again && grant != Grant::Microphone {
+            return vec![Effect::AskAgain(grant)];
+        }
         let mut effects = vec![Effect::Request(
             Request::Allow { grant },
             Tag::Permissions(Some(grant)),
@@ -675,7 +685,7 @@ impl App {
             }
             Some(grant) if self.grant != Some(grant) => {
                 self.grant = Some(grant);
-                self.fix(grant)
+                self.fix(grant, false)
             }
             Some(_) => vec![],
         }
@@ -1459,7 +1469,7 @@ impl App {
             Page::Settings => return self.open_setting(pos),
             Page::Doctor => {
                 if let Some(grant) = self.doctor_grant(pos) {
-                    return self.fix(grant);
+                    return self.fix(grant, true);
                 }
             }
             Page::Overlay => {
@@ -1632,7 +1642,16 @@ impl App {
             }
             (Step::Welcome, KeyCode::Enter) => return self.open_setup(Step::Provider),
             // Ask again: after removing old xflowd rows, macOS lists this one anew.
-            (Step::Permissions, KeyCode::Enter) => return self.open_setup(step),
+            (Step::Permissions, KeyCode::Enter) => {
+                return match self.missing().first().copied() {
+                    Some(grant) => {
+                        self.modal = Some(Modal::Setup(step));
+                        self.grant = Some(grant);
+                        self.fix(grant, true)
+                    }
+                    None => self.open_setup(step),
+                }
+            }
             (Step::MicCheck, KeyCode::Enter) => {
                 let mut effects = if self.active() {
                     vec![cancel()]
