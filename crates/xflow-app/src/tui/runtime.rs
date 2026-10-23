@@ -52,6 +52,8 @@ enum Update {
     Notice(Result<String>),
     Opened(Result<()>),
     MicTimeout,
+    Globe(Option<bool>),
+    KeysShared(Result<bool>),
 }
 
 fn restore() {
@@ -157,13 +159,13 @@ async fn stream_events(mut stream: UnixStream, tx: &mpsc::Sender<Update>) -> Res
     Ok(())
 }
 
-/// `setup` opens the setup wizard even when xflow is already configured.
-pub async fn run(setup: bool) -> Result<()> {
+/// `start` opens that setup step even when xflow is already configured.
+pub async fn run(start: Option<Step>) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         bail!("xflow tui needs an interactive terminal");
     }
     let mut app = App::new(crate::paths::config_path()?, ColorMode::detect());
-    app.wizard = setup;
+    app.start = start;
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     terminal.clear()?;
@@ -286,8 +288,18 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
         Update::Loaded(result) => match result.and_then(|(file, disk)| app.load(file, disk)) {
             Ok(()) => {
                 effects.push(Effect::KeyStatus(app.config.clone()));
-                if (app.disk.is_none() || app.wizard) && !app.setup_offered && app.modal.is_none() {
-                    effects.extend(app.open_setup(Step::Welcome));
+                if cfg!(target_os = "macos") {
+                    effects.push(Effect::Globe);
+                }
+                let start = if app.disk.is_none() {
+                    Some(Step::Welcome)
+                } else {
+                    app.start
+                };
+                if let Some(step) = start.filter(|_| !app.setup_offered && app.modal.is_none()) {
+                    // The installer's checks are this session's permissions offer.
+                    app.permissions_offered |= step == Step::Permissions;
+                    effects.extend(app.open_setup(step));
                 }
                 effects.extend(app.permissions_changed());
             }
@@ -369,6 +381,26 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             Err(_) => app.overlay_error = true,
         },
         Update::KeyStatus(config, missing) => {
+            // Keys saved by older builds trust only xflow: re-save them once so xflowd
+            // never asks "Always Allow". Unchanged signatures skip this (see share_keys).
+            let ids: Vec<String> = [
+                (missing.0 == KeySource::Keyring).then(|| config.stt.provider.clone()),
+                config
+                    .cleanup
+                    .provider
+                    .as_deref()
+                    .filter(|_| missing.1 == KeySource::Keyring)
+                    .map(|id| xflow_providers::cleanup_key_id(id).to_owned()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if cfg!(target_os = "macos")
+                && !ids.is_empty()
+                && !std::mem::replace(&mut app.keys_shared, true)
+            {
+                effects.push(Effect::ShareKeys(ids));
+            }
             app.key_status(&config, missing);
             if app.key_locked || app.cleanup_key_locked {
                 app.toast = Some(xflow_providers::KEYCHAIN_WAITING.into());
@@ -387,6 +419,20 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             }
         },
         Update::Doctor(rows) => app.diagnostics = rows,
+        Update::Globe(globe) => {
+            app.globe = globe;
+            effects = app.globe_changed();
+        }
+        Update::KeysShared(result) => match result {
+            Ok(true) => {
+                app.toast = Some(
+                    "Keychain ready: xflow's background helper reads your key without asking."
+                        .into(),
+                )
+            }
+            Ok(false) => *redraw = false,
+            Err(e) => app.toast = Some(options::plain(&format!("{e:#}"))),
+        },
         Update::Opened(result) => {
             if let Err(e) = result {
                 app.toast = Some(options::plain(&format!("{e:#}")));
@@ -501,6 +547,8 @@ fn dispatch(
                     }))
                 }
                 Effect::Open(url) => Update::Opened(blocking(move || open(url)).await),
+                Effect::Globe => Update::Globe(blocking(|| Ok(globe())).await.ok().flatten()),
+                Effect::ShareKeys(ids) => Update::KeysShared(integrations::share_keys(ids).await),
                 Effect::AskAgain(grant) => {
                     if blocking(restart).await.is_ok() {
                         // ponytail: fixed wait for the fresh xflowd's ask; poll its log if it proves short.
@@ -517,6 +565,14 @@ fn dispatch(
             let _ = tx.send(update).await;
         });
     }
+}
+/// "Press 🌐 key to" is Do Nothing (AppleFnUsageType 0; absent means Emoji).
+fn globe() -> Option<bool> {
+    let read = std::process::Command::new("/usr/bin/defaults")
+        .args(["read", "com.apple.HIToolbox", "AppleFnUsageType"])
+        .output()
+        .ok()?;
+    Some(read.status.success() && String::from_utf8_lossy(&read.stdout).trim() == "0")
 }
 fn open(url: &str) -> Result<()> {
     let opened = std::process::Command::new("/usr/bin/open")
@@ -666,6 +722,25 @@ mod tests {
             .response(status(true, true, Some(true)), mic.clone())
             .is_empty());
         assert!(kept.modal.is_none());
+        // Fn shortcut with the Globe key still set to emoji: one step after the grants,
+        // re-read while it shows, then the shortcut test.
+        let mut globe = reinstall(true, true);
+        globe.microphone = Some(true);
+        globe.globe = Some(false);
+        let effects = globe.permissions_changed();
+        assert!(matches!(globe.modal, Some(Modal::Setup(Step::Globe))));
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::Open(url) if *url == super::super::state::KEYBOARD_PANE)));
+        assert!(matches!(globe.poll()[..], [Effect::Globe]));
+        globe.globe = Some(true);
+        globe.globe_changed();
+        assert!(matches!(globe.modal, Some(Modal::Setup(Step::Try))));
+        // The installer's run with nothing missing goes straight to the shortcut test.
+        let mut done = reinstall(true, true);
+        (done.microphone, done.globe, done.permissions_offered) = (Some(true), Some(true), true);
+        done.open_setup(Step::Permissions);
+        assert!(matches!(done.modal, Some(Modal::Setup(Step::Try))));
         // Microphone off: only its step shows, at its pane.
         let mut off = reinstall(true, true);
         off.permissions_changed();

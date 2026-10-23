@@ -157,7 +157,11 @@ pub enum Command {
     /// Show CLI and, when available, daemon versions.
     Version,
     /// Open the terminal control centre.
-    Tui,
+    Tui {
+        /// After installing: walk through whatever setup is still missing, then a test.
+        #[arg(long, hide = true)]
+        onboard: bool,
+    },
     /// Create the default config without overwriting an existing file.
     #[command(hide = true)]
     Init,

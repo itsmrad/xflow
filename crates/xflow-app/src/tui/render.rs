@@ -290,6 +290,9 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
         Some(Modal::Setup(Step::Permissions)) => {
             vec![("Enter ask again", None), ("Esc later", None)]
         }
+        Some(Modal::Setup(Step::Globe)) => {
+            vec![("Enter open Keyboard settings", None), ("Esc later", None)]
+        }
         Some(Modal::Setup(Step::Try)) => vec![
             ("Space start / stop", None),
             ("Enter finish", None),
@@ -859,6 +862,8 @@ fn setup(frame: &mut Frame, rect: Rect, app: &App, step: Step) {
             };
             ("Try it", format!("{how}\nYour words show up here.\n\n{line}"))
         }
+        Step::Permissions if app.permissions.is_none() && !app.connected => ("Almost done · Mac permissions", "xflow's background helper isn't running yet, so permissions can't be checked.\n\nThis moves on by itself once it starts. If it doesn't, open a terminal and run: xflow daemon start".into()),
+        Step::Globe => ("Almost done · Globe key", "Your shortcut is the Fn (Globe) key, so set it to do nothing else: in System Settings › Keyboard, set “Press 🌐 key to” to “Do Nothing”.\n\nOtherwise each press also opens emoji or switches your input source.\n\nWaiting for the change — this moves on by itself.".into()),
         Step::Permissions => {
             let ask = match app.grant {
                 Some(Grant::InputMonitoring) => "In System Settings, switch on xflowd under Input Monitoring so your shortcut works in every app.",

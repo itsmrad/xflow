@@ -22,7 +22,11 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
         if ipc::request(&Request::Status).is_err() {
             super::system::service(&args::Service::Install { enable: true }, &quiet)?;
         }
-        return ipc::block_on(async { xflow_app::tui::run(true).await.map_err(Into::into) });
+        return ipc::block_on(async {
+            xflow_app::tui::run(Some(xflow_app::tui::Step::Welcome))
+                .await
+                .map_err(Into::into)
+        });
     }
     let mut file = config::load(path)?;
     let mut current = file.config().map_err(Error::config)?;

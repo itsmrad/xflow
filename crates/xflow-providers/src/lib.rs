@@ -21,6 +21,8 @@ mod stt;
 pub use stt::{build_stt, check_stt, hint_fit, transcribe_file};
 mod audio;
 mod catalog;
+#[cfg(target_os = "macos")]
+mod macos_keychain;
 #[cfg(test)]
 mod protocol_tests;
 pub use audio::encode_wav;
@@ -364,6 +366,16 @@ pub async fn save_key(provider: &str, secret: &str) -> Result<()> {
     keychain(move || {
         let entry = keyring::Entry::new(KEYRING_SERVICE, &provider)
             .map_err(|_| anyhow!("OS credential storage is unavailable"))?;
+        // Trust both xflow binaries so xflowd never asks "Always Allow"; the
+        // plain write stays the fallback, so the key is never lost.
+        #[cfg(target_os = "macos")]
+        {
+            let _ = entry.delete_credential();
+            let apps = macos_keychain::trusted_apps();
+            if macos_keychain::add(KEYRING_SERVICE, &provider, value.as_bytes(), &apps).is_ok() {
+                return Ok(());
+            }
+        }
         entry
             .set_password(&value)
             .map_err(|_| anyhow!("could not save API key in OS credential storage"))
@@ -371,6 +383,20 @@ pub async fn save_key(provider: &str, secret: &str) -> Result<()> {
     .await??;
     KEY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(())
+}
+/// Save a stored key again, e.g. so a key saved by an older build gets the
+/// access list that lets xflowd read it without asking.
+pub async fn share_key(provider: &str) -> Result<()> {
+    validate_provider(provider)?;
+    let id = provider.to_owned();
+    let secret = keychain_read(move || {
+        keyring::Entry::new(KEYRING_SERVICE, &id)
+            .and_then(|e| e.get_password())
+            .map(Zeroizing::new)
+    })
+    .await?
+    .map_err(|_| anyhow!("API key unavailable in OS credential storage"))?;
+    save_key(provider, &secret).await
 }
 
 fn http_error(error: reqwest::Error) -> anyhow::Error {
