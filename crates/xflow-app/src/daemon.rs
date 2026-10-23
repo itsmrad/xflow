@@ -2193,29 +2193,49 @@ mod tests {
     }
     #[tokio::test]
     async fn speech_free_sessions_never_upload_save_or_deliver() {
-        // Quiet-room RMS reached 0.026–0.030 in #51; a click must not count as speech.
+        // Sine segments of (milliseconds, amplitude) at 16 kHz.
+        let tone = |parts: &[(usize, f32)]| -> Vec<f32> {
+            parts
+                .iter()
+                .flat_map(|&(ms, amplitude)| std::iter::repeat_n(amplitude, ms * 16))
+                .enumerate()
+                .map(|(i, a)| a * (i as f32 * std::f32::consts::TAU * 220.0 / 16_000.0).sin())
+                .collect()
+        };
         let silence = vec![0.0; 40_000];
-        let noise: Vec<_> = (0..40_000)
-            .map(|i| if i % 2 == 0 { 0.03 } else { -0.03 })
+        // #51's quiet-room median frame RMS was 0.00064–0.00154.
+        let hiss: Vec<_> = (0..40_000)
+            .map(|i| if i % 2 == 0 { 0.003 } else { -0.003 })
             .collect();
         let mut click = silence.clone();
-        click[400..2000].fill(0.5);
-        let soft: Vec<_> = (0..40_000)
-            .map(|i| {
-                let amplitude = if (8_000..24_000).contains(&i) {
-                    0.012
-                } else {
-                    0.001
-                };
-                amplitude * (i as f32 * std::f32::consts::TAU * 220.0 / 16_000.0).sin()
-            })
-            .collect();
+        click[400..720].fill(0.5);
+        // #51's silent sessions peaked near 0.03 RMS on a key thump; STT hallucinated on it.
+        let thump = tone(&[(500, 0.001), (300, 0.04), (1700, 0.001)]);
+        let soft = tone(&[(500, 0.001), (1000, 0.012), (1000, 0.001)]);
         let mut cases = vec![
             (silence, false, false, "unexpected"),
-            (noise, false, false, "unexpected"),
+            (hiss, false, false, "unexpected"),
             (click, false, false, "unexpected"),
+            (thump, true, false, "Thank you."),
             (soft.clone(), true, true, "soft speech passes"),
             (soft.clone(), true, true, "PostgreSQL is ready"),
+            // Review of #55: speech with little surrounding quiet must not become the floor,
+            (
+                tone(&[(80, 0.001), (500, 0.015)]),
+                true,
+                true,
+                "soft speech passes",
+            ),
+            // loud short phrases are not hallucinations regardless of duration or occupancy,
+            (tone(&[(260, 0.2), (200, 0.001)]), true, true, "Thank you."),
+            (tone(&[(400, 0.2), (5000, 0.001)]), true, true, "Thank you."),
+            // and a brief word inside a longer clip reaches STT.
+            (
+                tone(&[(400, 0.001), (160, 0.2), (400, 0.001)]),
+                true,
+                true,
+                "OK.",
+            ),
         ];
         for text in [
             "Thank you.",

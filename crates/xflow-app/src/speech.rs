@@ -16,40 +16,23 @@ pub fn activity(audio: &AudioClip, threshold: f32) -> Activity {
         };
     }
     let frame_samples = (audio.sample_rate as usize / 50).max(1) * usize::from(audio.channels);
-    let mut levels: Vec<(f32, usize)> = audio
-        .samples
-        .chunks(frame_samples)
-        .map(|frame| {
-            let rms = (frame.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>()
-                / frame.len() as f64)
-                .sqrt() as f32;
-            (rms, frame.len())
-        })
-        .collect();
-    if levels.is_empty() || levels.iter().any(|(rms, _)| !rms.is_finite()) {
-        return Activity {
-            speech: false,
-            low_energy: true,
-        };
+    let (mut voiced_samples, mut peak) = (0, 0f32);
+    for frame in audio.samples.chunks(frame_samples) {
+        let rms = (frame.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / frame.len() as f64)
+            .sqrt() as f32;
+        if rms > threshold {
+            voiced_samples += frame.len();
+        }
+        peak = peak.max(rms);
     }
-    levels.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
-    // #51's quiet-room median was 0.00064–0.00154, with peaks near 0.03.
-    // Adapt to steady noise; cap its estimate so sustained loud speech still passes.
-    // shortcut: energy cannot identify speech in changing noise; use a speech classifier if hardware trials require it.
-    let floor = levels[levels.len() / 5].0.min(0.03);
-    let cutoff = threshold.max(floor * 2.5);
-    let voiced_samples: usize = levels
-        .iter()
-        .filter(|(rms, _)| *rms > cutoff)
-        .map(|(_, len)| len)
-        .sum();
     let voiced_ms =
         voiced_samples as u64 * 1000 / u64::from(audio.sample_rate) / u64::from(audio.channels);
+    // Losing a short "yes" is worse than sending a click to STT: 80 ms passes it.
+    // #51's silent sessions peaked at 0.025–0.030 frame RMS (key thumps), under 8x the default.
+    // shortcut: energy cannot identify speech in changing noise; use a speech classifier if hardware trials require it.
     Activity {
-        speech: voiced_ms >= 200,
-        low_energy: voiced_ms < 300
-            || voiced_samples < audio.samples.len() / 10
-            || levels[levels.len() - 1].0 < cutoff * 2.0,
+        speech: voiced_ms >= 80,
+        low_energy: peak < threshold * 8.0,
     }
 }
 
