@@ -11,6 +11,7 @@ use xflow_core::{
     ipc::{Delivery, HistoryEntry, Request, Response},
     State,
 };
+use xflow_providers::KeySource;
 
 fn app() -> (tempfile::TempDir, App) {
     let dir = tempfile::tempdir().unwrap();
@@ -593,7 +594,7 @@ async fn provider_connection_probe_uses_anonymous_loopback_get_without_audio() {
     config.stt.timeout_secs = 2;
     assert_eq!(
         super::integrations::missing_keys(&config).await,
-        (false, false, false)
+        (KeySource::NotRequired, KeySource::NotRequired)
     );
     let result = super::integrations::check(&config, false).await.unwrap();
     assert!(result.starts_with("Connected"));
@@ -609,17 +610,44 @@ fn stale_key_lookups_cannot_suppress_setup() {
     assert!(screen(&app, 80, 24).contains("Let's get you set up"));
     let before = app.config.clone();
     app.set("stt.api_key_env", "NEW_KEY").unwrap();
-    app.key_status(&before, (false, false, false));
+    app.key_status(&before, (KeySource::Locked, KeySource::Keyring));
     assert!(app.missing_key);
+    assert!(!app.key_locked);
     let current = app.config.clone();
-    app.key_status(&current, (false, false, false));
+    app.key_status(&current, (KeySource::Keyring, KeySource::Keyring));
     assert!(!app.missing_key);
+}
+#[test]
+fn keychain_lock_and_missing_key_belong_to_their_own_routes() {
+    let (_dir, mut app) = populated();
+    app.set("cleanup.provider", "openai").unwrap();
+    let config = app.config.clone();
+    app.key_status(&config, (KeySource::Missing, KeySource::Locked));
+    let settings = app.settings();
+    assert!(settings
+        .iter()
+        .any(|(k, v)| k == "action.stt_key" && v.contains("Missing")));
+    assert!(settings
+        .iter()
+        .any(|(k, v)| k == "action.cleanup_key" && v.contains("Always Allow")));
+    app.page = Page::Doctor;
+    assert!(app
+        .rows()
+        .iter()
+        .any(|(text, _)| text.contains("no API key")));
+    app.set("cleanup.provider", "groq").unwrap();
+    app.key_status(&config, (KeySource::Locked, KeySource::Keyring));
+    assert!(app.key_locked);
+    assert!(
+        app.cleanup_key_locked,
+        "stale cleanup result replaced the current route"
+    );
 }
 #[test]
 fn keychain_prompt_is_not_a_missing_key_and_the_wizard_never_vanishes() {
     let (_dir, mut app) = populated();
     let config = app.config.clone();
-    app.key_status(&config, (false, false, true));
+    app.key_status(&config, (KeySource::Locked, KeySource::Keyring));
     assert!(!screen(&app, 100, 32).contains("Not set up"));
     assert!(app
         .settings()
@@ -632,7 +660,7 @@ fn keychain_prompt_is_not_a_missing_key_and_the_wizard_never_vanishes() {
         matches!(&app.modal, Some(Modal::Editor(e)) if matches!(e.target, EditTarget::Setup(Step::Microphone)))
     );
     // With no saved key, an empty Enter explains instead of closing.
-    app.key_status(&config, (true, false, false));
+    app.key_status(&config, (KeySource::Missing, KeySource::Keyring));
     app.open_setup(Step::Key);
     key_enter(&mut app);
     assert!(editor(&app)

@@ -192,6 +192,10 @@ pub enum HotkeyAction {
 #[async_trait]
 pub trait GlobalHotkeys: Send {
     async fn next_action(&mut self) -> Result<HotkeyAction>;
+    /// Whether the native event tap has received keyboard input since creation.
+    fn received_events(&self) -> Option<bool> {
+        None
+    }
     /// Forget a gesture after a recording ends through another control.
     fn reset(&mut self) {}
 }

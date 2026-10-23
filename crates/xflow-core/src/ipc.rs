@@ -94,6 +94,12 @@ pub enum Request {
     Reload,
     Subscribe,
     Shutdown,
+    /// Daemon-internal, never on the wire: the socket could not deliver the start
+    /// reply for `session`, so cancel that session (and no later one).
+    #[serde(skip)]
+    Abandon {
+        session: u64,
+    },
 }
 impl Request {
     pub fn start() -> Self {
@@ -176,6 +182,32 @@ pub struct Timings {
     pub total_ms: u32,
 }
 
+pub const INPUT_MONITORING_FIX: &str = "Input Monitoring is off for xflowd — open System Settings → Privacy & Security → Input Monitoring, remove xflowd, add it again";
+pub const ACCESSIBILITY_FIX: &str = "Accessibility is off for xflowd — open System Settings → Privacy & Security → Accessibility, remove xflowd, add it again";
+pub const UNVERIFIED_SHORTCUT: &str = "No keyboard events received by xflowd yet — press the shortcut to check it. If it stays silent, open System Settings → Privacy & Security → Input Monitoring, remove xflowd, add it again";
+
+/// Nonprompting checks made by xflowd, never by the client displaying them.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Permissions {
+    pub accessibility: bool,
+    pub input_monitoring: bool,
+    /// None when the global shortcut is disabled or no tap could be created.
+    pub keyboard_events: Option<bool>,
+}
+impl Permissions {
+    pub fn warning(&self) -> Option<&'static str> {
+        if !self.input_monitoring {
+            Some(INPUT_MONITORING_FIX)
+        } else if !self.accessibility {
+            Some(ACCESSIBILITY_FIX)
+        } else if self.keyboard_events == Some(false) {
+            Some(UNVERIFIED_SHORTCUT)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Response {
     pub ok: bool,
@@ -194,6 +226,8 @@ pub struct Response {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Permissions>,
     /// Mode of the active session while listening/processing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<Mode>,
@@ -212,6 +246,9 @@ pub struct Response {
     /// Final event of a session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timings: Option<Timings>,
+    /// Daemon-internal, never on the wire: the session a successful start began.
+    #[serde(skip)]
+    pub session: Option<u64>,
 }
 impl Response {
     pub fn status(state: State, level: f32) -> Self {

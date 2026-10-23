@@ -66,9 +66,8 @@ pub fn selection(config: &Config, id: &str, cleanup: bool, model: Option<&str>) 
     selected.validate()?;
     Ok(selected)
 }
-/// Whether the active speech and writing services lack a usable key, and whether
-/// the keychain couldn't answer (a pending prompt is neither "missing" nor "added").
-pub async fn missing_keys(config: &Config) -> (bool, bool, bool) {
+/// Credential state per route; a pending prompt is neither "missing" nor "added".
+pub async fn missing_keys(config: &Config) -> (KeySource, KeySource) {
     // Custom servers can be anonymous on loopback; their connection check is
     // authoritative. Built-in local servers need no default credential.
     let stt = if matches!(config.stt.provider.as_str(), "local" | "custom") {
@@ -90,11 +89,7 @@ pub async fn missing_keys(config: &Config) -> (bool, bool, bool) {
         }
         _ => KeySource::NotRequired,
     };
-    (
-        stt == KeySource::Missing,
-        cleanup == KeySource::Missing,
-        [stt, cleanup].contains(&KeySource::Locked),
-    )
+    (stt, cleanup)
 }
 /// Non-billable key/reachability probe, answered in plain words.
 pub async fn check(config: &Config, cleanup: bool) -> Result<String> {

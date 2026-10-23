@@ -139,16 +139,61 @@ fn checks(
     }
     checks
 }
+#[cfg(any(target_os = "macos", test))]
+fn permission_checks(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<Check> {
+    use xflow_core::ipc::{ACCESSIBILITY_FIX, INPUT_MONITORING_FIX, UNVERIFIED_SHORTCUT};
+    let Some(permissions) = permissions else {
+        return vec![check(
+            "xflowd permissions",
+            false,
+            true,
+            "Cannot verify xflowd's permissions",
+            "Start or update xflowd, then run xflow doctor again",
+        )];
+    };
+    let mut checks = vec![
+        check(
+            "Accessibility",
+            permissions.accessibility,
+            true,
+            "xflowd text delivery",
+            ACCESSIBILITY_FIX,
+        ),
+        check(
+            "Input Monitoring",
+            permissions.input_monitoring,
+            true,
+            "xflowd keyboard access",
+            INPUT_MONITORING_FIX,
+        ),
+    ];
+    if let Some(received) = permissions.keyboard_events {
+        checks.push(check(
+            "Shortcut events",
+            received,
+            false,
+            if received {
+                "xflowd has received keyboard events"
+            } else {
+                "xflowd shortcut is not verified"
+            },
+            UNVERIFIED_SHORTCUT,
+        ));
+    }
+    checks
+}
 pub fn run(path: &Path, out: &Output) -> Result<()> {
-    let daemon = super::ipc::request(&xflow_core::ipc::Request::Status)
+    let status = super::ipc::request(&xflow_core::ipc::Request::Status);
+    let daemon = status
+        .as_ref()
         .map(|r| {
             format!(
                 "{}; protocol {}",
-                r.version.unwrap_or_default(),
+                r.version.as_deref().unwrap_or_default(),
                 r.protocol.unwrap_or_default()
             )
         })
-        .map_err(|e| e.message);
+        .map_err(|e| e.message.clone());
     #[cfg(target_os = "linux")]
     let (desktop, session) = (
         std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
@@ -159,14 +204,9 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
     let mut checks = checks(path, &desktop, &session, present, daemon);
     #[cfg(target_os = "macos")]
     {
-        // TCC grants are per executable: these describe this terminal, not launchd's
-        // xflowd, so they are informational (xflowd logs its own missing grants).
-        let (accessibility, input) = xflow_platform::permissions();
-        let microphone = xflow_platform::microphone_permission();
-        let state = |ok: bool| if ok { "granted" } else { "not granted" };
-        checks.push(check("Microphone", microphone == "authorized", false, format!("This terminal: {microphone}; xflowd has its own grant"), "System Settings > Privacy & Security > Microphone: allow xflowd (the first recording asks), then xflow daemon restart"));
-        checks.push(check("Accessibility", accessibility, false, format!("This terminal: {}; xflowd has its own grant (xflow daemon logs warns when missing)", state(accessibility)), "System Settings > Privacy & Security > Accessibility: add/enable the installed xflowd, then xflow daemon restart"));
-        checks.push(check("Input Monitoring", input, false, format!("This terminal: {}; needed by xflowd for global hotkeys", state(input)), "System Settings > Privacy & Security > Input Monitoring: add/enable xflowd, then xflow daemon restart"));
+        checks.extend(permission_checks(
+            status.as_ref().ok().and_then(|r| r.permissions.as_ref()),
+        ));
     }
     if let Ok(cfg) = super::config::load(path).and_then(|f| f.config().map_err(Error::config)) {
         let known = super::provider::info(&cfg.stt.provider);
@@ -248,6 +288,26 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn permissions_come_from_daemon_even_when_a_tap_exists() {
+        use xflow_core::ipc::Permissions;
+        for granted in [false, true] {
+            let checks = permission_checks(Some(&Permissions {
+                accessibility: granted,
+                input_monitoring: granted,
+                keyboard_events: Some(false),
+            }));
+            assert_eq!(checks.iter().all(|c| c.ok || !c.required), granted);
+            let input = checks
+                .iter()
+                .find(|c| c.name == "Input Monitoring")
+                .unwrap();
+            assert_eq!(input.ok, granted);
+            assert_eq!(input.hint, xflow_core::ipc::INPUT_MONITORING_FIX);
+            assert!(checks.iter().any(|c| c.name == "Shortcut events" && !c.ok));
+        }
+        assert!(permission_checks(None).iter().any(|c| !c.ok && c.required));
+    }
     #[test]
     fn fake_doctor_checks_are_session_specific() {
         let temp = tempfile::tempdir().unwrap();

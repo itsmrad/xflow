@@ -546,9 +546,9 @@ async fn silence_never_uploads() {
     daemon.ready().await;
     assert!(daemon.request(json!({"command":"start"})).await.ok);
     let stopped = daemon.request(json!({"command":"stop"})).await;
-    assert!(!stopped.ok);
-    assert_eq!(stopped.state, State::Error);
-    assert!(stopped.message.unwrap().contains("no speech"));
+    assert!(stopped.ok);
+    assert_eq!(stopped.state, State::Idle);
+    assert_eq!(stopped.message.as_deref(), Some("Didn't catch anything"));
     assert!(timeout(Duration::from_millis(150), mock.uploads.recv())
         .await
         .is_err());
