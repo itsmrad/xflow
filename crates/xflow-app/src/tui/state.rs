@@ -357,6 +357,8 @@ pub struct App {
     /// The grant a screen is waiting for (the permissions step, or a Check-up fix).
     pub grant: Option<Grant>,
     pub permissions_offered: bool,
+    /// The once-per-session microphone check on a configured install was sent.
+    pub mic_checked: bool,
     /// `xflow setup`: open the wizard once settings load, even on a configured install.
     pub wizard: bool,
     pub diagnostics: Vec<String>,
@@ -412,6 +414,7 @@ impl App {
             mic_pane: false,
             grant: None,
             permissions_offered: false,
+            mic_checked: false,
             wizard: false,
             diagnostics: vec![],
             modal: None,
@@ -696,8 +699,24 @@ impl App {
         if matches!(self.modal, Some(Modal::Setup(Step::Permissions))) {
             return self.permissions_step();
         }
-        let lacking = self.missing().iter().any(|g| *g != Grant::Microphone);
-        if !lacking || self.permissions_offered || self.modal.is_some() || self.disk.is_none() {
+        if self.permissions_offered || self.modal.is_some() || self.disk.is_none() {
+            return vec![];
+        }
+        let missing = self.missing();
+        // The microphone is only known by asking: check it once here, so a reinstall
+        // settles it now rather than at the first dictation. Allowed shows nothing.
+        if missing == [Grant::Microphone] && self.microphone.is_none() {
+            if std::mem::replace(&mut self.mic_checked, true) {
+                return vec![];
+            }
+            return vec![Effect::Request(
+                Request::Allow {
+                    grant: Grant::Microphone,
+                },
+                Tag::Permissions(Some(Grant::Microphone)),
+            )];
+        }
+        if missing.is_empty() {
             return vec![];
         }
         self.permissions_offered = true;

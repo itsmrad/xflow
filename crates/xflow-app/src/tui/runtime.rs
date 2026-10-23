@@ -639,17 +639,41 @@ mod tests {
         app.connected = true;
         // A configured (re)install: no wizard, so the permissions step opens by itself.
         app.disk = Some(String::new());
-        // Everything still granted after a reinstall: nothing is shown or asked.
-        app.event(status(true, true, None));
-        assert!(app.permissions_changed().is_empty() && app.modal.is_none());
+        let reinstall = |input_monitoring, accessibility| {
+            let mut app = App::new("unused".into(), ColorMode::TrueColor);
+            app.disk = Some(String::new());
+            app.event(status(input_monitoring, accessibility, None));
+            app
+        };
+        let mic = Tag::Permissions(Some(Grant::Microphone));
         // Granted steps are skipped: only Accessibility is missing here.
-        let mut other = App::new("unused".into(), ColorMode::TrueColor);
-        other.disk = Some(String::new());
-        other.event(status(true, false, None));
         assert_eq!(
-            asks(&other.permissions_changed(), Grant::Accessibility),
+            asks(
+                &reinstall(true, false).permissions_changed(),
+                Grant::Accessibility
+            ),
             (true, true)
         );
+        // Grants kept: the microphone is checked once (no prompt when allowed) and
+        // nothing is shown.
+        let mut kept = reinstall(true, true);
+        assert_eq!(
+            asks(&kept.permissions_changed(), Grant::Microphone),
+            (true, false)
+        );
+        assert!(kept.permissions_changed().is_empty(), "checked once");
+        assert!(kept
+            .response(status(true, true, Some(true)), mic.clone())
+            .is_empty());
+        assert!(kept.modal.is_none());
+        // Microphone off: only its step shows, at its pane.
+        let mut off = reinstall(true, true);
+        off.permissions_changed();
+        let effects = off.response(status(true, true, Some(false)), mic.clone());
+        assert!(matches!(off.modal, Some(Modal::Setup(Step::Permissions))));
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::Open(url) if *url == Grant::Microphone.pane())));
         app.event(status(false, false, None));
         let effects = app.permissions_changed();
         assert!(matches!(app.modal, Some(Modal::Setup(Step::Permissions))));
