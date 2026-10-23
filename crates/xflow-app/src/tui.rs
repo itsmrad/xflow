@@ -6,7 +6,9 @@ mod runtime;
 mod state;
 mod theme;
 
+pub use options::key_label;
 pub use runtime::run;
+pub use state::Step;
 
 #[cfg(test)]
 mod tests;

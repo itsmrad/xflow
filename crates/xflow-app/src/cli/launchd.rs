@@ -304,10 +304,9 @@ mod tests {
             "Executable=/usr/local/bin/xflowd\nIdentifier=com.xflow.xflowd\nSignature=adhoc\n";
         assert!(signed_already(adhoc, false));
         assert!(!signed_already(adhoc, true));
-        assert!(signed_already(
-            "Identifier=com.xflow.xflowd\nAuthority=xflow-dev\n",
-            true
-        ));
+        // The installer's xflow-dev signature is kept, never replaced ad-hoc.
+        let installer = "Identifier=com.xflow.xflowd\nAuthority=xflow-dev\n";
+        assert!(signed_already(installer, true) && signed_already(installer, false));
         // A fresh cargo build carries the linker's per-build identifier.
         assert!(!signed_already(
             "Identifier=xflowd-5b3e0c\nSignature=adhoc\n",

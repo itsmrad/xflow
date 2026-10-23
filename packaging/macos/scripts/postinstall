@@ -14,6 +14,7 @@ if [ -d "$home" ] && { [ -e "$old/xflow" ] || [ -e "$old/xflowd" ]; }; then
     for b in xflow xflowd; do [ -e "$old/$b" ] && sudo -u "$user" mv "$old/$b" "$keep/"; done
 fi
 launchctl asuser "$uid" sudo -H -u "$user" /usr/local/bin/xflow service install --enable || true
-# Guided setup opens System Settings at each permission xflowd still needs.
-launchctl asuser "$uid" sudo -H -u "$user" /usr/bin/open -a Terminal "/usr/local/share/xflow/Set up xflow.command" || true
+# Guided setup opens System Settings at each permission xflowd still needs. Plain
+# open uses the user's own terminal for .command files (Terminal, Ghostty, ...).
+launchctl asuser "$uid" sudo -H -u "$user" /usr/bin/open "/usr/local/share/xflow/Set up xflow.command" || true
 exit 0

@@ -1,3 +1,4 @@
 #!/bin/sh
-# Opened in Terminal by the xflow installer: guided setup, including permissions.
-exec /usr/local/bin/xflow tui
+# Opened by the xflow installer: setup (first install) or only the checks still
+# missing (reinstall), ending with a shortcut test.
+exec /usr/local/bin/xflow tui --onboard

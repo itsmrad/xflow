@@ -52,6 +52,8 @@ enum Update {
     Notice(Result<String>),
     Opened(Result<()>),
     MicTimeout,
+    Globe(Option<bool>),
+    KeysShared(Result<bool>),
 }
 
 fn restore() {
@@ -157,11 +159,13 @@ async fn stream_events(mut stream: UnixStream, tx: &mpsc::Sender<Update>) -> Res
     Ok(())
 }
 
-pub async fn run() -> Result<()> {
+/// `start` opens that setup step even when xflow is already configured.
+pub async fn run(start: Option<Step>) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         bail!("xflow tui needs an interactive terminal");
     }
     let mut app = App::new(crate::paths::config_path()?, ColorMode::detect());
+    app.start = start;
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     terminal.clear()?;
@@ -284,8 +288,18 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
         Update::Loaded(result) => match result.and_then(|(file, disk)| app.load(file, disk)) {
             Ok(()) => {
                 effects.push(Effect::KeyStatus(app.config.clone()));
-                if app.disk.is_none() && !app.setup_offered && app.modal.is_none() {
-                    effects.extend(app.open_setup(Step::Welcome));
+                if cfg!(target_os = "macos") {
+                    effects.push(Effect::Globe);
+                }
+                let start = if app.disk.is_none() {
+                    Some(Step::Welcome)
+                } else {
+                    app.start
+                };
+                if let Some(step) = start.filter(|_| !app.setup_offered && app.modal.is_none()) {
+                    // The installer's checks are this session's permissions offer.
+                    app.permissions_offered |= step == Step::Permissions;
+                    effects.extend(app.open_setup(step));
                 }
                 effects.extend(app.permissions_changed());
             }
@@ -367,6 +381,26 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             Err(_) => app.overlay_error = true,
         },
         Update::KeyStatus(config, missing) => {
+            // Keys saved by older builds trust only xflow: re-save them once so xflowd
+            // never asks "Always Allow". Unchanged signatures skip this (see share_keys).
+            let ids: Vec<String> = [
+                (missing.0 == KeySource::Keyring).then(|| config.stt.provider.clone()),
+                config
+                    .cleanup
+                    .provider
+                    .as_deref()
+                    .filter(|_| missing.1 == KeySource::Keyring)
+                    .map(|id| xflow_providers::cleanup_key_id(id).to_owned()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if cfg!(target_os = "macos")
+                && !ids.is_empty()
+                && !std::mem::replace(&mut app.keys_shared, true)
+            {
+                effects.push(Effect::ShareKeys(ids));
+            }
             app.key_status(&config, missing);
             if app.key_locked || app.cleanup_key_locked {
                 app.toast = Some(xflow_providers::KEYCHAIN_WAITING.into());
@@ -385,6 +419,20 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             }
         },
         Update::Doctor(rows) => app.diagnostics = rows,
+        Update::Globe(globe) => {
+            app.globe = globe;
+            effects = app.globe_changed();
+        }
+        Update::KeysShared(result) => match result {
+            Ok(true) => {
+                app.toast = Some(
+                    "Keychain ready: xflow's background helper reads your key without asking."
+                        .into(),
+                )
+            }
+            Ok(false) => *redraw = false,
+            Err(e) => app.toast = Some(options::plain(&format!("{e:#}"))),
+        },
         Update::Opened(result) => {
             if let Err(e) = result {
                 app.toast = Some(options::plain(&format!("{e:#}")));
@@ -498,23 +546,57 @@ fn dispatch(
                         vec![format!("! {}", options::plain(&format!("{e:#}")))]
                     }))
                 }
-                Effect::Open(url) => Update::Opened(
-                    blocking(move || {
-                        let opened = std::process::Command::new("/usr/bin/open")
-                            .arg(url)
-                            .status()
-                            .is_ok_and(|s| s.success());
-                        if !opened {
-                            bail!("System Settings didn't open — open it from the Apple menu");
-                        }
-                        Ok(())
-                    })
-                    .await,
-                ),
+                Effect::Open(url) => Update::Opened(blocking(move || open(url)).await),
+                Effect::Globe => Update::Globe(blocking(|| Ok(globe())).await.ok().flatten()),
+                Effect::ShareKeys(ids) => Update::KeysShared(integrations::share_keys(ids).await),
+                Effect::AskAgain(grant) => {
+                    if blocking(restart).await.is_ok() {
+                        // ponytail: fixed wait for the fresh xflowd's ask; poll its log if it proves short.
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    } else {
+                        let reply = transport::request(&Request::Allow { grant }).await;
+                        let _ = tx
+                            .send(Update::Reply(Tag::Permissions(Some(grant)), reply))
+                            .await;
+                    }
+                    Update::Opened(blocking(move || open(grant.pane())).await)
+                }
             };
             let _ = tx.send(update).await;
         });
     }
+}
+/// "Press 🌐 key to" is Do Nothing (AppleFnUsageType 0; absent means Emoji).
+fn globe() -> Option<bool> {
+    let read = std::process::Command::new("/usr/bin/defaults")
+        .args(["read", "com.apple.HIToolbox", "AppleFnUsageType"])
+        .output()
+        .ok()?;
+    Some(read.status.success() && String::from_utf8_lossy(&read.stdout).trim() == "0")
+}
+fn open(url: &str) -> Result<()> {
+    let opened = std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .status()
+        .is_ok_and(|s| s.success());
+    if !opened {
+        bail!("System Settings didn't open — open it from the Apple menu");
+    }
+    Ok(())
+}
+/// Restart xflowd under launchd; the subscription reconnects by itself.
+fn restart() -> Result<()> {
+    let target = format!("gui/{}/com.xflow.daemon", unsafe { libc::getuid() });
+    let restarted = std::process::Command::new("/bin/launchctl")
+        .args(["kickstart", "-k", &target])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !restarted {
+        bail!("xflowd isn't running under launchd");
+    }
+    Ok(())
 }
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
     tokio::task::spawn_blocking(f).await?
@@ -613,6 +695,62 @@ mod tests {
         app.connected = true;
         // A configured (re)install: no wizard, so the permissions step opens by itself.
         app.disk = Some(String::new());
+        let reinstall = |input_monitoring, accessibility| {
+            let mut app = App::new("unused".into(), ColorMode::TrueColor);
+            app.disk = Some(String::new());
+            app.event(status(input_monitoring, accessibility, None));
+            app
+        };
+        let mic = Tag::Permissions(Some(Grant::Microphone));
+        // Granted steps are skipped: only Accessibility is missing here.
+        assert_eq!(
+            asks(
+                &reinstall(true, false).permissions_changed(),
+                Grant::Accessibility
+            ),
+            (true, true)
+        );
+        // Grants kept: the microphone is checked once (no prompt when allowed) and
+        // nothing is shown.
+        let mut kept = reinstall(true, true);
+        assert_eq!(
+            asks(&kept.permissions_changed(), Grant::Microphone),
+            (true, false)
+        );
+        assert!(kept.permissions_changed().is_empty(), "checked once");
+        assert!(kept
+            .response(status(true, true, Some(true)), mic.clone())
+            .is_empty());
+        assert!(kept.modal.is_none());
+        // Fn shortcut with the Globe key still set to emoji: one step after the grants,
+        // re-read while it shows, then the shortcut test.
+        let mut globe = reinstall(true, true);
+        globe.microphone = Some(true);
+        globe.globe = Some(false);
+        assert!(globe.permissions_changed().is_empty(), "not outside setup");
+        globe.start = Some(Step::Permissions);
+        let effects = globe.permissions_changed();
+        assert!(matches!(globe.modal, Some(Modal::Setup(Step::Globe))));
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::Open(url) if *url == super::super::state::KEYBOARD_PANE)));
+        assert!(matches!(globe.poll()[..], [Effect::Globe]));
+        globe.globe = Some(true);
+        globe.globe_changed();
+        assert!(matches!(globe.modal, Some(Modal::Setup(Step::Try))));
+        // The installer's run with nothing missing goes straight to the shortcut test.
+        let mut done = reinstall(true, true);
+        (done.microphone, done.globe, done.permissions_offered) = (Some(true), Some(true), true);
+        done.open_setup(Step::Permissions);
+        assert!(matches!(done.modal, Some(Modal::Setup(Step::Try))));
+        // Microphone off: only its step shows, at its pane.
+        let mut off = reinstall(true, true);
+        off.permissions_changed();
+        let effects = off.response(status(true, true, Some(false)), mic.clone());
+        assert!(matches!(off.modal, Some(Modal::Setup(Step::Permissions))));
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::Open(url) if *url == Grant::Microphone.pane())));
         app.event(status(false, false, None));
         let effects = app.permissions_changed();
         assert!(matches!(app.modal, Some(Modal::Setup(Step::Permissions))));
@@ -644,6 +782,13 @@ mod tests {
             .is_empty());
         let effects = app.response(status(true, false, None), Tag::Permissions(None));
         assert_eq!(asks(&effects, Grant::Accessibility), (true, true));
+        // Enter asks again from a fresh xflowd: macOS asks once per process.
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(
+            app.key(enter)[..],
+            [Effect::AskAgain(Grant::Accessibility)]
+        ));
+        assert!(matches!(app.modal, Some(Modal::Setup(Step::Permissions))));
         // An undecided microphone gets the system prompt, not a pane.
         let effects = app.response(status(true, true, None), Tag::Permissions(None));
         assert_eq!(asks(&effects, Grant::Microphone), (true, false));
@@ -706,10 +851,19 @@ mod tests {
             }
             assert!(lines.iter().any(|l| l.contains("Enter fix")), "{width}");
         }
+        // The running xflowd already used its one ask: Enter restarts it.
         let effects = app.action(Action::Choose);
-        assert!(effects
-            .iter()
-            .any(|e| matches!(e, Effect::Open(url) if *url == Grant::InputMonitoring.pane())));
+        assert!(matches!(
+            effects[..],
+            [Effect::AskAgain(Grant::InputMonitoring)]
+        ));
+        // Never mid-dictation: a restart would drop it, so the running xflowd asks.
+        app.status.state = State::Listening;
+        assert!(matches!(
+            app.action(Action::Choose)[0],
+            Effect::Request(Request::Allow { .. }, _)
+        ));
+        app.status.state = State::Idle;
         // An undecided microphone keeps being asked until Allow flips its row.
         app.permissions.as_mut().unwrap().input_monitoring = true;
         app.selected[Page::Doctor.index()] = 4;

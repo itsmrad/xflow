@@ -243,7 +243,15 @@ pub fn save_key(path: &Path, provider: &str, stdin: bool, out: &Output) -> Resul
                 "Use --stdin in scripts",
             ));
         }
-        zeroize::Zeroizing::new(rpassword::prompt_password("API key (hidden): ")?)
+        let mut tries = 0;
+        loop {
+            let key = zeroize::Zeroizing::new(rpassword::prompt_password("API key (hidden): ")?);
+            tries += 1;
+            if !key.trim().is_empty() || tries == 3 {
+                break key;
+            }
+            eprintln!("Nothing was entered. Paste your key, then press Enter.");
+        }
     };
     if secret.len() > 4096 {
         return Err(Error::new(

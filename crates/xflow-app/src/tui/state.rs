@@ -162,7 +162,16 @@ pub enum Effect {
     Doctor,
     /// Open a URL, e.g. a System Settings pane.
     Open(&'static str),
+    /// macOS asks once per process: restart xflowd, which asks as it starts, then
+    /// open the grant's pane. Without launchd, asks the running xflowd instead.
+    AskAgain(Grant),
+    /// Read "Press 🌐 key to" (macOS).
+    Globe,
+    /// Re-save these Keychain keys so xflowd reads them without asking (macOS).
+    ShareKeys(Vec<String>),
 }
+/// System Settings › Keyboard, where "Press 🌐 key to" lives.
+pub const KEYBOARD_PANE: &str = "x-apple.systempreferences:com.apple.Keyboard-Settings.extension";
 /// The guided first-run flow. Every step is a choice except pasting the key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -174,6 +183,8 @@ pub enum Step {
     Shortcut,
     /// macOS grants, one at a time; moves on by itself once each switch is on.
     Permissions,
+    /// "Press 🌐 key to: Do Nothing", when Fn is the shortcut; moves on by itself.
+    Globe,
     Try,
     Done,
 }
@@ -354,6 +365,15 @@ pub struct App {
     /// The grant a screen is waiting for (the permissions step, or a Check-up fix).
     pub grant: Option<Grant>,
     pub permissions_offered: bool,
+    /// The once-per-session microphone check on a configured install was sent.
+    pub mic_checked: bool,
+    /// "Press 🌐 key to" is Do Nothing; None until read (or off macOS).
+    pub globe: Option<bool>,
+    /// This session already re-saved its Keychain keys for xflowd.
+    pub keys_shared: bool,
+    /// Step to open once settings load on a configured install: the wizard
+    /// (`xflow setup`) or the checks (`xflow tui --onboard`, after installing).
+    pub start: Option<Step>,
     pub diagnostics: Vec<String>,
     pub modal: Option<Modal>,
     pub toast: Option<String>,
@@ -407,6 +427,10 @@ impl App {
             mic_pane: false,
             grant: None,
             permissions_offered: false,
+            mic_checked: false,
+            globe: None,
+            keys_shared: false,
+            start: None,
             diagnostics: vec![],
             modal: None,
             toast: None,
@@ -620,7 +644,7 @@ impl App {
                 ),
                 Some(false) => (
                     format!("! {label} off — Enter to fix"),
-                    format!("{about}\n\nPress Enter: your Mac adds xflowd to the list and System Settings opens at {pane}. Find xflowd in the list and switch it on — you never need to add it yourself.\n\n{STALE_ROWS}"),
+                    format!("{about}\n\n{STALE_ROWS}\n\nOtherwise press Enter and System Settings opens at {pane}: find xflowd in the list and switch it on. You never need to add it yourself."),
                     Some(grant),
                 ),
             }
@@ -647,7 +671,12 @@ impl App {
         rows.get(pos.checked_sub(2)?)?.2
     }
     /// One step: xflowd asks macOS (which lists xflowd) and the exact pane opens.
-    pub fn fix(&mut self, grant: Grant) -> Vec<Effect> {
+    /// `again` is a person asking: the running xflowd already used its one ask.
+    /// A restart would drop a dictation in progress, so then the running one asks.
+    pub fn fix(&mut self, grant: Grant, again: bool) -> Vec<Effect> {
+        if again && grant != Grant::Microphone && !self.active() {
+            return vec![Effect::AskAgain(grant)];
+        }
         let mut effects = vec![Effect::Request(
             Request::Allow { grant },
             Tag::Permissions(Some(grant)),
@@ -664,18 +693,39 @@ impl App {
         }
         effects
     }
-    /// Ask for the next missing grant; finish with the shortcut test.
+    /// The Fn shortcut also fires the Globe key's own action unless that is Do Nothing.
+    pub fn globe_off(&self) -> bool {
+        self.globe == Some(false) && self.config.hotkey.enabled && self.config.hotkey.key == "fn"
+    }
+    /// After the grants and the Globe key: finish with the shortcut test.
+    fn checks_done(&mut self) -> Vec<Effect> {
+        // Offered on its own to an install that still lacks a key: set that up next.
+        let setup = self.permissions_offered && self.needs_setup();
+        self.open_setup(if setup { Step::Welcome } else { Step::Try })
+    }
+    pub fn globe_changed(&mut self) -> Vec<Effect> {
+        if matches!(self.modal, Some(Modal::Setup(Step::Globe))) && !self.globe_off() {
+            return self.checks_done();
+        }
+        self.permissions_changed()
+    }
+    /// Ask for the next missing grant, then the Globe key; finish with the shortcut test.
     fn permissions_step(&mut self) -> Vec<Effect> {
+        // Grants come from xflowd's status: wait for xflowd rather than skip them.
+        if cfg!(target_os = "macos") && self.permissions.is_none() && !self.connected {
+            return vec![];
+        }
         match self.missing().first().copied() {
             None => {
                 self.grant = None;
-                // Offered on its own to an install that still lacks a key: set that up next.
-                let setup = self.permissions_offered && self.needs_setup();
-                self.open_setup(if setup { Step::Welcome } else { Step::Try })
+                if self.globe_off() {
+                    return self.open_setup(Step::Globe);
+                }
+                self.checks_done()
             }
             Some(grant) if self.grant != Some(grant) => {
                 self.grant = Some(grant);
-                self.fix(grant)
+                self.fix(grant, false)
             }
             Some(_) => vec![],
         }
@@ -686,8 +736,25 @@ impl App {
         if matches!(self.modal, Some(Modal::Setup(Step::Permissions))) {
             return self.permissions_step();
         }
-        let lacking = self.missing().iter().any(|g| *g != Grant::Microphone);
-        if !lacking || self.permissions_offered || self.modal.is_some() || self.disk.is_none() {
+        if self.permissions_offered || self.modal.is_some() || self.disk.is_none() {
+            return vec![];
+        }
+        let missing = self.missing();
+        // The microphone is only known by asking: check it once here, so a reinstall
+        // settles it now rather than at the first dictation. Allowed shows nothing.
+        if missing == [Grant::Microphone] && self.microphone.is_none() {
+            if std::mem::replace(&mut self.mic_checked, true) {
+                return vec![];
+            }
+            return vec![Effect::Request(
+                Request::Allow {
+                    grant: Grant::Microphone,
+                },
+                Tag::Permissions(Some(Grant::Microphone)),
+            )];
+        }
+        // Some keep the Globe key on purpose: it is only asked in setup and after installing.
+        if missing.is_empty() && !(self.globe_off() && self.start.is_some()) {
             return vec![];
         }
         self.permissions_offered = true;
@@ -697,7 +764,7 @@ impl App {
     pub fn watching(&self) -> bool {
         self.connected
             && match &self.modal {
-                Some(Modal::Setup(Step::Permissions)) => true,
+                Some(Modal::Setup(Step::Permissions | Step::Globe)) => true,
                 None => {
                     self.page == Page::Doctor
                         && (self.missing().iter().any(|g| *g != Grant::Microphone)
@@ -711,6 +778,9 @@ impl App {
         self.grant == Some(Grant::Microphone) && self.microphone != Some(true)
     }
     pub fn poll(&mut self) -> Vec<Effect> {
+        if matches!(self.modal, Some(Modal::Setup(Step::Globe))) {
+            return vec![Effect::Globe];
+        }
         let grant = Grant::Microphone;
         let screen = match self.modal {
             Some(Modal::Setup(Step::Permissions)) => true,
@@ -1459,7 +1529,7 @@ impl App {
             Page::Settings => return self.open_setting(pos),
             Page::Doctor => {
                 if let Some(grant) = self.doctor_grant(pos) {
-                    return self.fix(grant);
+                    return self.fix(grant, true);
                 }
             }
             Page::Overlay => {
@@ -1579,6 +1649,10 @@ impl App {
                 self.grant = None;
                 return self.permissions_step();
             }
+            Step::Globe => {
+                self.modal = Some(Modal::Setup(step));
+                return vec![Effect::Open(KEYBOARD_PANE)];
+            }
             Step::Provider => {
                 let choices = integrations::catalog(false)
                     .into_iter()
@@ -1631,8 +1705,18 @@ impl App {
                 };
             }
             (Step::Welcome, KeyCode::Enter) => return self.open_setup(Step::Provider),
+            (Step::Globe, KeyCode::Enter) => return self.open_setup(step),
             // Ask again: after removing old xflowd rows, macOS lists this one anew.
-            (Step::Permissions, KeyCode::Enter) => return self.open_setup(step),
+            (Step::Permissions, KeyCode::Enter) => {
+                return match self.missing().first().copied() {
+                    Some(grant) => {
+                        self.modal = Some(Modal::Setup(step));
+                        self.grant = Some(grant);
+                        self.fix(grant, true)
+                    }
+                    None => self.open_setup(step),
+                }
+            }
             (Step::MicCheck, KeyCode::Enter) => {
                 let mut effects = if self.active() {
                     vec![cancel()]
