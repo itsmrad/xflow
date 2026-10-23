@@ -120,6 +120,7 @@ pub struct Engine {
     hotkey_warning: Option<String>,
     permissions: Option<Permissions>,
     permission_probe: Option<fn() -> Permissions>,
+    #[cfg(target_os = "macos")]
     permission_request: Option<fn(Grant)>,
     /// The tap was created without Input Monitoring, so it never sees keys.
     hotkeys_blind: bool,
@@ -172,6 +173,7 @@ impl Engine {
             hotkey_warning: None,
             permissions: None,
             permission_probe: None,
+            #[cfg(target_os = "macos")]
             permission_request: None,
             hotkeys_blind: false,
             rearming: false,
@@ -2351,6 +2353,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn a_tap_made_without_input_monitoring_is_rearmed_once_it_is_granted() {
         static GRANTED: AtomicBool = AtomicBool::new(false);
