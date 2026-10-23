@@ -93,6 +93,11 @@ pub enum Request {
     /// running configuration is kept and the error is returned.
     Reload,
     Subscribe,
+    /// macOS: ask the system for `grant` so xflowd appears in its System Settings
+    /// list (and the system prompt shows when undecided). Replies with Status.
+    Allow {
+        grant: Grant,
+    },
     Shutdown,
     /// Daemon-internal, never on the wire: the socket could not deliver the start
     /// reply for `session`, so cancel that session (and no later one).
@@ -182,9 +187,36 @@ pub struct Timings {
     pub total_ms: u32,
 }
 
-pub const INPUT_MONITORING_FIX: &str = "Input Monitoring is off for xflowd — open System Settings → Privacy & Security → Input Monitoring, remove xflowd, add it again";
-pub const ACCESSIBILITY_FIX: &str = "Accessibility is off for xflowd — open System Settings → Privacy & Security → Accessibility, remove xflowd, add it again";
-pub const UNVERIFIED_SHORTCUT: &str = "No keyboard events received by xflowd yet — press the shortcut to check it. If it stays silent, open System Settings → Privacy & Security → Input Monitoring, remove xflowd, add it again";
+pub const INPUT_MONITORING_FIX: &str = "Input Monitoring is off for xflowd — run xflow tui, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
+pub const ACCESSIBILITY_FIX: &str = "Accessibility is off for xflowd — run xflow tui, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
+pub const UNVERIFIED_SHORTCUT: &str = "No keyboard events received by xflowd yet — press the shortcut to check it. If it stays silent, run xflow tui, open Check-up and fix Input Monitoring";
+/// Bare executables are listed by path, so old copies leave look-alike rows behind.
+pub const STALE_ROWS: &str = "Already on, or more than one xflowd? Those are older copies: select each xflowd and click − to remove it, then ask again and switch on the one that appears.";
+
+/// A macOS privacy grant xflowd needs.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Grant {
+    InputMonitoring,
+    Accessibility,
+    Microphone,
+}
+impl Grant {
+    /// The exact System Settings pane, for `open`.
+    pub fn pane(self) -> &'static str {
+        match self {
+            Self::InputMonitoring => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+            }
+            Self::Accessibility => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            }
+            Self::Microphone => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            }
+        }
+    }
+}
 
 /// Nonprompting checks made by xflowd, never by the client displaying them.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -193,6 +225,9 @@ pub struct Permissions {
     pub input_monitoring: bool,
     /// None when the global shortcut is disabled or no tap could be created.
     pub keyboard_events: Option<bool>,
+    /// Only in an `Allow { grant: Microphone }` reply; None while undecided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microphone: Option<bool>,
 }
 impl Permissions {
     pub fn warning(&self) -> Option<&'static str> {

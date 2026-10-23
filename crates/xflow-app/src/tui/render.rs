@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Sparkline, Wrap},
     Frame,
 };
-use xflow_core::State;
+use xflow_core::{ipc::Grant, State};
 
 #[derive(Default)]
 pub struct HitMap {
@@ -287,6 +287,9 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
         Some(Modal::Setup(Step::MicCheck)) => {
             vec![("Enter sounds good", None), ("Esc stop setup", None)]
         }
+        Some(Modal::Setup(Step::Permissions)) => {
+            vec![("Enter ask again", None), ("Esc later", None)]
+        }
         Some(Modal::Setup(Step::Try)) => vec![
             ("Space start / stop", None),
             ("Enter finish", None),
@@ -315,6 +318,10 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                 Page::Settings | Page::Overlay => {
                     vec![("↑↓ move", None), ("Enter change", Some(Action::Choose))]
                 }
+                Page::Doctor if app.doctor_grant(app.selected()).is_some() => vec![
+                    ("Enter fix", Some(Action::Choose)),
+                    ("r refresh", Some(Action::Refresh)),
+                ],
                 Page::Stats | Page::Doctor => {
                     vec![("↑↓ move", None), ("r refresh", Some(Action::Refresh))]
                 }
@@ -644,7 +651,7 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
             format!("{group} · {label}\n{value}\n\n{help}\n\n{verb}")
         }).unwrap_or_default()),
         Page::Overlay => ("About", app.overlay.get(pos).map(|s| format!("{}\n{}\n\nEnter to change. Changes apply right away.", s.summary, super::state::overlay_value(&s.value))).unwrap_or_default()),
-        Page::Doctor => ("Details", rows.get(pos).map(|(row, _)| row.clone()).unwrap_or_else(|| "Checking…".into())),
+        Page::Doctor => ("Details", rows.get(pos).map(|(row, more)| if more.is_empty() { row } else { more }.clone()).unwrap_or_else(|| "Checking…".into())),
         _ => ("", String::new()),
     }
 }
@@ -846,7 +853,25 @@ fn setup(frame: &mut Frame, rect: Rect, app: &App, step: Step) {
                 State::Error => options::plain(app.status.message.as_deref().unwrap_or("")),
                 _ => "Press Space to start.".into(),
             };
-            ("Try it", format!("Press Space, say a sentence, then press Space again.\nNothing is typed into other apps during this test.\n\n{line}"))
+            let how = match app.shortcut() {
+                Some(key) => format!("Hold {key}, say something, then let go.\nOr press Space to start, and Space again to stop."),
+                None => "Press Space, say a sentence, then press Space again.".into(),
+            };
+            ("Try it", format!("{how}\nYour words show up here.\n\n{line}"))
+        }
+        Step::Permissions => {
+            let ask = match app.grant {
+                Some(Grant::InputMonitoring) => "Switch on xflowd under Input Monitoring so your shortcut works in every app.",
+                Some(Grant::Accessibility) => "Switch on xflowd under Accessibility so xflow can type your words into apps.",
+                Some(Grant::Microphone) if app.microphone == Some(false) => "Switch on xflowd under Microphone so xflow can hear you.",
+                _ => "Checking the microphone… If your Mac asks, click Allow.",
+            };
+            let open = if app.grant != Some(Grant::Microphone) || app.microphone == Some(false) {
+                format!("\n\nSystem Settings is open: find xflowd in the list and switch it on. You never need to add it yourself.\n\n{}", xflow_core::ipc::STALE_ROWS)
+            } else {
+                String::new()
+            };
+            ("Almost done · Mac permissions", format!("{ask}{open}\n\nWaiting for the switch — this moves on by itself."))
         }
         _ => ("You're all set", format!("{speak} — your words appear where you're typing.\n\nEverything you dictate is also saved in History.\nPress Enter to go to Home.")),
     };

@@ -26,7 +26,7 @@ pub use xflow_core::ipc::Command;
 use xflow_core::{
     config::{Config, DictionaryConfig, HotkeyConfig},
     ipc::{
-        Delivery, HistoryEntry, Permissions, Request, Response, Timings, MAX_MESSAGE_BYTES,
+        Delivery, Grant, HistoryEntry, Permissions, Request, Response, Timings, MAX_MESSAGE_BYTES,
         PROTOCOL_VERSION,
     },
     AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, GlobalHotkeys,
@@ -90,6 +90,8 @@ enum Completion {
         result: Box<Result<Reloaded>>,
         reply: oneshot::Sender<Response>,
     },
+    /// A tap recreated after Input Monitoring was granted (see `rearm`).
+    Rearmed(std::result::Result<Option<Box<dyn GlobalHotkeys>>, String>),
     /// Learned words were saved to config.toml; `message` says which.
     Learned {
         dictionary: DictionaryConfig,
@@ -118,6 +120,11 @@ pub struct Engine {
     hotkey_warning: Option<String>,
     permissions: Option<Permissions>,
     permission_probe: Option<fn() -> Permissions>,
+    #[cfg(target_os = "macos")]
+    permission_request: Option<fn(Grant)>,
+    /// The tap was created without Input Monitoring, so it never sees keys.
+    hotkeys_blind: bool,
+    rearming: bool,
     opening: Option<Opening>,
     /// A hotkey session not yet revealed: capture runs, but no cue or pill.
     quiet: bool,
@@ -166,6 +173,10 @@ impl Engine {
             hotkey_warning: None,
             permissions: None,
             permission_probe: None,
+            #[cfg(target_os = "macos")]
+            permission_request: None,
+            hotkeys_blind: false,
+            rearming: false,
             opening: None,
             quiet: false,
             reloading: false,
@@ -246,6 +257,30 @@ impl Engine {
     }
     fn active(&self) -> bool {
         matches!(self.state, State::Listening | State::Processing)
+    }
+    /// Clients' probes (status, check-up, onboarding) are the only trigger: no polling.
+    fn rearm(&mut self, input_monitoring: bool, completion: &mpsc::Sender<Completion>) {
+        if !input_monitoring
+            || !self.hotkeys_blind
+            || self.rearming
+            || self.reloading
+            || self.active()
+            || self.opening.is_some()
+        {
+            return;
+        }
+        let Some(factory) = self.hotkey_factory.clone() else {
+            return;
+        };
+        self.rearming = true;
+        let (config, tx) = (self.config.hotkey.clone(), completion.clone());
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || factory(&config))
+                .await
+                .unwrap_or_else(|e| Err(e.into()))
+                .map_err(|e| bounded_message(&format!("{e:#}")));
+            let _ = tx.send(Completion::Rearmed(result)).await;
+        });
     }
     fn reset_hotkeys(&mut self) {
         if let Some(hotkeys) = &mut self.hotkeys {
@@ -637,10 +672,16 @@ impl Engine {
     ) -> Result<Option<Response>> {
         if matches!(
             request,
-            Request::Status | Request::Subscribe | Request::Start { .. } | Request::Toggle { .. }
+            Request::Status
+                | Request::Subscribe
+                | Request::Start { .. }
+                | Request::Toggle { .. }
+                | Request::Allow { .. }
         ) {
             if let Some(probe) = self.permission_probe {
-                self.permissions = Some(probe());
+                let permissions = probe();
+                self.rearm(permissions.input_monitoring, completion);
+                self.permissions = Some(permissions);
             }
         }
         if let Some(opening) = self.opening.as_mut().filter(|_| {
@@ -690,6 +731,15 @@ impl Engine {
                 let mut r = self.status();
                 r.text = self.last.clone();
                 return Ok(Some(r));
+            }
+            #[cfg(not(target_os = "macos"))]
+            Request::Allow { .. } => bail!("allow is macOS only"),
+            #[cfg(target_os = "macos")]
+            Request::Allow { grant } => {
+                if let Some(request) = self.permission_request {
+                    // TCC may wait on its prompt; keep it off the actor.
+                    let _ = std::thread::Builder::new().spawn(move || request(grant));
+                }
             }
             Request::Status | Request::Subscribe | Request::Shutdown => (),
             _ => bail!("invalid actor request"),
@@ -746,6 +796,11 @@ impl Engine {
                             })).await.unwrap_or_else(|_| Ok(Err(anyhow::anyhow!("configuration reload timed out")))).unwrap_or_else(|e| Err(e.into()));
                             let _ = tx.send(Completion::Reloaded { result: Box::new(result), reply }).await;
                         }); continue;
+                    }
+                    if matches!(request, Request::Allow { grant: Grant::Microphone }) && self.permission_probe.is_some() {
+                        let status = self.status();
+                        queries.spawn(async move { let _ = reply.send(microphone(status).await); });
+                        continue;
                     }
                     if is_query(&request) {
                         if is_desktop_query(&request) && (!desktop_ops.is_empty() || self.delivering) { let _ = reply.send(Response::error(self.state, "desktop delivery is busy")); continue; }
@@ -806,8 +861,17 @@ impl Engine {
                     Completion::Reloaded { result, reply } => {
                         self.reloading = false;
                         let learned = self.learned_during_reload.take();
-                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
+                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys_blind = !self.permissions.as_ref().is_some_and(|p| p.input_monitoring); retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
+                    }
+                    Completion::Rearmed(result) => {
+                        self.rearming = false;
+                        self.hotkeys_blind = false; // a failure is not retried until reload
+                        match result {
+                            Ok(hotkeys) => { retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } }
+                            Err(warning) => self.hotkey_warning = Some(warning),
+                        }
+                        self.publish();
                     }
                     Completion::Learned { dictionary, message } => {
                         // Event only: the state and status message stay with the current session.
@@ -933,6 +997,64 @@ fn is_query(r: &Request) -> bool {
             | Request::ClearHistory
             | Request::Stats
     )
+}
+/// Microphone status (and the system prompt while undecided) comes from a
+/// short-lived `xflowd --microphone` child, so AVFoundation never loads here.
+async fn microphone(r: Response) -> Response {
+    #[cfg(target_os = "macos")]
+    {
+        use std::sync::atomic::AtomicBool;
+        use tokio::io::AsyncBufReadExt;
+        let mut r = r;
+        // One child asks at a time; the others only read the status.
+        static ASKING: AtomicBool = AtomicBool::new(false);
+        let ask = !ASKING.swap(true, Ordering::AcqRel);
+        let result = async {
+            let mut child = tokio::process::Command::new(std::env::current_exe()?)
+                .args(["--microphone", if ask { "request" } else { "check" }])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()?;
+            let stdout = child.stdout.take().context("no child output")?;
+            let mut line = String::new();
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::io::BufReader::new(stdout).read_line(&mut line),
+            )
+            .await
+            .context("microphone check timed out")??;
+            anyhow::Ok((child, line.trim().to_string()))
+        }
+        .await;
+        match result {
+            Ok((mut child, status)) => {
+                if let Some(permissions) = &mut r.permissions {
+                    permissions.microphone = match status.as_str() {
+                        "authorized" => Some(true),
+                        "not determined" => None,
+                        _ => Some(false),
+                    };
+                }
+                if ask {
+                    // The asking child waits for the user's answer; free the slot after.
+                    tokio::spawn(async move {
+                        let _ = child.wait().await;
+                        ASKING.store(false, Ordering::Release);
+                    });
+                }
+            }
+            Err(e) => {
+                if ask {
+                    ASKING.store(false, Ordering::Release);
+                }
+                return Response::error(r.state, format!("{e:#}"));
+            }
+        }
+        r
+    }
+    #[cfg(not(target_os = "macos"))]
+    r
 }
 async fn query(
     mut r: Response,
@@ -1379,11 +1501,27 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     #[cfg(target_os = "macos")]
     {
         if native {
-            engine.permission_probe = Some(xflow_platform::permissions);
-            engine.permissions = Some(xflow_platform::permissions());
-            if let Some(warning) = engine.permissions.as_ref().and_then(Permissions::warning) {
+            let permissions = xflow_platform::permissions();
+            if let Some(warning) = permissions.warning() {
                 log("warn", warning);
             }
+            // Asking lists this executable in System Settings and prompts while undecided;
+            // a reinstalled binary starts with no grants. Once per start, off the runtime.
+            let missing: Vec<_> = [
+                (Grant::InputMonitoring, permissions.input_monitoring),
+                (Grant::Accessibility, permissions.accessibility),
+            ]
+            .into_iter()
+            .filter_map(|(grant, granted)| (!granted).then_some(grant))
+            .collect();
+            if !missing.is_empty() {
+                let _ = std::thread::Builder::new()
+                    .spawn(move || missing.into_iter().for_each(xflow_platform::request_access));
+            }
+            engine.hotkeys_blind = !permissions.input_monitoring && engine.config.hotkey.enabled;
+            engine.permission_probe = Some(xflow_platform::permissions);
+            engine.permission_request = Some(xflow_platform::request_access);
+            engine.permissions = Some(permissions);
             let factory: HotkeyFactory = Arc::new(|config| {
                 if config.enabled {
                     Ok(Some(Box::new(xflow_platform::MacHotkeys::new(
@@ -2169,6 +2307,7 @@ mod tests {
             accessibility: false,
             input_monitoring: false,
             keyboard_events: None,
+            microphone: None,
         });
         let task = tokio::spawn(engine.run(rx));
         for request in [Request::Status, Request::Subscribe] {
@@ -2208,9 +2347,68 @@ mod tests {
                 accessibility,
                 input_monitoring: input,
                 keyboard_events: received,
+                microphone: None,
             };
             assert_eq!(permissions.warning(), warning);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_tap_made_without_input_monitoring_is_rearmed_once_it_is_granted() {
+        static GRANTED: AtomicBool = AtomicBool::new(false);
+        static ASKED: AtomicUsize = AtomicUsize::new(0);
+        let (mut engine, tx, rx, _, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 5).unwrap(),
+        );
+        let (_keys, key_events) = mpsc::channel(4);
+        engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
+        engine.hotkeys_blind = true;
+        engine.permission_probe = Some(|| Permissions {
+            accessibility: true,
+            input_monitoring: GRANTED.load(Ordering::SeqCst),
+            keyboard_events: None,
+            microphone: None,
+        });
+        engine.permission_request = Some(|grant| {
+            assert_eq!(grant, Grant::InputMonitoring);
+            ASKED.fetch_add(1, Ordering::SeqCst);
+        });
+        let created = Arc::new(AtomicUsize::new(0));
+        let (new_keys, new_events) = mpsc::channel(4);
+        let new_events = Mutex::new(Some(new_events));
+        let count = created.clone();
+        engine.hotkey_factory = Some(Arc::new(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(Box::new(FakeHotkeys(
+                new_events.lock().unwrap().take().context("created twice")?,
+            ))))
+        }));
+        let task = tokio::spawn(engine.run(rx));
+        let grant = Grant::InputMonitoring;
+        assert!(ask(&tx, Request::Allow { grant }).await.ok);
+        ask(&tx, Request::Status).await;
+        assert_eq!(created.load(Ordering::SeqCst), 0, "still denied");
+        GRANTED.store(true, Ordering::SeqCst);
+        // The next client probe replaces the tap; later probes leave it alone.
+        for _ in 0..3 {
+            ask(&tx, Request::Status).await;
+        }
+        new_keys.send(HotkeyAction::Start).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while ask(&tx, Request::Status).await.state != State::Listening {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(created.load(Ordering::SeqCst), 1);
+        assert_eq!(ASKED.load(Ordering::SeqCst), 1);
+        ask(&tx, Request::Cancel).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
     }
 
     struct ClipAudio(Vec<f32>);

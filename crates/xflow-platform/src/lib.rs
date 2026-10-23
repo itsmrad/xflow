@@ -22,7 +22,9 @@ pub use desktop::LinuxDesktop;
 #[cfg(target_os = "linux")]
 pub use desktop::LinuxDesktop as NativeDesktop;
 #[cfg(target_os = "macos")]
-pub use macos::{microphone_permission, permissions, MacDesktop, MacDesktop as NativeDesktop};
+pub use macos::{
+    microphone_permission, permissions, request_access, MacDesktop, MacDesktop as NativeDesktop,
+};
 
 pub use notifications::notify;
 pub use sounds::{play, Cue};

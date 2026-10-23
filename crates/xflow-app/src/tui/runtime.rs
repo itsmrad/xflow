@@ -50,6 +50,7 @@ enum Update {
     Devices(Result<Vec<String>>),
     Doctor(Vec<String>),
     Notice(Result<String>),
+    Opened(Result<()>),
     MicTimeout,
 }
 
@@ -180,6 +181,8 @@ pub async fn run() -> Result<()> {
     let mut redraw = true;
     let mut mouse = false;
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut recheck = tokio::time::interval(Duration::from_secs(1));
+    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         if app.quit {
             break;
@@ -240,6 +243,11 @@ pub async fn run() -> Result<()> {
                     _ => redraw = false,
                 }
             },
+            // Only while a screen waits for a permission switch; idle otherwise.
+            _ = recheck.tick(), if app.watching() => {
+                effects = app.poll();
+                redraw = false;
+            },
             _ = term.recv() => {
                 effects = app.action(Action::Quit);
                 redraw = true;
@@ -279,6 +287,7 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
                 if app.disk.is_none() && !app.setup_offered && app.modal.is_none() {
                     effects.extend(app.open_setup(Step::Welcome));
                 }
+                effects.extend(app.permissions_changed());
             }
             Err(e) => {
                 app.toast = Some(format!(
@@ -320,7 +329,12 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
                     "Saved. It takes effect when xflow's background helper starts (run xflowd)."
                         .into(),
                 ),
-                Err(error) => app.toast = Some(options::plain(&format!("{error:#}"))),
+                Err(error) => {
+                    if matches!(tag, Tag::Permissions(Some(_))) {
+                        app.asking = false;
+                    }
+                    app.toast = Some(options::plain(&format!("{error:#}")))
+                }
             }
         }
         Update::Event(response) => {
@@ -329,12 +343,13 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
                 || response.state == xflow_core::State::Listening;
             let final_event = response.text.is_some();
             app.event(response);
+            effects.extend(app.permissions_changed());
             if app.reload_pending && !app.active() {
                 app.reload_pending = false;
                 effects.push(Effect::Request(Request::Reload, Tag::Reload));
             }
             if final_event && matches!(app.page, Page::History | Page::Stats) {
-                effects = app.refresh();
+                effects.extend(app.refresh());
             }
         }
         Update::Connection(connected, message) => {
@@ -370,6 +385,11 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             }
         },
         Update::Doctor(rows) => app.diagnostics = rows,
+        Update::Opened(result) => {
+            if let Err(e) = result {
+                app.toast = Some(options::plain(&format!("{e:#}")));
+            }
+        }
         Update::MicTimeout => {
             if matches!(app.modal, Some(Modal::Setup(Step::MicCheck)))
                 && app.status.state == xflow_core::State::Listening
@@ -474,14 +494,23 @@ fn dispatch(
                 }
                 Effect::Devices => Update::Devices(blocking(integrations::devices).await),
                 Effect::Doctor => {
-                    let permissions = transport::request(&Request::Status)
-                        .await
-                        .ok()
-                        .and_then(|r| r.permissions);
-                    Update::Doctor(blocking(move || doctor(permissions)).await.unwrap_or_else(
-                        |e| vec![format!("! {}", options::plain(&format!("{e:#}")))],
-                    ))
+                    Update::Doctor(blocking(doctor).await.unwrap_or_else(|e| {
+                        vec![format!("! {}", options::plain(&format!("{e:#}")))]
+                    }))
                 }
+                Effect::Open(url) => Update::Opened(
+                    blocking(move || {
+                        let opened = std::process::Command::new("/usr/bin/open")
+                            .arg(url)
+                            .status()
+                            .is_ok_and(|s| s.success());
+                        if !opened {
+                            bail!("System Settings didn't open — open it from the Apple menu");
+                        }
+                        Ok(())
+                    })
+                    .await,
+                ),
             };
             let _ = tx.send(update).await;
         });
@@ -508,7 +537,7 @@ pub(super) fn save(file: &ConfigFile, expected: Option<&str>) -> Result<()> {
     crate::daemon::build_transformer(&config)?;
     file.save()
 }
-fn doctor(_permissions: Option<xflow_core::ipc::Permissions>) -> Result<Vec<String>> {
+fn doctor() -> Result<Vec<String>> {
     let (ok, warn) = (options::glyph("✓", "+"), "!");
     let mut rows = vec![];
     let path = crate::paths::config_path()?;
@@ -548,41 +577,7 @@ fn doctor(_permissions: Option<xflow_core::ipc::Permissions>) -> Result<Vec<Stri
             });
         }
     }
-    #[cfg(target_os = "macos")]
-    rows.extend(permission_rows(_permissions.as_ref()));
     Ok(rows)
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn permission_rows(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<String> {
-    use xflow_core::ipc::{ACCESSIBILITY_FIX, INPUT_MONITORING_FIX, UNVERIFIED_SHORTCUT};
-    let Some(permissions) = permissions else {
-        return vec![
-            "! Cannot verify xflowd's permissions — start or update xflowd, then refresh".into(),
-        ];
-    };
-    let ok = options::glyph("✓", "+");
-    let mut rows = vec![
-        if permissions.input_monitoring {
-            format!("{ok} Input Monitoring is on for xflowd")
-        } else {
-            format!("! {INPUT_MONITORING_FIX}")
-        },
-        if permissions.accessibility {
-            format!("{ok} Accessibility is on for xflowd")
-        } else {
-            format!("! {ACCESSIBILITY_FIX}")
-        },
-    ];
-    if let Some(received) = permissions.keyboard_events {
-        rows.push(if received {
-            format!("{ok} xflowd has received keyboard events")
-        } else {
-            format!("! {UNVERIFIED_SHORTCUT}")
-        });
-    }
-    rows.push("• Microphone: allow xflowd in System Settings → Privacy & Security → Microphone (the first recording asks)".into());
-    rows
 }
 
 #[cfg(test)]
@@ -593,49 +588,150 @@ mod tests {
     use xflow_core::State;
 
     #[test]
-    fn checkup_reports_daemon_grants_and_unverified_input() {
-        use xflow_core::ipc::{
-            Permissions, ACCESSIBILITY_FIX, INPUT_MONITORING_FIX, UNVERIFIED_SHORTCUT,
+    fn onboarding_asks_for_each_grant_in_order_and_moves_on_by_itself() {
+        use xflow_core::ipc::{Grant, Permissions};
+        let status = |input_monitoring, accessibility, microphone| {
+            let mut r = Response::status(State::Idle, 0.0);
+            r.permissions = Some(Permissions {
+                accessibility,
+                input_monitoring,
+                keyboard_events: Some(false),
+                microphone,
+            });
+            r
         };
-        let mut permissions = Permissions {
-            accessibility: false,
-            input_monitoring: false,
-            keyboard_events: Some(false),
+        let asks = |effects: &[Effect], grant: Grant| {
+            let allow = effects.iter().any(|e| {
+                matches!(e, Effect::Request(Request::Allow { grant: g }, Tag::Permissions(Some(t))) if *g == grant && *t == grant)
+            });
+            let pane = effects
+                .iter()
+                .any(|e| matches!(e, Effect::Open(url) if *url == grant.pane()));
+            (allow, pane)
         };
-        let rows = permission_rows(Some(&permissions));
-        assert!(rows.iter().any(|r| r.contains(INPUT_MONITORING_FIX)));
-        assert!(rows.iter().any(|r| r.contains(ACCESSIBILITY_FIX)));
-        assert!(rows.iter().all(|r| !r.contains("terminal")));
-        // The selected row's Details pane must retain the fix at normal terminal sizes.
-        let dir = tempfile::tempdir().unwrap();
-        let mut app = App::new(dir.path().join("config.toml"), ColorMode::TrueColor);
+        let mut app = App::new("unused".into(), ColorMode::TrueColor);
+        app.connected = true;
+        // A configured (re)install: no wizard, so the permissions step opens by itself.
+        app.disk = Some(String::new());
+        app.event(status(false, false, None));
+        let effects = app.permissions_changed();
+        assert!(matches!(app.modal, Some(Modal::Setup(Step::Permissions))));
+        assert_eq!(asks(&effects, Grant::InputMonitoring), (true, true));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| drop(render::draw(frame, &app)))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            text.contains("Input Monitoring") && text.contains("moves on by itself"),
+            "{text}"
+        );
+        assert!(app.watching());
+        assert!(matches!(
+            app.poll()[..],
+            [Effect::Request(Request::Status, Tag::Permissions(None))]
+        ));
+        // Still off: nothing is asked twice.
+        assert!(app
+            .response(status(false, false, None), Tag::Permissions(None))
+            .is_empty());
+        let effects = app.response(status(true, false, None), Tag::Permissions(None));
+        assert_eq!(asks(&effects, Grant::Accessibility), (true, true));
+        // An undecided microphone gets the system prompt, not a pane.
+        let effects = app.response(status(true, true, None), Tag::Permissions(None));
+        assert_eq!(asks(&effects, Grant::Microphone), (true, false));
+        assert!(app.poll().is_empty(), "one microphone ask at a time");
+        let mic = Tag::Permissions(Some(Grant::Microphone));
+        let effects = app.response(status(true, true, Some(false)), mic.clone());
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::Open(url) if *url == Grant::Microphone.pane())));
+        app.response(status(true, true, Some(true)), mic);
+        assert!(matches!(app.modal, Some(Modal::Setup(Step::Try))));
+        assert!(!app.watching());
+        // Offered once per TUI session.
+        app.modal = None;
+        app.event(status(false, true, None));
+        assert!(app.permissions_changed().is_empty());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn checkup_permission_rows_fit_and_enter_fixes_them() {
+        use xflow_core::ipc::{Grant, Permissions};
+        let mut app = App::new("unused".into(), ColorMode::TrueColor);
         app.connected = true;
         app.page = Page::Doctor;
-        app.diagnostics = rows;
+        app.permissions = Some(Permissions {
+            accessibility: true,
+            input_monitoring: false,
+            keyboard_events: Some(false),
+            microphone: None,
+        });
+        let rows = app.permission_rows();
+        assert_eq!(rows[0].0, "! Shortcut access off — Enter to fix");
+        assert!(rows[1].0.ends_with("Typing access is on") && rows[1].2.is_none());
+        assert!(rows[2].0.contains("Microphone — Enter to check"));
+        assert!(rows[0].1.contains("xflowd in the list and switch it on"));
         app.selected[Page::Doctor.index()] = 2;
-        for width in [80, 100] {
+        assert_eq!(app.doctor_grant(2), Some(Grant::InputMonitoring));
+        assert_eq!(app.doctor_grant(3), None);
+        for width in [80, 100, 120] {
             let mut terminal =
-                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 24)).unwrap();
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
             terminal
                 .draw(|frame| {
                     render::draw(frame, &app);
                 })
                 .unwrap();
-            let text: String = terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|cell| cell.symbol())
+            let buffer = terminal.backend().buffer();
+            let lines: Vec<String> = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect()
+                })
                 .collect();
-            assert!(text.contains("add it again"), "{text}");
+            for (row, _, _) in &rows {
+                assert!(
+                    lines.iter().any(|l| l.contains(row.as_str())),
+                    "{width}: {row}"
+                );
+            }
+            assert!(lines.iter().any(|l| l.contains("Enter fix")), "{width}");
         }
-        permissions.accessibility = true;
-        permissions.input_monitoring = true;
-        assert!(permission_rows(Some(&permissions))
+        let effects = app.action(Action::Choose);
+        assert!(effects
             .iter()
-            .any(|r| r.contains(UNVERIFIED_SHORTCUT)));
-        assert!(permission_rows(None)[0].starts_with("! Cannot verify"));
+            .any(|e| matches!(e, Effect::Open(url) if *url == Grant::InputMonitoring.pane())));
+        // An undecided microphone keeps being asked until Allow flips its row.
+        app.permissions.as_mut().unwrap().input_monitoring = true;
+        app.selected[Page::Doctor.index()] = 4;
+        app.action(Action::Choose);
+        let mic = Tag::Permissions(Some(Grant::Microphone));
+        let mut reply = Response::status(State::Idle, 0.0);
+        reply.permissions = app.permissions.clone();
+        app.response(reply.clone(), mic.clone());
+        assert!(app.watching());
+        assert!(matches!(
+            app.poll()[..],
+            [Effect::Request(
+                Request::Allow {
+                    grant: Grant::Microphone
+                },
+                _
+            )]
+        ));
+        reply.permissions.as_mut().unwrap().microphone = Some(true);
+        app.response(reply, mic);
+        assert!(app.permission_rows()[2].0.ends_with("Microphone is on"));
+        assert!(!app.watching());
     }
     #[tokio::test]
     async fn quit_keeps_ownership_of_a_pending_start_but_not_another_clients_session() {

@@ -11,10 +11,24 @@ struct Args {
     /// Parse and validate configuration without starting desktop/audio services.
     #[arg(long)]
     check_config: bool,
+    /// Internal: print this executable's microphone authorization; `request` also
+    /// asks while undecided. xflowd runs it as a child to keep AVFoundation out.
+    #[cfg(target_os = "macos")]
+    #[arg(long, hide = true, value_parser = ["check", "request"])]
+    microphone: Option<String>,
 }
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    #[cfg(target_os = "macos")]
+    if let Some(mode) = args.microphone {
+        let status = xflow_platform::microphone_permission(false);
+        println!("{status}");
+        if mode == "request" && status == "not determined" {
+            xflow_platform::microphone_permission(true);
+        }
+        return Ok(());
+    }
     let path = args
         .config
         .map(Ok)
