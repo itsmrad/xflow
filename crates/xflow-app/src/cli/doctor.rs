@@ -217,6 +217,44 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
             cfg.stt.provider,
             "Run xflow providers list and xflow providers use <provider>",
         ));
+        #[cfg(target_os = "linux")]
+        if cfg.recording.ignore_speakers {
+            // PipeWire and PulseAudio both answer pactl. xflow records the default
+            // input, so their echo-cancel source works once it is the default.
+            // A sink's .monitor source records the speakers; never suggest one.
+            let echo = |name: &str| {
+                let name = name.to_lowercase();
+                name.contains("echo") && name.contains("cancel") && !name.ends_with(".monitor")
+            };
+            let info = super::system::tool("pactl", &["info"]).unwrap_or_default();
+            let default = info
+                .lines()
+                .find_map(|l| l.strip_prefix("Default Source:"))
+                .unwrap_or("")
+                .trim()
+                .to_owned();
+            let sources =
+                super::system::tool("pactl", &["list", "short", "sources"]).unwrap_or_default();
+            let found = sources
+                .lines()
+                .filter_map(|l| l.split('\t').nth(1))
+                .find(|&n| echo(n));
+            let hint = match found {
+                Some(name) => format!("Make it your microphone: pactl set-default-source '{name}'"),
+                None => "Turn on echo cancelling. PipeWire: save `context.modules = [ { name = libpipewire-module-echo-cancel } ]` as ~/.config/pipewire/pipewire.conf.d/echo-cancel.conf, run systemctl --user restart pipewire, then pick the echo-cancel source as your microphone in Sound settings. PulseAudio: pactl load-module module-echo-cancel aec_method=webrtc".into(),
+            };
+            checks.push(check(
+                "Ignore speakers",
+                echo(&default),
+                false,
+                if echo(&default) {
+                    format!("Echo cancelling is on ({default})")
+                } else {
+                    "Sound from your speakers can reach the microphone".into()
+                },
+                &hint,
+            ));
+        }
     }
     if desktop.to_lowercase().contains("gnome") && present("gnome-extensions") {
         let extension = super::system::tool("gnome-extensions", &["info", "xflow@xflow.local"]);
