@@ -5,7 +5,7 @@ use std::{
     ffi::{c_char, c_void, CStr},
     ptr,
     sync::{Once, OnceLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use xflow_core::{
     config::{InjectionConfig, InjectionMethod},
@@ -42,15 +42,19 @@ extern "C" {
     fn CFDictionaryGetValue(dict: Ref, key: Ref) -> Ref;
     fn CFBooleanGetTypeID() -> usize;
     fn CFBooleanGetValue(value: Ref) -> bool;
+    fn CFNumberGetTypeID() -> usize;
+    fn CFNumberGetValue(number: Ref, kind: isize, value: *mut c_void) -> bool;
 }
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn GetFrontProcess(psn: *mut ProcessSerialNumber) -> i16;
     fn GetProcessPID(psn: *const ProcessSerialNumber, pid: *mut i32) -> i32;
+    fn GetProcessForPID(pid: i32, psn: *mut ProcessSerialNumber) -> i32;
     fn ProcessInformationCopyDictionary(psn: *const ProcessSerialNumber, mask: u32) -> Ref;
     fn AXIsProcessTrusted() -> bool;
     fn AXUIElementCreateApplication(pid: i32) -> Ref;
     fn AXUIElementCreateSystemWide() -> Ref;
+    fn AXUIElementGetPid(element: Ref, pid: *mut i32) -> i32;
     fn AXUIElementSetAttributeValue(element: Ref, attribute: Ref, value: Ref) -> i32;
     fn AXUIElementCopyAttributeValue(element: Ref, attribute: Ref, value: *mut Ref) -> i32;
     fn AXUIElementIsAttributeSettable(element: Ref, attribute: Ref, settable: *mut bool) -> i32;
@@ -104,6 +108,16 @@ impl Owned {
             (CFGetTypeID(value.0) == CFBooleanGetTypeID()).then(|| CFBooleanGetValue(value.0))
         }
     }
+    fn number(&self, name: &str) -> Option<i64> {
+        let value = self.attribute(name)?;
+        let mut number = 0_i64;
+        // kCFNumberSInt64Type
+        unsafe {
+            (CFGetTypeID(value.0) == CFNumberGetTypeID()
+                && CFNumberGetValue(value.0, 4, (&mut number as *mut i64).cast()))
+            .then_some(number)
+        }
+    }
 }
 impl Drop for Owned {
     fn drop(&mut self) {
@@ -154,9 +168,30 @@ fn focus() -> Focus {
     let mut focus = Focus::default();
     let mut psn = ProcessSerialNumber::default();
     let mut pid = 0;
-    // Process Manager avoids loading AppKit just to identify the frontmost app.
+    // Process Manager avoids loading AppKit just to identify the frontmost app;
+    // GetProcessPID also connects the services system-wide AX focus queries need.
     if unsafe { GetFrontProcess(&mut psn) != 0 || GetProcessPID(&psn, &mut pid) != 0 } {
         return focus;
+    }
+    let trusted = unsafe { AXIsProcessTrusted() };
+    if trusted {
+        if let Some(system) = Owned::new(unsafe { AXUIElementCreateSystemWide() }) {
+            // The system-wide timeout bounds every AX call, so a stalled app cannot block delivery.
+            TIMEOUT.call_once(|| unsafe {
+                AXUIElementSetMessagingTimeout(system.0, 0.2);
+            });
+            // Keyboard focus, not the front process: Spotlight/Raycast-style panels
+            // own the key window while the app behind them stays frontmost.
+            if let Some(app) = system.attribute("AXFocusedApplication") {
+                let (mut key_pid, mut key_psn) = (0, ProcessSerialNumber::default());
+                if unsafe {
+                    AXUIElementGetPid(app.0, &mut key_pid) == 0
+                        && GetProcessForPID(key_pid, &mut key_psn) == 0
+                } {
+                    (pid, psn) = (key_pid, key_psn);
+                }
+            }
+        }
     }
     if let Some(info) = Owned::new(unsafe { ProcessInformationCopyDictionary(&psn, u32::MAX) }) {
         for key in ["CFBundleIdentifier", "CFBundleName"] {
@@ -167,15 +202,12 @@ fn focus() -> Focus {
             }
         }
     }
-    if !unsafe { AXIsProcessTrusted() } {
+    if focus.context.app_id.as_deref() == Some("com.apple.finder") {
+        focus.editable = Some(false);
+    }
+    if !trusted {
         return focus;
     }
-    // The system-wide timeout bounds every AX call, so a stalled app cannot block delivery.
-    TIMEOUT.call_once(|| {
-        if let Some(system) = Owned::new(unsafe { AXUIElementCreateSystemWide() }) {
-            unsafe { AXUIElementSetMessagingTimeout(system.0, 0.2) };
-        }
-    });
     let Some(app) = Owned::new(unsafe { AXUIElementCreateApplication(pid) }) else {
         return focus;
     };
@@ -184,6 +216,8 @@ fn focus() -> Focus {
     let mut role = role_of(&element);
     // Electron and Chromium build their AX tree only once an assistive client asks.
     if role.as_deref().is_none_or(is_container) && app.enable("AXManualAccessibility") {
+        // Chromium builds the tree asynchronously after accepting the request.
+        std::thread::sleep(Duration::from_millis(100));
         element = app.attribute("AXFocusedUIElement");
         role = role_of(&element);
     }
@@ -202,17 +236,22 @@ fn focus() -> Focus {
     focus.secure = role == "AXSecureTextField"
         || element.text("AXSubrole").as_deref() == Some("AXSecureTextField")
         || element.flag("AXProtectedContent") == Some(true);
-    focus.editable = if matches!(role.as_str(), "AXTextField" | "AXTextArea" | "AXComboBox") {
-        Some(
-            !focus.secure
-                // NSTextView (TextEdit) omits AXEnabled; only an explicit false disables.
-                && element.flag("AXEnabled") != Some(false)
-                && (element.settable("AXValue")
-                    || element.settable("AXSelectedText")
-                    || element.flag("AXEditable") == Some(true)
-                    || is_terminal(focus.context.app_id.as_deref())),
-        )
-    } else if is_container(&role) {
+    focus.editable = if focus.secure
+        || element.flag("AXEnabled") == Some(false)
+        || element.flag("AXEditable") == Some(false)
+    {
+        Some(false)
+    } else if element.flag("AXEditable") == Some(true)
+        || element.settable("AXSelectedText")
+        || ((is_container(&role)
+            || matches!(
+                role.as_str(),
+                "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField"
+            ))
+            && (element.settable("AXValue") || is_terminal(focus.context.app_id.as_deref())))
+    {
+        Some(true)
+    } else if is_container(&role) && focus.context.app_id.as_deref() != Some("com.apple.finder") {
         None
     } else {
         Some(false)
@@ -243,7 +282,10 @@ fn is_terminal(app: Option<&str>) -> bool {
 }
 #[derive(Debug, PartialEq)]
 enum Decision {
+    /// An editable field: paste, then restore the user's clipboard.
     Paste,
+    /// Editability unknown (canvas apps, games): paste and keep the text copied.
+    PasteAndCopy,
     Type,
     Copy,
     Refuse,
@@ -255,9 +297,10 @@ fn decision(text: &str, method: InjectionMethod, target: &AppContext, current: &
     if current.secure {
         return Decision::Refuse;
     }
-    // Unknown editability (web content without AX) pastes blind, like Wispr Flow;
-    // a changed window or a known non-editable element copies instead.
+    // Unknown editability pastes blind, like Wispr Flow; a changed window or a
+    // known non-editable element copies instead.
     if target.app_id.as_deref().is_none_or(str::is_empty)
+        || current.context.app_id.as_deref() == Some("com.apple.loginwindow")
         || target.window_id.is_none()
         || target.app_id != current.context.app_id
         || target.window_id != current.context.window_id
@@ -269,26 +312,60 @@ fn decision(text: &str, method: InjectionMethod, target: &AppContext, current: &
     }
     if method == InjectionMethod::Type {
         Decision::Type
+    } else if current.editable.is_none() {
+        Decision::PasteAndCopy
     } else {
         Decision::Paste
+    }
+}
+/// What changes in a field when text lands in it.
+fn snapshot(field: &Owned) -> (Option<i64>, Option<String>) {
+    (field.number("AXNumberOfCharacters"), field.text("AXValue"))
+}
+/// Restore only after the field contains the insertion, never on a timer alone (#53).
+fn landed(
+    field: &Owned,
+    before: &(Option<i64>, Option<String>),
+    text: &str,
+    delay: Duration,
+) -> bool {
+    if *before == (None, None) {
+        return false;
+    }
+    std::thread::sleep(delay);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let after = snapshot(field);
+        if after.1.as_ref().is_some_and(|s| {
+            s.matches(text).count() > before.1.as_deref().map_or(0, |s| s.matches(text).count())
+        }) || (before.1.is_none()
+            && before
+                .0
+                .zip(after.0)
+                .is_some_and(|(a, b)| b == a + text.encode_utf16().count() as i64))
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 fn send_keys(text: &str, typed: bool) -> Result<()> {
     if !unsafe { CGPreflightPostEventAccess() } {
         bail!("Accessibility permission is required for text delivery; run xflow doctor");
     }
-    let key = if typed { 0 } else { paste_keycode() };
-    // Allocate both events before posting so failure cannot leave a key down.
-    let down = Owned::new(unsafe { CGEventCreateKeyboardEvent(ptr::null(), key, true) })
-        .context("cannot create keyboard event")?;
-    let up = Owned::new(unsafe { CGEventCreateKeyboardEvent(ptr::null(), key, false) })
-        .context("cannot create keyboard event")?;
-    for event in [&down, &up] {
-        unsafe {
-            CGEventSetFlags(event.0, if typed { 0 } else { 1 << 20 });
-        }
-    }
+    const COMMAND: u64 = 1 << 20;
+    let key = |code, down, flags| {
+        let event = Owned::new(unsafe { CGEventCreateKeyboardEvent(ptr::null(), code, down) })
+            .context("cannot create keyboard event")?;
+        unsafe { CGEventSetFlags(event.0, flags) };
+        Ok::<_, anyhow::Error>(event)
+    };
+    // Allocate every event before posting so failure cannot leave a key down.
     if typed {
+        let (down, up) = (key(0, true, 0)?, key(0, false, 0)?);
         for ch in text.chars() {
             let mut buf = [0; 2];
             let utf16 = ch.encode_utf16(&mut buf);
@@ -300,9 +377,17 @@ fn send_keys(text: &str, typed: bool) -> Result<()> {
             }
         }
     } else {
-        unsafe {
-            CGEventPost(0, down.0);
-            CGEventPost(0, up.0);
+        // A real ⌘ press and release: a V that only carries the ⌘ flag can leave ⌘
+        // held in the HID state, so later pastes misfire and keys become shortcuts.
+        let v = paste_keycode();
+        let events = [
+            key(55, true, COMMAND)?,
+            key(v, true, COMMAND)?,
+            key(v, false, COMMAND)?,
+            key(55, false, 0)?,
+        ];
+        for event in &events {
+            unsafe { CGEventPost(0, event.0) };
         }
     }
     Ok(())
@@ -395,6 +480,7 @@ fn paste_keycode() -> u16 {
 
 pub struct MacDesktop {
     config: InjectionConfig,
+    delivery: tokio::sync::Mutex<()>,
 }
 impl MacDesktop {
     pub fn new(config: &InjectionConfig) -> Self {
@@ -404,6 +490,7 @@ impl MacDesktop {
         }
         Self {
             config: config.clone(),
+            delivery: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -446,6 +533,7 @@ impl Desktop for MacDesktop {
         if text.len() > MAX_TEXT {
             bail!("injection text exceeds 64 KiB");
         }
+        let _delivery = self.delivery.lock().await;
         let method = self.config.effective_method();
         let target_owned = target.clone();
         let text_owned = text.to_owned();
@@ -461,43 +549,63 @@ impl Desktop for MacDesktop {
             }
             _ => {}
         }
+        // shortcut: restores text only; preserve native pasteboard formats in #27.
         let previous = if action == Decision::Paste && self.config.restore_clipboard {
             super::desktop::output("/usr/bin/pbpaste", &[]).await.ok()
         } else {
             None
         };
-        if action == Decision::Paste {
+        if action != Decision::Type {
             self.copy(text).await?;
+            // Cmd+V only while the pasteboard holds the transcript, never another writer's text.
+            if super::desktop::output("/usr/bin/pbpaste", &[]).await? != text {
+                self.copy(text).await?;
+                return Ok(InjectionOutcome::ClipboardOnly);
+            }
         }
         let target = target.clone();
         let text_owned = text.to_owned();
-        // Re-check just before the keys: focus may have moved to another window or a secure field.
-        let delivered = tokio::task::spawn_blocking(move || {
-            match decision(&text_owned, method, &target, &focus()) {
-                Decision::Refuse | Decision::Copy => Ok(false),
-                _ => send_keys(&text_owned, method == InjectionMethod::Type).map(|()| true),
+        let delay = Duration::from_millis(self.config.restore_delay_ms.into());
+        let restore = previous.is_some();
+        // Re-check focus just before the keys, then keep this delivery serialized through restore.
+        let (action, confirmed) = tokio::task::spawn_blocking(move || {
+            let current = focus();
+            let action = decision(&text_owned, method, &target, &current);
+            if matches!(action, Decision::Refuse | Decision::Copy) {
+                return Ok::<_, anyhow::Error>((Decision::Copy, false));
             }
+            let before = current.element.as_ref().map(snapshot);
+            send_keys(&text_owned, action == Decision::Type)?;
+            let confirmed = action == Decision::Paste
+                && restore
+                && current
+                    .element
+                    .as_ref()
+                    .zip(before.as_ref())
+                    .is_some_and(|(field, before)| landed(field, before, &text_owned, delay));
+            Ok((action, confirmed))
         })
         .await??;
-        if !delivered {
-            if action == Decision::Type {
-                self.copy(text).await?;
-            }
+        if action == Decision::Copy {
+            self.copy(text).await?;
             return Ok(InjectionOutcome::ClipboardOnly);
         }
-        if let Some(previous) = previous {
-            let injected = text.to_owned();
-            let delay = self.config.restore_delay_ms;
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(delay.into())).await;
+        if confirmed {
+            if let Some(previous) = previous {
                 if super::desktop::output("/usr/bin/pbpaste", &[])
                     .await
-                    .is_ok_and(|s| s == injected)
+                    .is_ok_and(|s| s == text)
                 {
-                    let _ = super::desktop::copy_with("/usr/bin/pbcopy", &[], &previous).await;
+                    super::desktop::copy_with("/usr/bin/pbcopy", &[], &previous).await?;
                 }
-            });
+            }
         }
+        if action == Decision::PasteAndCopy
+            || (action == Decision::Paste && self.config.restore_clipboard && !confirmed)
+        {
+            return Ok(InjectionOutcome::ClipboardOnly);
+        }
+
         Ok(if action == Decision::Type {
             InjectionOutcome::Typed
         } else {
@@ -599,6 +707,29 @@ mod tests {
         );
     }
     #[test]
+    fn editability_selects_paste_copy_or_both() {
+        let target = AppContext {
+            app_id: Some("app".into()),
+            window_id: Some("1:2".into()),
+            selected_text: None,
+        };
+        for (editable, expected) in [
+            (Some(true), Decision::Paste),
+            (Some(false), Decision::Copy),
+            (None, Decision::PasteAndCopy),
+        ] {
+            let current = Focus {
+                context: target.clone(),
+                editable,
+                ..Default::default()
+            };
+            assert_eq!(
+                decision("hello", InjectionMethod::Paste, &target, &current),
+                expected
+            );
+        }
+    }
+    #[test]
     fn delivery_requires_same_window_nonsecure_focus_and_safe_terminal_input() {
         use Decision::*;
         use InjectionMethod::{Clipboard, Paste as P, Type as T};
@@ -623,7 +754,7 @@ mod tests {
         assert_eq!(decision("hello", P, &target, &current), Copy);
         // Electron/web content without an AX tree: paste blind into the same window.
         current.editable = None;
-        assert_eq!(decision("hello", P, &target, &current), Paste);
+        assert_eq!(decision("hello", P, &target, &current), PasteAndCopy);
         current.context.window_id = Some("1:3".into());
         assert_eq!(decision("hello", P, &target, &current), Copy);
         current.context.app_id = Some("com.googlecode.iterm2".into());
@@ -631,7 +762,7 @@ mod tests {
         for text in ["echo hi\n", "echo hi\r", "\u{1b}"] {
             assert_eq!(decision(text, P, &terminal, &current), Copy);
         }
-        assert_eq!(decision("echo hi", P, &terminal, &current), Paste);
+        assert_eq!(decision("echo hi", P, &terminal, &current), PasteAndCopy);
         assert_eq!(decision("hello", P, &AppContext::default(), &current), Copy);
     }
 }

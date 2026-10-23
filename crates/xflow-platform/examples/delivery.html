@@ -1,0 +1,8 @@
+<!doctype html><title>XFlow delivery fixture</title>
+<input id=i placeholder="Search"><br><textarea id=t autofocus></textarea><br>
+<div id=c contenteditable style="border:1px solid;min-height:40px"></div><button id=b>Non-editable button</button>
+<script>
+const slow=new URLSearchParams(location.search).has('slow');
+addEventListener('keydown',e=>{if(slow&&e.metaKey&&e.key==='v'){const end=performance.now()+1000;while(performance.now()<end){}}});
+addEventListener('input',e=>document.title='XFlow fixture '+e.target.id+' '+(e.target.value||e.target.textContent));
+</script>

@@ -1091,11 +1091,16 @@ async fn edit_history(
     fit_final(&mut r);
     Ok(r)
 }
+#[cfg(target_os = "macos")]
+pub(crate) const COPIED: &str = "Copied — press ⌘V to paste";
+#[cfg(not(target_os = "macos"))]
+pub(crate) const COPIED: &str = "Copied — press Ctrl+V to paste";
+
 fn delivery_message(warning: Option<String>, outcome: Option<InjectionOutcome>) -> Option<String> {
     if outcome == Some(InjectionOutcome::ClipboardOnly) {
         Some(bounded_message(&match warning {
-            Some(warning) => format!("{warning}; Transcript copied; paste manually"),
-            None => "Transcript copied; paste manually".into(),
+            Some(warning) => format!("{COPIED}; {warning}"),
+            None => COPIED.into(),
         }))
     } else {
         warning.map(|s| bounded_message(&s))
@@ -2836,7 +2841,7 @@ mod tests {
             Some(InjectionOutcome::ClipboardOnly),
         )
         .unwrap();
-        assert!(message.contains("Cleanup failed") && message.contains("paste manually"));
+        assert!(message.contains("Cleanup failed") && message.contains(COPIED));
     }
 
     #[test]

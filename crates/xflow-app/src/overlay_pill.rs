@@ -22,6 +22,8 @@ struct PillEvent {
     level: f32,
     #[serde(default)]
     hands_free: bool,
+    #[serde(default)]
+    copied: bool,
 }
 
 impl PillEvent {
@@ -37,6 +39,10 @@ impl PillEvent {
             } else {
                 0.0
             },
+            copied: event
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains(crate::daemon::COPIED)),
             hands_free: event
                 .message
                 .is_some_and(|m| m.starts_with(crate::daemon::HANDS_FREE)),
@@ -60,7 +66,7 @@ pub async fn run(mut events: broadcast::Receiver<DesktopEvent>, config: std::pat
             if let Some(child) = &mut helper {
                 let _ = send(child, event).await;
             }
-            close(&mut helper).await;
+            close(&mut helper, event.copied).await;
             session_active = false;
             continue;
         }
@@ -71,11 +77,11 @@ pub async fn run(mut events: broadcast::Receiver<DesktopEvent>, config: std::pat
         }
         if let Some(child) = &mut helper {
             if send(child, event).await.is_err() {
-                close(&mut helper).await;
+                close(&mut helper, false).await;
             }
         }
     }
-    close(&mut helper).await;
+    close(&mut helper, false).await;
 }
 
 fn spawn(config: &std::path::Path) -> Result<Child> {
@@ -106,10 +112,16 @@ async fn send(child: &mut Child, event: PillEvent) -> Result<()> {
     Ok(())
 }
 
-async fn close(helper: &mut Option<Child>) {
+async fn close(helper: &mut Option<Child>, copied: bool) {
     if let Some(mut child) = helper.take() {
         drop(child.stdin.take());
-        if timeout(Duration::from_secs(1), child.wait()).await.is_err() {
+        if timeout(
+            Duration::from_secs(if copied { 4 } else { 1 }),
+            child.wait(),
+        )
+        .await
+        .is_err()
+        {
             let _ = child.kill().await;
         }
     }
@@ -173,6 +185,7 @@ pub fn preview() -> Result<()> {
             state,
             level,
             hands_free,
+            copied: false,
         };
         writeln!(stdin, "{}", serde_json::to_string(&event)?)?;
         std::thread::sleep(Duration::from_millis(40));
@@ -198,6 +211,7 @@ mod tests {
             state: State::Listening,
             level: 0.5,
             hands_free: false,
+            copied: false,
         };
         let mut stalled = false;
         for _ in 0..4096 {
@@ -207,7 +221,7 @@ mod tests {
             }
         }
         let mut helper = Some(child);
-        timeout(Duration::from_secs(2), close(&mut helper))
+        timeout(Duration::from_secs(2), close(&mut helper, false))
             .await
             .unwrap();
         assert!(stalled, "an unread pipe must stop accepting events");
@@ -242,5 +256,12 @@ mod tests {
         assert_eq!(event.level, 0.0);
         assert!(!encoded.contains("private"));
         assert!(encoded.len() < MAX_EVENT_BYTES);
+        let copied = PillEvent::from_desktop(DesktopEvent {
+            state: State::Success,
+            level: 0.0,
+            message: Some(crate::daemon::COPIED.into()),
+            mode: Default::default(),
+        });
+        assert!(copied.copied && !copied.active());
     }
 }
