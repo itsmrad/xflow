@@ -348,6 +348,8 @@ pub struct App {
     /// Last key typed here, and when xflowd's permissions last arrived (see tap_blind).
     pub typed: Option<Instant>,
     pub status_at: Option<Instant>,
+    /// When xflowd's current tap was (probably) created: connect, or events granted.
+    pub armed_at: Option<Instant>,
     /// The current permission step started waiting; Enter asked again.
     pub waiting_since: Option<Instant>,
     pub asked_again: bool,
@@ -423,6 +425,7 @@ impl App {
             start_failed: false,
             typed: None,
             status_at: None,
+            armed_at: None,
             waiting_since: None,
             asked_again: false,
             status: Response::status(State::Idle, 0.0),
@@ -639,13 +642,26 @@ impl App {
     /// Accessibility also lets the tap hear keys, so Input Monitoring is asked only
     /// when the tap still heard nothing in a status taken after a key was typed
     /// here (the tap sees this terminal's keys too).
+    /// Only keys typed after the current tap was armed count, as a new tap starts
+    /// deaf. ponytail: Secure Keyboard Entry hides this terminal's keys from every
+    /// tap, so there a working tap reads as blind and costs one extra ask.
     pub fn tap_blind(&self) -> bool {
+        let settle = Duration::from_millis(300); // a re-arm is asynchronous
         self.permissions.as_ref().is_some_and(|p| {
             p.accessibility && !p.input_monitoring && p.keyboard_events == Some(false)
-        }) && self
-            .typed
-            .zip(self.status_at)
-            .is_some_and(|(typed, status)| status >= typed + Duration::from_millis(300))
+        }) && matches!(
+            (self.armed_at, self.typed, self.status_at),
+            (Some(armed), Some(typed), Some(status)) if typed >= armed + settle && status >= typed + settle
+        )
+    }
+    /// A new xflowd, or event access just granted, means a new (deaf) tap.
+    pub fn take_permissions(&mut self, permissions: Option<Permissions>) {
+        let events = |p: &Option<Permissions>| p.as_ref().is_some_and(|p| p.events());
+        let now = Instant::now();
+        if !events(&self.permissions) && events(&permissions) {
+            self.armed_at = Some(now);
+        }
+        (self.permissions, self.status_at) = (permissions, Some(now));
     }
     /// The stale-row hint, once a step waited STALE_AFTER or the person asked again.
     pub fn stale_hint(&self) -> bool {
@@ -853,7 +869,7 @@ impl App {
         } else if self.restarting {
             "Restarting xflow…".into()
         } else if self.start_failed {
-            let retry = if self.modal.is_none() {
+            let retry = if self.retry_here() {
                 " Press Enter to try again."
             } else {
                 ""
@@ -862,6 +878,12 @@ impl App {
         } else {
             "Starting xflow…".into()
         }
+    }
+    /// Enter retries a failed start on screens where Enter has no better use.
+    fn retry_here(&self) -> bool {
+        self.start_failed
+            && !self.connected
+            && matches!(self.modal, None | Some(Modal::Setup(Step::Permissions)))
     }
     /// Lost (or never had) the helper: start it once per outage through launchd,
     /// unless an ask-again restart explains the first disconnect.
@@ -1050,8 +1072,7 @@ impl App {
             Tag::Permissions(grant) => {
                 let mut effects = vec![];
                 if response.permissions.is_some() {
-                    self.permissions = response.permissions.clone();
-                    self.status_at = Some(Instant::now());
+                    self.take_permissions(response.permissions.clone());
                 }
                 if grant == Some(Grant::Microphone) {
                     self.microphone = response.permissions.and_then(|p| p.microphone);
@@ -1119,8 +1140,7 @@ impl App {
             self.timings = Some(timings);
         }
         if response.permissions.is_some() {
-            self.permissions = response.permissions.clone();
-            self.status_at = Some(Instant::now());
+            self.take_permissions(response.permissions.clone());
         }
         if !response.level.is_finite() {
             response.level = 0.0;
@@ -1142,7 +1162,7 @@ impl App {
     }
     pub fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
         self.typed = Some(Instant::now());
-        if self.start_failed && self.modal.is_none() && key.code == KeyCode::Enter {
+        if self.retry_here() && key.code == KeyCode::Enter {
             self.start_failed = false;
             return vec![Effect::StartHelper];
         }

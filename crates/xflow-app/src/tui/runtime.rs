@@ -337,6 +337,10 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             if matches!(tag, Tag::Session) {
                 app.starts = app.starts.saturating_sub(1);
             }
+            // An ask-again's answer: any restart is over (or never happened).
+            if matches!(tag, Tag::Permissions(Some(_))) {
+                app.restarting = false;
+            }
             match result {
                 Ok(response) => effects = app.response(response, tag),
                 Err(_) if matches!(tag, Tag::Reload) => {
@@ -346,7 +350,7 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
                 }
                 Err(error) => {
                     if matches!(tag, Tag::Permissions(Some(_))) {
-                        app.asking = false;
+                        (app.asking, app.restarting) = (false, false);
                     }
                     app.toast = Some(options::plain(&format!("{error:#}")))
                 }
@@ -372,6 +376,7 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             app.connection = message;
             effects = if connected {
                 (app.downs, app.restarting, app.start_failed) = (0, false, false);
+                app.armed_at = Some(std::time::Instant::now());
                 app.refresh()
             } else {
                 app.disconnected()
@@ -599,8 +604,9 @@ fn open(url: &str) -> Result<()> {
     }
     Ok(())
 }
-/// `xflow daemon start` from this same binary: installs a missing LaunchAgent
-/// (or systemd unit) and starts xflowd; the subscription then connects by itself.
+/// `xflow daemon start` from this same binary: on macOS it installs a missing
+/// LaunchAgent, then starts xflowd (Linux: `systemctl --user start`, which needs
+/// `xflow service install`); the subscription then connects by itself.
 fn start_helper() -> Result<()> {
     let out = std::process::Command::new(std::env::current_exe()?)
         .args(["daemon", "start", "--quiet"])
@@ -781,16 +787,21 @@ mod tests {
         assert!(matches!(done.modal, Some(Modal::Setup(Step::Try))));
         // Fallback: Accessibility on, yet a status taken after a key was typed here
         // shows a tap that heard nothing: then Input Monitoring is asked.
+        let ago = |s| Instant::now().checked_sub(Duration::from_secs(s));
         let mut blind = reinstall(false, true);
-        (blind.microphone, blind.typed) = (
-            Some(true),
-            Instant::now().checked_sub(Duration::from_secs(1)),
-        );
+        (blind.microphone, blind.armed_at, blind.typed) = (Some(true), ago(2), ago(1));
         blind.status_at = Some(Instant::now());
         assert_eq!(
             asks(&blind.permissions_changed(), Grant::InputMonitoring),
             (true, true)
         );
+        // Accessibility switched on (with the mouse) after keys typed earlier: the
+        // new tap is merely deaf so far, which is not blindness.
+        let mut fresh = reinstall(false, false);
+        (fresh.microphone, fresh.typed) = (Some(true), ago(1));
+        fresh.event(status(false, true, None));
+        assert!(!fresh.tap_blind());
+        assert!(fresh.permissions_changed().is_empty());
         // Microphone off: only its step shows, at its pane.
         let mut off = reinstall(true, true);
         off.permissions_changed();
@@ -845,7 +856,6 @@ mod tests {
         ));
         assert!(matches!(app.modal, Some(Modal::Setup(Step::Permissions))));
         assert!(app.stale_hint(), "after asking again");
-        app.typed = None;
         // Accessibility on: Input Monitoring is skipped, the microphone is next.
         // An undecided microphone gets the system prompt, not a pane.
         let effects = app.response(status(false, true, None), Tag::Permissions(None));
@@ -953,6 +963,7 @@ mod tests {
         assert!(app.permission_rows()[1].0.ends_with("Microphone is on"));
         assert!(!app.watching());
         // The fallback row appears once the tap proved blind with Accessibility on.
+        app.armed_at = Instant::now().checked_sub(Duration::from_secs(2));
         app.typed = Instant::now().checked_sub(Duration::from_secs(1));
         app.status_at = Some(Instant::now());
         assert!(app

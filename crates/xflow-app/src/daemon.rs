@@ -680,6 +680,16 @@ impl Engine {
         ) {
             if let Some(probe) = self.permission_probe {
                 let permissions = probe();
+                // Input Monitoring is the fallback for a tap Accessibility didn't make
+                // hear keys: once it arrives, that tap must be replaced too.
+                if permissions.input_monitoring
+                    && !self
+                        .permissions
+                        .as_ref()
+                        .is_some_and(|p| p.input_monitoring)
+                {
+                    self.hotkeys_blind = true;
+                }
                 self.rearm(permissions.events(), completion);
                 self.permissions = Some(permissions);
             }
@@ -2346,7 +2356,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[tokio::test]
-    async fn a_tap_made_without_input_monitoring_is_rearmed_once_it_is_granted() {
+    async fn granting_input_monitoring_rearms_a_tap_blind_despite_accessibility() {
         static GRANTED: AtomicBool = AtomicBool::new(false);
         static ASKED: AtomicUsize = AtomicUsize::new(0);
         let (mut engine, tx, rx, _, _) = fixture(
@@ -2356,14 +2366,17 @@ mod tests {
         );
         let (_keys, key_events) = mpsc::channel(4);
         engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
-        engine.hotkeys_blind = true;
-        // Accessibility would cover the tap too; this is the Input Monitoring fallback.
-        engine.permission_probe = Some(|| Permissions {
-            accessibility: false,
+        // Started with Accessibility on, so the tap wasn't marked blind; it heard
+        // nothing anyway, and Input Monitoring is the fallback being granted.
+        let probe: fn() -> Permissions = || Permissions {
+            accessibility: true,
             input_monitoring: GRANTED.load(Ordering::SeqCst),
             keyboard_events: None,
             microphone: None,
-        });
+        };
+        engine.hotkeys_blind = false;
+        engine.permissions = Some(probe());
+        engine.permission_probe = Some(probe);
         engine.permission_request = Some(|grant| {
             assert_eq!(grant, Grant::InputMonitoring);
             ASKED.fetch_add(1, Ordering::SeqCst);
