@@ -15,6 +15,7 @@ use xflow_core::{
     ipc::{Delivery, HistoryEntry, Request, Response, Stats, Timings},
     CleanupMode, Mode, State,
 };
+use xflow_providers::KeySource;
 use zeroize::Zeroizing;
 
 pub const PAGE_SIZE: usize = 30;
@@ -135,6 +136,7 @@ pub fn fuzzy(query: &str, text: &str) -> bool {
 #[derive(Clone, Debug)]
 pub enum Tag {
     Ordinary,
+    Session,
     Done(&'static str),
     Last,
     History(u64),
@@ -306,6 +308,10 @@ pub struct App {
     pub saving: bool,
     /// The daemon was busy when we asked it to reload; ask again once it's idle.
     pub reload_pending: bool,
+    /// TUI starts awaiting their reply; one may still begin a recording.
+    pub starts: usize,
+    /// A recording a TUI start began; cancel it on exit.
+    pub session_pending: bool,
     pub connected: bool,
     pub connection: String,
     pub status: Response,
@@ -327,6 +333,7 @@ pub struct App {
     pub missing_cleanup_key: bool,
     /// The keychain didn't answer, e.g. its Always Allow prompt is still open.
     pub key_locked: bool,
+    pub cleanup_key_locked: bool,
     pub advanced: bool,
     pub setup: Option<Step>,
     pub setup_offered: bool,
@@ -373,6 +380,7 @@ impl App {
             missing_key: false,
             missing_cleanup_key: false,
             key_locked: false,
+            cleanup_key_locked: false,
             advanced: false,
             setup: None,
             setup_offered: false,
@@ -381,6 +389,8 @@ impl App {
             toast: None,
             quit: false,
             reload_pending: false,
+            starts: 0,
+            session_pending: false,
             colors,
             theme,
             scroll: 0,
@@ -427,14 +437,15 @@ impl App {
     pub fn selected(&self) -> usize {
         self.selected[self.page.index()]
     }
-    pub fn key_status(&mut self, config: &Config, missing: (bool, bool, bool)) {
-        self.key_locked = missing.2;
+    pub fn key_status(&mut self, config: &Config, keys: (KeySource, KeySource)) {
         // An older lookup must not replace onboarding for a newly edited route.
         if config.stt == self.config.stt {
-            self.missing_key = missing.0;
+            self.missing_key = keys.0 == KeySource::Missing;
+            self.key_locked = keys.0 == KeySource::Locked;
         }
         if config.cleanup == self.config.cleanup {
-            self.missing_cleanup_key = missing.1;
+            self.missing_cleanup_key = keys.1 == KeySource::Missing;
+            self.cleanup_key_locked = keys.1 == KeySource::Locked;
         }
     }
     /// Leading "+ Add" rows on editable list pages.
@@ -565,6 +576,8 @@ impl App {
                 }
                 "action.cleanup_key" => if self.config.cleanup.provider.is_none() {
                     "Choose a service first"
+                } else if self.cleanup_key_locked {
+                    "Waiting for Keychain — click Always Allow"
                 } else if self.missing_cleanup_key {
                     "Missing — add one"
                 } else {
@@ -637,6 +650,10 @@ impl App {
         }
     }
     pub fn response(&mut self, response: Response, tag: Tag) -> Vec<Effect> {
+        // Only the start that began capture owns it; another start's refusal doesn't.
+        if matches!(tag, Tag::Session) && response.ok && response.state == State::Listening {
+            self.session_pending = true;
+        }
         if let Tag::History(generation) = tag {
             if generation != self.generation {
                 return vec![];
@@ -655,7 +672,10 @@ impl App {
                 .message
                 .unwrap_or_else(|| "xflow couldn't do that".into());
             self.toast = Some(match tag {
-                Tag::Reload if message.contains("idle daemon") => {
+                Tag::Reload
+                    if message.contains("idle daemon")
+                        || message.starts_with(crate::daemon::MIC_WAITING) =>
+                {
                     self.reload_pending = true;
                     "Saved — applies when this dictation finishes.".into()
                 }
@@ -719,7 +739,7 @@ impl App {
                     self.transcript = response.text.unwrap_or_default();
                 }
             }
-            Tag::Ordinary => {
+            Tag::Ordinary | Tag::Session => {
                 // The subscription owns session state; a delayed command reply
                 // must never roll a newer state event back to an older state.
                 if let Some(text) = response.text {
@@ -733,6 +753,11 @@ impl App {
         vec![]
     }
     pub fn event(&mut self, mut response: Response) {
+        if !matches!(response.state, State::Listening | State::Processing)
+            && matches!(self.status.state, State::Listening | State::Processing)
+        {
+            self.session_pending = false;
+        }
         if let Some(text) = response.text.take() {
             self.transcript = text;
             self.scroll = 0;

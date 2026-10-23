@@ -42,17 +42,18 @@ pub const KEYCHAIN_WAITING: &str =
 /// Runs one credential-store call off the async thread. The lock is held until the
 /// call returns, so a pending OS prompt is never stacked by a second read.
 async fn keychain<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> Result<T> {
-    tokio::time::timeout(KEYCHAIN_WAIT, async {
-        let lock = KEYRING_LOCK.lock().await;
-        tokio::task::spawn_blocking(move || {
-            let _lock = lock;
-            call()
-        })
-        .await
-        .map_err(|_| anyhow!("credential storage task failed"))
+    let lock = KEYRING_LOCK.lock().await;
+    tokio::task::spawn_blocking(move || {
+        let _lock = lock;
+        call()
     })
     .await
-    .map_err(|_| anyhow!(KEYCHAIN_WAITING))?
+    .map_err(|_| anyhow!("credential storage task failed"))
+}
+async fn keychain_read<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tokio::time::timeout(KEYCHAIN_WAIT, keychain(call))
+        .await
+        .map_err(|_| anyhow!(KEYCHAIN_WAITING))?
 }
 
 pub fn build_transformer(
@@ -224,7 +225,7 @@ impl Credentials {
             bail!("API key unavailable in the configured environment variable");
         }
         let provider = self.provider.clone();
-        let value = keychain(move || {
+        let value = keychain_read(move || {
             let entry = keyring::Entry::new(KEYRING_SERVICE, &provider).map_err(|_| anyhow!("OS credential storage is unavailable"))?;
             entry.get_password().map(Zeroizing::new).map_err(|e| match e {
                 keyring::Error::NoEntry => anyhow!("API key unavailable; set the provider environment variable or run `xflow key set {provider}`"),
@@ -324,7 +325,7 @@ pub async fn key_status(provider: &str, api_key_env: Option<&str>) -> KeySource 
         return KeySource::NotRequired;
     }
     let provider = provider.to_owned();
-    keychain(move || {
+    keychain_read(move || {
         match keyring::Entry::new(KEYRING_SERVICE, &provider)
             .and_then(|e| e.get_password())
             .map(Zeroizing::new)
@@ -903,6 +904,7 @@ mod tests {
     async fn pending_keychain_prompt_is_reported_not_a_provider_timeout() {
         // Held lock = another read still waiting on the macOS Always Allow prompt.
         let lock = KEYRING_LOCK.lock().await;
+        let write = tokio::spawn(keychain(|| ()));
         let cfg = SttConfig {
             api_key_env: Some("XFLOW_MISSING_TIMEOUT_KEY".into()),
             timeout_secs: 10,
@@ -918,7 +920,12 @@ mod tests {
             key_status("groq", Some("XFLOW_MISSING_TIMEOUT_KEY")).await,
             KeySource::Locked
         );
+        assert!(
+            !write.is_finished(),
+            "interactive writes must wait for approval"
+        );
         drop(lock);
+        write.await.unwrap().unwrap();
     }
     #[tokio::test]
     async fn groq_multipart_contract_auth_and_language() {

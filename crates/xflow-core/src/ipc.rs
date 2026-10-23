@@ -94,6 +94,12 @@ pub enum Request {
     Reload,
     Subscribe,
     Shutdown,
+    /// Daemon-internal, never on the wire: the socket could not deliver the start
+    /// reply for `session`, so cancel that session (and no later one).
+    #[serde(skip)]
+    Abandon {
+        session: u64,
+    },
 }
 impl Request {
     pub fn start() -> Self {
@@ -240,6 +246,9 @@ pub struct Response {
     /// Final event of a session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timings: Option<Timings>,
+    /// Daemon-internal, never on the wire: the session a successful start began.
+    #[serde(skip)]
+    pub session: Option<u64>,
 }
 impl Response {
     pub fn status(state: State, level: f32) -> Self {
