@@ -3505,6 +3505,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "coreaudio-rs",
  "cpal",
  "serde_json",
  "tempfile",
