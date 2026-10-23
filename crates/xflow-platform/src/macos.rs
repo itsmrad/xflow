@@ -17,6 +17,7 @@ type Ref = *const c_void;
 #[link(name = "IOKit", kind = "framework")]
 extern "C" {
     fn IOHIDCheckAccess(request: u32) -> u32;
+    fn IOHIDRequestAccess(request: u32) -> bool;
 }
 #[repr(C)]
 #[derive(Default)]
@@ -44,6 +45,16 @@ extern "C" {
     fn CFDataGetBytePtr(data: Ref) -> *const u8;
     static kCFBooleanTrue: Ref;
     fn CFDictionaryGetValue(dict: Ref, key: Ref) -> Ref;
+    fn CFDictionaryCreate(
+        allocator: Ref,
+        keys: *const Ref,
+        values: *const Ref,
+        count: isize,
+        key_callbacks: Ref,
+        value_callbacks: Ref,
+    ) -> Ref;
+    static kCFTypeDictionaryKeyCallBacks: u8;
+    static kCFTypeDictionaryValueCallBacks: u8;
     fn CFBooleanGetTypeID() -> usize;
     fn CFBooleanGetValue(value: Ref) -> bool;
     fn CFNumberGetTypeID() -> usize;
@@ -56,6 +67,8 @@ extern "C" {
     fn GetProcessForPID(pid: i32, psn: *mut ProcessSerialNumber) -> i32;
     fn ProcessInformationCopyDictionary(psn: *const ProcessSerialNumber, mask: u32) -> Ref;
     fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(options: Ref) -> bool;
+    static kAXTrustedCheckOptionPrompt: Ref;
     fn AXUIElementCreateApplication(pid: i32) -> Ref;
     fn AXUIElementCreateSystemWide() -> Ref;
     fn AXUIElementGetPid(element: Ref, pid: *mut i32) -> i32;
@@ -699,12 +712,43 @@ pub fn permissions() -> xflow_core::ipc::Permissions {
         // kIOHIDRequestTypeListenEvent = 1; kIOHIDAccessTypeGranted = 0.
         input_monitoring: unsafe { IOHIDCheckAccess(1) == 0 && CGPreflightListenEventAccess() },
         keyboard_events: None,
+        microphone: None,
     }
 }
 
-/// Read AVFoundation authorization without opening an input device or prompting.
-/// Load it only for doctor; the daemon's idle image stays free of AVFoundation.
-pub fn microphone_permission() -> &'static str {
+/// Ask macOS for Input Monitoring or Accessibility: this lists the executable in
+/// System Settings and shows the system prompt while undecided. Call off the runtime.
+pub fn request_access(grant: xflow_core::ipc::Grant) {
+    use xflow_core::ipc::Grant;
+    match grant {
+        // kIOHIDRequestTypeListenEvent = 1.
+        Grant::InputMonitoring => unsafe {
+            IOHIDRequestAccess(1);
+        },
+        Grant::Accessibility => unsafe {
+            let options = CFDictionaryCreate(
+                ptr::null(),
+                &kAXTrustedCheckOptionPrompt,
+                &kCFBooleanTrue,
+                1,
+                &kCFTypeDictionaryKeyCallBacks as *const u8 as Ref,
+                &kCFTypeDictionaryValueCallBacks as *const u8 as Ref,
+            );
+            AXIsProcessTrustedWithOptions(options);
+            if !options.is_null() {
+                CFRelease(options);
+            }
+        },
+        Grant::Microphone => {
+            microphone_permission(true);
+        }
+    }
+}
+
+/// AVFoundation microphone authorization; `request` asks while undecided and waits
+/// up to a minute for the answer. AVFoundation is heavy: xflowd runs this in a
+/// short-lived child (`xflowd --microphone`) so its idle image stays free of it.
+pub fn microphone_permission(request: bool) -> &'static str {
     #[link(name = "objc")]
     extern "C" {
         fn objc_getClass(name: *const c_char) -> Ref;
@@ -713,31 +757,62 @@ pub fn microphone_permission() -> &'static str {
     }
     extern "C" {
         fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
-        fn dlclose(handle: *mut c_void) -> i32;
+        static _NSConcreteGlobalBlock: u8;
     }
+    // A global block literal (Clang block ABI) for the completion handler; the
+    // answer is read back through authorizationStatus instead.
+    #[repr(C)]
+    struct Block {
+        isa: *const u8,
+        flags: i32,
+        reserved: i32,
+        invoke: unsafe extern "C" fn(*const Block, bool),
+        descriptor: *const [usize; 2],
+    }
+    unsafe extern "C" fn answered(_block: *const Block, _granted: bool) {}
+    static DESCRIPTOR: [usize; 2] = [0, std::mem::size_of::<Block>()];
     unsafe {
+        // Never unloaded: AVFoundation cannot be safely dlclosed once its classes load.
         let library = dlopen(
             c"/System/Library/Frameworks/AVFoundation.framework/AVFoundation".as_ptr(),
             1,
         );
-        if library.is_null() {
-            return "unavailable";
-        }
         let class = objc_getClass(c"AVCaptureDevice".as_ptr());
-        if class.is_null() {
-            dlclose(library);
+        if library.is_null() || class.is_null() {
             return "unavailable";
         }
-        let send: unsafe extern "C" fn(Ref, Ref, Ref) -> isize =
+        let status: unsafe extern "C" fn(Ref, Ref, Ref) -> isize =
             std::mem::transmute(objc_msgSend as *const ());
         let audio = Owned::string("soun");
-        let status = send(
-            class,
-            sel_registerName(c"authorizationStatusForMediaType:".as_ptr()),
-            audio.0,
-        );
-        dlclose(library);
-        match status {
+        let read = || {
+            status(
+                class,
+                sel_registerName(c"authorizationStatusForMediaType:".as_ptr()),
+                audio.0,
+            )
+        };
+        if request && read() == 0 {
+            let ask: unsafe extern "C" fn(Ref, Ref, Ref, *const Block) =
+                std::mem::transmute(objc_msgSend as *const ());
+            let block: &'static Block = Box::leak(Box::new(Block {
+                isa: &_NSConcreteGlobalBlock,
+                flags: 1 << 28, // BLOCK_IS_GLOBAL
+                reserved: 0,
+                invoke: answered,
+                descriptor: &DESCRIPTOR,
+            }));
+            ask(
+                class,
+                sel_registerName(c"requestAccessForMediaType:completionHandler:".as_ptr()),
+                audio.0,
+                block,
+            );
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while read() == 0 && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
+        match read() {
             0 => "not determined",
             1 => "restricted",
             2 => "denied",

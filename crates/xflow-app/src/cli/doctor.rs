@@ -296,6 +296,7 @@ mod tests {
                 accessibility: granted,
                 input_monitoring: granted,
                 keyboard_events: Some(false),
+                microphone: None,
             }));
             assert_eq!(checks.iter().all(|c| c.ok || !c.required), granted);
             let input = checks

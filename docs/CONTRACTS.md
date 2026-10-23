@@ -55,12 +55,14 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | `stats` | — | `stats` (sessions, words, audio_ms, today, streak, wpm, latency p50/p95) |
 | `reload` | — | idle only; stage services before swapping config; on error keep the running config and return the error; SIGHUP uses this path |
 | `subscribe` | — | snapshot, then every state/level event; the final event of a successful session carries `text`, `injection`, `entry`, `timings`. A learned-words event carries only `message` and leaves the state unchanged |
+| `allow` | `grant` ("input_monitoring" / "accessibility" / "microphone") | macOS: xflowd asks the system, which lists xflowd in System Settings and prompts while undecided; replies with status. A microphone reply adds `permissions.microphone` (null while undecided), read by a short-lived `xflowd --microphone` child so AVFoundation never loads in the daemon |
 | `shutdown` | — | unchanged |
 
 `HistoryEntry` adds model, raw_text, app_id, language, duration_ms, latency_ms, mode. `Timings` carries
 hotkey_ms, open_ms, audio_ms, stt_ms, cleanup_ms, inject_ms, total_ms. All new response fields are
 optional on the wire. macOS permission checks run in xflowd and refresh on explicit
-status/subscribe/start requests; keyboard_events is null with no tap, false before
+status/subscribe/start/allow requests; a tap created before Input Monitoring was granted
+is recreated on the first such request after the grant. keyboard_events is null with no tap, false before
 any keyboard input, and true once the tap has received an event (not proof of a
 specific Fn gesture). No permission polling runs at idle. The integrated daemon implements these requests; see [daemon behavior](DAEMON_V1.md) for retention, cancellation, delivery and timing semantics.
 

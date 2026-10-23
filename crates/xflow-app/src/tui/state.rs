@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{collections::VecDeque, path::PathBuf};
 use xflow_core::{
     config::{Config, Replacement, Snippet, Style},
-    ipc::{Delivery, HistoryEntry, Request, Response, Stats, Timings},
+    ipc::{Delivery, Grant, HistoryEntry, Permissions, Request, Response, Stats, Timings},
     CleanupMode, Mode, State,
 };
 use xflow_providers::KeySource;
@@ -145,6 +145,8 @@ pub enum Tag {
     Stats,
     Activity,
     Reload,
+    /// A permission check; Some(grant) answers `Request::Allow { grant }`.
+    Permissions(Option<Grant>),
 }
 pub enum Effect {
     Request(Request, Tag),
@@ -158,6 +160,8 @@ pub enum Effect {
     MicTimeout(std::time::Duration),
     Devices,
     Doctor,
+    /// Open a URL, e.g. a System Settings pane.
+    Open(&'static str),
 }
 /// The guided first-run flow. Every step is a choice except pasting the key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,6 +172,8 @@ pub enum Step {
     Microphone,
     MicCheck,
     Shortcut,
+    /// macOS grants, one at a time; moves on by itself once each switch is on.
+    Permissions,
     Try,
     Done,
 }
@@ -337,6 +343,17 @@ pub struct App {
     pub advanced: bool,
     pub setup: Option<Step>,
     pub setup_offered: bool,
+    /// xflowd's own grants, from its status.
+    pub permissions: Option<Permissions>,
+    /// Only known after asking xflowd (`Allow { grant: Microphone }`); None while undecided.
+    pub microphone: Option<bool>,
+    /// A microphone ask is in flight.
+    pub asking: bool,
+    /// Open the Microphone pane if the pending ask finds it switched off.
+    pub mic_pane: bool,
+    /// The grant the permissions step is waiting for.
+    pub grant: Option<Grant>,
+    pub permissions_offered: bool,
     pub diagnostics: Vec<String>,
     pub modal: Option<Modal>,
     pub toast: Option<String>,
@@ -384,6 +401,12 @@ impl App {
             advanced: false,
             setup: None,
             setup_offered: false,
+            permissions: None,
+            microphone: None,
+            asking: false,
+            mic_pane: false,
+            grant: None,
+            permissions_offered: false,
             diagnostics: vec![],
             modal: None,
             toast: None,
@@ -537,12 +560,161 @@ impl App {
                 };
                 [helper, key]
                     .into_iter()
-                    .chain(self.diagnostics.iter().cloned())
                     .map(|s| (s, String::new()))
+                    .chain(
+                        self.permission_rows()
+                            .into_iter()
+                            .map(|(row, more, _)| (row, more)),
+                    )
+                    .chain(self.diagnostics.iter().map(|s| (s.clone(), String::new())))
                     .collect()
             }
             _ => vec![],
         }
+    }
+    /// Grants xflowd still lacks, in onboarding order. The microphone counts until
+    /// xflowd says it's allowed: its state is only known after asking.
+    pub fn missing(&self) -> Vec<Grant> {
+        let Some(p) = &self.permissions else {
+            return vec![];
+        };
+        [
+            (Grant::InputMonitoring, p.input_monitoring),
+            (Grant::Accessibility, p.accessibility),
+            (Grant::Microphone, self.microphone == Some(true)),
+        ]
+        .into_iter()
+        .filter_map(|(grant, on)| (!on).then_some(grant))
+        .collect()
+    }
+    /// Check-up rows for xflowd's macOS grants: (row, details, grant Enter fixes).
+    /// Rows stay short enough for the list pane; the details pane explains.
+    pub fn permission_rows(&self) -> Vec<(String, String, Option<Grant>)> {
+        use xflow_core::ipc::{STALE_ROWS, UNVERIFIED_SHORTCUT};
+        if !cfg!(target_os = "macos") {
+            return vec![];
+        }
+        let ok = options::glyph("✓", "+");
+        let Some(p) = &self.permissions else {
+            return vec![(
+                "! Can't check permissions yet".into(),
+                "Start or update xflow's background helper (xflowd), then press r to refresh."
+                    .into(),
+                None,
+            )];
+        };
+        let mut rows: Vec<_> = [
+            (Grant::InputMonitoring, "Shortcut access", "Input Monitoring", "hear your shortcut key in every app", Some(p.input_monitoring)),
+            (Grant::Accessibility, "Typing access", "Accessibility", "type your words where your cursor is", Some(p.accessibility)),
+            (Grant::Microphone, "Microphone", "Microphone", "hear you", self.microphone),
+        ]
+        .into_iter()
+        .map(|(grant, label, pane, why, on)| {
+            let about = format!("{label} ({pane}) lets xflow {why}.");
+            match on {
+                Some(true) => (format!("{ok} {label} is on"), format!("{about}\n\nIt's on."), None),
+                None => (
+                    format!("• {label} — Enter to check"),
+                    format!("{about}\n\nPress Enter to check. If your Mac asks, click Allow. If it's off, System Settings opens at {pane}: find xflowd in the list and switch it on."),
+                    Some(grant),
+                ),
+                Some(false) => (
+                    format!("! {label} off — Enter to fix"),
+                    format!("{about}\n\nPress Enter: your Mac adds xflowd to the list and System Settings opens at {pane}. Find xflowd in the list and switch it on — you never need to add it yourself.\n\n{STALE_ROWS}"),
+                    Some(grant),
+                ),
+            }
+        })
+        .collect();
+        match p.keyboard_events {
+            Some(true) => rows.push((
+                format!("{ok} Your shortcut reaches xflow"),
+                String::new(),
+                None,
+            )),
+            Some(false) => rows.push((
+                "! Shortcut not heard yet — press it".into(),
+                UNVERIFIED_SHORTCUT.into(),
+                None,
+            )),
+            None => (),
+        }
+        rows
+    }
+    /// The grant behind a Check-up row (after the helper and key rows).
+    pub fn doctor_grant(&self, pos: usize) -> Option<Grant> {
+        let rows = self.permission_rows();
+        rows.get(pos.checked_sub(2)?)?.2
+    }
+    /// One step: xflowd asks macOS (which lists xflowd) and the exact pane opens.
+    pub fn fix(&mut self, grant: Grant) -> Vec<Effect> {
+        let mut effects = vec![Effect::Request(
+            Request::Allow { grant },
+            Tag::Permissions(Some(grant)),
+        )];
+        if grant != Grant::Microphone || self.microphone == Some(false) {
+            effects.push(Effect::Open(grant.pane()));
+        } else {
+            // Undecided: the system prompt is the whole step; open the pane only if off.
+            self.asking = true;
+            self.mic_pane = true;
+        }
+        effects
+    }
+    /// Ask for the next missing grant; finish with the shortcut test.
+    fn permissions_step(&mut self) -> Vec<Effect> {
+        match self.missing().first().copied() {
+            None => {
+                self.grant = None;
+                // Offered on its own to an install that still lacks a key: set that up next.
+                let setup = self.permissions_offered && self.needs_setup();
+                self.open_setup(if setup { Step::Welcome } else { Step::Try })
+            }
+            Some(grant) if self.grant != Some(grant) => {
+                self.grant = Some(grant);
+                self.fix(grant)
+            }
+            Some(_) => vec![],
+        }
+    }
+    /// After any permission news: advance the open step, or offer it once when
+    /// the TUI opens on a configured install that lacks a grant.
+    pub fn permissions_changed(&mut self) -> Vec<Effect> {
+        if matches!(self.modal, Some(Modal::Setup(Step::Permissions))) {
+            return self.permissions_step();
+        }
+        let lacking = self.missing().iter().any(|g| *g != Grant::Microphone);
+        if !lacking || self.permissions_offered || self.modal.is_some() || self.disk.is_none() {
+            return vec![];
+        }
+        self.permissions_offered = true;
+        self.open_setup(Step::Permissions)
+    }
+    /// Re-check on a short timer only while a screen waits for a switch.
+    pub fn watching(&self) -> bool {
+        self.connected
+            && match &self.modal {
+                Some(Modal::Setup(Step::Permissions)) => true,
+                None => {
+                    self.page == Page::Doctor
+                        && self.missing().iter().any(|g| *g != Grant::Microphone)
+                }
+                _ => false,
+            }
+    }
+    pub fn poll(&mut self) -> Vec<Effect> {
+        let grant = Grant::Microphone;
+        if self.grant == Some(grant) && matches!(self.modal, Some(Modal::Setup(Step::Permissions)))
+        {
+            if std::mem::replace(&mut self.asking, true) {
+                return vec![];
+            }
+            return vec![Effect::Request(
+                Request::Allow { grant },
+                Tag::Permissions(Some(grant)),
+            )];
+        }
+        vec![Effect::Request(Request::Status, Tag::Permissions(None))]
     }
     /// (key, display value) for every visible settings row.
     pub fn settings(&self) -> Vec<(String, String)> {
@@ -641,7 +813,10 @@ impl App {
             Page::Settings if !self.dirty && !self.saving => vec![Effect::Load(self.path.clone())],
             Page::Settings => vec![Effect::KeyStatus(self.config.clone())],
             Page::Overlay => vec![Effect::Overlay],
-            Page::Doctor => vec![Effect::Doctor],
+            Page::Doctor => vec![
+                Effect::Doctor,
+                Effect::Request(Request::Status, Tag::Permissions(None)),
+            ],
             Page::Home => vec![
                 Effect::Request(Request::Status, Tag::Ordinary),
                 Effect::Request(Request::Last, Tag::Last),
@@ -653,6 +828,9 @@ impl App {
         // Only the start that began capture owns it; another start's refusal doesn't.
         if matches!(tag, Tag::Session) && response.ok && response.state == State::Listening {
             self.session_pending = true;
+        }
+        if matches!(tag, Tag::Permissions(Some(Grant::Microphone))) {
+            self.asking = false;
         }
         if let Tag::History(generation) = tag {
             if generation != self.generation {
@@ -712,6 +890,23 @@ impl App {
                 }
             }
             Tag::Mutation => return self.refresh(),
+            Tag::Permissions(grant) => {
+                let mut effects = vec![];
+                if response.permissions.is_some() {
+                    self.permissions = response.permissions.clone();
+                }
+                if grant == Some(Grant::Microphone) {
+                    self.microphone = response.permissions.and_then(|p| p.microphone);
+                    if self.microphone.is_some()
+                        && std::mem::take(&mut self.mic_pane)
+                        && self.microphone == Some(false)
+                    {
+                        effects.push(Effect::Open(Grant::Microphone.pane()));
+                    }
+                }
+                effects.extend(self.permissions_changed());
+                return effects;
+            }
             Tag::Reload => {
                 if std::mem::take(&mut self.reload_pending) {
                     return vec![Effect::Request(Request::Reload, Tag::Reload)];
@@ -764,6 +959,9 @@ impl App {
         }
         if let Some(timings) = response.timings.take() {
             self.timings = Some(timings);
+        }
+        if response.permissions.is_some() {
+            self.permissions = response.permissions.clone();
         }
         if !response.level.is_finite() {
             response.level = 0.0;
@@ -1247,6 +1445,11 @@ impl App {
                 }
             }
             Page::Settings => return self.open_setting(pos),
+            Page::Doctor => {
+                if let Some(grant) = self.doctor_grant(pos) {
+                    return self.fix(grant);
+                }
+            }
             Page::Overlay => {
                 if let Some(setting) = self.overlay.get(pos).cloned() {
                     let choices = overlay_choices(&setting);
@@ -1359,6 +1562,11 @@ impl App {
             Step::Welcome | Step::MicCheck | Step::Try | Step::Done => {
                 self.modal = Some(Modal::Setup(step))
             }
+            Step::Permissions => {
+                self.modal = Some(Modal::Setup(step));
+                self.grant = None;
+                return self.permissions_step();
+            }
             Step::Provider => {
                 let choices = integrations::catalog(false)
                     .into_iter()
@@ -1411,6 +1619,8 @@ impl App {
                 };
             }
             (Step::Welcome, KeyCode::Enter) => return self.open_setup(Step::Provider),
+            // Ask again: after removing old xflowd rows, macOS lists this one anew.
+            (Step::Permissions, KeyCode::Enter) => return self.open_setup(step),
             (Step::MicCheck, KeyCode::Enter) => {
                 let mut effects = if self.active() {
                     vec![cancel()]
@@ -1827,7 +2037,7 @@ impl App {
             }
             EditTarget::Setup(Step::Shortcut) => {
                 self.set_choice("hotkey.key", value)?;
-                return Ok(self.open_setup(Step::Try));
+                return Ok(self.open_setup(Step::Permissions));
             }
             EditTarget::Setup(_) => return Ok(vec![]),
             EditTarget::Setting(key) => {

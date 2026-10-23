@@ -75,9 +75,28 @@ fn program(plist: &str) -> Option<&str> {
 /// TCC and Keychain grants follow the code signature; a stable identity keeps them
 /// across rebuilds, while the linker's ad-hoc signature changes with every build.
 const IDENTITY: &str = "xflow-dev";
+/// The installer already signs xflowd into a root-owned directory, where re-signing
+/// would fail; keep a signature that is ours unless an xflow-dev upgrade is possible.
+fn signed_already(details: &str, named: bool) -> bool {
+    details.lines().any(|l| l == "Identifier=com.xflow.xflowd")
+        && (!named
+            || details
+                .lines()
+                .any(|l| l == format!("Authority={IDENTITY}")))
+}
 fn sign(binary: &Path) -> &'static str {
     let named = tool("/usr/bin/security", &["find-identity", "-p", "codesigning"])
         .is_ok_and(|ids| ids.contains(&format!("\"{IDENTITY}\"")));
+    // codesign -d prints its details on stderr.
+    let details = Command::new("/usr/bin/codesign")
+        .args(["-dvv"])
+        .arg(binary)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+        .unwrap_or_default();
+    if signed_already(&details, named) {
+        return "already signed as com.xflow.xflowd";
+    }
     let identity = if named { IDENTITY } else { "-" };
     let signed = Command::new("/usr/bin/codesign")
         .args([
@@ -95,6 +114,7 @@ fn sign(binary: &Path) -> &'static str {
     match (signed, named) {
         (true, true) => "signed with xflow-dev",
         (true, false) => "ad-hoc signed; grants reset on rebuild unless an \"xflow-dev\" code-signing certificate exists (see README)",
+        _ if signed_already(&details, false) => "kept its existing com.xflow.xflowd signature",
         _ => "could not sign xflowd; permissions may need granting again",
     }
 }
@@ -277,5 +297,21 @@ mod tests {
         let plist = plist(Path::new("/bin/sh"), Path::new("/tmp/log")).unwrap();
         assert_eq!(program(&plist), Some("/bin/sh"));
         assert_eq!(program("<plist/>"), None);
+    }
+    #[test]
+    fn installer_signature_is_kept_unless_xflow_dev_can_replace_it() {
+        let adhoc =
+            "Executable=/usr/local/bin/xflowd\nIdentifier=com.xflow.xflowd\nSignature=adhoc\n";
+        assert!(signed_already(adhoc, false));
+        assert!(!signed_already(adhoc, true));
+        assert!(signed_already(
+            "Identifier=com.xflow.xflowd\nAuthority=xflow-dev\n",
+            true
+        ));
+        // A fresh cargo build carries the linker's per-build identifier.
+        assert!(!signed_already(
+            "Identifier=xflowd-5b3e0c\nSignature=adhoc\n",
+            false
+        ));
     }
 }
