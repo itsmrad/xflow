@@ -98,9 +98,9 @@ impl Owned {
         let mut settable = false;
         unsafe { AXUIElementIsAttributeSettable(self.0, name.0, &mut settable) == 0 && settable }
     }
-    fn enable(&self, name: &str) -> bool {
+    fn enable(&self, name: &str) {
         let name = Self::string(name);
-        unsafe { AXUIElementSetAttributeValue(self.0, name.0, kCFBooleanTrue) == 0 }
+        unsafe { AXUIElementSetAttributeValue(self.0, name.0, kCFBooleanTrue) };
     }
     fn flag(&self, name: &str) -> Option<bool> {
         let value = self.attribute(name)?;
@@ -214,12 +214,18 @@ fn focus() -> Focus {
     let role_of = |e: &Option<Owned>| e.as_ref().and_then(|e| e.text("AXRole"));
     let mut element = app.attribute("AXFocusedUIElement");
     let mut role = role_of(&element);
-    // Electron and Chromium build their AX tree only once an assistive client asks.
-    if role.as_deref().is_none_or(is_container) && app.enable("AXManualAccessibility") {
-        // Chromium builds the tree asynchronously after accepting the request.
-        std::thread::sleep(Duration::from_millis(100));
-        element = app.attribute("AXFocusedUIElement");
-        role = role_of(&element);
+    // Electron and Chromium build their AX tree only once an assistive client asks;
+    // Chrome builds it asynchronously even while reporting the attribute unsupported.
+    if role.as_deref().is_none_or(is_container) {
+        app.enable("AXManualAccessibility");
+        for _ in 0..6 {
+            std::thread::sleep(Duration::from_millis(50));
+            element = app.attribute("AXFocusedUIElement");
+            role = role_of(&element);
+            if !role.as_deref().is_none_or(is_container) {
+                break;
+            }
+        }
     }
     let window = element
         .as_ref()
@@ -318,39 +324,44 @@ fn decision(text: &str, method: InjectionMethod, target: &AppContext, current: &
         Decision::Paste
     }
 }
-/// What changes in a field when text lands in it.
-fn snapshot(field: &Owned) -> (Option<i64>, Option<String>) {
-    (field.number("AXNumberOfCharacters"), field.text("AXValue"))
+/// A field's character count, value and selected-text length (UTF-16 units).
+type Snapshot = (Option<i64>, Option<String>, i64);
+fn snapshot(field: &Owned) -> Snapshot {
+    let selected = field
+        .text("AXSelectedText")
+        .map_or(0, |s| s.encode_utf16().count() as i64);
+    (
+        field.number("AXNumberOfCharacters"),
+        field.text("AXValue"),
+        selected,
+    )
 }
-/// Restore only after the field contains the insertion, never on a timer alone (#53).
-fn landed(
-    field: &Owned,
-    before: &(Option<i64>, Option<String>),
-    text: &str,
-    delay: Duration,
-) -> bool {
-    if *before == (None, None) {
-        return false;
-    }
-    std::thread::sleep(delay);
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        let after = snapshot(field);
-        if after.1.as_ref().is_some_and(|s| {
-            s.matches(text).count() > before.1.as_deref().map_or(0, |s| s.matches(text).count())
-        }) || (before.1.is_none()
-            && before
-                .0
-                .zip(after.0)
-                .is_some_and(|(a, b)| b == a + text.encode_utf16().count() as i64))
-        {
-            return true;
+fn content_len(s: &Snapshot) -> Option<i64> {
+    s.1.as_deref()
+        .map(|v| v.encode_utf16().count() as i64)
+        .or(s.0)
+}
+/// The field shows the paste: one more occurrence of the text, or the selection
+/// replaced by it. Restore only on this receipt, never on a timer alone (#53).
+fn inserted(before: &Snapshot, after: &Snapshot, text: &str) -> bool {
+    let replaced = content_len(before)
+        .zip(content_len(after))
+        .is_some_and(|(b, a)| a == b - before.2 + text.encode_utf16().count() as i64);
+    match (&before.1, &after.1) {
+        (Some(b), Some(a)) => {
+            a.matches(text).count() > b.matches(text).count() || (replaced && a.contains(text))
         }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
+        (None, _) => replaced,
+        (Some(_), None) => false,
     }
+}
+/// After Cmd+V the delivery lock is held until the receipt or this bound, so no
+/// later clipboard write replaces text a slow app has yet to read.
+const PENDING_PASTE: Duration = Duration::from_secs(5);
+/// How long a reply waits for the receipt; keeps any accepted restore_delay_ms
+/// well inside the 10 s IPC request timeout.
+fn receipt_budget(restore_delay_ms: u32) -> Duration {
+    Duration::from_millis(u64::from(restore_delay_ms) + 2000).min(Duration::from_secs(4))
 }
 fn send_keys(text: &str, typed: bool) -> Result<()> {
     if !unsafe { CGPreflightPostEventAccess() } {
@@ -480,7 +491,8 @@ fn paste_keycode() -> u16 {
 
 pub struct MacDesktop {
     config: InjectionConfig,
-    delivery: tokio::sync::Mutex<()>,
+    /// Serializes clipboard writes, including a pending paste (see PENDING_PASTE).
+    delivery: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 impl MacDesktop {
     pub fn new(config: &InjectionConfig) -> Self {
@@ -490,8 +502,14 @@ impl MacDesktop {
         }
         Self {
             config: config.clone(),
-            delivery: tokio::sync::Mutex::new(()),
+            delivery: Default::default(),
         }
+    }
+    async fn write(&self, text: &str) -> Result<()> {
+        if text.len() > MAX_TEXT {
+            bail!("injection text exceeds 64 KiB");
+        }
+        super::desktop::copy_with("/usr/bin/pbcopy", &[], text).await
     }
 }
 #[async_trait]
@@ -524,16 +542,14 @@ impl Desktop for MacDesktop {
         .await?
     }
     async fn copy(&self, text: &str) -> Result<()> {
-        if text.len() > MAX_TEXT {
-            bail!("injection text exceeds 64 KiB");
-        }
-        super::desktop::copy_with("/usr/bin/pbcopy", &[], text).await
+        let _delivery = self.delivery.lock().await;
+        self.write(text).await
     }
     async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome> {
         if text.len() > MAX_TEXT {
             bail!("injection text exceeds 64 KiB");
         }
-        let _delivery = self.delivery.lock().await;
+        let delivery = self.delivery.clone().lock_owned().await;
         let method = self.config.effective_method();
         let target_owned = target.clone();
         let text_owned = text.to_owned();
@@ -544,7 +560,7 @@ impl Desktop for MacDesktop {
         match action {
             Decision::Refuse => bail!("refusing delivery into a secure field"),
             Decision::Copy => {
-                self.copy(text).await?;
+                self.write(text).await?;
                 return Ok(InjectionOutcome::ClipboardOnly);
             }
             _ => {}
@@ -556,61 +572,112 @@ impl Desktop for MacDesktop {
             None
         };
         if action != Decision::Type {
-            self.copy(text).await?;
+            self.write(text).await?;
             // Cmd+V only while the pasteboard holds the transcript, never another writer's text.
             if super::desktop::output("/usr/bin/pbpaste", &[]).await? != text {
-                self.copy(text).await?;
+                self.write(text).await?;
                 return Ok(InjectionOutcome::ClipboardOnly);
             }
         }
         let target = target.clone();
         let text_owned = text.to_owned();
-        let delay = Duration::from_millis(self.config.restore_delay_ms.into());
         let restore = previous.is_some();
-        // Re-check focus just before the keys, then keep this delivery serialized through restore.
-        let (action, confirmed) = tokio::task::spawn_blocking(move || {
+        let budget = if restore {
+            receipt_budget(self.config.restore_delay_ms)
+        } else {
+            Duration::ZERO
+        };
+        let runtime = tokio::runtime::Handle::current();
+        let (reply, outcome) = tokio::sync::oneshot::channel();
+        // Re-check focus just before the keys; the lock then stays with the pending paste.
+        tokio::task::spawn_blocking(move || {
+            let _delivery = delivery;
             let current = focus();
             let action = decision(&text_owned, method, &target, &current);
             if matches!(action, Decision::Refuse | Decision::Copy) {
-                return Ok::<_, anyhow::Error>((Decision::Copy, false));
+                let copied = runtime.block_on(super::desktop::copy_with(
+                    "/usr/bin/pbcopy",
+                    &[],
+                    &text_owned,
+                ));
+                return drop(reply.send(copied.map(|()| (Decision::Copy, false))));
             }
-            let before = current.element.as_ref().map(snapshot);
-            send_keys(&text_owned, action == Decision::Type)?;
-            let confirmed = action == Decision::Paste
-                && restore
-                && current
-                    .element
-                    .as_ref()
-                    .zip(before.as_ref())
-                    .is_some_and(|(field, before)| landed(field, before, &text_owned, delay));
-            Ok((action, confirmed))
-        })
-        .await??;
-        if action == Decision::Copy {
-            self.copy(text).await?;
-            return Ok(InjectionOutcome::ClipboardOnly);
-        }
-        if confirmed {
-            if let Some(previous) = previous {
-                if super::desktop::output("/usr/bin/pbpaste", &[])
-                    .await
-                    .is_ok_and(|s| s == text)
-                {
-                    super::desktop::copy_with("/usr/bin/pbcopy", &[], &previous).await?;
+            let field = current
+                .element
+                .as_ref()
+                .map(|f| (f, snapshot(f)))
+                .filter(|(_, before)| before.0.is_some() || before.1.is_some());
+            if let Err(e) = send_keys(&text_owned, action == Decision::Type) {
+                return drop(reply.send(Err(e)));
+            }
+            if action == Decision::Type {
+                return drop(reply.send(Ok((action, false))));
+            }
+            // A known-editable field showing no content may never show the paste
+            // (VS Code exposes an empty AXValue): report pasted at once, restore on
+            // receipt or at the PENDING_PASTE bound.
+            let opaque = field
+                .as_ref()
+                .is_none_or(|(_, before)| content_len(before).unwrap_or(0) == 0);
+            let restore_previous = || {
+                if let Some(previous) = &previous {
+                    runtime.block_on(async {
+                        if super::desktop::output("/usr/bin/pbpaste", &[])
+                            .await
+                            .is_ok_and(|s| s == text_owned)
+                        {
+                            let _ =
+                                super::desktop::copy_with("/usr/bin/pbcopy", &[], previous).await;
+                        }
+                    });
                 }
+            };
+            let mut restored = false;
+            await_paste(
+                || {
+                    field
+                        .as_ref()
+                        .is_some_and(|(f, before)| inserted(before, &snapshot(f), &text_owned))
+                },
+                if opaque { Duration::ZERO } else { budget },
+                |confirmed| {
+                    if confirmed {
+                        restore_previous();
+                        restored = true;
+                    }
+                    let _ = reply.send(Ok((action, confirmed || opaque)));
+                },
+            );
+            if opaque && !restored {
+                restore_previous();
+            }
+        });
+        let (action, confirmed) = outcome.await.context("delivery task stopped")??;
+        Ok(match action {
+            Decision::Type => InjectionOutcome::Typed,
+            Decision::Paste if confirmed || !restore => InjectionOutcome::Pasted,
+            _ => InjectionOutcome::ClipboardOnly,
+        })
+    }
+}
+
+/// Poll `landed` while the caller holds the delivery lock. `report` answers the
+/// request once, on receipt or after `budget`; returning releases the lock, on
+/// receipt or after PENDING_PASTE.
+fn await_paste(mut landed: impl FnMut() -> bool, budget: Duration, report: impl FnOnce(bool)) {
+    let start = Instant::now();
+    let mut report = Some(report);
+    loop {
+        let done = landed();
+        if done || start.elapsed() >= budget {
+            if let Some(report) = report.take() {
+                report(done);
             }
         }
-        if action == Decision::PasteAndCopy
-            || (action == Decision::Paste && self.config.restore_clipboard && !confirmed)
-        {
-            return Ok(InjectionOutcome::ClipboardOnly);
+        if done || start.elapsed() >= PENDING_PASTE {
+            return;
         }
-
-        Ok(if action == Decision::Type {
-            InjectionOutcome::Typed
-        } else {
-            InjectionOutcome::Pasted
-        })
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -728,6 +795,89 @@ mod tests {
                 expected
             );
         }
+    }
+    #[test]
+    fn receipt_accepts_insertion_and_selection_replacement() {
+        let s = |chars: Option<i64>, value: Option<&str>, selected| {
+            (chars, value.map(str::to_owned), selected)
+        };
+        let world = s(Some(11), Some("hello world"), 11);
+        assert!(inserted(&world, &s(Some(5), Some("hello"), 0), "hello"));
+        assert!(inserted(
+            &s(None, Some("hello world"), 0),
+            &s(None, Some("hello worldhello"), 0),
+            "hello"
+        ));
+        assert!(!inserted(&world, &world, "hello"));
+        // Unreadable value: the character count must account for the replaced selection.
+        assert!(inserted(
+            &s(Some(11), None, 11),
+            &s(Some(5), None, 0),
+            "hello"
+        ));
+        assert!(!inserted(
+            &s(Some(11), None, 0),
+            &s(Some(5), None, 0),
+            "hello"
+        ));
+    }
+    #[test]
+    fn pending_paste_holds_the_clipboard_for_a_delayed_reader() {
+        use std::sync::{mpsc, Arc, Mutex};
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        let clipboard = Arc::new(Mutex::new("A"));
+        let pasted = Arc::new(Mutex::new(None));
+        // The app reads the clipboard after the receipt budget has expired.
+        let app = {
+            let (clipboard, pasted) = (clipboard.clone(), pasted.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(250));
+                *pasted.lock().unwrap() = Some(*clipboard.lock().unwrap());
+            })
+        };
+        let (reply, replied) = mpsc::channel();
+        let guard = lock.clone().try_lock_owned().unwrap();
+        let landed = pasted.clone();
+        let a = std::thread::spawn(move || {
+            let _guard = guard;
+            await_paste(
+                || landed.lock().unwrap().is_some(),
+                Duration::from_millis(50),
+                |confirmed| reply.send(confirmed).unwrap(),
+            );
+        });
+        assert!(!replied.recv().unwrap(), "unconfirmed within the budget");
+        // A second injection writes the clipboard only once it holds the lock.
+        *clipboard.lock().unwrap() = {
+            let _b = lock.blocking_lock();
+            "B"
+        };
+        app.join().unwrap();
+        a.join().unwrap();
+        assert_eq!(*pasted.lock().unwrap(), Some("A"));
+    }
+    #[test]
+    fn unconfirmable_paste_replies_within_ipc_timeout_and_holds_until_bound() {
+        let mut config = xflow_core::config::Config::default();
+        config.injection.restore_delay_ms = 10_000;
+        config.validate().unwrap();
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let guard = lock.clone().try_lock_owned().unwrap();
+        let start = Instant::now();
+        let (reply, replied) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _guard = guard;
+            await_paste(
+                || false,
+                receipt_budget(config.injection.restore_delay_ms),
+                |confirmed| reply.send((confirmed, start.elapsed())).unwrap(),
+            );
+        });
+        let (confirmed, at) = replied.recv().unwrap();
+        // Leaves the 10 s IPC timeout room for focus checks and clipboard commands.
+        assert!(!confirmed && at <= Duration::from_millis(4100), "{at:?}");
+        drop(lock.blocking_lock());
+        assert!(start.elapsed() >= PENDING_PASTE);
     }
     #[test]
     fn delivery_requires_same_window_nonsecure_focus_and_safe_terminal_input() {
