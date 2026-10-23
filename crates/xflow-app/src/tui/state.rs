@@ -9,7 +9,11 @@ use crate::{
 };
 use anyhow::{anyhow, bail, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    collections::VecDeque,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use xflow_core::{
     config::{Config, Replacement, Snippet, Style},
     ipc::{Delivery, Grant, HistoryEntry, Permissions, Request, Response, Stats, Timings},
@@ -169,7 +173,11 @@ pub enum Effect {
     Globe,
     /// Re-save these Keychain keys so xflowd reads them without asking (macOS).
     ShareKeys(Vec<String>),
+    /// Start xflowd the way `xflow daemon start` does (launchd / systemd).
+    StartHelper,
 }
+/// A step still waiting this long likely faces an old, switched-on xflowd row.
+const STALE_AFTER: Duration = Duration::from_secs(10);
 /// System Settings › Keyboard, where "Press 🌐 key to" lives.
 pub const KEYBOARD_PANE: &str = "x-apple.systempreferences:com.apple.Keyboard-Settings.extension";
 /// The guided first-run flow. Every step is a choice except pasting the key.
@@ -331,6 +339,20 @@ pub struct App {
     pub session_pending: bool,
     pub connected: bool,
     pub connection: String,
+    /// Ask-again restarted xflowd: its disconnect is expected, not a failure.
+    pub restarting: bool,
+    /// Disconnects in a row since the last connect; the first real one starts xflowd.
+    pub downs: u32,
+    /// Starting xflowd failed; Enter tries again.
+    pub start_failed: bool,
+    /// Last key typed here, and when xflowd's permissions last arrived (see tap_blind).
+    pub typed: Option<Instant>,
+    pub status_at: Option<Instant>,
+    /// When xflowd's current tap was (probably) created: connect, or events granted.
+    pub armed_at: Option<Instant>,
+    /// The current permission step started waiting; Enter asked again.
+    pub waiting_since: Option<Instant>,
+    pub asked_again: bool,
     pub status: Response,
     pub transcript: String,
     pub timings: Option<Timings>,
@@ -371,8 +393,7 @@ pub struct App {
     pub globe: Option<bool>,
     /// This session already re-saved its Keychain keys for xflowd.
     pub keys_shared: bool,
-    /// Step to open once settings load on a configured install: the wizard
-    /// (`xflow setup`) or the checks (`xflow tui --onboard`, after installing).
+    /// Step to open once settings load on a configured install: the wizard (`xflow setup`).
     pub start: Option<Step>,
     pub diagnostics: Vec<String>,
     pub modal: Option<Modal>,
@@ -399,6 +420,14 @@ impl App {
             saving: false,
             connected: false,
             connection: "Connecting…".into(),
+            restarting: false,
+            downs: 0,
+            start_failed: false,
+            typed: None,
+            status_at: None,
+            armed_at: None,
+            waiting_since: None,
+            asked_again: false,
             status: Response::status(State::Idle, 0.0),
             transcript: String::new(),
             timings: None,
@@ -572,8 +601,7 @@ impl App {
                 let helper = if self.connected {
                     format!("{ok} xflow's background helper is running")
                 } else {
-                    "! xflow's background helper isn't running — open a terminal and run: xflowd"
-                        .into()
+                    format!("! {}", self.helper_down())
                 };
                 let key = if self.key_locked {
                     format!("! {}", xflow_providers::KEYCHAIN_WAITING)
@@ -603,13 +631,44 @@ impl App {
             return vec![];
         };
         [
-            (Grant::InputMonitoring, p.input_monitoring),
             (Grant::Accessibility, p.accessibility),
+            (Grant::InputMonitoring, !self.tap_blind()),
             (Grant::Microphone, self.microphone == Some(true)),
         ]
         .into_iter()
         .filter_map(|(grant, on)| (!on).then_some(grant))
         .collect()
+    }
+    /// Accessibility also lets the tap hear keys, so Input Monitoring is asked only
+    /// when the tap still heard nothing in a status taken after a key was typed
+    /// here (the tap sees this terminal's keys too).
+    /// Only keys typed after the current tap was armed count, as a new tap starts
+    /// deaf. ponytail: Secure Keyboard Entry hides this terminal's keys from every
+    /// tap, so there a working tap reads as blind and costs one extra ask.
+    pub fn tap_blind(&self) -> bool {
+        let settle = Duration::from_millis(300); // a re-arm is asynchronous
+        self.permissions.as_ref().is_some_and(|p| {
+            p.accessibility && !p.input_monitoring && p.keyboard_events == Some(false)
+        }) && matches!(
+            (self.armed_at, self.typed, self.status_at),
+            (Some(armed), Some(typed), Some(status)) if typed >= armed + settle && status >= typed + settle
+        )
+    }
+    /// A new xflowd, or event access just granted, means a new (deaf) tap.
+    pub fn take_permissions(&mut self, permissions: Option<Permissions>) {
+        let events = |p: &Option<Permissions>| p.as_ref().is_some_and(|p| p.events());
+        let now = Instant::now();
+        if !events(&self.permissions) && events(&permissions) {
+            self.armed_at = Some(now);
+        }
+        (self.permissions, self.status_at) = (permissions, Some(now));
+    }
+    /// The stale-row hint, once a step waited STALE_AFTER or the person asked again.
+    pub fn stale_hint(&self) -> bool {
+        self.asked_again
+            || self
+                .waiting_since
+                .is_some_and(|t| t.elapsed() >= STALE_AFTER)
     }
     /// Check-up rows for xflowd's macOS grants: (row, details, grant Enter fixes).
     /// Rows stay short enough for the list pane; the details pane explains.
@@ -622,17 +681,19 @@ impl App {
         let Some(p) = &self.permissions else {
             return vec![(
                 "! Can't check permissions yet".into(),
-                "Start or update xflow's background helper (xflowd), then press r to refresh."
-                    .into(),
+                "They show up once xflow's background helper is running.".into(),
                 None,
             )];
         };
+        let blind = self.tap_blind();
         let mut rows: Vec<_> = [
-            (Grant::InputMonitoring, "Shortcut access", "Input Monitoring", "hear your shortcut key in every app", Some(p.input_monitoring)),
-            (Grant::Accessibility, "Typing access", "Accessibility", "type your words where your cursor is", Some(p.accessibility)),
+            (Grant::Accessibility, "Typing access", "Accessibility", "type your words where your cursor is and hear your shortcut", Some(p.accessibility)),
             (Grant::Microphone, "Microphone", "Microphone", "hear you", self.microphone),
+            // Only when Accessibility doesn't get the shortcut through.
+            (Grant::InputMonitoring, "Shortcut access", "Input Monitoring", "hear your shortcut key in every app", blind.then_some(false)),
         ]
         .into_iter()
+        .filter(|(grant, ..)| *grant != Grant::InputMonitoring || blind)
         .map(|(grant, label, pane, why, on)| {
             let about = format!("{label} ({pane}) lets xflow {why}.");
             match on {
@@ -644,7 +705,7 @@ impl App {
                 ),
                 Some(false) => (
                     format!("! {label} off — Enter to fix"),
-                    format!("{about}\n\n{STALE_ROWS}\n\nOtherwise press Enter and System Settings opens at {pane}: find xflowd in the list and switch it on. You never need to add it yourself."),
+                    format!("{about}\n\nPress Enter and System Settings opens at {pane}: find xflowd in the list and switch it on. You never need to add it yourself.{}", if self.stale_hint() { format!("\n\n{STALE_ROWS}") } else { String::new() }),
                     Some(grant),
                 ),
             }
@@ -674,7 +735,9 @@ impl App {
     /// `again` is a person asking: the running xflowd already used its one ask.
     /// A restart would drop a dictation in progress, so then the running one asks.
     pub fn fix(&mut self, grant: Grant, again: bool) -> Vec<Effect> {
+        self.asked_again |= again;
         if again && grant != Grant::Microphone && !self.active() {
+            self.restarting = true;
             return vec![Effect::AskAgain(grant)];
         }
         let mut effects = vec![Effect::Request(
@@ -725,6 +788,7 @@ impl App {
             }
             Some(grant) if self.grant != Some(grant) => {
                 self.grant = Some(grant);
+                (self.waiting_since, self.asked_again) = (Some(Instant::now()), false);
                 self.fix(grant, false)
             }
             Some(_) => vec![],
@@ -797,6 +861,39 @@ impl App {
             )];
         }
         vec![Effect::Request(Request::Status, Tag::Permissions(None))]
+    }
+    /// Why the background helper isn't connected, the same on every screen.
+    pub fn helper_down(&self) -> String {
+        if self.downs == 0 && !self.restarting {
+            "Connecting…".into()
+        } else if self.restarting {
+            "Restarting xflow…".into()
+        } else if self.start_failed {
+            let retry = if self.retry_here() {
+                " Press Enter to try again."
+            } else {
+                ""
+            };
+            format!("xflow couldn't start its background helper.{retry}")
+        } else {
+            "Starting xflow…".into()
+        }
+    }
+    /// Enter retries a failed start on screens where Enter has no better use.
+    fn retry_here(&self) -> bool {
+        self.start_failed
+            && !self.connected
+            && matches!(self.modal, None | Some(Modal::Setup(Step::Permissions)))
+    }
+    /// Lost (or never had) the helper: start it once per outage through launchd,
+    /// unless an ask-again restart explains the first disconnect.
+    pub fn disconnected(&mut self) -> Vec<Effect> {
+        self.downs += 1;
+        if self.downs == 1 + u32::from(self.restarting) {
+            self.restarting = false;
+            return vec![Effect::StartHelper];
+        }
+        vec![]
     }
     /// (key, display value) for every visible settings row.
     pub fn settings(&self) -> Vec<(String, String)> {
@@ -975,7 +1072,7 @@ impl App {
             Tag::Permissions(grant) => {
                 let mut effects = vec![];
                 if response.permissions.is_some() {
-                    self.permissions = response.permissions.clone();
+                    self.take_permissions(response.permissions.clone());
                 }
                 if grant == Some(Grant::Microphone) {
                     self.microphone = response.permissions.and_then(|p| p.microphone);
@@ -1043,7 +1140,7 @@ impl App {
             self.timings = Some(timings);
         }
         if response.permissions.is_some() {
-            self.permissions = response.permissions.clone();
+            self.take_permissions(response.permissions.clone());
         }
         if !response.level.is_finite() {
             response.level = 0.0;
@@ -1064,6 +1161,11 @@ impl App {
         self.status = response;
     }
     pub fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        self.typed = Some(Instant::now());
+        if self.retry_here() && key.code == KeyCode::Enter {
+            self.start_failed = false;
+            return vec![Effect::StartHelper];
+        }
         if let Some(modal) = self.modal.take() {
             return self.modal_key(modal, key);
         }

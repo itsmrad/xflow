@@ -1,13 +1,8 @@
 <html><body style="font-family:-apple-system;font-size:13px">
 <h2>xflow is installed and running</h2>
-<p>A Terminal window now opens <b>guided setup</b>. It walks you through everything:</p>
-<ol>
-<li><b>Permissions.</b> It opens System Settings at Input Monitoring, then Accessibility, then Microphone. Each time, find <b>xflowd</b> in the list and switch it on; you never need to add it yourself. Setup moves on by itself. If the Keychain asks, click <b>Always Allow</b>.</li>
-<li><b>Speech service.</b> Add your speech key and pick your microphone (first install only).</li>
-<li><b>Try it.</b> Hold Fn and say something.</li>
-</ol>
-<p><b>Fn opens emoji or dictation instead?</b> System Settings › Keyboard › “Press 🌐 key to” › <b>Do Nothing</b>.<br>
-<b>Use it:</b> hold Fn to dictate. Double-tap Fn for hands-free, then press Fn again to stop.<br>
-<b>Setup again or check-up:</b> <code>xflow tui</code><br>
-<b>Uninstall:</b> <code>xflow service uninstall &amp;&amp; sudo rm -r /usr/local/bin/xflow /usr/local/bin/xflowd /usr/local/share/xflow</code></p>
+<p style="font-size:15px">Open <b>Terminal</b> and type: <code><b>xflow</b></code></p>
+<p>The first time, it walks you through setup: your speech service and key, your microphone, then the Mac permissions (it opens System Settings at each one; find <b>xflowd</b> in the list and switch it on). It ends with a test: hold <b>Fn</b> and say something.</p>
+<p><b>Use it:</b> hold Fn to dictate. Double-tap Fn for hands-free, then press Fn again to stop.<br>
+<b>Settings or check-up later:</b> type <code>xflow</code> again.<br>
+<b>Uninstall:</b> <code>xflow service uninstall &amp;&amp; sudo rm /usr/local/bin/xflow /usr/local/bin/xflowd</code></p>
 </body></html>

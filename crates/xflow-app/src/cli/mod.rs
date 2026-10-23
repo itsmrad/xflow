@@ -12,7 +12,11 @@ mod system;
 use args::{Cli, Command};
 use clap::{CommandFactory, FromArgMatches};
 use output::Output;
-use std::{io::Write, path::PathBuf, process::ExitCode};
+use std::{
+    io::{IsTerminal, Write},
+    path::PathBuf,
+    process::ExitCode,
+};
 use xflow_core::ipc::Request;
 
 type Result<T> = std::result::Result<T, Error>;
@@ -47,11 +51,7 @@ impl Error {
         )
     }
     fn daemon(error: impl std::fmt::Display) -> Self {
-        Self::new(
-            3,
-            error.to_string(),
-            "Run xflow daemon start or start xflowd in another terminal",
-        )
+        Self::new(3, error.to_string(), "Run xflow daemon start")
     }
     fn broken_pipe(&self) -> bool {
         self.source.as_ref().is_some_and(|e| {
@@ -89,7 +89,11 @@ from_error!(
 );
 
 pub fn main() -> ExitCode {
-    let argv: Vec<_> = std::env::args_os().collect();
+    let mut argv: Vec<_> = std::env::args_os().collect();
+    // Plain `xflow` in a terminal opens the TUI, which onboards until setup is done.
+    if argv.len() == 1 && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        argv.push("tui".into());
+    }
     let json = argv.iter().any(|v| v == "--json");
     let color = argv
         .windows(2)
@@ -235,10 +239,9 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
             seconds,
             command,
         } => ipc::block_on(ipc::listen(*once, *seconds, *command, out)),
-        Command::Tui { onboard } => ipc::block_on(async {
-            let start = onboard.then_some(xflow_app::tui::Step::Permissions);
-            xflow_app::tui::run(start).await.map_err(Into::into)
-        }),
+        Command::Tui => {
+            ipc::block_on(async { xflow_app::tui::run(None).await.map_err(Into::into) })
+        }
         Command::History { page, action } => ipc::history(page, action.as_ref(), out),
         Command::ClearHistory { yes } => {
             config::confirm(*yes, "Delete all dictation history?")?;

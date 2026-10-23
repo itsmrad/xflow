@@ -54,6 +54,7 @@ enum Update {
     MicTimeout,
     Globe(Option<bool>),
     KeysShared(Result<bool>),
+    Started(Result<()>),
 }
 
 fn restore() {
@@ -250,7 +251,8 @@ pub async fn run(start: Option<Step>) -> Result<()> {
             // Only while a screen waits for a permission switch; idle otherwise.
             _ = recheck.tick(), if app.watching() => {
                 effects = app.poll();
-                redraw = false;
+                // The permission step's stale-row hint appears after a while.
+                redraw = matches!(app.modal, Some(Modal::Setup(Step::Permissions)));
             },
             _ = term.recv() => {
                 effects = app.action(Action::Quit);
@@ -297,8 +299,6 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
                     app.start
                 };
                 if let Some(step) = start.filter(|_| !app.setup_offered && app.modal.is_none()) {
-                    // The installer's checks are this session's permissions offer.
-                    app.permissions_offered |= step == Step::Permissions;
                     effects.extend(app.open_setup(step));
                 }
                 effects.extend(app.permissions_changed());
@@ -337,15 +337,20 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             if matches!(tag, Tag::Session) {
                 app.starts = app.starts.saturating_sub(1);
             }
+            // An ask-again's answer: any restart is over (or never happened).
+            if matches!(tag, Tag::Permissions(Some(_))) {
+                app.restarting = false;
+            }
             match result {
                 Ok(response) => effects = app.response(response, tag),
-                Err(_) if matches!(tag, Tag::Reload) => app.toast = Some(
-                    "Saved. It takes effect when xflow's background helper starts (run xflowd)."
-                        .into(),
-                ),
+                Err(_) if matches!(tag, Tag::Reload) => {
+                    app.toast = Some(
+                        "Saved. It takes effect once xflow's background helper is running.".into(),
+                    )
+                }
                 Err(error) => {
                     if matches!(tag, Tag::Permissions(Some(_))) {
-                        app.asking = false;
+                        (app.asking, app.restarting) = (false, false);
                     }
                     app.toast = Some(options::plain(&format!("{error:#}")))
                 }
@@ -369,9 +374,13 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
         Update::Connection(connected, message) => {
             app.connected = connected;
             app.connection = message;
-            if connected {
-                effects = app.refresh();
-            }
+            effects = if connected {
+                (app.downs, app.restarting, app.start_failed) = (0, false, false);
+                app.armed_at = Some(std::time::Instant::now());
+                app.refresh()
+            } else {
+                app.disconnected()
+            };
         }
         Update::Overlay(result) => match result {
             Ok(rows) => {
@@ -422,6 +431,12 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
         Update::Globe(globe) => {
             app.globe = globe;
             effects = app.globe_changed();
+        }
+        Update::Started(result) => {
+            if let Err(e) = result {
+                app.start_failed = true;
+                app.toast = Some(options::plain(&format!("{e:#}")));
+            }
         }
         Update::KeysShared(result) => match result {
             Ok(true) => {
@@ -549,16 +564,21 @@ fn dispatch(
                 Effect::Open(url) => Update::Opened(blocking(move || open(url)).await),
                 Effect::Globe => Update::Globe(blocking(|| Ok(globe())).await.ok().flatten()),
                 Effect::ShareKeys(ids) => Update::KeysShared(integrations::share_keys(ids).await),
+                Effect::StartHelper => Update::Started(blocking(start_helper).await),
                 Effect::AskAgain(grant) => {
-                    if blocking(restart).await.is_ok() {
-                        // ponytail: fixed wait for the fresh xflowd's ask; poll its log if it proves short.
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    } else {
-                        let reply = transport::request(&Request::Allow { grant }).await;
-                        let _ = tx
-                            .send(Update::Reply(Tag::Permissions(Some(grant)), reply))
-                            .await;
+                    // A fresh xflowd asks no grant by itself: ask it once it answers.
+                    let restarted = blocking(restart).await.is_ok();
+                    let mut reply = transport::request(&Request::Allow { grant }).await;
+                    for _ in 0..20 {
+                        if !restarted || reply.is_ok() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        reply = transport::request(&Request::Allow { grant }).await;
                     }
+                    let _ = tx
+                        .send(Update::Reply(Tag::Permissions(Some(grant)), reply))
+                        .await;
                     Update::Opened(blocking(move || open(grant.pane())).await)
                 }
             };
@@ -584,7 +604,28 @@ fn open(url: &str) -> Result<()> {
     }
     Ok(())
 }
-/// Restart xflowd under launchd; the subscription reconnects by itself.
+/// `xflow daemon start` from this same binary: on macOS it installs a missing
+/// LaunchAgent, then starts xflowd (Linux: `systemctl --user start`, which needs
+/// `xflow service install`); the subscription then connects by itself.
+fn start_helper() -> Result<()> {
+    let out = std::process::Command::new(std::env::current_exe()?)
+        .args(["daemon", "start", "--quiet"])
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if !out.status.success() {
+        // The whole message (error and hint), on one line for the toast.
+        let why = String::from_utf8_lossy(&out.stderr).replace("error: ", "");
+        let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
+        if why.is_empty() {
+            bail!("xflow couldn't start its background helper");
+        }
+        bail!("{why}");
+    }
+    Ok(())
+}
+/// Restart xflowd under launchd (macOS ask-again only: macOS asks once per
+/// process). Elsewhere launchctl is missing and ask-again just sends Allow.
+/// The subscription reconnects by itself.
 fn restart() -> Result<()> {
     let target = format!("gui/{}/com.xflow.daemon", unsafe { libc::getuid() });
     let restarted = std::process::Command::new("/bin/launchctl")
@@ -666,6 +707,7 @@ fn doctor() -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::daemon::MIC_WAITING;
+    use std::time::Instant;
     use tokio::io::AsyncWriteExt;
     use xflow_core::State;
 
@@ -728,7 +770,7 @@ mod tests {
         globe.microphone = Some(true);
         globe.globe = Some(false);
         assert!(globe.permissions_changed().is_empty(), "not outside setup");
-        globe.start = Some(Step::Permissions);
+        globe.start = Some(Step::Welcome);
         let effects = globe.permissions_changed();
         assert!(matches!(globe.modal, Some(Modal::Setup(Step::Globe))));
         assert!(effects
@@ -743,6 +785,23 @@ mod tests {
         (done.microphone, done.globe, done.permissions_offered) = (Some(true), Some(true), true);
         done.open_setup(Step::Permissions);
         assert!(matches!(done.modal, Some(Modal::Setup(Step::Try))));
+        // Fallback: Accessibility on, yet a status taken after a key was typed here
+        // shows a tap that heard nothing: then Input Monitoring is asked.
+        let ago = |s| Instant::now().checked_sub(Duration::from_secs(s));
+        let mut blind = reinstall(false, true);
+        (blind.microphone, blind.armed_at, blind.typed) = (Some(true), ago(2), ago(1));
+        blind.status_at = Some(Instant::now());
+        assert_eq!(
+            asks(&blind.permissions_changed(), Grant::InputMonitoring),
+            (true, true)
+        );
+        // Accessibility switched on (with the mouse) after keys typed earlier: the
+        // new tap is merely deaf so far, which is not blindness.
+        let mut fresh = reinstall(false, false);
+        (fresh.microphone, fresh.typed) = (Some(true), ago(1));
+        fresh.event(status(false, true, None));
+        assert!(!fresh.tap_blind());
+        assert!(fresh.permissions_changed().is_empty());
         // Microphone off: only its step shows, at its pane.
         let mut off = reinstall(true, true);
         off.permissions_changed();
@@ -751,10 +810,14 @@ mod tests {
         assert!(effects
             .iter()
             .any(|e| matches!(e, Effect::Open(url) if *url == Grant::Microphone.pane())));
+        // Accessibility also lets the shortcut through, so it comes first and alone.
         app.event(status(false, false, None));
         let effects = app.permissions_changed();
         assert!(matches!(app.modal, Some(Modal::Setup(Step::Permissions))));
-        assert_eq!(asks(&effects, Grant::InputMonitoring), (true, true));
+        assert_eq!(asks(&effects, Grant::Accessibility), (true, true));
+        assert!(!effects
+            .iter()
+            .any(|e| matches!(e, Effect::Open(url) if *url == Grant::InputMonitoring.pane())));
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
         terminal
@@ -768,9 +831,13 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(
-            text.contains("Input Monitoring") && text.contains("moves on by itself"),
+            text.contains("Accessibility") && text.contains("moves on by itself"),
             "{text}"
         );
+        assert!(!text.contains("old copy"), "no stale-row hint up front");
+        // Still waiting after a while: the hint appears.
+        app.waiting_since = Instant::now().checked_sub(Duration::from_secs(11));
+        assert!(app.stale_hint());
         assert!(app.watching());
         assert!(matches!(
             app.poll()[..],
@@ -780,17 +847,19 @@ mod tests {
         assert!(app
             .response(status(false, false, None), Tag::Permissions(None))
             .is_empty());
-        let effects = app.response(status(true, false, None), Tag::Permissions(None));
-        assert_eq!(asks(&effects, Grant::Accessibility), (true, true));
         // Enter asks again from a fresh xflowd: macOS asks once per process.
+        app.waiting_since = Some(Instant::now());
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         assert!(matches!(
             app.key(enter)[..],
             [Effect::AskAgain(Grant::Accessibility)]
         ));
         assert!(matches!(app.modal, Some(Modal::Setup(Step::Permissions))));
+        assert!(app.stale_hint(), "after asking again");
+        // Accessibility on: Input Monitoring is skipped, the microphone is next.
         // An undecided microphone gets the system prompt, not a pane.
-        let effects = app.response(status(true, true, None), Tag::Permissions(None));
+        let effects = app.response(status(false, true, None), Tag::Permissions(None));
+        assert!(!app.stale_hint(), "a new step waits afresh");
         assert_eq!(asks(&effects, Grant::Microphone), (true, false));
         assert!(app.poll().is_empty(), "one microphone ask at a time");
         let mic = Tag::Permissions(Some(Grant::Microphone));
@@ -814,19 +883,21 @@ mod tests {
         app.connected = true;
         app.page = Page::Doctor;
         app.permissions = Some(Permissions {
-            accessibility: true,
+            accessibility: false,
             input_monitoring: false,
             keyboard_events: Some(false),
             microphone: None,
         });
+        // Accessibility covers the shortcut: no Input Monitoring row unless it's blind.
         let rows = app.permission_rows();
-        assert_eq!(rows[0].0, "! Shortcut access off — Enter to fix");
-        assert!(rows[1].0.ends_with("Typing access is on") && rows[1].2.is_none());
-        assert!(rows[2].0.contains("Microphone — Enter to check"));
+        assert_eq!(rows[0].0, "! Typing access off — Enter to fix");
+        assert!(rows[1].0.contains("Microphone — Enter to check"));
+        assert!(rows[2].0.contains("Shortcut not heard yet") && rows[2].2.is_none());
         assert!(rows[0].1.contains("xflowd in the list and switch it on"));
+        assert!(!rows[0].1.contains("old copy"));
         app.selected[Page::Doctor.index()] = 2;
-        assert_eq!(app.doctor_grant(2), Some(Grant::InputMonitoring));
-        assert_eq!(app.doctor_grant(3), None);
+        assert_eq!(app.doctor_grant(2), Some(Grant::Accessibility));
+        assert_eq!(app.doctor_grant(4), None);
         for width in [80, 100, 120] {
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
@@ -851,12 +922,16 @@ mod tests {
             }
             assert!(lines.iter().any(|l| l.contains("Enter fix")), "{width}");
         }
-        // The running xflowd already used its one ask: Enter restarts it.
+        // Enter re-asks from a restarted xflowd (macOS asks once per process).
         let effects = app.action(Action::Choose);
         assert!(matches!(
             effects[..],
-            [Effect::AskAgain(Grant::InputMonitoring)]
+            [Effect::AskAgain(Grant::Accessibility)]
         ));
+        assert!(
+            app.permission_rows()[0].1.contains("old copy"),
+            "after Enter"
+        );
         // Never mid-dictation: a restart would drop it, so the running xflowd asks.
         app.status.state = State::Listening;
         assert!(matches!(
@@ -865,8 +940,9 @@ mod tests {
         ));
         app.status.state = State::Idle;
         // An undecided microphone keeps being asked until Allow flips its row.
-        app.permissions.as_mut().unwrap().input_monitoring = true;
-        app.selected[Page::Doctor.index()] = 4;
+        app.permissions.as_mut().unwrap().accessibility = true;
+        app.typed = None;
+        app.selected[Page::Doctor.index()] = 3;
         app.action(Action::Choose);
         let mic = Tag::Permissions(Some(Grant::Microphone));
         let mut reply = Response::status(State::Idle, 0.0);
@@ -884,8 +960,39 @@ mod tests {
         ));
         reply.permissions.as_mut().unwrap().microphone = Some(true);
         app.response(reply, mic);
-        assert!(app.permission_rows()[2].0.ends_with("Microphone is on"));
+        assert!(app.permission_rows()[1].0.ends_with("Microphone is on"));
         assert!(!app.watching());
+        // The fallback row appears once the tap proved blind with Accessibility on.
+        app.armed_at = Instant::now().checked_sub(Duration::from_secs(2));
+        app.typed = Instant::now().checked_sub(Duration::from_secs(1));
+        app.status_at = Some(Instant::now());
+        assert!(app
+            .permission_rows()
+            .iter()
+            .any(|r| r.0 == "! Shortcut access off — Enter to fix"));
+    }
+    #[test]
+    fn a_lost_helper_is_started_once_and_a_restart_is_not_an_outage() {
+        let mut app = App::new("unused".into(), ColorMode::TrueColor);
+        let lost = |app: &mut App| handle(app, Update::Connection(false, String::new()), &mut true);
+        assert!(matches!(lost(&mut app)[..], [Effect::StartHelper]));
+        assert!(lost(&mut app).is_empty(), "once per outage");
+        assert_eq!(app.helper_down(), "Starting xflow…");
+        handle(&mut app, Update::Connection(true, String::new()), &mut true);
+        // Ask-again's restart: the first disconnect is expected; a second one starts it.
+        app.restarting = true;
+        assert!(lost(&mut app).is_empty());
+        assert_eq!(app.helper_down(), "Restarting xflow…");
+        assert!(matches!(lost(&mut app)[..], [Effect::StartHelper]));
+        // A failed start says so, and Enter tries again.
+        handle(
+            &mut app,
+            Update::Started(Err(anyhow::anyhow!("no"))),
+            &mut true,
+        );
+        assert!(app.helper_down().contains("Press Enter"));
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(app.key(enter)[..], [Effect::StartHelper]));
     }
     #[tokio::test]
     async fn quit_keeps_ownership_of_a_pending_start_but_not_another_clients_session() {

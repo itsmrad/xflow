@@ -1,5 +1,7 @@
 #!/bin/sh
 # Stop a running xflow worker before its program files are replaced.
+# Older packages shipped a setup launcher here; setup is now just `xflow`.
+rm -rf /usr/local/share/xflow
 user=$(stat -f%Su /dev/console); uid=$(id -u "$user" 2>/dev/null) || exit 0
 launchctl bootout "gui/$uid/com.xflow.daemon" 2>/dev/null || true
 exit 0

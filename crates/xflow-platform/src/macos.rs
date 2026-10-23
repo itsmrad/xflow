@@ -701,7 +701,13 @@ fn await_paste(mut landed: impl FnMut() -> bool, budget: Duration, report: impl 
         if done || start.elapsed() >= PENDING_PASTE {
             return;
         }
-        std::thread::sleep(Duration::from_millis(25));
+        // Wake at the next deadline rather than up to a poll late.
+        let deadline = if report.is_some() {
+            budget
+        } else {
+            PENDING_PASTE
+        };
+        std::thread::sleep(Duration::from_millis(25).min(deadline.saturating_sub(start.elapsed())));
     }
 }
 

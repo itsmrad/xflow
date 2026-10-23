@@ -59,12 +59,7 @@ fn panel(
 pub fn status(app: &App) -> (&'static str, &'static str, String, bool) {
     let message = app.status.message.as_deref().map(options::plain);
     if !app.connected {
-        return (
-            glyph("○", "o"),
-            "Not running",
-            "xflow's background helper isn't running. Open a terminal and run: xflowd".into(),
-            true,
-        );
+        return (glyph("○", "o"), "Not running", app.helper_down(), true);
     }
     match app.status.state {
         State::Idle if app.needs_setup() => (
@@ -594,7 +589,7 @@ fn empty(app: &App) -> String {
         None => "press Space on Home and speak".into(),
     };
     match app.page {
-        Page::History if !app.connected => "Your history shows up when xflow's background helper is running.\n\nOpen a terminal and run: xflowd".into(),
+        Page::History if !app.connected => format!("Your history shows up once xflow's background helper is running.\n\n{}", app.helper_down()),
         Page::History if !app.query.is_empty() => format!("Nothing matches “{}”.\n\nPress Esc to clear the search.", app.query),
         Page::History => format!("No dictations yet — {speak}."),
         Page::Overlay if cfg!(target_os = "macos") => "The floating recording pill is part of xflow on Linux (GNOME).\n\nOn this Mac, the status is shown at the top of this window.".into(),
@@ -661,9 +656,12 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
 fn stats(frame: &mut Frame, area: Rect, app: &App) {
     if !app.stats_loaded {
         let text = if app.connected {
-            "No dictations yet — your stats appear after your first one."
+            "No dictations yet — your stats appear after your first one.".into()
         } else {
-            "Your stats show up when xflow's background helper is running.\n\nOpen a terminal and run: xflowd"
+            format!(
+                "Your stats show up once xflow's background helper is running.\n\n{}",
+                app.helper_down()
+            )
         };
         panel(frame, area, "Your stats", text, app);
         return;
@@ -843,7 +841,7 @@ fn setup(frame: &mut Frame, rect: Rect, app: &App, step: Step) {
     };
     let (title, text) = match step {
         Step::Welcome => ("Welcome to xflow", "Speak, and your words appear wherever you're typing.\n\nLet's set things up — it takes about a minute:\n\n   1  Choose a speech service\n   2  Add its API key\n   3  Pick your microphone\n   4  Choose your shortcut\n\nPress Enter to begin, or Esc to do this later.".to_string()),
-        Step::MicCheck if !app.connected => ("Step 3 of 4 · Microphone check", "xflow's background helper isn't running, so the microphone can't be checked yet.\n\nOpen a terminal and run: xflowd\n\nPress Enter to continue anyway.".into()),
+        Step::MicCheck if !app.connected => ("Step 3 of 4 · Microphone check", format!("The microphone can be checked once xflow's background helper is running.\n\n{}\n\nPress Enter to continue anyway.", app.helper_down())),
         Step::MicCheck => ("Step 3 of 4 · Microphone check", format!(
             "Say something. The bar should move while you speak.\n\n   {}\n\nNothing is recorded or sent during this check.\nIf the bar stays still, press Esc and pick another microphone in Settings.",
             meter(if app.status.state == State::Listening { app.status.level } else { 0.0 }, 30)
@@ -862,17 +860,17 @@ fn setup(frame: &mut Frame, rect: Rect, app: &App, step: Step) {
             };
             ("Try it", format!("{how}\nYour words show up here.\n\n{line}"))
         }
-        Step::Permissions if app.permissions.is_none() && !app.connected => ("Almost done · Mac permissions", "xflow's background helper isn't running yet, so permissions can't be checked.\n\nThis moves on by itself once it starts. If it doesn't, open a terminal and run: xflow daemon start".into()),
+        Step::Permissions if app.permissions.is_none() && !app.connected => ("Almost done · Mac permissions", format!("{}\n\nPermissions are checked once xflow's background helper is running; this moves on by itself.", app.helper_down())),
         Step::Globe => ("Almost done · Globe key", "Your shortcut is the Fn (Globe) key, so set it to do nothing else: in System Settings › Keyboard, set “Press 🌐 key to” to “Do Nothing”.\n\nOtherwise each press also opens emoji or switches your input source.\n\nWaiting for the change — this moves on by itself.".into()),
         Step::Permissions => {
             let ask = match app.grant {
-                Some(Grant::InputMonitoring) => "In System Settings, switch on xflowd under Input Monitoring so your shortcut works in every app.",
-                Some(Grant::Accessibility) => "In System Settings, switch on xflowd under Accessibility so xflow can type your words into apps.",
+                Some(Grant::InputMonitoring) => "Your shortcut isn't reaching xflow yet. In System Settings, switch on xflowd under Input Monitoring.",
+                Some(Grant::Accessibility) => "In System Settings, switch on xflowd under Accessibility so xflow can hear your shortcut and type your words into apps.",
                 Some(Grant::Microphone) if app.microphone == Some(false) => "In System Settings, switch on xflowd under Microphone so xflow can hear you.",
                 _ => "Checking the microphone… If your Mac asks, click Allow.",
             };
-            // Lead with the stale-row fix: an old xflowd that looks on is the usual trap.
-            let stale = if app.grant != Some(Grant::Microphone) || app.microphone == Some(false) {
+            // Only after waiting a while or asking again: an old xflowd row that looks on.
+            let stale = if app.stale_hint() && (app.grant != Some(Grant::Microphone) || app.microphone == Some(false)) {
                 format!("{}\n\n", xflow_core::ipc::STALE_ROWS)
             } else {
                 String::new()
