@@ -44,7 +44,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 
 | Request (`"command"`) | Fields | Reply / semantics |
 | --- | --- | --- |
-| `status` | — | state, level, version, protocol, provider, model, mode (while active); last successful timings when inactive |
+| `status` | — | state, level, version, protocol, provider, model, mode (while active), optional daemon permissions (accessibility, input_monitoring, keyboard_events); last successful timings when inactive |
 | `start`, `toggle` | `mode` ("dictation"/"command", default dictation), `context` (AppContext captured by the caller), `t0_us` (caller CLOCK_MONOTONIC µs at hotkey), `delivery` ("inject" default / "clipboard" / "none" — none leaves the desktop untouched so a subscribed client such as `xflow listen` can print the text) | Mic opens **before** any focus query; provider connection is warmed in the background |
 | `stop`, `cancel` | — | unchanged |
 | `last`, `copy_last`, `paste_last` | — | unchanged |
@@ -59,7 +59,10 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 
 `HistoryEntry` adds model, raw_text, app_id, language, duration_ms, latency_ms, mode. `Timings` carries
 hotkey_ms, open_ms, audio_ms, stt_ms, cleanup_ms, inject_ms, total_ms. All new response fields are
-optional on the wire. The integrated daemon implements these requests; see [daemon behavior](DAEMON_V1.md) for retention, cancellation, delivery and timing semantics.
+optional on the wire. macOS permission checks run in xflowd and refresh on explicit
+status/subscribe/start requests; keyboard_events is null with no tap, false before
+any keyboard input, and true once the tap has received an event (not proof of a
+specific Fn gesture). No permission polling runs at idle. The integrated daemon implements these requests; see [daemon behavior](DAEMON_V1.md) for retention, cancellation, delivery and timing semantics.
 
 ## D-Bus (session bus)
 
@@ -103,6 +106,7 @@ safety check stay in Rust (`safe_target`).
   fails. The daemon checks it on its existing listening-level tick, then calls `stop()` to retrieve
   the buffered clip or original error. Reset on start/stop/cancel; no new idle polling.
 - `InjectionOutcome::Typed`, `CleanupMode::Custom`, `Mode::{Dictation, Command}`.
+- `GlobalHotkeys::received_events()` optionally reports whether a native tap has received keyboard input.
 - `GlobalHotkeys::next_action()` adds `HandsFree` (latch notification without restarting capture);
   `reset()` clears a gesture when another control ends a session. Physical events are
   processed by the platform's pure timestamp state machine before reaching the actor.

@@ -7,6 +7,15 @@ Input Monitoring**. If the passive event tap cannot be created, `xflow status`
 reports an error with these instructions; CLI dictation remains available. After
 granting access, restart the daemon or reload with `xflow config set hotkey.enabled true`.
 
+Status, doctor and TUI Check-up use checks made inside `xflowd`: Input Monitoring
+must pass both IOHID and CoreGraphics preflights, and Accessibility must pass AX.
+An event tap that has received no keyboard events is **unverified**, even if it
+was created successfully; press the shortcut, then refresh the check. No idle
+polling or test keystrokes are used. With a stale grant, follow the reported fix:
+“Input Monitoring is off for xflowd — open System Settings → Privacy & Security →
+Input Monitoring, remove xflowd, add it again”. Repeat under Accessibility when
+that check fails, then restart `xflowd`. Diagnostics cannot repair macOS grants.
+
 ```toml
 [hotkey]
 key = "fn"

@@ -30,7 +30,7 @@ enabled = true
 
 [recording]
 max_seconds = 120
-silence_threshold = 0.005
+silence_threshold = 0.005    # minimum 20 ms frame RMS; speech must last at least 200 ms
 # device = "USB Microphone"  # `xflow devices`; unset = system default input
 min_ms = 300                 # shorter taps are discarded without upload
 auto_stop_secs = 0           # stop after N s of silence (0 = off)

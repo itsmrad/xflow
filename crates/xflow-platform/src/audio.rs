@@ -31,8 +31,6 @@ struct Recording {
     sample_rate: u32,
     channels: u16,
     limit: usize,
-    threshold: f32,
-    voiced: bool,
     complete: bool,
     error: Option<String>,
 }
@@ -70,8 +68,6 @@ impl Recording {
             sample_rate,
             channels,
             limit,
-            threshold: config.silence_threshold,
-            voiced: false,
             complete: false,
             error: None,
         })
@@ -102,7 +98,6 @@ impl Recording {
         } else {
             (energy / input.len() as f64).sqrt() as f32
         };
-        self.voiced |= rms > self.threshold;
         self.complete = self.samples.len() == self.limit;
         (rms, self.complete)
     }
@@ -110,9 +105,6 @@ impl Recording {
     fn finish(self) -> Result<AudioClip> {
         if let Some(error) = self.error {
             bail!("microphone stream failed: {error}");
-        }
-        if !self.voiced {
-            bail!("no speech detected; check microphone or silence threshold");
         }
         Ok(AudioClip {
             samples: self.samples,
@@ -660,7 +652,7 @@ mod tests {
         );
     }
     #[test]
-    fn vad_rejects_silence_without_removing_internal_pauses() {
+    fn capture_preserves_silence_and_internal_pauses_for_the_daemon_gate() {
         let config = RecordingConfig {
             max_seconds: 1,
             silence_threshold: 0.1,
@@ -668,7 +660,7 @@ mod tests {
         };
         let mut silent = Recording::new(4, 1, &config).unwrap();
         silent.push(&[0.01_f32; 4]);
-        assert!(silent.finish().is_err());
+        assert_eq!(silent.finish().unwrap().samples, vec![0.01; 4]);
         let mut voiced = Recording::new(4, 1, &config).unwrap();
         voiced.push(&[0.5_f32, 0.0, 0.0, 0.5]);
         assert_eq!(voiced.finish().unwrap().samples.len(), 4);

@@ -76,10 +76,10 @@ pub fn status(app: &App) -> (&'static str, &'static str, String, bool) {
         State::Idle => (
             glyph("●", "*"),
             "Ready",
-            match app.shortcut() {
+            message.unwrap_or_else(|| match app.shortcut() {
                 Some(key) => format!("Hold {key} and speak — or press Space here."),
                 None => "Press Space to start dictating, and again to finish.".into(),
-            },
+            }),
             false,
         ),
         State::Listening => (

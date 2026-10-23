@@ -10,13 +10,11 @@ use std::{
         Arc,
     },
 };
-use xflow_core::{
-    config::RecordingConfig, AppContext, AudioCapture, AudioClip, Desktop, InjectionOutcome,
-};
+use xflow_core::{AppContext, AudioCapture, AudioClip, Desktop, InjectionOutcome};
 
 type Adapters = (Arc<dyn AudioCapture>, Arc<dyn Desktop>);
 
-pub(crate) fn adapters(config: &RecordingConfig) -> Result<Option<Adapters>> {
+pub(crate) fn adapters() -> Result<Option<Adapters>> {
     let audio = std::env::var_os("XFLOW_TEST_AUDIO");
     let sink = std::env::var_os("XFLOW_TEST_SINK");
     if audio.is_none() && sink.is_none() {
@@ -64,7 +62,6 @@ pub(crate) fn adapters(config: &RecordingConfig) -> Result<Option<Adapters>> {
         Arc::new(SyntheticAudio {
             active: AtomicBool::new(false),
             voiced,
-            threshold: config.silence_threshold,
         }),
         Arc::new(FileDesktop(sink)),
     )))
@@ -73,7 +70,6 @@ pub(crate) fn adapters(config: &RecordingConfig) -> Result<Option<Adapters>> {
 struct SyntheticAudio {
     active: AtomicBool,
     voiced: bool,
-    threshold: f32,
 }
 
 #[async_trait]
@@ -88,13 +84,10 @@ impl AudioCapture for SyntheticAudio {
         if !self.active.swap(false, Ordering::SeqCst) {
             bail!("no recording is active");
         }
-        if !self.voiced || 0.2 <= self.threshold {
-            bail!("no speech detected");
-        }
         // ponytail: fixed one-second mono PCM, not a timing/device simulator.
         // Add WAV fixtures here when codec/device coverage needs real samples.
         Ok(AudioClip {
-            samples: vec![0.2; 16_000],
+            samples: vec![if self.voiced { 0.2 } else { 0.0 }; 16_000],
             sample_rate: 16_000,
             channels: 1,
         })
