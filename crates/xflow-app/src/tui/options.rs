@@ -14,6 +14,7 @@ pub const SETTINGS: &[Row] = &[
     ("action.stt_key", "Speech", "API key", "Your key for the speech service. It is stored in your system keychain, never in a file."),
     ("stt.language", "Speech", "Language", "Automatic works for most people. Pick a language if words come out in the wrong one."),
     ("recording.device", "Speech", "Microphone", "Which microphone to listen to. System default follows your computer's sound settings."),
+    ("recording.ignore_speakers", "Speech", "Ignore speaker sound", "Hear only your voice, not music, videos or calls playing on this computer."),
     ("action.stt_test", "Speech", "Check connection", "Checks your key and connection without recording or using paid credits."),
     ("hotkey.key", "Shortcut", "Key", "Hold this key and speak; let go to finish. Double-tap it for hands-free."),
     ("hotkey.enabled", "Shortcut", "Shortcut", "Turn the global shortcut on or off."),

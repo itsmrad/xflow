@@ -175,6 +175,20 @@ impl CaptureBuffer {
         Ok(())
     }
 
+    fn open(
+        sample_rate: u32,
+        channels: u16,
+        config: &RecordingConfig,
+        limited: Arc<AtomicBool>,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            recording: Mutex::new(Some(Recording::new(sample_rate, channels, config)?)),
+            active: AtomicBool::new(true),
+            limited,
+            first_callback_us: AtomicU64::new(0),
+        }))
+    }
+
     fn fail(&self, error: String) {
         self.active.store(false, Ordering::Release);
         if let Ok(mut guard) = self.recording.lock() {
@@ -187,8 +201,9 @@ impl CaptureBuffer {
 }
 
 struct OpenStream {
-    // Keep the stream on its owner thread. Dropping closes capture immediately.
-    _stream: cpal::Stream,
+    // Keep the stream (cpal or the macOS voice unit) on its owner thread.
+    // Dropping closes capture immediately.
+    _stream: Box<dyn std::any::Any>,
     buffer: Arc<CaptureBuffer>,
     sample_rate: u32,
     channels: u16,
@@ -367,6 +382,18 @@ fn open_stream(
     finished: Arc<AtomicBool>,
 ) -> Result<OpenStream> {
     let opened = Instant::now();
+    #[cfg(target_os = "macos")]
+    if voice_processing(config) {
+        match open_voice_unit(config, &sender, &level, generation, &finished, opened) {
+            Ok(open) => return Ok(open),
+            Err(error) => {
+                static FALLBACK: std::sync::Once = std::sync::Once::new();
+                FALLBACK.call_once(|| {
+                    tracing::warn!(%error, "voice processing unavailable; using the plain microphone")
+                });
+            }
+        }
+    }
     let host = cpal::default_host();
     let device = if let Some(requested) = &config.device {
         let devices: Vec<_> = host
@@ -390,12 +417,7 @@ fn open_stream(
         .context("cannot inspect microphone")?;
     let sample_rate = supported.sample_rate().0;
     let channels = supported.channels();
-    let buffer = Arc::new(CaptureBuffer {
-        recording: Mutex::new(Some(Recording::new(sample_rate, channels, config)?)),
-        active: AtomicBool::new(true),
-        limited: finished,
-        first_callback_us: AtomicU64::new(0),
-    });
+    let buffer = CaptureBuffer::open(sample_rate, channels, config, finished)?;
     let stream_config = supported.config();
     macro_rules! build {
         ($sample:ty) => {
@@ -425,7 +447,7 @@ fn open_stream(
     }?;
     stream.play().context("cannot start microphone")?;
     Ok(OpenStream {
-        _stream: stream,
+        _stream: Box::new(stream),
         buffer,
         sample_rate,
         channels,
@@ -438,7 +460,50 @@ fn smooth_level(previous: f32, rms: f32, seconds: f32) -> f32 {
     previous + (rms - previous) * (1.0 - (-seconds / tau).exp())
 }
 
-fn build_stream<T: SizedSample>(
+/// The per-callback work shared by every capture backend: fill the recording,
+/// publish the level and wake the worker at the limit. Never blocks or allocates.
+fn input_handler<T: Sample>(
+    buffer: Arc<CaptureBuffer>,
+    sender: mpsc::SyncSender<Command>,
+    level: Arc<AtomicU32>,
+    generation: u64,
+    opened: Instant,
+    samples_per_second: f32,
+) -> impl FnMut(&[T])
+where
+    f32: FromSample<T>,
+{
+    let mut first = true;
+    let mut smoothed = 0.0;
+    move |input: &[T]| {
+        if first {
+            buffer.first_callback_us.store(
+                opened.elapsed().as_micros().max(1) as u64,
+                Ordering::Relaxed,
+            );
+            first = false;
+        }
+        if !buffer.active.load(Ordering::Acquire) {
+            smoothed = 0.0;
+            return;
+        }
+        // Worker only takes this lock to swap buffers. The bounded limit queue never allocates.
+        if let Ok(mut guard) = buffer.recording.lock() {
+            if let Some(recording) = guard.as_mut() {
+                let (rms, limit) = recording.push(input);
+                smoothed = smooth_level(smoothed, rms, input.len() as f32 / samples_per_second);
+                level.store(smoothed.to_bits(), Ordering::Relaxed);
+                if limit {
+                    buffer.active.store(false, Ordering::Release);
+                    buffer.limited.store(true, Ordering::Release);
+                    let _ = sender.try_send(Command::Limit(generation));
+                }
+            }
+        }
+    }
+}
+
+fn build_stream<T: SizedSample + 'static>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     buffer: Arc<CaptureBuffer>,
@@ -451,40 +516,19 @@ where
     f32: FromSample<T>,
 {
     let samples_per_second = config.sample_rate.0 as f32 * f32::from(config.channels);
-    let limit_sender = sender.clone();
     let error_buffer = buffer.clone();
-    let mut first = true;
-    let mut smoothed = 0.0;
+    let mut handle = input_handler::<T>(
+        buffer,
+        sender.clone(),
+        level,
+        generation,
+        opened,
+        samples_per_second,
+    );
     device
         .build_input_stream(
             config,
-            move |input: &[T], _| {
-                if first {
-                    buffer.first_callback_us.store(
-                        opened.elapsed().as_micros().max(1) as u64,
-                        Ordering::Relaxed,
-                    );
-                    first = false;
-                }
-                if !buffer.active.load(Ordering::Acquire) {
-                    smoothed = 0.0;
-                    return;
-                }
-                // Worker only takes this lock to swap buffers. The bounded limit queue never allocates.
-                if let Ok(mut guard) = buffer.recording.lock() {
-                    if let Some(recording) = guard.as_mut() {
-                        let (rms, limit) = recording.push(input);
-                        smoothed =
-                            smooth_level(smoothed, rms, input.len() as f32 / samples_per_second);
-                        level.store(smoothed.to_bits(), Ordering::Relaxed);
-                        if limit {
-                            buffer.active.store(false, Ordering::Release);
-                            buffer.limited.store(true, Ordering::Release);
-                            let _ = limit_sender.try_send(Command::Limit(generation));
-                        }
-                    }
-                }
-            },
+            move |input: &[T], _| handle(input),
             move |error| {
                 error_buffer.fail(error.to_string());
                 // Never block a CPAL callback on the worker that drops its stream.
@@ -493,6 +537,124 @@ where
             Some(Duration::from_secs(3)),
         )
         .context("cannot open microphone stream")
+}
+
+/// Echo cancellation follows the system default input and output; a chosen
+/// device keeps the plain microphone.
+// ponytail: default device only; set kAudioOutputUnitProperty_CurrentDevice when someone needs both.
+#[cfg(any(target_os = "macos", test))]
+fn voice_processing(config: &RecordingConfig) -> bool {
+    config.ignore_speakers && config.device.is_none()
+}
+
+/// Apple's voice processing (the FaceTime echo canceller). Measured on a
+/// MacBook Air: it removes what other apps play through the default output,
+/// but only while its own output element runs, so that plays silence. It
+/// exists only while the stream is open, like the plain microphone.
+#[cfg(target_os = "macos")]
+fn open_voice_unit(
+    config: &RecordingConfig,
+    sender: &mpsc::SyncSender<Command>,
+    level: &Arc<AtomicU32>,
+    generation: u64,
+    finished: &Arc<AtomicBool>,
+    opened: Instant,
+) -> Result<OpenStream> {
+    use coreaudio::audio_unit::{
+        audio_format::LinearPcmFlags,
+        render_callback::{data, Args},
+        AudioUnit, Element, IOType, SampleFormat, Scope, StreamFormat,
+    };
+    use coreaudio::sys;
+    // AUVoiceIOOtherAudioDuckingConfiguration (AudioUnitProperties.h, macOS 14+).
+    #[repr(C)]
+    struct Ducking {
+        advanced: u8,
+        level: u32,
+    }
+    // AudioUnit::new initializes; I/O and formats only apply before initialization.
+    let mut unit = AudioUnit::new(IOType::VoiceProcessingIO)?;
+    unit.uninitialize()?;
+    for (scope, element) in [
+        (Scope::Input, Element::Input),
+        (Scope::Output, Element::Output),
+    ] {
+        unit.set_property(
+            sys::kAudioOutputUnitProperty_EnableIO,
+            scope,
+            element,
+            Some(&1_u32),
+        )?;
+    }
+    let hardware: sys::AudioStreamBasicDescription = unit.get_property(
+        sys::kAudioUnitProperty_StreamFormat,
+        Scope::Input,
+        Element::Input,
+    )?;
+    let sample_rate = hardware.mSampleRate;
+    if !(8_000.0..=192_000.0).contains(&sample_rate) {
+        bail!("voice processing reported sample rate {sample_rate}");
+    }
+    let format = StreamFormat {
+        sample_rate,
+        sample_format: SampleFormat::F32,
+        flags: LinearPcmFlags::IS_FLOAT | LinearPcmFlags::IS_PACKED,
+        channels: 1,
+    }
+    .to_asbd();
+    // Capture leaves the input element; silence enters the output element.
+    // (set_stream_format only addresses the output element.)
+    for (scope, element) in [
+        (Scope::Output, Element::Input),
+        (Scope::Input, Element::Output),
+    ] {
+        unit.set_property(
+            sys::kAudioUnitProperty_StreamFormat,
+            scope,
+            element,
+            Some(&format),
+        )?;
+    }
+    unit.set_render_callback(|args: Args<data::Interleaved<f32>>| {
+        args.data.buffer.fill(0.0);
+        Ok(())
+    })?;
+    let sample_rate = sample_rate as u32;
+    let buffer = CaptureBuffer::open(sample_rate, 1, config, finished.clone())?;
+    let mut handle = input_handler::<f32>(
+        buffer.clone(),
+        sender.clone(),
+        level.clone(),
+        generation,
+        opened,
+        sample_rate as f32,
+    );
+    unit.set_input_callback(move |args: Args<data::Interleaved<f32>>| {
+        handle(args.data.buffer);
+        Ok(())
+    })?;
+    unit.initialize()?;
+    // Duck other apps' audio as little as possible (the default ducks it hard);
+    // cancellation held in testing. 2108 = OtherAudioDuckingConfiguration.
+    if let Err(error) = unit.set_property(
+        2108,
+        Scope::Global,
+        Element::Output,
+        Some(&Ducking {
+            advanced: 0,
+            level: 10,
+        }),
+    ) {
+        tracing::debug!(%error, "voice processing keeps default ducking");
+    }
+    unit.start()?;
+    Ok(OpenStream {
+        _stream: Box::new(unit),
+        buffer,
+        sample_rate,
+        channels: 1,
+        generation,
+    })
 }
 
 #[async_trait]
@@ -590,6 +752,20 @@ mod tests {
             Some(now + Duration::from_secs(2))
         );
         assert_eq!(warm_deadline(&config, false, now), None);
+    }
+    #[test]
+    fn speaker_cancelling_is_on_by_default_and_yields_to_a_chosen_microphone() {
+        assert!(voice_processing(&RecordingConfig::default()));
+        let off = RecordingConfig {
+            ignore_speakers: false,
+            ..Default::default()
+        };
+        assert!(!voice_processing(&off));
+        let usb = RecordingConfig {
+            device: Some("USB Microphone".into()),
+            ..Default::default()
+        };
+        assert!(!voice_processing(&usb));
     }
     #[test]
     fn levels_attack_quickly_and_decay_smoothly() {
