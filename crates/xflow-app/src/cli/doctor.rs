@@ -161,9 +161,13 @@ fn permission_checks(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<
         ),
         check(
             "Input Monitoring",
-            permissions.input_monitoring,
+            permissions.events(),
             true,
-            "xflowd keyboard access",
+            if permissions.input_monitoring {
+                "xflowd keyboard access"
+            } else {
+                "covered by Accessibility"
+            },
             INPUT_MONITORING_FIX,
         ),
     ];

@@ -259,8 +259,8 @@ impl Engine {
         matches!(self.state, State::Listening | State::Processing)
     }
     /// Clients' probes (status, check-up, onboarding) are the only trigger: no polling.
-    fn rearm(&mut self, input_monitoring: bool, completion: &mpsc::Sender<Completion>) {
-        if !input_monitoring
+    fn rearm(&mut self, events: bool, completion: &mpsc::Sender<Completion>) {
+        if !events
             || !self.hotkeys_blind
             || self.rearming
             || self.reloading
@@ -680,7 +680,7 @@ impl Engine {
         ) {
             if let Some(probe) = self.permission_probe {
                 let permissions = probe();
-                self.rearm(permissions.input_monitoring, completion);
+                self.rearm(permissions.events(), completion);
                 self.permissions = Some(permissions);
             }
         }
@@ -861,7 +861,7 @@ impl Engine {
                     Completion::Reloaded { result, reply } => {
                         self.reloading = false;
                         let learned = self.learned_during_reload.take();
-                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys_blind = !self.permissions.as_ref().is_some_and(|p| p.input_monitoring); retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
+                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys_blind = !self.permissions.as_ref().is_some_and(|p| p.events()); retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
                     }
                     Completion::Rearmed(result) => {
@@ -1505,20 +1505,9 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
             if let Some(warning) = permissions.warning() {
                 log("warn", warning);
             }
-            // Asking lists this executable in System Settings and prompts while undecided;
-            // a reinstalled binary starts with no grants. Once per start, off the runtime.
-            let missing: Vec<_> = [
-                (Grant::InputMonitoring, permissions.input_monitoring),
-                (Grant::Accessibility, permissions.accessibility),
-            ]
-            .into_iter()
-            .filter_map(|(grant, granted)| (!granted).then_some(grant))
-            .collect();
-            if !missing.is_empty() {
-                let _ = std::thread::Builder::new()
-                    .spawn(move || missing.into_iter().for_each(xflow_platform::request_access));
-            }
-            engine.hotkeys_blind = !permissions.input_monitoring && engine.config.hotkey.enabled;
+            // Nothing is asked here (a prompt mid-install is a surprise): grants are
+            // requested only when onboarding or Check-up sends Allow.
+            engine.hotkeys_blind = !permissions.events() && engine.config.hotkey.enabled;
             engine.permission_probe = Some(xflow_platform::permissions);
             engine.permission_request = Some(xflow_platform::request_access);
             engine.permissions = Some(permissions);
@@ -2317,16 +2306,18 @@ mod tests {
             assert!(response
                 .message
                 .unwrap()
-                .contains(xflow_core::ipc::INPUT_MONITORING_FIX));
+                .contains(xflow_core::ipc::ACCESSIBILITY_FIX));
         }
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
         for (accessibility, input, received, warning) in [
+            // Accessibility also lets the tap hear keys: no Input Monitoring needed.
+            (true, false, Some(true), None),
             (
                 true,
                 false,
-                Some(true),
-                Some(xflow_core::ipc::INPUT_MONITORING_FIX),
+                Some(false),
+                Some(xflow_core::ipc::UNVERIFIED_SHORTCUT),
             ),
             (
                 false,
@@ -2366,8 +2357,9 @@ mod tests {
         let (_keys, key_events) = mpsc::channel(4);
         engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
         engine.hotkeys_blind = true;
+        // Accessibility would cover the tap too; this is the Input Monitoring fallback.
         engine.permission_probe = Some(|| Permissions {
-            accessibility: true,
+            accessibility: false,
             input_monitoring: GRANTED.load(Ordering::SeqCst),
             keyboard_events: None,
             microphone: None,

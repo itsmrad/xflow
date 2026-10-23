@@ -188,8 +188,8 @@ pub struct Timings {
 }
 
 pub const INPUT_MONITORING_FIX: &str = "Input Monitoring is off for xflowd — run xflow, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
-pub const ACCESSIBILITY_FIX: &str = "Accessibility is off for xflowd — run xflow, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
-pub const UNVERIFIED_SHORTCUT: &str = "No keyboard events received by xflowd yet — press the shortcut to check it. If it stays silent, run xflow, open Check-up and fix Input Monitoring";
+pub const ACCESSIBILITY_FIX: &str = "Accessibility is off for xflowd (it types your words and hears your shortcut) — run xflow, open Check-up and press Enter on it, then find xflowd in the list and switch it on";
+pub const UNVERIFIED_SHORTCUT: &str = "No keyboard events received by xflowd yet — press the shortcut to check it. If it stays silent, run xflow and open Check-up";
 /// Bare executables are listed by path, so old copies leave look-alike rows behind.
 pub const STALE_ROWS: &str = "If you see xflowd already switched on, it's an old copy: select it and click −, then press Enter here.";
 
@@ -230,10 +230,13 @@ pub struct Permissions {
     pub microphone: Option<bool>,
 }
 impl Permissions {
+    /// The listen-only tap gets key events with either grant: Accessibility trust
+    /// covers it too (CGEventTapCreate), so Input Monitoring is only a fallback.
+    pub fn events(&self) -> bool {
+        self.input_monitoring || self.accessibility
+    }
     pub fn warning(&self) -> Option<&'static str> {
-        if !self.input_monitoring {
-            Some(INPUT_MONITORING_FIX)
-        } else if !self.accessibility {
+        if !self.accessibility {
             Some(ACCESSIBILITY_FIX)
         } else if self.keyboard_events == Some(false) {
             Some(UNVERIFIED_SHORTCUT)

@@ -864,13 +864,13 @@ fn setup(frame: &mut Frame, rect: Rect, app: &App, step: Step) {
         Step::Globe => ("Almost done · Globe key", "Your shortcut is the Fn (Globe) key, so set it to do nothing else: in System Settings › Keyboard, set “Press 🌐 key to” to “Do Nothing”.\n\nOtherwise each press also opens emoji or switches your input source.\n\nWaiting for the change — this moves on by itself.".into()),
         Step::Permissions => {
             let ask = match app.grant {
-                Some(Grant::InputMonitoring) => "In System Settings, switch on xflowd under Input Monitoring so your shortcut works in every app.",
-                Some(Grant::Accessibility) => "In System Settings, switch on xflowd under Accessibility so xflow can type your words into apps.",
+                Some(Grant::InputMonitoring) => "Your shortcut isn't reaching xflow yet. In System Settings, switch on xflowd under Input Monitoring.",
+                Some(Grant::Accessibility) => "In System Settings, switch on xflowd under Accessibility so xflow can hear your shortcut and type your words into apps.",
                 Some(Grant::Microphone) if app.microphone == Some(false) => "In System Settings, switch on xflowd under Microphone so xflow can hear you.",
                 _ => "Checking the microphone… If your Mac asks, click Allow.",
             };
-            // Lead with the stale-row fix: an old xflowd that looks on is the usual trap.
-            let stale = if app.grant != Some(Grant::Microphone) || app.microphone == Some(false) {
+            // Only after waiting a while or asking again: an old xflowd row that looks on.
+            let stale = if app.stale_hint() && (app.grant != Some(Grant::Microphone) || app.microphone == Some(false)) {
                 format!("{}\n\n", xflow_core::ipc::STALE_ROWS)
             } else {
                 String::new()

@@ -305,8 +305,7 @@ impl MacHotkeys {
                 (*context).tap = tap;
                 let _context = ContextGuard(context); // freed after the tap is invalidated
                 if tap.is_null() {
-                    let _ =
-                        ready_tx.send(Err(anyhow::anyhow!(xflow_core::ipc::INPUT_MONITORING_FIX)));
+                    let _ = ready_tx.send(Err(anyhow::anyhow!(xflow_core::ipc::ACCESSIBILITY_FIX)));
                     return;
                 }
                 let source = CFMachPortCreateRunLoopSource(ptr::null_mut(), tap, 0);
