@@ -50,7 +50,7 @@ fn retire(hotkeys: Option<Box<dyn GlobalHotkeys>>) {
 /// Status message while a double-tap has latched recording; the macOS pill keys off it.
 pub const HANDS_FREE: &str = "Hands-free recording";
 /// Status message once a capture open is slow, typically behind the macOS microphone prompt.
-const MIC_WAITING: &str = "Waiting for microphone permission";
+pub const MIC_WAITING: &str = "Waiting for microphone permission";
 const MIC_SLOW: Duration = Duration::from_secs(1);
 /// A late permission grant must not record for an expired request or gesture.
 const START_GRACE: Duration = Duration::from_secs(5);
@@ -333,7 +333,9 @@ impl Engine {
         let response = match result {
             Ok(()) if live => {
                 self.capture(opening);
-                self.status()
+                let mut r = self.status();
+                r.session = Some(self.generation);
+                r
             }
             result => {
                 let _ = self.services.audio.cancel().await;
@@ -345,8 +347,9 @@ impl Engine {
                 Response::error(self.state, self.message.as_deref().unwrap_or("canceled"))
             }
         };
-        if let Some(reply) = reply {
-            let _ = reply.send(response);
+        // A requester that left after the liveness check never learns of its session.
+        if reply.is_some_and(|reply| reply.send(response).is_err()) && self.active() {
+            let _ = self.cancel().await;
         }
     }
     fn capture(&mut self, opening: Opening) {
@@ -644,6 +647,11 @@ impl Engine {
                 }
             }
             Request::Cancel => self.cancel().await?,
+            Request::Abandon { session } => {
+                if session == self.generation && self.active() {
+                    self.cancel().await?;
+                }
+            }
             Request::Last => {
                 let mut r = self.status();
                 r.text = self.last.clone();
@@ -1445,7 +1453,7 @@ async fn connection(
     let subscribe = matches!(request, Request::Subscribe);
     // Subscribe first, then get an actor snapshot, avoiding missed state transitions.
     let mut receiver = events.subscribe();
-    let (reply_tx, reply_rx) = oneshot::channel();
+    let (reply_tx, mut reply_rx) = oneshot::channel();
     let closed = read_frame::<Request, _>(&mut reader);
     tokio::pin!(closed);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(9);
@@ -1458,10 +1466,17 @@ async fn connection(
             .await?;
         tokio::select! { biased;
             result = &mut closed => { let _ = result?; Ok(None) }
-            reply = reply_rx => reply.context("daemon is shutting down").map(Some),
+            reply = &mut reply_rx => reply.context("daemon is shutting down").map(Some),
         }
     })
     .await;
+    if !matches!(answer, Ok(Ok(Some(_)))) {
+        // The actor may have started capture just as the requester left; take that reply.
+        reply_rx.close();
+        if let Ok(response) = reply_rx.try_recv() {
+            abandon(&commands, response.session).await;
+        }
+    }
     // A live but busy daemon says so; closing silently reads as "daemon not running".
     let Some(response) = answer.unwrap_or_else(|_| {
         let mut r = Response::error(
@@ -1474,7 +1489,10 @@ async fn connection(
     else {
         return Ok(());
     };
-    write_frame(&mut write, &response).await?;
+    if let Err(e) = write_frame(&mut write, &response).await {
+        abandon(&commands, response.session).await;
+        return Err(e);
+    }
     if subscribe {
         // Keep the read future alive: canceling read_line can discard partial frames.
         loop {
@@ -1493,6 +1511,22 @@ async fn connection(
         }
     }
     Ok(())
+}
+/// Cancels a session whose start reply never reached its requester.
+async fn abandon(commands: &mpsc::Sender<Command>, session: Option<u64>) {
+    let Some(session) = session else { return };
+    let (reply, response) = oneshot::channel();
+    // Keep the reply receiver: the actor skips commands whose requester has gone.
+    if commands
+        .send(Command {
+            request: Request::Abandon { session },
+            reply,
+        })
+        .await
+        .is_ok()
+    {
+        let _ = response.await;
+    }
 }
 
 #[cfg(test)]
@@ -2705,6 +2739,37 @@ mod tests {
         assert_eq!(audio.cancels.load(Ordering::SeqCst), 2);
         let status = ask(&tx, Request::Status).await;
         assert_eq!((status.state, status.message), (State::Idle, None));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn start_reply_lost_to_a_disconnect_cancels_only_its_own_session() {
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let audio = Arc::new(GatedAudio::default());
+        engine.services.audio = audio.clone();
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let connection = tokio::spawn(connection(server, tx.clone(), engine.events.clone()));
+        let task = tokio::spawn(engine.run(rx));
+        write_frame(&mut client, &Request::start()).await.unwrap();
+        let waiting = hotkey_state(&mut events, State::Idle).await;
+        assert_eq!(waiting.message.as_deref(), Some(MIC_WAITING));
+        // No await between: the actor starts capture before the socket task sees EOF.
+        drop(client);
+        audio.open.notify_one();
+        hotkey_state(&mut events, State::Listening).await;
+        hotkey_state(&mut events, State::Idle).await;
+        let _ = connection.await.unwrap();
+        assert_eq!(audio.cancels.load(Ordering::SeqCst), 1);
+        // A late abandon for that session leaves a newer one alone.
+        audio.open.notify_one();
+        assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
+        let stale = ask(&tx, Request::Abandon { session: 1 }).await;
+        assert_eq!(stale.state, State::Listening);
+        ask(&tx, Request::Cancel).await;
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }

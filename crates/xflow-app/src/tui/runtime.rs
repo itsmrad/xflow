@@ -264,7 +264,7 @@ pub async fn run() -> Result<()> {
     }
     jobs.abort_all();
     while jobs.join_next().await.is_some() {}
-    if app.session_pending {
+    if app.session_pending || app.starts > 0 {
         let _ = transport::request(&Request::Cancel).await;
     }
     Ok(())
@@ -311,8 +311,8 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             }
         }
         Update::Reply(tag, result) => {
-            if matches!(tag, Tag::Session) && result.is_err() {
-                app.session_pending = false;
+            if matches!(tag, Tag::Session) {
+                app.starts = app.starts.saturating_sub(1);
             }
             match result {
                 Ok(response) => effects = app.response(response, tag),
@@ -408,7 +408,7 @@ fn dispatch(
     for mut effect in effects {
         if let Effect::Request(request, tag) = &mut effect {
             if matches!(request, Request::Start { .. } | Request::Toggle { .. }) && !app.active() {
-                app.session_pending = true;
+                app.starts += 1;
                 *tag = Tag::Session;
             }
         }
@@ -552,6 +552,7 @@ fn doctor() -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::MIC_WAITING;
     use tokio::io::AsyncWriteExt;
     use xflow_core::State;
 
@@ -562,17 +563,25 @@ mod tests {
         let (tx, _) = mpsc::channel(8);
         let mut jobs = JoinSet::new();
         let generation = Arc::new(AtomicU64::new(0));
-        let effects = app.action(Action::Toggle);
-        dispatch(effects, &mut app, &tx, &mut jobs, &generation);
+        let reply = |app: &mut App, response| {
+            handle(app, Update::Reply(Tag::Session, Ok(response)), &mut true);
+        };
+        // A second start while the first waits for the microphone is refused.
+        for _ in 0..2 {
+            let effects = app.action(Action::Toggle);
+            dispatch(effects, &mut app, &tx, &mut jobs, &generation);
+        }
         // Never poll these requests: fixtures must not connect to the user's daemon.
         jobs.abort_all();
-        assert!(app.session_pending);
-        app.event(Response::status(State::Idle, 0.0));
-        app.event(Response::status(State::Success, 0.0));
+        assert_eq!(app.starts, 2);
+        reply(&mut app, Response::error(State::Idle, MIC_WAITING));
         app.action(Action::Quit);
-        assert!(app.quit && app.session_pending);
-        app.response(Response::status(State::Listening, 0.0), Tag::Session);
-        assert!(app.session_pending);
+        assert!(
+            app.quit && app.starts == 1,
+            "a refusal dropped the first start"
+        );
+        reply(&mut app, Response::status(State::Listening, 0.0));
+        assert!(app.session_pending && app.starts == 0);
         app.event(Response::status(State::Listening, 0.0));
         app.event(Response::status(State::Idle, 0.0));
         assert!(!app.session_pending);
@@ -580,8 +589,21 @@ mod tests {
         let effects = app.action(Action::Toggle);
         dispatch(effects, &mut app, &tx, &mut jobs, &generation);
         jobs.abort_all();
-        assert!(!app.session_pending);
+        assert!(!app.session_pending && app.starts == 0);
         while jobs.join_next().await.is_some() {}
+    }
+    #[test]
+    fn reload_refused_while_the_microphone_opens_retries_when_idle() {
+        let mut app = App::new("unused".into(), ColorMode::TrueColor);
+        app.response(Response::error(State::Idle, MIC_WAITING), Tag::Reload);
+        let effects = handle(
+            &mut app,
+            Update::Event(Response::status(State::Idle, 0.0)),
+            &mut true,
+        );
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::Request(Request::Reload, Tag::Reload))));
     }
     #[test]
     fn key_write_reloads_only_after_success() {

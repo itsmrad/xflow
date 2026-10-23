@@ -308,7 +308,9 @@ pub struct App {
     pub saving: bool,
     /// The daemon was busy when we asked it to reload; ask again once it's idle.
     pub reload_pending: bool,
-    /// A TUI start or its unfinished recording; cancel it on exit.
+    /// TUI starts awaiting their reply; one may still begin a recording.
+    pub starts: usize,
+    /// A recording a TUI start began; cancel it on exit.
     pub session_pending: bool,
     pub connected: bool,
     pub connection: String,
@@ -387,6 +389,7 @@ impl App {
             toast: None,
             quit: false,
             reload_pending: false,
+            starts: 0,
             session_pending: false,
             colors,
             theme,
@@ -647,8 +650,9 @@ impl App {
         }
     }
     pub fn response(&mut self, response: Response, tag: Tag) -> Vec<Effect> {
-        if matches!(tag, Tag::Session) && (!response.ok || response.state != State::Listening) {
-            self.session_pending = false;
+        // Only the start that began capture owns it; another start's refusal doesn't.
+        if matches!(tag, Tag::Session) && response.ok && response.state == State::Listening {
+            self.session_pending = true;
         }
         if let Tag::History(generation) = tag {
             if generation != self.generation {
@@ -668,7 +672,10 @@ impl App {
                 .message
                 .unwrap_or_else(|| "xflow couldn't do that".into());
             self.toast = Some(match tag {
-                Tag::Reload if message.contains("idle daemon") => {
+                Tag::Reload
+                    if message.contains("idle daemon")
+                        || message.starts_with(crate::daemon::MIC_WAITING) =>
+                {
                     self.reload_pending = true;
                     "Saved — applies when this dictation finishes.".into()
                 }
