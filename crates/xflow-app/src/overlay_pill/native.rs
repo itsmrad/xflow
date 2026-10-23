@@ -83,7 +83,7 @@ impl Rect {
 
 // Geometry in points before the `scale` setting. The window is sized for the
 // widest (hands-free) capsule so width changes never move the window.
-const WIN_W: f64 = 158.0;
+const WIN_W: f64 = 300.0;
 const WIN_H: f64 = 38.0;
 const PILL_H: f64 = 34.0;
 const LISTEN_W: f64 = 110.0;
@@ -273,15 +273,16 @@ pub(super) fn run(
                     }
                     // A final success/error frame, or EOF/garbage meaning idle.
                     other => {
-                        let state = match other {
-                            Ok(Some(event)) => event.state,
-                            _ => State::Idle,
+                        let event = match other {
+                            Ok(Some(event)) => event,
+                            _ => PillEvent {
+                                state: State::Idle,
+                                level: 0.0,
+                                hands_free: false,
+                                copied: false,
+                            },
                         };
-                        let _ = events_tx.send(PillEvent {
-                            state,
-                            level: 0.0,
-                            hands_free: false,
-                        });
+                        let _ = events_tx.send(event);
                         break;
                     }
                 }
@@ -365,6 +366,14 @@ pub(super) fn run(
         let square = layer(stop, white, 1.5 * s);
         place(square, BUTTON * s / 2.0, BUTTON * s / 2.0, 8.0 * s, 8.0 * s);
 
+        let copied_label = msg!(class(c"CATextLayer"), c"layer"; Id);
+        msg!(copied_label, c"setString:", string(c"Copied — press ⌘V to paste") => Id; ());
+        msg!(copied_label, c"setFontSize:", 12.0 * s => f64; ());
+        msg!(copied_label, c"setAlignmentMode:", string(c"center") => Id; ());
+        msg!(copied_label, c"setForegroundColor:", white => Id; ());
+        msg!(copied_label, c"setContentsScale:", msg!(screen, c"backingScaleFactor"; f64) => f64; ());
+        msg!(capsule, c"addSublayer:", copied_label => Id; ());
+
         msg!(app, c"finishLaunching"; ());
         msg!(panel, c"orderFrontRegardless"; ());
 
@@ -386,7 +395,11 @@ pub(super) fn run(
                     }
                     state = event;
                 } else {
+                    state = event;
                     closing.get_or_insert((Instant::now(), event.state));
+                    if event.copied {
+                        msg!(panel, c"setAccessibilityLabel:", string(c"Copied — press ⌘V to paste") => Id; ());
+                    }
                 }
             }
             let now = Instant::now();
@@ -403,7 +416,14 @@ pub(super) fn run(
             } else {
                 1.0 - (-dt / 70.0).exp()
             };
-            width += ((if hands_free { HANDS_FREE_W } else { LISTEN_W }) - width) * follow;
+            width += ((if state.copied {
+                290.0
+            } else if hands_free {
+                HANDS_FREE_W
+            } else {
+                LISTEN_W
+            }) - width)
+                * follow;
             buttons += (f64::from(u8::from(hands_free)) - buttons) * follow;
             let appear = if reduce_motion {
                 1.0
@@ -415,7 +435,13 @@ pub(super) fn run(
             if let Some((at, final_state)) = closing {
                 let e = at.elapsed().as_secs_f64();
                 error = final_state == State::Error;
-                let fade_from = if error { 0.45 } else { 0.0 };
+                let fade_from = if state.copied {
+                    3.0
+                } else if error {
+                    0.45
+                } else {
+                    0.0
+                };
                 let fade = if reduce_motion { 0.0 } else { 0.15 };
                 if e >= fade_from + fade {
                     msg!(tick_pool, c"drain"; ());
@@ -445,12 +471,14 @@ pub(super) fn run(
             transform(capsule, scale, 0.0, shake);
             msg!(capsule, c"setOpacity:", (alpha * opacity) as f32 => f32; ());
             msg!(capsule, c"setBackgroundColor:", if error { alarm } else { dark } => Id; ());
+            place(copied_label, w / 2.0, h / 2.0, w - 16.0 * s, 16.0 * s);
+            msg!(copied_label, c"setOpacity:", if state.copied { 1.0f32 } else { 0.0f32 } => f32; ());
             let pitch = (BAR_W + BAR_GAP) * s;
             let first_x = w / 2.0 - pitch * (BARS - 1) as f64 / 2.0;
             for (i, (&bar, (height, bar_alpha))) in bars.iter().zip(heights).enumerate() {
                 let bar_h = BAR_W * s + (BAR_MAX - BAR_W) * s * height;
                 place(bar, first_x + i as f64 * pitch, h / 2.0, BAR_W * s, bar_h);
-                msg!(bar, c"setOpacity:", bar_alpha as f32 => f32; ());
+                msg!(bar, c"setOpacity:", if state.copied { 0.0f32 } else { bar_alpha as f32 } => f32; ());
             }
             let inset = (PILL_H - BUTTON) / 2.0 * s + BUTTON * s / 2.0;
             place(cancel, inset, h / 2.0, BUTTON * s, BUTTON * s);
