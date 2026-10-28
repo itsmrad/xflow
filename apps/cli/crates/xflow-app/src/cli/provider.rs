@@ -181,13 +181,16 @@ pub fn key(
         None if legacy.is_some() => save_key(path, legacy.unwrap(), stdin, out),
         Some(args::Key::Remove { provider }) => {
             credential_provider(provider)?;
-            ipc::block_on(async {
+            let note = ipc::block_on(async {
                 xflow_providers::delete_key(provider)
                     .await
                     .map_err(Error::provider)
             })?;
             ipc::reload_if_running(path, out)?;
-            out.confirm("Stored key removed; environment overrides are unchanged")?;
+            out.confirm(&match note {
+                Some(note) => format!("Stored key removed; {note}"),
+                None => "Stored key removed; environment overrides are unchanged".into(),
+            })?;
             Ok(())
         }
         Some(args::Key::Status { provider }) => key_status(path, provider.as_deref(), out),

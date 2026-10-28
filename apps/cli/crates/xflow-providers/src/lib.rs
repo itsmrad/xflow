@@ -453,18 +453,25 @@ pub async fn key_status(provider: &str, api_key_env: Option<&str>) -> KeySource 
     }
 }
 /// Remove a stored key, and any copy an older build left in the OS keychain.
-pub async fn delete_key(provider: &str) -> Result<()> {
+/// Some(note) when the stored key is gone but an older keychain copy couldn't
+/// be deleted yet: it's never used again and its deletion is retried.
+pub async fn delete_key(provider: &str) -> Result<Option<String>> {
     validate_provider(provider)?;
     let provider = provider.to_owned();
     blocking(move || {
-        keystore::Store::open()?.remove(&provider)?;
-        // Best effort: an item this build can't delete is never read again once
-        // the migration is complete.
-        let _ = legacy_delete(&provider);
-        Ok::<_, anyhow::Error>(())
+        let store = keystore::Store::open()?;
+        store.remove(&provider)?;
+        if keychain_off() {
+            return Ok(None);
+        }
+        match legacy_delete(&provider) {
+            Ok(()) => store.deleted_from_keychain(&provider).map(|()| None),
+            Err(e) => Ok(Some(format!(
+                "an older keychain copy wasn't deleted yet ({e:#}); xflow won't use it and retries"
+            ))),
+        }
     })
-    .await??;
-    Ok(())
+    .await?
 }
 /// Persist encrypted in xflow's keystore; environment variables take precedence.
 pub async fn save_key(provider: &str, secret: &str) -> Result<()> {

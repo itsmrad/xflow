@@ -49,6 +49,10 @@ struct Contents {
     /// Moved here, but the keychain copy isn't confirmed deleted yet.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pending_delete: BTreeSet<String>,
+    /// Removed by the user while the migration is unfinished: never imported
+    /// again, and their keychain copy is deleted (via `pending_delete`).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    removed: BTreeSet<String>,
     #[serde(default)]
     entries: BTreeMap<String, Sealed>,
 }
@@ -153,13 +157,30 @@ impl Store {
         let mut contents = self.load_for_write()?;
         let sealed = self.seal(provider, secret)?;
         contents.entries.insert(provider.to_owned(), sealed);
+        contents.removed.remove(provider);
         self.save(&contents)
     }
+    /// Removes the key for good: while the keychain migration is unfinished, the
+    /// removal is recorded so no later (or in-flight) migration brings it back,
+    /// and the keychain copy is queued for deletion.
     pub fn remove(&self, provider: &str) -> Result<()> {
         let _lock = self.lock()?;
         let mut contents = self.load_for_write()?;
-        let pending = contents.pending_delete.remove(provider);
-        if contents.entries.remove(provider).is_some() || pending {
+        let mut changed = contents.entries.remove(provider).is_some();
+        if !contents.migrated_keychain {
+            changed |= contents.removed.insert(provider.to_owned());
+            changed |= contents.pending_delete.insert(provider.to_owned());
+        }
+        if changed {
+            self.save(&contents)?;
+        }
+        Ok(())
+    }
+    /// The keychain copy of `provider` is confirmed deleted.
+    pub fn deleted_from_keychain(&self, provider: &str) -> Result<()> {
+        let _lock = self.lock()?;
+        let mut contents = self.load_for_write()?;
+        if contents.pending_delete.remove(provider) {
             self.save(&contents)?;
         }
         Ok(())
@@ -179,8 +200,9 @@ impl Store {
     /// Move keys out of the OS keychain, once. `read` is Ok(None) only when there
     /// is no item; Err (needs approval, service unavailable) leaves the item and
     /// the migration runs again next time. A keychain copy is deleted only after
-    /// its stored copy reads back from disk; until `delete` confirms, it stays
-    /// pending and is retried. Returns the ids that couldn't be read.
+    /// its stored copy reads back from disk (or the user removed the key); until
+    /// `delete` confirms, it stays pending and is retried. A removed key is never
+    /// imported. Returns the ids that couldn't be read.
     pub fn migrate(
         &self,
         ids: &[&str],
@@ -193,22 +215,28 @@ impl Store {
         }
         let (mut found, mut blocked) = (vec![], vec![]);
         // A key saved here wins: its keychain copy is neither read nor deleted
-        // (unless this migration moved it and its deletion is pending).
-        for &id in ids.iter().filter(|id| !before.entries.contains_key(**id)) {
+        // (unless this migration moved it and its deletion is pending). A key the
+        // user removed is never read back.
+        let skip = |id: &str| before.entries.contains_key(id) || before.removed.contains(id);
+        for &id in ids.iter().filter(|id| !skip(id)) {
             match read(id) {
                 Ok(Some(secret)) if !secret.is_empty() => found.push((id, secret)),
                 Ok(_) => {}
                 Err(_) => blocked.push(id.to_owned()),
             }
         }
-        let pending = if found.is_empty() {
-            before.pending_delete
+        let (pending, removed) = if found.is_empty() {
+            (before.pending_delete, before.removed)
         } else {
             // Read without the lock (a foreground read may wait on the user), then
-            // merge into the current file: a concurrent `xflow key set` wins.
+            // merge into the current file: a concurrent `xflow key set` or
+            // `xflow key remove` wins.
             let _lock = self.lock()?;
             let mut contents = self.load_for_write()?;
             for (id, secret) in &found {
+                if contents.removed.contains(*id) {
+                    continue;
+                }
                 if !contents.entries.contains_key(*id) {
                     let sealed = self.seal(id, secret)?;
                     contents.entries.insert((*id).to_owned(), sealed);
@@ -216,11 +244,12 @@ impl Store {
                 contents.pending_delete.insert((*id).to_owned());
             }
             self.save(&contents)?;
-            contents.pending_delete
+            (contents.pending_delete, contents.removed)
         };
         let deleted: Vec<_> = pending
             .iter()
-            .filter(|id| matches!(self.get(id), Ok((Some(_), _))) && delete(id).is_ok())
+            .filter(|id| removed.contains(*id) || matches!(self.get(id), Ok((Some(_), _))))
+            .filter(|id| delete(id).is_ok())
             .collect();
         let done = blocked.is_empty() && deleted.len() == pending.len();
         if !deleted.is_empty() || done {
@@ -230,6 +259,10 @@ impl Store {
                 contents.pending_delete.remove(id);
             }
             contents.migrated_keychain = blocked.is_empty() && contents.pending_delete.is_empty();
+            if contents.migrated_keychain {
+                // The keychain is never read again: nothing left to keep out.
+                contents.removed.clear();
+            }
             self.save(&contents)?;
         }
         Ok(blocked)
@@ -309,7 +342,8 @@ impl Store {
     /// Serializes writers (CLI, TUI, xflowd); readers tolerate the atomic rename.
     fn lock(&self) -> Result<File> {
         let dir = Dir::open(&self.config, true)?.context("keystore directory unavailable")?;
-        let file = dir.open_file("credentials.lock", libc::O_RDWR | libc::O_CREAT, 0o600)?;
+        let flags = libc::O_RDWR | libc::O_CREAT | libc::O_NONBLOCK;
+        let file = dir.open_file("credentials.lock", flags, 0o600)?;
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
             bail!("could not lock {}", self.config.display());
         }
@@ -408,7 +442,9 @@ fn read_private(dir: &Path, name: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
     let Some(dir) = Dir::open(dir, false)? else {
         return Ok(None);
     };
-    let file = match dir.open_file(name, libc::O_RDONLY, 0) {
+    // Non-blocking: a FIFO planted here must fail the type check below, not hang
+    // the open. Regular files ignore the flag.
+    let file = match dir.open_file(name, libc::O_RDONLY | libc::O_NONBLOCK, 0) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => bail!(
@@ -870,16 +906,94 @@ mod tests {
         assert!(store.migrated().unwrap());
     }
     #[test]
-    fn removing_a_key_drops_its_pending_delete() {
+    fn removed_key_is_never_restored_by_migration() {
         let (_dir, store) = store();
-        let read = |_: &str| Ok(Some(Zeroizing::new(SENTINEL.to_owned())));
+        let keychain = RefCell::new(BTreeMap::from([("groq", SENTINEL)]));
+        let read = |id: &str| -> Result<Option<Zeroizing<String>>> {
+            Ok(keychain
+                .borrow()
+                .get(id)
+                .map(|v| Zeroizing::new(v.to_string())))
+        };
+        let ids = ["groq", "openai"];
+        // Moved, but the keychain delete fails; then the user removes the key and
+        // the remove's own keychain delete fails too.
         store
-            .migrate(&["groq"], read, |_| bail!("delete failed"))
+            .migrate(&ids, read, |_| bail!("delete failed"))
             .unwrap();
         store.remove("groq").unwrap();
-        assert!(file_json(&store).get("pending_delete").is_none());
-        assert!(store.migrate(&[], read, |_| Ok(())).unwrap().is_empty());
+        for _ in 0..2 {
+            store
+                .migrate(&ids, read, |_| bail!("delete failed"))
+                .unwrap();
+            assert_eq!(get(&store, "groq").unwrap(), None, "removed key came back");
+            assert!(!store.migrated().unwrap());
+        }
+        // The deletion goes through later: done, and still gone.
+        let delete = |id: &str| -> Result<()> {
+            keychain.borrow_mut().remove(id);
+            Ok(())
+        };
+        store.migrate(&ids, read, delete).unwrap();
+        assert!(keychain.borrow().is_empty());
         assert!(store.migrated().unwrap());
+        assert_eq!(get(&store, "groq").unwrap(), None);
+        let json = file_json(&store);
+        assert!(json.get("removed").is_none() && json.get("pending_delete").is_none());
+    }
+    #[test]
+    fn removal_during_an_in_flight_migration_wins() {
+        let (_dir, store) = store();
+        // The read runs outside the lock; another process removes the key before
+        // the migration commits its (now stale) read.
+        let read = |_: &str| -> Result<Option<Zeroizing<String>>> {
+            store.remove("groq").unwrap();
+            Ok(Some(Zeroizing::new(SENTINEL.to_owned())))
+        };
+        let deleted = RefCell::new(vec![]);
+        let delete = |id: &str| -> Result<()> {
+            deleted.borrow_mut().push(id.to_owned());
+            Ok(())
+        };
+        store.migrate(&["groq"], read, delete).unwrap();
+        assert_eq!(get(&store, "groq").unwrap(), None);
+        assert_eq!(*deleted.borrow(), ["groq"]);
+        assert!(store.migrated().unwrap());
+    }
+    #[test]
+    fn a_key_set_again_after_removal_is_kept() {
+        let (_dir, store) = store();
+        store.remove("groq").unwrap();
+        store.set("groq", "fresh").unwrap();
+        let read = |_: &str| Ok(Some(Zeroizing::new("old".to_owned())));
+        store.migrate(&["groq"], read, |_| Ok(())).unwrap();
+        assert_eq!(get(&store, "groq").unwrap().as_deref(), Some("fresh"));
+        assert!(store.migrated().unwrap());
+    }
+    #[test]
+    fn a_fifo_in_place_of_a_store_file_is_refused_not_waited_on() {
+        for name in [CREDENTIALS, KEY] {
+            let (_dir, store) = store();
+            store.set("groq", SENTINEL).unwrap();
+            let dir = if name == KEY {
+                &store.data
+            } else {
+                &store.config
+            };
+            std::fs::remove_file(dir.join(name)).unwrap();
+            let path = CString::new(dir.join(name).as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (config, data) = (store.config.clone(), store.data.clone());
+            std::thread::spawn(move || {
+                let _ = tx.send(Store::at(&config, &data).get("groq").map(|_| ()));
+            });
+            let result = rx
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap_or_else(|_| panic!("reading a FIFO {name} hung"));
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("not a regular file"), "{error}");
+        }
     }
     #[test]
     fn check_reports_whether_anything_is_stored() {
