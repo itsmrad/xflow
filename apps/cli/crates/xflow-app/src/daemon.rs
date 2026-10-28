@@ -531,8 +531,8 @@ impl Engine {
         let stopped = Instant::now();
         self.started = None;
         self.silent_since = None;
-        // Segments sent while recording get one retry; the tail, like a short
-        // dictation, fails fast instead of doubling a provider timeout.
+        // Whatever the capture holds, even if its stream just failed.
+        self.drain().await;
         let live = self.segments.count;
         let mut warning = None;
         match self.services.audio.stop().await {
@@ -629,6 +629,13 @@ impl Engine {
         segments.heard = true;
         let (stt, config) = (self.services.stt.clone(), self.config.clone());
         segments.sent.spawn(async move {
+            // Every upload is 16 kHz mono anyway; holding that copy for a retry instead
+            // of native-rate audio cuts in-flight memory 3–6x.
+            let audio = tokio::task::spawn_blocking(move || {
+                xflow_providers::upload_audio(&audio).unwrap_or(audio)
+            })
+            .await
+            .expect("audio conversion panicked");
             (
                 index,
                 transcribe_segment(&*stt, audio, activity.low_energy, &config).await,
@@ -653,33 +660,60 @@ impl Engine {
         let mut timings = self.timings.clone();
         self.job = Some(tokio::spawn(async move {
             let result = async {
-                let mut pieces = Vec::with_capacity(sent.len());
+                let (mut pieces, mut failed) = (Vec::with_capacity(sent.len()), None);
                 while let Some(joined) = sent.join_next().await {
-                    pieces.push(joined.context("transcription task failed")?);
+                    match joined {
+                        Ok(piece) => pieces.push(piece),
+                        Err(e) => {
+                            failed.get_or_insert(anyhow::Error::new(e).context("transcription task failed"));
+                        }
+                    }
                 }
                 pieces.sort_by_key(|(index, _)| *index);
+                // A segmented dictation retries each failed segment once and keeps the rest:
+                // one bad upload never discards minutes of transcribed speech. A single
+                // short clip still fails fast instead of doubling a provider timeout.
+                let segmented = live > 0 || pieces.len() + usize::from(failed.is_some()) > 1;
+                if let Some(e) = failed.take_if(|_| !segmented) {
+                    return Err(e);
+                }
                 let (mut parts, mut language) = (Vec::with_capacity(pieces.len()), None);
-                for (index, piece) in pieces {
-                    let transcript = match piece {
-                        Ok(transcript) => transcript,
-                        Err((_, audio, low_energy)) if index < live => {
-                            transcribe_segment(&*services.stt, audio, low_energy, &config)
-                                .await
-                                .map_err(|(e, ..)| e)?
+                for (_, piece) in pieces {
+                    let piece = match piece {
+                        Err((_, audio, low_energy)) if segmented => {
+                            transcribe_segment(&*services.stt, audio, low_energy, &config).await
+                        }
+                        piece => piece,
+                    };
+                    match piece {
+                        Ok(transcript) => {
+                            language = language.or(transcript.language);
+                            parts.push(transcript.text);
+                        }
+                        Err((e, ..)) if segmented => {
+                            failed.get_or_insert(e);
                         }
                         Err((e, ..)) => return Err(e),
-                    };
-                    language = language.or(transcript.language);
-                    parts.push(transcript.text);
+                    }
                 }
                 timings.stt_ms = ms(stopped.elapsed());
-                let raw = join_parts(&parts);
+                let raw = join_parts(&parts, language.as_deref().or(config.stt.language.as_deref()));
                 if raw.len() > 32 * 1024 {
                     bail!("transcript exceeds 32 KiB safety limit");
                 }
                 if raw.is_empty() {
-                    return Ok(None);
+                    return failed.map_or(Ok(None), Err);
                 }
+                let warning = match (warning, failed) {
+                    (warning, None) => warning,
+                    (warning, Some(e)) => {
+                        let lost = format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered");
+                        Some(bounded_message(&match warning {
+                            Some(warning) => format!("{warning}; {lost}"),
+                            None => lost,
+                        }))
+                    }
+                };
                 let target = if let Some(ref mut job) = context {
                     match tokio::time::timeout(Duration::from_secs(2), &mut *job).await {
                         Ok(Ok(c)) => c,
@@ -1502,13 +1536,18 @@ async fn transcribe_segment(
         Err(error) => Err((error, audio, low_energy)),
     }
 }
-fn join_parts(parts: &[String]) -> String {
+fn join_parts(parts: &[String], language: Option<&str>) -> String {
+    // Chinese, Japanese and Thai don't put spaces between words.
+    let separator = match language.map(str::to_ascii_lowercase).as_deref() {
+        Some("zh" | "ja" | "th" | "chinese" | "japanese" | "thai") => "",
+        _ => " ",
+    };
     parts
         .iter()
         .map(|part| part.trim())
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(separator)
 }
 fn vocabulary(config: &Config) -> Vec<String> {
     if config.dictionary.words.is_empty() {
@@ -1630,8 +1669,11 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let config = match crate::config_edit::migrate_recording_limit(&config_path, &marker) {
         Ok(true) => Config::load(&config_path)?,
         Ok(false) => config,
-        Err(_) => {
-            log("warn", "could not migrate the legacy recording limit");
+        Err(error) => {
+            log(
+                "warn",
+                &format!("could not migrate the legacy recording limit: {error:#}"),
+            );
             config
         }
     };
@@ -2793,6 +2835,8 @@ mod tests {
         drained: usize,
         cursor: Mutex<usize>,
         stop_fails: bool,
+        /// The stream failed: drain hands over the rest, as the capture worker does.
+        failed: AtomicBool,
     }
     impl StreamAudio {
         /// A rising ramp, so each sample's value identifies its position.
@@ -2805,6 +2849,7 @@ mod tests {
                 drained: drained_seconds * 16_000,
                 cursor: Mutex::new(0),
                 stop_fails,
+                failed: AtomicBool::new(false),
             }
         }
         fn clip(samples: &[f32]) -> AudioClip {
@@ -2840,11 +2885,16 @@ mod tests {
         }
         async fn drain(&self) -> Result<Option<AudioClip>> {
             let mut cursor = self.cursor.lock().unwrap();
-            if *cursor > 0 {
+            let end = if *cursor == 0 {
+                self.drained
+            } else if self.failed.load(Ordering::SeqCst) {
+                self.samples.len()
+            } else {
                 return Ok(None);
-            }
-            *cursor = self.drained;
-            Ok(Some(Self::clip(&self.samples[..self.drained])))
+            };
+            let clip = Self::clip(&self.samples[*cursor..end]);
+            *cursor = end;
+            Ok((!clip.samples.is_empty()).then_some(clip))
         }
         fn level(&self) -> f32 {
             0.2
@@ -2857,6 +2907,8 @@ mod tests {
         audio: Option<Arc<StreamAudio>>,
         clips: Mutex<Vec<AudioClip>>,
         failures: AtomicUsize,
+        /// Segments (by start, ms) that fail on every attempt.
+        broken: Option<fn(usize) -> bool>,
         hang: bool,
         dropped: Arc<AtomicUsize>,
     }
@@ -2878,12 +2930,13 @@ mod tests {
             if self.hang {
                 std::future::pending::<()>().await;
             }
-            if self
-                .failures
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-                .is_ok()
+            if self.broken.is_some_and(|broken| broken(start))
+                || self
+                    .failures
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
             {
-                bail!("network unreachable");
+                bail!("provider returned HTTP 500");
             }
             tokio::time::sleep(Duration::from_millis(
                 400u64.saturating_sub(start as u64 / 500),
@@ -2984,15 +3037,18 @@ mod tests {
     }
     #[tokio::test]
     async fn a_lost_microphone_keeps_the_audio_captured_before_it() {
-        let audio = Arc::new(StreamAudio::ramp(150, 150, true));
+        // 140 s drained while recording; the last 10 s are still in the capture
+        // buffer when the stream fails, and must not be lost with it.
+        let audio = Arc::new(StreamAudio::ramp(150, 140, true));
         let stt = Arc::new(SegmentStt {
             audio: Some(audio.clone()),
             ..SegmentStt::default()
         });
-        let (engine, tx, rx, mut events, desktop) = segment_fixture(audio, stt.clone());
+        let (engine, tx, rx, mut events, desktop) = segment_fixture(audio.clone(), stt.clone());
         let task = tokio::spawn(engine.run(rx));
         ask(&tx, Request::start()).await;
         wait_for(|| !stt.clips.lock().unwrap().is_empty()).await;
+        audio.failed.store(true, Ordering::SeqCst);
         ask(&tx, Request::Stop).await;
         let done = success(&mut events).await;
         assert!(done
@@ -3001,6 +3057,165 @@ mod tests {
             .contains("device disconnected; transcribed the audio captured before it"));
         assert!(desktop.injections.lock().unwrap()[0].starts_with("at0 at"));
         assert_eq!(done.timings.unwrap().audio_ms, 150_000);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_segment_that_keeps_failing_loses_only_its_own_text() {
+        // 5 minutes; segments start every ~30.1 s and the tail starts at 241 s.
+        let tail: fn(usize) -> bool = |start| start >= 240_000;
+        let middle: fn(usize) -> bool = |start| (60_000..61_000).contains(&start);
+        for (broken, lost) in [(tail, "at241"), (middle, "at60")] {
+            let audio = Arc::new(StreamAudio::ramp(300, 290, false));
+            let stt = Arc::new(SegmentStt {
+                audio: Some(audio.clone()),
+                broken: Some(broken),
+                ..SegmentStt::default()
+            });
+            let (engine, tx, rx, mut events, desktop) = segment_fixture(audio.clone(), stt.clone());
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            wait_for(|| stt.clips.lock().unwrap().len() >= 4).await;
+            ask(&tx, Request::Stop).await;
+            let done = success(&mut events).await;
+            let message = done.message.unwrap();
+            assert!(
+                message.contains("Part of the dictation could not be transcribed")
+                    && message.contains("HTTP 500"),
+                "{message}"
+            );
+            let text = desktop.injections.lock().unwrap()[0].clone();
+            assert!(
+                text.starts_with("at0 at30") && !text.contains(lost),
+                "{text}"
+            );
+            let attempts = {
+                let clips = stt.clips.lock().unwrap();
+                clips.iter().filter(|c| broken(audio.position(c))).count()
+            };
+            assert_eq!(attempts, 2, "the failing segment is retried once");
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn a_dictation_with_nothing_transcribed_still_fails() {
+        let audio = Arc::new(StreamAudio::ramp(100, 90, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            broken: Some(|_| true),
+            ..SegmentStt::default()
+        });
+        let (engine, tx, rx, mut events, desktop) = segment_fixture(audio, stt);
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        ask(&tx, Request::Stop).await;
+        let failed = hotkey_state(&mut events, State::Error).await;
+        assert!(failed.message.unwrap().contains("HTTP 500"));
+        assert!(desktop.injections.lock().unwrap().is_empty());
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_short_dictation_fails_fast_without_a_retry() {
+        let audio = Arc::new(StreamAudio::ramp(20, 20, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            broken: Some(|_| true),
+            ..SegmentStt::default()
+        });
+        let (engine, tx, rx, mut events, _) = segment_fixture(audio, stt.clone());
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        hotkey_state(&mut events, State::Error).await;
+        assert_eq!(stt.clips.lock().unwrap().len(), 1);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[test]
+    fn segments_join_without_spaces_in_languages_written_without_them() {
+        let parts = ["今日は".to_string(), " 晴れです。".into(), "".into()];
+        assert_eq!(join_parts(&parts, Some("ja")), "今日は晴れです。");
+        assert_eq!(join_parts(&parts, Some("Chinese")), "今日は晴れです。");
+        let parts = ["Ship it.".to_string(), "  Then rest. ".into()];
+        assert_eq!(join_parts(&parts, Some("en")), "Ship it. Then rest.");
+        assert_eq!(join_parts(&parts, None), "Ship it. Then rest.");
+    }
+    /// Native-rate audio returned whole at stop (no drain), like #79's debug hook.
+    struct WholeClip(AudioClip);
+    #[async_trait]
+    impl AudioCapture for WholeClip {
+        async fn start(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<AudioClip> {
+            Ok(self.0.clone())
+        }
+        async fn cancel(&self) -> Result<()> {
+            Ok(())
+        }
+        fn level(&self) -> f32 {
+            0.2
+        }
+    }
+    #[derive(Default)]
+    struct FormatStt(Mutex<Vec<(u32, u16, usize)>>);
+    #[async_trait]
+    impl SpeechToText for FormatStt {
+        fn name(&self) -> &str {
+            "fixture"
+        }
+        async fn transcribe(&self, clip: AudioClip, _: TranscriptionOptions) -> Result<Transcript> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((clip.sample_rate, clip.channels, clip.samples.len()));
+            Ok(Transcript {
+                text: "part".into(),
+                language: None,
+            })
+        }
+    }
+    #[tokio::test]
+    async fn segments_are_held_and_sent_at_16_khz_mono() {
+        // 62 s of 32 kHz stereo tone: two segments, downmixed and resampled.
+        let samples = (0..32_000 * 62)
+            .flat_map(|i| {
+                let s = 0.3 * (i as f32 * 0.05).sin();
+                [s, s]
+            })
+            .collect();
+        let desktop = Arc::new(RecordingDesktop::default());
+        let store = Store::open(std::path::Path::new("unused"), false, 5).unwrap();
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop.clone(), store);
+        let stt = Arc::new(FormatStt::default());
+        engine.services.audio = Arc::new(WholeClip(AudioClip {
+            samples,
+            sample_rate: 32_000,
+            channels: 2,
+        }));
+        engine.services.stt = stt.clone();
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        // Debug-build resampling is slow next to the parallel suite.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while events.recv().await.unwrap().state != State::Success {}
+        })
+        .await
+        .unwrap();
+        let clips = stt.0.lock().unwrap().clone();
+        assert_eq!(clips.len(), 2);
+        assert!(clips
+            .iter()
+            .all(|&(rate, channels, _)| (rate, channels) == (16_000, 1)));
+        let frames: usize = clips.iter().map(|&(.., len)| len).sum();
+        assert!(frames.abs_diff(16_000 * 62) <= 2, "{frames}");
+        assert_eq!(desktop.injections.lock().unwrap()[0].trim(), "part part");
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }

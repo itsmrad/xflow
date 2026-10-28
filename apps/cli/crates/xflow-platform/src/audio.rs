@@ -378,11 +378,14 @@ impl CpalCapture {
                             let _ = reply.send(Ok(()));
                         }
                         Command::Drain(reply) => {
-                            let result = match &stream {
-                                Some(open) if open.buffer.active.load(Ordering::Acquire) => {
-                                    open.buffer.drain()
+                            // Also after a failure or limit, so the audio captured before
+                            // it survives; stop() then only reports the error. Idle
+                            // streams hold no recording and return nothing.
+                            let result = match (&stream, completed.as_mut()) {
+                                (Some(open), _) => open.buffer.drain(),
+                                (None, Some(done)) if !done.samples.is_empty() => {
+                                    Ok(Some(done.drain(Vec::new())))
                                 }
-                                // Limited, failed or idle: stop() reports the rest.
                                 _ => Ok(None),
                             };
                             let _ = reply.send(result);
