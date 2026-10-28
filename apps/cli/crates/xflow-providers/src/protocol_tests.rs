@@ -786,18 +786,22 @@ async fn whisper_prompt_fallback_preserves_audio_and_retries_once() {
 
 #[tokio::test]
 async fn whisper_fallback_does_not_retry_auth_other_errors_or_unprompted_requests() {
-    for (status, hints, replies) in [
-        ("401 Unauthorized", true, 1),
-        ("403 Forbidden", true, 1),
-        ("429 Too Many Requests", true, 1),
-        ("502 Bad Gateway", true, 1),
-        ("503 Service Unavailable", true, 1),
-        ("504 Gateway Timeout", true, 1),
-        ("500 Internal Server Error", false, 1),
-        ("500 Internal Server Error", true, 2),
+    for (status, hints, retried) in [
+        ("401 Unauthorized", true, false),
+        ("403 Forbidden", true, false),
+        ("429 Too Many Requests", true, false),
+        ("502 Bad Gateway", true, false),
+        ("503 Service Unavailable", true, false),
+        ("504 Gateway Timeout", true, false),
+        ("500 Internal Server Error", false, false),
+        ("500 Internal Server Error", true, true),
     ] {
+        // A 200 is always waiting: only a retry can turn the dictation into success.
         let (url, task) = scripted(
-            vec![(status, json!({"error":"rejected"})); replies],
+            vec![
+                (status, json!({"error":"rejected"})),
+                ("200 OK", json!({"text":"ok"})),
+            ],
             "/transcribe",
         )
         .await;
@@ -806,12 +810,16 @@ async fn whisper_fallback_does_not_retry_auth_other_errors_or_unprompted_request
             cfg.vocabulary = vec!["PostgreSQL".into()];
         }
         let env = set_test_key(&mut cfg);
-        assert!(build_stt(&cfg, true)
+        let result = build_stt(&cfg, true)
             .unwrap()
             .transcribe(clip(), Default::default())
-            .await
-            .is_err());
-        assert_eq!(task.await.unwrap().len(), replies);
+            .await;
+        assert_eq!(result.is_ok(), retried, "{status} hints={hints}");
+        if retried {
+            assert_eq!(task.await.unwrap().len(), 2);
+        } else {
+            task.abort();
+        }
         std::env::remove_var(env);
     }
 }
