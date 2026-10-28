@@ -19,8 +19,8 @@ import termios
 import threading
 import time
 
-ROOT = Path(__file__).resolve().parents[4]
-BINARY = ROOT / "target/debug/xflow"
+ROOT = Path(__file__).resolve().parents[6]
+BINARY = ROOT / "apps/cli/target/debug/xflow"
 
 
 def run(online, columns, rows):
