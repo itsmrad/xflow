@@ -1,0 +1,1 @@
+ALTER TABLE "usage_events" ADD COLUMN "cost_micros" integer DEFAULT 0 NOT NULL;
