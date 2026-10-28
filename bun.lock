@@ -10,7 +10,6 @@
       "dependencies": {
         "@clerk/nextjs": "7.9.22",
         "@neon/realtime": "0.1.2",
-        "@neon/realtime-drizzle": "0.1.0",
         "@neon/realtime-react": "0.1.1",
         "@vercel/functions": "3.10.4",
         "aws4fetch": "1.0.20",
@@ -245,8 +244,6 @@
     "@neon/config": ["@neon/config@1.9.5", "", { "dependencies": { "@neon/sdk": "7.6.0", "jiti": "^2.7.0", "zod": "^4.5.4" } }, "sha512-KK105CxGBrcNGJfUgmjINKTykizGbWh9fdjkaEflls10Q8VsBSMt/AXagECH9spYr/mI8o/UCtr6AOMwpKTsRw=="],
 
     "@neon/realtime": ["@neon/realtime@0.1.2", "", { "dependencies": { "base64-js": "^1.5.1", "postgres-array": "^3.0.4" }, "peerDependencies": { "ws": "^8.21.2" }, "optionalPeers": ["ws"] }, "sha512-82PkgG/iGZOHjO1znVTpBhUMTxpAd/82pFw141zeIS11SlTQLYsuMD5Emc/noatuMA99fZspokP8hnggip4rAA=="],
-
-    "@neon/realtime-drizzle": ["@neon/realtime-drizzle@0.1.0", "", { "peerDependencies": { "@neon/realtime": "^0.1.0", "drizzle-orm": ">=0.45.2 <0.46.0" }, "optionalPeers": ["drizzle-orm"] }, "sha512-JZ4g5Zg2klNxF7QPxUKU77d8i+IEtX3fQ83oDoG61/DUi8jPZrTuZGhQyZuspaYTb+tPMYhITBpaRd1qAr0Xtg=="],
 
     "@neon/realtime-react": ["@neon/realtime-react@0.1.1", "", { "peerDependencies": { "@neon/realtime": "^0.1.1", "react": "^18.0.0 || ^19.0.0" } }, "sha512-JYcsruF7liS45R8raseRVl22+Psgc8Nm22HR9oDck51bkbniKXy8rJex+XhYEnKzF/eo2QgS0pIyKmR7+ZH9IQ=="],
 

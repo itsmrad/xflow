@@ -10,12 +10,11 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "bun run src/db/migrate.ts"
+    "db:migrate": "bun --env-file=.env.local db/migrate.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "7.9.22",
     "@neon/realtime": "0.1.2",
-    "@neon/realtime-drizzle": "0.1.0",
     "@neon/realtime-react": "0.1.1",
     "@vercel/functions": "3.10.4",
     "aws4fetch": "1.0.20",
