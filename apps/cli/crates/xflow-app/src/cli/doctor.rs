@@ -444,7 +444,7 @@ mod tests {
             .iter()
             .find(|c| c.name == "Wayland injection")
             .is_some_and(|c| !c.required));
-        let words: Vec<_> = (0..30).map(|i| format!("\"word{i:02}\"")).collect();
+        let words: Vec<_> = (0..90).map(|i| format!("\"word{i:02}\"")).collect();
         std::fs::write(
             &path,
             format!("[dictionary]\nwords = [{}]", words.join(",")),
@@ -458,8 +458,8 @@ mod tests {
         assert!(!hints.ok && !hints.required);
         assert!(hints
             .detail
-            .starts_with("30 dictionary words exceed the groq hint limit"));
-        let long = "a".repeat(120);
+            .starts_with("90 dictionary words exceed the groq hint limit"));
+        let long = "Q".repeat(120);
         std::fs::write(
             &path,
             format!("[stt]\nvocabulary = [\"{long}\", \"b{long}\"]"),
@@ -471,6 +471,6 @@ mod tests {
             .find(|c| c.name == "dictionary hints")
             .unwrap();
         assert!(!hints.ok && hints.required);
-        assert!(hints.detail.contains("224-byte"));
+        assert!(hints.detail.contains("200 estimated tokens"));
     }
 }

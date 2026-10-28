@@ -1,0 +1,151 @@
+# spoken text	expected terms (pipe separated)
+Please check React and Apache and Flyte and ngrok in the project.	React|Apache|Flyte|ngrok
+Please check Redux and OpenResty and ZenML and cloudflared in the project.	Redux|OpenResty|ZenML|cloudflared
+Please check Zustand and Consul and DVC and bore in the project.	Zustand|Consul|DVC|bore
+Please check Jotai and Vault and Pachyderm and frp in the project.	Jotai|Vault|Pachyderm|frp
+Please check Recoil and Nomad and LakeFS and ssh in the project.	Recoil|Nomad|LakeFS|ssh
+Please check MobX and Terraform and DeltaLake and scp in the project.	MobX|Terraform|DeltaLake|scp
+Please check Immer and OpenTofu and Iceberg and rsync in the project.	Immer|OpenTofu|Iceberg|rsync
+Please check XState and Pulumi and Hudi and rclone in the project.	XState|Pulumi|Hudi|rclone
+Please check RxJS and Ansible and LanceDB and restic in the project.	RxJS|Ansible|LanceDB|restic
+Please check Preact and Chef and Chroma and borg in the project.	Preact|Chef|Chroma|borg
+Please check SolidJS and Puppet and Qdrant and age in the project.	SolidJS|Puppet|Qdrant|age
+Please check Svelte and SaltStack and Milvus and sops in the project.	Svelte|SaltStack|Milvus|sops
+Please check Vue and Packer and Weaviate and gpg in the project.	Vue|Packer|Weaviate|gpg
+Please check Angular and Vagrant and Pinecone and openssl in the project.	Angular|Vagrant|Pinecone|openssl
+Please check Astro and Terragrunt and pgvector and mkcert in the project.	Astro|Terragrunt|pgvector|mkcert
+Please check Next.js and Atlantis and FAISS and certbot in the project.	Next.js|Atlantis|FAISS|certbot
+Please check Nuxt and Crossplane and Annoy and acme.sh in the project.	Nuxt|Crossplane|Annoy|acme.sh
+Please check Remix and ArgoCD and ScaNN and step in the project.	Remix|ArgoCD|ScaNN|step
+Please check Gatsby and Flux and Vespa and tailscale in the project.	Gatsby|Flux|Vespa|tailscale
+Please check Vite and Tekton and SolrCloud and wireguard in the project.	Vite|Tekton|SolrCloud|wireguard
+Please check Vitest and Jenkins and OpenAI and zerotier in the project.	Vitest|Jenkins|OpenAI|zerotier
+Please check Jest and Buildkite and Anthropic and nebula in the project.	Jest|Buildkite|Anthropic|nebula
+Please check Playwright and CircleCI and Groq and headscale in the project.	Playwright|CircleCI|Groq|headscale
+Please check Cypress and TravisCI and Cerebras and netbird in the project.	Cypress|TravisCI|Cerebras|netbird
+Please check Storybook and GitHub and Fireworks and innernet in the project.	Storybook|GitHub|Fireworks|innernet
+Please check Tailwind and GitLab and Together and firezone in the project.	Tailwind|GitLab|Together|firezone
+Please check PostCSS and Bitbucket and DeepInfra and useState in the project.	PostCSS|Bitbucket|DeepInfra|useState
+Please check Sass and Gitea and Replicate and useEffect in the project.	Sass|Gitea|Replicate|useEffect
+Please check Less and Forgejo and HuggingFace and useMemo in the project.	Less|Forgejo|HuggingFace|useMemo
+Please check Bootstrap and Gerrit and Modal and useCallback in the project.	Bootstrap|Gerrit|Modal|useCallback
+Please check Radix and Mercurial and RunPod and useRef in the project.	Radix|Mercurial|RunPod|useRef
+Please check shadcn and Fossil and Baseten and useContext in the project.	shadcn|Fossil|Baseten|useContext
+Please check Chakra and Perforce and Banana and useReducer in the project.	Chakra|Perforce|Banana|useReducer
+Please check Mantine and Subversion and Fal and useLayoutEffect in the project.	Mantine|Subversion|Fal|useLayoutEffect
+Please check FramerMotion and Git and Clarifai and useImperativeHandle in the project.	FramerMotion|Git|Clarifai|useImperativeHandle
+Please check Three.js and LFS and Cohere and useId in the project.	Three.js|LFS|Cohere|useId
+Please check D3 and GitHubActions and Mistral and useTransition in the project.	D3|GitHubActions|Mistral|useTransition
+Please check Chart.js and Dependabot and DeepSeek and useDeferredValue in the project.	Chart.js|Dependabot|DeepSeek|useDeferredValue
+Please check Recharts and Renovate and Qwen and createContext in the project.	Recharts|Renovate|Qwen|createContext
+Please check TanStack and CodeQL and Gemma and createRoot in the project.	TanStack|CodeQL|Gemma|createRoot
+Please check ReactQuery and Semgrep and Llama and renderToString in the project.	ReactQuery|Semgrep|Llama|renderToString
+Please check SWR and SonarQube and Granite and hydrateRoot in the project.	SWR|SonarQube|Granite|hydrateRoot
+Please check Axios and Snyk and Phi and forwardRef in the project.	Axios|Snyk|Phi|forwardRef
+Please check Ky and Trivy and SmolLM and createElement in the project.	Ky|Trivy|SmolLM|createElement
+Please check Hono and Grype and TinyLlama and getServerSideProps in the project.	Hono|Grype|TinyLlama|getServerSideProps
+Please check Express and Syft and StarCoder and getStaticProps in the project.	Express|Syft|StarCoder|getStaticProps
+Please check Fastify and Cosign and CodeLlama and generateMetadata in the project.	Fastify|Cosign|CodeLlama|generateMetadata
+Please check Koa and Sigstore and DeepCoder and generateStaticParams in the project.	Koa|Sigstore|DeepCoder|generateStaticParams
+Please check NestJS and OpenTelemetry and CodeGemma and serverActions in the project.	NestJS|OpenTelemetry|CodeGemma|serverActions
+Please check AdonisJS and Prometheus and Replit and queryClient in the project.	AdonisJS|Prometheus|Replit|queryClient
+Please check Elysia and Grafana and Cursor and invalidateQueries in the project.	Elysia|Grafana|Cursor|invalidateQueries
+Please check Bun and Loki and Zed and mutationKey in the project.	Bun|Loki|Zed|mutationKey
+Please check Deno and Tempo and Neovim and staleTime in the project.	Deno|Tempo|Neovim|staleTime
+Please check Node.js and Jaeger and Emacs and cacheTime in the project.	Node.js|Jaeger|Emacs|cacheTime
+Please check TypeScript and Zipkin and Helix and queryKey in the project.	TypeScript|Zipkin|Helix|queryKey
+Please check JavaScript and Datadog and Kakoune and setQueryData in the project.	JavaScript|Datadog|Kakoune|setQueryData
+Please check CoffeeScript and NewRelic and Lapce and getQueryData in the project.	CoffeeScript|NewRelic|Lapce|getQueryData
+Please check Elm and Sentry and SublimeText and findUnique in the project.	Elm|Sentry|SublimeText|findUnique
+Please check PureScript and Bugsnag and VSCode and findMany in the project.	PureScript|Bugsnag|VSCode|findMany
+Please check ReasonML and Rollbar and VSCodium and createMany in the project.	ReasonML|Rollbar|VSCodium|createMany
+Please check ReScript and Honeycomb and JetBrains and updateMany in the project.	ReScript|Honeycomb|JetBrains|updateMany
+Please check GraphQL and Axiom and IntelliJ and deleteMany in the project.	GraphQL|Axiom|IntelliJ|deleteMany
+Please check Apollo and Logtail and WebStorm and executeRaw in the project.	Apollo|Logtail|WebStorm|executeRaw
+Please check Relay and Vector and PyCharm and queryRaw in the project.	Relay|Vector|PyCharm|queryRaw
+Please check urql and FluentBit and GoLand and fetchUser in the project.	urql|FluentBit|GoLand|fetchUser
+Please check Prisma and Fluentd and RustRover and userId in the project.	Prisma|Fluentd|RustRover|userId
+Please check Drizzle and Logstash and CLion and requestId in the project.	Drizzle|Logstash|CLion|requestId
+Please check Kysely and Filebeat and Rider and apiKey in the project.	Kysely|Filebeat|Rider|apiKey
+Please check Sequelize and Telegraf and Fleet and accessToken in the project.	Sequelize|Telegraf|Fleet|accessToken
+Please check TypeORM and StatsD and Eclipse and refreshToken in the project.	TypeORM|StatsD|Eclipse|refreshToken
+Please check Knex and collectd and NetBeans and clientSecret in the project.	Knex|collectd|NetBeans|clientSecret
+Please check Objection and Mimir and Xcode and redirectUri in the project.	Objection|Mimir|Xcode|redirectUri
+Please check Mongoose and Thanos and AndroidStudio and callbackUrl in the project.	Mongoose|Thanos|AndroidStudio|callbackUrl
+Please check MongoDB and Cortex and npm and connectionString in the project.	MongoDB|Cortex|npm|connectionString
+Please check PostgreSQL and Alertmanager and pnpm and databaseUrl in the project.	PostgreSQL|Alertmanager|pnpm|databaseUrl
+Please check SQLite and PagerDuty and yarn and maxRetries in the project.	SQLite|PagerDuty|yarn|maxRetries
+Please check MySQL and Opsgenie and npx and retryDelay in the project.	MySQL|Opsgenie|npx|retryDelay
+Please check MariaDB and BetterStack and bunx and timeoutMs in the project.	MariaDB|BetterStack|bunx|timeoutMs
+Please check Redis and UptimeKuma and pip and abortController in the project.	Redis|UptimeKuma|pip|abortController
+Please check Valkey and LangChain and pipx and eventListener in the project.	Valkey|LangChain|pipx|eventListener
+Please check Memcached and LlamaIndex and uv and handleSubmit in the project.	Memcached|LlamaIndex|uv|handleSubmit
+Please check Cassandra and LangGraph and rye and handleChange in the project.	Cassandra|LangGraph|rye|handleChange
+Please check ScyllaDB and Langfuse and poetry and onClick in the project.	ScyllaDB|Langfuse|poetry|onClick
+Please check DynamoDB and LiteLLM and pdm and onKeyDown in the project.	DynamoDB|LiteLLM|pdm|onKeyDown
+Please check CockroachDB and vLLM and hatch and isLoading in the project.	CockroachDB|vLLM|hatch|isLoading
+Please check TiDB and Ollama and flit and hasError in the project.	TiDB|Ollama|flit|hasError
+Please check ClickHouse and llama.cpp and setuptools and isSuccess in the project.	ClickHouse|llama.cpp|setuptools|isSuccess
+Please check DuckDB and Whisper and maturin and contentType in the project.	DuckDB|Whisper|maturin|contentType
+Please check TimescaleDB and PyTorch and cargo and statusCode in the project.	TimescaleDB|PyTorch|cargo|statusCode
+Please check InfluxDB and TensorFlow and rustup and responseBody in the project.	InfluxDB|TensorFlow|rustup|responseBody
+Please check QuestDB and JAX and rustfmt and requestHeaders in the project.	QuestDB|JAX|rustfmt|requestHeaders
+Please check RocksDB and Keras and clippy and processEnv in the project.	RocksDB|Keras|clippy|processEnv
+Please check LevelDB and NumPy and rustc and importMeta in the project.	LevelDB|NumPy|rustc|importMeta
+Please check FoundationDB and SciPy and wasm-pack and asyncAwait in the project.	FoundationDB|SciPy|wasm-pack|asyncAwait
+Please check Elasticsearch and Pandas and trunk and PromiseAll in the project.	Elasticsearch|Pandas|trunk|PromiseAll
+Please check OpenSearch and Polars and bacon and PromiseRace in the project.	OpenSearch|Polars|bacon|PromiseRace
+Please check Meilisearch and PyArrow and just and ArrayFrom in the project.	Meilisearch|PyArrow|just|ArrayFrom
+Please check Typesense and Dask and make and ObjectEntries in the project.	Typesense|Dask|make|ObjectEntries
+Please check Solr and Ray and cmake and ObjectKeys in the project.	Solr|Ray|cmake|ObjectKeys
+Please check Algolia and Spark and ninja and MapSet in the project.	Algolia|Spark|ninja|MapSet
+Please check Supabase and Flink and meson and WeakMap in the project.	Supabase|Flink|meson|WeakMap
+Please check Firebase and Beam and bazel and WeakSet in the project.	Firebase|Beam|bazel|WeakSet
+Please check Appwrite and Airflow and buck2 and BigInt in the project.	Appwrite|Airflow|buck2|BigInt
+Please check Convex and Dagster and pants and Uint8Array in the project.	Convex|Dagster|pants|Uint8Array
+Please check Neon and Prefect and gradle and ArrayBuffer in the project.	Neon|Prefect|gradle|ArrayBuffer
+Please check PlanetScale and Kestra and maven and TextEncoder in the project.	PlanetScale|Kestra|maven|TextEncoder
+Please check Turso and Temporal and sbt and TextDecoder in the project.	Turso|Temporal|sbt|TextDecoder
+Please check Upstash and Inngest and lein and ReadableStream in the project.	Upstash|Inngest|lein|ReadableStream
+Please check Fauna and Hatchet and boot and WritableStream in the project.	Fauna|Hatchet|boot|WritableStream
+Please check Hasura and Trigger.dev and mix and TransformStream in the project.	Hasura|Trigger.dev|mix|TransformStream
+Please check PostgREST and BullMQ and hex and BroadcastChannel in the project.	PostgREST|BullMQ|hex|BroadcastChannel
+Please check PostGraphile and Celery and rebar3 and MessageChannel in the project.	PostGraphile|Celery|rebar3|MessageChannel
+Please check tRPC and Dramatiq and escript and MutationObserver in the project.	tRPC|Dramatiq|escript|MutationObserver
+Please check gRPC and Huey and dotnet and ResizeObserver in the project.	gRPC|Huey|dotnet|ResizeObserver
+Please check Protobuf and RQ and nuget and IntersectionObserver in the project.	Protobuf|RQ|nuget|IntersectionObserver
+Please check FlatBuffers and Sidekiq and msbuild and CustomEvent in the project.	FlatBuffers|Sidekiq|msbuild|CustomEvent
+Please check CapnProto and Faktory and swift and EventTarget in the project.	CapnProto|Faktory|swift|EventTarget
+Please check Avro and Oban and xcrun and URLSearchParams in the project.	Avro|Oban|xcrun|URLSearchParams
+Please check Thrift and Broadway and xcodebuild in the project.	Thrift|Broadway|xcodebuild
+Please check JSON and RabbitMQ and fastlane in the project.	JSON|RabbitMQ|fastlane
+Please check YAML and Kafka and cocoapods in the project.	YAML|Kafka|cocoapods
+Please check TOML and Redpanda and carthage in the project.	TOML|Redpanda|carthage
+Please check HCL and Pulsar and mint in the project.	HCL|Pulsar|mint
+Please check Dhall and NATS and tuist in the project.	Dhall|NATS|tuist
+Please check Jsonnet and Mosquitto and ripgrep in the project.	Jsonnet|Mosquitto|ripgrep
+Please check CUE and EMQX and fd in the project.	CUE|EMQX|fd
+Please check Nix and ZeroMQ and bat in the project.	Nix|ZeroMQ|bat
+Please check Docker and nanomsg and eza in the project.	Docker|nanomsg|eza
+Please check Podman and nng and zoxide in the project.	Podman|nng|zoxide
+Please check Buildah and RocketMQ and fzf in the project.	Buildah|RocketMQ|fzf
+Please check Kaniko and ActiveMQ and skim in the project.	Kaniko|ActiveMQ|skim
+Please check containerd and Artemis and delta in the project.	containerd|Artemis|delta
+Please check Kubernetes and Qpid and difftastic in the project.	Kubernetes|Qpid|difftastic
+Please check Kustomize and RedisStreams and jq in the project.	Kustomize|RedisStreams|jq
+Please check Helm and EventStoreDB and yq in the project.	Helm|EventStoreDB|yq
+Please check Skaffold and Debezium and xq in the project.	Skaffold|Debezium|xq
+Please check Tilt and Maxwell and curl in the project.	Tilt|Maxwell|curl
+Please check Minikube and Airbyte and wget in the project.	Minikube|Airbyte|wget
+Please check Kind and Meltano and httpie in the project.	Kind|Meltano|httpie
+Please check K3s and Singer and xh in the project.	K3s|Singer|xh
+Please check K9s and dbt and grpcurl in the project.	K9s|dbt|grpcurl
+Please check Istio and SQLMesh and websocat in the project.	Istio|SQLMesh|websocat
+Please check Linkerd and Dataform and socat in the project.	Linkerd|Dataform|socat
+Please check Envoy and GreatExpectations and netcat in the project.	Envoy|GreatExpectations|netcat
+Please check Traefik and Soda and nmap in the project.	Traefik|Soda|nmap
+Please check Caddy and Evidently and masscan in the project.	Caddy|Evidently|masscan
+Please check Nginx and BentoML and tcpdump in the project.	Nginx|BentoML|tcpdump
+Please check HAProxy and MLflow and tshark in the project.	HAProxy|MLflow|tshark
+Please check Varnish and Kubeflow and wireshark in the project.	Varnish|Kubeflow|wireshark
+Please check Squid and Metaflow and mitmproxy in the project.	Squid|Metaflow|mitmproxy

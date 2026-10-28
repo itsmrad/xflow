@@ -880,14 +880,14 @@ mod tests {
             assert!(error.to_string().contains("language"), "{language}");
         }
         cfg.language = Some("en".into());
-        cfg.vocabulary = vec!["a".repeat(224)];
+        cfg.vocabulary = vec![" world".repeat(149)];
         assert!(build_stt(&cfg, true).is_ok());
-        cfg.vocabulary = vec!["a".repeat(225)];
+        cfg.vocabulary = vec![" world".repeat(150)];
         assert!(build_stt(&cfg, true)
             .err()
             .unwrap()
             .to_string()
-            .contains("224-byte"));
+            .contains("200 estimated tokens or 896 UTF-8 bytes"));
         cfg.provider = "openrouter".into();
         cfg.vocabulary = vec!["Postgres".into()];
         assert!(build_stt(&cfg, true)
@@ -918,10 +918,9 @@ mod tests {
     async fn over_budget_dictionary_hints_are_truncated_not_fatal() {
         let (url, rx) = server("200 OK", br#"{"text":"hello"}"#, Duration::ZERO, "").await;
         let mut cfg = config("groq", url);
-        cfg.vocabulary = vec!["a".repeat(120)];
-        // 120 + 2 + 50 fits the 224-byte prompt; the 103-byte word stops the prefix.
-        let words = vec!["c".repeat(50), "b".repeat(103), "d".into()];
-        assert_eq!(hint_fit(&cfg, &words).unwrap(), 1);
+        cfg.vocabulary = vec!["Q".repeat(140)];
+        let words = vec!["Z".repeat(30), "Q".repeat(80), "d".into()];
+        assert_eq!(hint_fit(&cfg, &words).unwrap(), 2);
         let result = build_stt(&cfg, true)
             .unwrap()
             .transcribe(
@@ -935,8 +934,8 @@ mod tests {
             .unwrap();
         assert_eq!(result.text, "hello");
         let request = String::from_utf8_lossy(&rx.await.unwrap()).into_owned();
-        assert!(request.contains(&format!("{}, {}", "a".repeat(120), "c".repeat(50))));
-        assert!(!request.contains(&"b".repeat(103)));
+        assert!(request.contains(&format!("{}, {}, d", "Q".repeat(140), "Z".repeat(30))));
+        assert!(!request.contains(&format!(", {}", "Q".repeat(80))));
         let cfg = config("openrouter", "http://127.0.0.1:9/x".into());
         assert_eq!(hint_fit(&cfg, &["Postgres".into()]).unwrap(), 0);
     }

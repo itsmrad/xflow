@@ -736,3 +736,83 @@ async fn assembly_rejects_bad_ids_and_redacts_job_errors() {
         assert_eq!(task.await.unwrap().len(), 2);
     }
 }
+
+#[tokio::test]
+async fn whisper_prompt_fallback_preserves_audio_and_retries_once() {
+    for protocol in ["openai", "whisper-cpp"] {
+        for status in [
+            "400 Bad Request",
+            "500 Internal Server Error",
+            "503 Service Unavailable",
+        ] {
+            let (url, task) = scripted(
+                vec![
+                    (status, json!({"error":"rejected"})),
+                    ("200 OK", json!({"text":"React and PostgreSQL"})),
+                ],
+                "/transcribe",
+            )
+            .await;
+            let mut cfg = config("groq", url);
+            cfg.protocol = Some(protocol.into());
+            cfg.language = Some("en".into());
+            cfg.vocabulary = vec!["React".into()];
+            let env = set_test_key(&mut cfg);
+            let result = build_stt(&cfg, true)
+                .unwrap()
+                .transcribe(
+                    clip(),
+                    TranscriptionOptions {
+                        vocabulary: vec!["PostgreSQL".into()],
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.text, "React and PostgreSQL");
+            let requests = task.await.unwrap();
+            assert_eq!(requests.len(), 2);
+            let first = String::from_utf8_lossy(&requests[0]);
+            let second = String::from_utf8_lossy(&requests[1]);
+            assert!(first.contains("name=\"prompt\"\r\n\r\nReact, PostgreSQL\r\n"));
+            assert!(!second.contains("name=\"prompt\""));
+            for bytes in requests {
+                let request = String::from_utf8_lossy(&bytes);
+                assert!(request.contains("name=\"language\"\r\n\r\nen"));
+                assert!(request.contains("name=\"model\"\r\n\r\nwhisper-large-v3-turbo"));
+                let wav = encode_wav(&clip()).unwrap();
+                assert!(bytes.windows(wav.len()).any(|part| part == wav));
+            }
+            std::env::remove_var(env);
+        }
+    }
+}
+
+#[tokio::test]
+async fn whisper_fallback_does_not_retry_auth_other_errors_or_unprompted_requests() {
+    for (status, hints, replies) in [
+        ("401 Unauthorized", true, 1),
+        ("403 Forbidden", true, 1),
+        ("429 Too Many Requests", true, 1),
+        ("500 Internal Server Error", false, 1),
+        ("500 Internal Server Error", true, 2),
+    ] {
+        let (url, task) = scripted(
+            vec![(status, json!({"error":"rejected"})); replies],
+            "/transcribe",
+        )
+        .await;
+        let mut cfg = config("groq", url);
+        if hints {
+            cfg.vocabulary = vec!["PostgreSQL".into()];
+        }
+        let env = set_test_key(&mut cfg);
+        assert!(build_stt(&cfg, true)
+            .unwrap()
+            .transcribe(clip(), Default::default())
+            .await
+            .is_err());
+        assert_eq!(task.await.unwrap().len(), replies);
+        std::env::remove_var(env);
+    }
+}

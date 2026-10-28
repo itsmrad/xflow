@@ -1,5 +1,5 @@
 use super::*;
-use std::path::Path;
+use std::{collections::HashMap, path::Path, sync::OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Protocol {
@@ -40,6 +40,83 @@ impl Protocol {
         }
     }
 }
+// Stop BPE at rank 8192: fewer merges can only over-count, unlike bytes/4.
+// Bound both GPT-2 and Whisper multilingual; count other UTF-8 pieces bytewise.
+fn prompt_tokens(prompt: &str) -> usize {
+    if prompt.is_empty() {
+        return 0;
+    }
+    static MERGES: OnceLock<[HashMap<String, usize>; 2]> = OnceLock::new();
+    let merges = MERGES.get_or_init(|| {
+        [
+            include_str!("bpe/gpt2-merges.txt"),
+            include_str!("bpe/whisper-merges.txt"),
+        ]
+        .map(|table| {
+            table
+                .split_ascii_whitespace()
+                .enumerate()
+                .map(|(rank, token)| (token.replace('_', " "), rank))
+                .collect()
+        })
+    });
+    let mut total = 0;
+    let mut rest = prompt;
+    while !rest.is_empty() {
+        // Match tokenizer contraction boundaries before counting letter pieces.
+        if let Some(suffix) = ["'s", "'t", "'re", "'ve", "'m", "'ll", "'d"]
+            .iter()
+            .find(|s| rest.starts_with(**s))
+        {
+            total += suffix.len();
+            rest = &rest[suffix.len()..];
+            continue;
+        }
+        let letters = rest.strip_prefix(' ').unwrap_or(rest);
+        let len = letters
+            .chars()
+            .take_while(|c| c.is_alphabetic())
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if len == 0 {
+            let len = rest.chars().next().unwrap().len_utf8();
+            total += len;
+            rest = &rest[len..];
+            continue;
+        }
+        let len = len + rest.len() - letters.len();
+        let piece = &rest[..len];
+        total += if piece.is_ascii() {
+            merges
+                .iter()
+                .map(|ranks| {
+                    let mut boundaries: Vec<_> = (0..=piece.len()).collect();
+                    while let Some((i, _)) = boundaries
+                        .windows(3)
+                        .enumerate()
+                        .filter_map(|(i, b)| ranks.get(&piece[b[0]..b[2]]).map(|rank| (i, rank)))
+                        .min_by_key(|(_, rank)| *rank)
+                    {
+                        boundaries.remove(i + 1);
+                    }
+                    boundaries.len() - 1
+                })
+                .max()
+                .unwrap()
+        } else {
+            piece.len()
+        };
+        rest = &rest[len..];
+    }
+    total
+}
+/// Whisper truncates prompts at 224 tokens; leave room for estimator/tokenizer drift.
+const PROMPT_TOKENS: usize = 200;
+// benchmarks/devterms (2026-10-29, 1,136 terms): turbo list 53.1% vs `Glossary: …` 52.3%,
+// large-v3 60.9% vs 61.2%. A tie, so keep the plain list: no wrapper tokens.
+fn vocabulary_prompt(hints: &[String]) -> String {
+    hints.join(", ")
+}
 fn validate_options(
     language: Option<&str>,
     hints: &[String],
@@ -60,7 +137,7 @@ fn validate_options(
     }
     let bytes = hints.iter().map(String::len).sum::<usize>() + hints.len().saturating_sub(1) * 2;
     match protocol {
-        Protocol::Multipart|Protocol::WhisperCpp if bytes>224=>bail!("vocabulary hints exceed the conservative 224-byte prompt limit"),
+        Protocol::Multipart|Protocol::WhisperCpp if bytes>896 || prompt_tokens(&vocabulary_prompt(hints))>PROMPT_TOKENS=>bail!("vocabulary hints exceed 200 estimated tokens or 896 UTF-8 bytes"),
         Protocol::Multipart if model.contains("parakeet") && !hints.is_empty()=>bail!("this model does not support vocabulary prompts"),
         Protocol::Router if !hints.is_empty()=>bail!("OpenRouter vocabulary keyterms require model support; select a direct provider"),
         Protocol::Deepgram if bytes>500=>bail!("Deepgram vocabulary exceeds the conservative 500-byte token budget"),
@@ -73,7 +150,7 @@ fn validate_options(
 }
 /// Appends `extra` hints in order and returns how many are sent. Dictionary hints
 /// never fail a dictation: a term the provider rejects on its own is skipped, and
-/// the first term past the total budget ends the list. Duplicates ignore ASCII case,
+/// terms past the total budget are skipped. Duplicates ignore ASCII case,
 /// matching the daemon's merge.
 fn push_hints(
     hints: &mut Vec<String>,
@@ -83,6 +160,7 @@ fn push_hints(
     model: &str,
 ) -> usize {
     let mut sent = 0;
+    let mut tokens = prompt_tokens(&vocabulary_prompt(hints));
     for term in extra {
         if hints.iter().any(|h| h.eq_ignore_ascii_case(&term)) {
             sent += 1;
@@ -91,11 +169,24 @@ fn push_hints(
         if validate_options(language, std::slice::from_ref(&term), protocol, model).is_err() {
             continue;
         }
+        // The estimator never merges across ", ", so a term adds "," plus " term".
+        // Rejecting on that keeps big dictionaries from recounting the whole prompt.
+        let cost = if hints.is_empty() {
+            prompt_tokens(&term)
+        } else {
+            1 + prompt_tokens(&format!(" {term}"))
+        };
+        if matches!(protocol, Protocol::Multipart | Protocol::WhisperCpp)
+            && tokens + cost > PROMPT_TOKENS
+        {
+            continue;
+        }
         hints.push(term);
         if validate_options(language, hints, protocol, model).is_err() {
             hints.pop();
-            break;
+            continue;
         }
+        tokens += cost;
         sent += 1;
     }
     sent
@@ -262,43 +353,17 @@ impl HttpProvider {
             bail!("AssemblyAI sync requires 80 ms–120 s of 16 kHz WAV; use the async protocol for longer clips");
         }
         let mime = audio_mime(format)?;
+        let retry_audio = if matches!(self.protocol, Protocol::Multipart | Protocol::WhisperCpp)
+            && !options.vocabulary.is_empty()
+        {
+            Some(data.clone())
+        } else {
+            None
+        };
         let mut request = self.client.post(self.endpoint.clone());
         request = match self.protocol {
             Protocol::Multipart | Protocol::Keywords | Protocol::Mistral | Protocol::WhisperCpp => {
-                let file = audio_part(data, format)?;
-                let mut form = multipart::Form::new()
-                    .text("model", self.model.clone())
-                    .part("file", file);
-                if self.protocol != Protocol::Mistral {
-                    form = form.text("response_format", "json");
-                }
-                if let Some(code) = &options.language {
-                    form = form.text(
-                        if self.protocol == Protocol::Keywords {
-                            "languages[]"
-                        } else {
-                            "language"
-                        },
-                        code.clone(),
-                    );
-                } else if self.name == "together" && self.protocol == Protocol::Multipart {
-                    form = form.text("language", "auto");
-                }
-                if matches!(self.protocol, Protocol::Keywords | Protocol::Mistral) {
-                    for term in &options.vocabulary {
-                        form = form.text(
-                            if self.protocol == Protocol::Keywords {
-                                "keywords[]"
-                            } else {
-                                "context_bias"
-                            },
-                            term.clone(),
-                        );
-                    }
-                } else if !options.vocabulary.is_empty() {
-                    form = form.text("prompt", options.vocabulary.join(", "));
-                }
-                request.multipart(form)
+                request.multipart(self.form(data, format, &options, true)?)
             }
             Protocol::Router => {
                 let mut body = json!({"model":self.model,"input_audio":{"data":STANDARD.encode(&data),"format":format},"response_format":"json"});
@@ -403,8 +468,71 @@ impl HttpProvider {
             .send()
             .await
             .map_err(http_error)?;
+        let status = response.status();
+        let response = if let Some(data) =
+            retry_audio.filter(|_| status.as_u16() == 400 || status.is_server_error())
+        {
+            // Hints must never fail a dictation; log the status only, never the body.
+            eprintln!("STT prompt fallback: {}", status.as_u16());
+            let _ = read_bytes(response, false).await;
+            self.credential
+                .apply(
+                    self.client
+                        .post(self.endpoint.clone())
+                        .multipart(self.form(data, format, &options, false)?),
+                    self.protocol.auth(),
+                )
+                .await?
+                .send()
+                .await
+                .map_err(http_error)?
+        } else {
+            response
+        };
         let result: Value = self.credential.read(response).await?;
         self.parse(result, options.language)
+    }
+    /// Multipart upload; `prompt` is false only for the hint-free retry.
+    fn form(
+        &self,
+        data: Vec<u8>,
+        format: &str,
+        options: &TranscriptionOptions,
+        prompt: bool,
+    ) -> Result<multipart::Form> {
+        let mut form = multipart::Form::new()
+            .text("model", self.model.clone())
+            .part("file", audio_part(data, format)?);
+        if self.protocol != Protocol::Mistral {
+            form = form.text("response_format", "json");
+        }
+        if let Some(code) = &options.language {
+            form = form.text(
+                if self.protocol == Protocol::Keywords {
+                    "languages[]"
+                } else {
+                    "language"
+                },
+                code.clone(),
+            );
+        } else if self.name == "together" && self.protocol == Protocol::Multipart {
+            form = form.text("language", "auto");
+        }
+        if matches!(self.protocol, Protocol::Keywords | Protocol::Mistral) {
+            for term in &options.vocabulary {
+                form = form.text(
+                    if self.protocol == Protocol::Keywords {
+                        "keywords[]"
+                    } else {
+                        "context_bias"
+                    },
+                    term.clone(),
+                );
+            }
+        } else if prompt && !options.vocabulary.is_empty() {
+            form = form.text("prompt", vocabulary_prompt(&options.vocabulary));
+        }
+        Ok(form)
     }
     fn parse(&self, result: Value, requested: Option<String>) -> Result<Transcript> {
         let (text, detected) = match self.protocol {
@@ -699,4 +827,103 @@ fn audio_part(data: Vec<u8>, format: &str) -> Result<multipart::Part> {
         .file_name(format!("dictation.{format}"))
         .mime_str(audio_mime(format)?)
         .map_err(|_| anyhow!("invalid audio MIME type"))
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    #[test]
+    fn estimator_bounds_offline_gpt2_and_whisper_counts() {
+        let table = include_str!("../../../../../benchmarks/devterms/tokens.tsv");
+        let mut cases = 0;
+        for line in table.lines().filter(|line| !line.starts_with('#')) {
+            let fields: Vec<_> = line.split('\t').collect();
+            assert_eq!(fields.len(), 5);
+            for (prefix, columns) in [("", [1, 3]), (" ", [2, 4])] {
+                let estimate = prompt_tokens(&format!("{prefix}{}", fields[0]));
+                for column in columns {
+                    let actual = fields[column].parse::<usize>().unwrap();
+                    assert!(estimate >= actual, "{}: {estimate} < {actual}", fields[0]);
+                }
+            }
+            cases += 1;
+        }
+        assert!(cases >= 300);
+    }
+
+    #[test]
+    fn prompt_tokens_add_up_across_separators() {
+        let table = include_str!("../../../../../benchmarks/devterms/tokens.tsv");
+        let terms: Vec<String> = table
+            .lines()
+            .skip(1)
+            .map(|line| line.split('\t').next().unwrap().to_string())
+            .collect();
+        for window in terms.windows(7).step_by(3) {
+            let sum = prompt_tokens(&window[0])
+                + window[1..]
+                    .iter()
+                    .map(|t| 1 + prompt_tokens(&format!(" {t}")))
+                    .sum::<usize>();
+            assert_eq!(prompt_tokens(&vocabulary_prompt(window)), sum, "{window:?}");
+        }
+    }
+
+    #[test]
+    fn sixty_short_terms_fill_the_new_budget() {
+        for protocol in [Protocol::Multipart, Protocol::WhisperCpp] {
+            let mut hints = Vec::new();
+            push_hints(
+                &mut hints,
+                (0..60).map(|i| format!("term{i}")),
+                None,
+                protocol,
+                "whisper",
+            );
+            let prompt = vocabulary_prompt(&hints);
+            assert!((180..=200).contains(&prompt_tokens(&prompt)), "{prompt}");
+            assert!(validate_options(None, &hints, protocol, "whisper").is_ok());
+            assert!(prompt.len() <= 896);
+            assert!(prompt.len() > 224);
+        }
+    }
+
+    #[test]
+    fn token_and_byte_limits_are_independent() {
+        for protocol in [Protocol::Multipart, Protocol::WhisperCpp] {
+            let hints = vec![" world".repeat(149)];
+            assert!(validate_options(None, &hints, protocol, "whisper").is_ok());
+            assert!(validate_options(None, &[" world".repeat(150)], protocol, "whisper").is_err());
+            assert!(validate_options(None, &["Q".repeat(224)], protocol, "whisper").is_err());
+        }
+    }
+
+    #[test]
+    fn overflowing_term_does_not_hide_later_short_term() {
+        let mut hints = vec!["Q".repeat(180)];
+        let sent = push_hints(
+            &mut hints,
+            ["Z".repeat(80), "x".into()],
+            None,
+            Protocol::Multipart,
+            "whisper",
+        );
+        assert_eq!(sent, 1);
+        assert_eq!(hints.last().unwrap(), "x");
+    }
+    #[test]
+    fn exact_prompt_boundaries_are_inclusive() {
+        for protocol in [Protocol::Multipart, Protocol::WhisperCpp] {
+            let bytes = format!("{}.!", " world".repeat(149));
+            assert_eq!(bytes.len(), 896);
+            assert!(
+                validate_options(None, std::slice::from_ref(&bytes), protocol, "whisper").is_ok()
+            );
+            assert!(validate_options(None, &[format!("{bytes}.")], protocol, "whisper").is_err());
+            assert_eq!(prompt_tokens(&"Q".repeat(200)), 200);
+            assert!(validate_options(None, &["Q".repeat(200)], protocol, "whisper").is_ok());
+            assert!(validate_options(None, &["Q".repeat(201)], protocol, "whisper").is_err());
+        }
+    }
 }

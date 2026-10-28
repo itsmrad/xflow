@@ -46,12 +46,13 @@ Together explicitly sends `auto`, since its omitted-language default is English.
 Dedicated Gemini ASR maps twelve common codes to locales; other codes require
 auto-detection. Vocabulary merges/deduplicates config and request hints before
 validation. Configured `stt.vocabulary` must fit; request (dictionary) hints are
-never fail a dictation: a term the provider rejects on its own is skipped, the
-list ends at the total budget, and `xflow doctor`/config writes warn when words
-are dropped. OpenRouter rejects
+never fail a dictation: a term the provider rejects on its own, or one that no
+longer fits the total budget, is skipped (shorter later terms are still sent), and
+`xflow doctor`/config writes warn when words are dropped. OpenRouter rejects
 hints because upstream model support differs; Together Parakeet rejects ignored
-prompts. Whisper uses a conservative 224-byte
-prompt ceiling. Mistral allows 100 terms without spaces/commas; AssemblyAI permits
+prompts. Whisper prompts are capped at 200 estimated tokens and 896 bytes (the
+model keeps 224 tokens); the estimator never under-counts, and a 400/5xx on a
+prompted upload is retried once without the prompt. Mistral allows 100 terms without spaces/commas; AssemblyAI permits
 100 terms / 8000 bytes; Deepgram uses a conservative 500-byte budget. ElevenLabs
 allows up to 1000 terms, each under 50 characters / five words without reserved
 characters; its documented keyterm surcharge applies.
