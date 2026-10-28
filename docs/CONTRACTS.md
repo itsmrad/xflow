@@ -20,7 +20,7 @@ history disabled; it must never silently erase saved rows at startup.
 | `[recording]` | max_seconds, silence_threshold, device, min_ms, auto_stop_secs, keep_warm_secs, ignore_speakers | platform audio, daemon |
 | `[hotkey]` | key, double_tap_ms (500), hold_threshold_ms (500), enabled (true) | macOS event tap, daemon |
 | `[injection]` | method (paste/type/clipboard), clipboard_only, restore_clipboard, restore_delay_ms, trailing_space | platform desktop, extension |
-| `[formatting]` | remove_fillers, fillers, spoken_punctuation | daemon text pipeline |
+| `[formatting]` | remove_fillers, fillers, spoken_punctuation, lists | daemon text pipeline |
 | `[dictionary]` | words, replacements = [{from, to}], auto_learn, learned, never_learn | daemon text pipeline and correction learning, providers (hints) |
 | `[[snippets]]` | trigger, text | daemon text pipeline |
 | `[[styles]]` | name, apps, mode, prompt | daemon (picks style by focused app id) |

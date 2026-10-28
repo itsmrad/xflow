@@ -2,17 +2,17 @@
 use crate::config::{Config, Style};
 
 #[derive(Clone)]
-struct Word<'a> {
-    start: usize,
-    end: usize,
-    text: &'a str,
+pub(crate) struct Word<'a> {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) text: &'a str,
 }
 fn word_char(c: char) -> bool {
     c.is_alphanumeric()
         || c == '_'
         || matches!(c as u32, 0x0300..=0x036f | 0x1ab0..=0x1aff | 0x1dc0..=0x1dff | 0x20d0..=0x20ff | 0xfe20..=0xfe2f)
 }
-fn words(text: &str) -> Vec<Word<'_>> {
+pub(crate) fn words(text: &str) -> Vec<Word<'_>> {
     let mut result = Vec::new();
     let mut start = None;
     for (i, c) in text.char_indices() {
@@ -122,7 +122,8 @@ fn tidy(text: &str) -> String {
     }
     out.trim().to_owned()
 }
-pub fn before_cleanup(text: &str, config: &Config) -> String {
+/// `terminal`: the target is a terminal, where a newline can run a command.
+pub fn before_cleanup(text: &str, config: &Config, terminal: bool) -> String {
     let mut text = text.trim().to_owned();
     if config.formatting.spoken_punctuation {
         text = replace(
@@ -159,7 +160,13 @@ pub fn before_cleanup(text: &str, config: &Config) -> String {
         .map(|r| (r.from.as_str(), r.to.as_str()))
         .collect();
     // Tidy before replacement: dictionary values, like snippets, stay literal.
-    replace(&text, &pairs, false)
+    let text = replace(&text, &pairs, false);
+    // After replacements, so list items carry the corrected terms.
+    if config.formatting.lists && !terminal {
+        crate::lists::format(&text).unwrap_or(text)
+    } else {
+        text
+    }
 }
 pub fn after_cleanup(text: &str, config: &Config) -> String {
     let pairs: Vec<_> = config
@@ -197,7 +204,7 @@ mod tests {
             ("um\nhello", "hello"),
             ("hello, um, world", "hello, world"),
         ] {
-            assert_eq!(before_cleanup(input, &c), expected, "{input}");
+            assert_eq!(before_cleanup(input, &c, false), expected, "{input}");
         }
     }
     #[test]
@@ -217,7 +224,7 @@ mod tests {
         })
         .collect();
         assert_eq!(
-            before_cleanup("POST GRES école café cafétéria", &c),
+            before_cleanup("POST GRES école café cafétéria", &c, false),
             "Postgres School Coffee cafétéria"
         );
     }
@@ -225,16 +232,16 @@ mod tests {
     fn punctuation_is_opt_in_and_boundaries_hold() {
         let mut c = Config::default();
         assert_eq!(
-            before_cleanup("hello comma world new line next question mark", &c),
+            before_cleanup("hello comma world new line next question mark", &c, false),
             "hello comma world new line next question mark"
         );
         c.formatting.spoken_punctuation = true;
         assert_eq!(
-            before_cleanup("hello comma world new line next question mark", &c),
+            before_cleanup("hello comma world new line next question mark", &c, false),
             "hello, world\nnext?"
         );
         assert_eq!(
-            before_cleanup("commander periodical", &c),
+            before_cleanup("commander periodical", &c, false),
             "commander periodical"
         );
     }
@@ -260,18 +267,18 @@ mod tests {
     #[test]
     fn empty_text_never_becomes_a_space() {
         assert_eq!(after_cleanup("   ", &Config::default()), "");
-        assert_eq!(before_cleanup("um uh", &Config::default()), "");
+        assert_eq!(before_cleanup("um uh", &Config::default(), false), "");
     }
     #[test]
     fn configurable_phrase_fillers_and_opt_out() {
         let mut c = Config::default();
         c.formatting.fillers = vec!["you know".into(), "um".into()];
         assert_eq!(
-            before_cleanup("YOU KNOW, hello um, world", &c),
+            before_cleanup("YOU KNOW, hello um, world", &c, false),
             "hello world"
         );
         c.formatting.remove_fillers = false;
-        assert_eq!(before_cleanup("um, you know", &c), "um, you know");
+        assert_eq!(before_cleanup("um, you know", &c, false), "um, you know");
     }
     #[test]
     fn combining_marks_stay_inside_word_boundaries() {
@@ -280,7 +287,10 @@ mod tests {
             from: "cafe".into(),
             to: "coffee".into(),
         }];
-        assert_eq!(before_cleanup("cafe\u{301} cafe", &c), "cafe\u{301} coffee");
+        assert_eq!(
+            before_cleanup("cafe\u{301} cafe", &c, false),
+            "cafe\u{301} coffee"
+        );
     }
     #[test]
     fn first_app_style_wins() {

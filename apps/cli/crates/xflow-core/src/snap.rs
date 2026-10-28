@@ -569,7 +569,7 @@ mod tests {
             ("so supa base is up", "so Supabase is up"),
             ("Postgres is ready.", "Postgres is ready."),
         ] {
-            assert_eq!(before_cleanup(input, &c), expected);
+            assert_eq!(before_cleanup(input, &c, false), expected);
         }
     }
 
@@ -582,7 +582,7 @@ mod tests {
             from: "DevTerms".into(),
             to: "literal  replacement".into(),
         });
-        assert_eq!(before_cleanup("dev terms", &c), "literal  replacement");
+        assert_eq!(before_cleanup("dev terms", &c, false), "literal  replacement");
     }
 
     #[test]
@@ -596,7 +596,7 @@ mod tests {
             "  next js\n x flow!  ",
             "https://example.com/next.js",
         ]) {
-            assert_eq!(before_cleanup(input, &c), before_cleanup(input, &baseline));
+            assert_eq!(before_cleanup(input, &c, false), before_cleanup(input, &baseline, false));
         }
         assert_eq!(apply("  next js\n x flow!  ", &c), "  next js\n x flow!  ");
     }

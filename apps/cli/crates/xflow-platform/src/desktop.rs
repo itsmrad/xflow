@@ -114,10 +114,12 @@ impl LinuxDesktop {
     }
 }
 
-fn is_terminal(app: Option<&str>) -> bool {
+/// Whether the app id names a terminal emulator, where a newline can run a command.
+pub fn is_terminal(app: Option<&str>) -> bool {
     let app = app.unwrap_or_default().to_ascii_lowercase();
     [
         "terminal",
+        "iterm",
         "console",
         "ptyxis",
         "kgx",

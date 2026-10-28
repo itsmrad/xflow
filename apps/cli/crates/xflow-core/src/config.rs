@@ -253,6 +253,9 @@ pub struct FormattingConfig {
     pub fillers: Vec<String>,
     /// Turn spoken "comma", "period", "new line", ... into punctuation.
     pub spoken_punctuation: bool,
+    /// Turn spoken enumerations ("one …, two …, three …", "bullet …") into
+    /// lists. Never in terminals.
+    pub lists: bool,
 }
 impl Default for FormattingConfig {
     fn default() -> Self {
@@ -265,6 +268,7 @@ impl Default for FormattingConfig {
             .map(String::from)
             .to_vec(),
             spoken_punctuation: false,
+            lists: true,
         }
     }
 }
