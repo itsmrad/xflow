@@ -97,7 +97,7 @@ PATH=/home/mrad/.cache/xflow-dev/bin:$PATH sh scripts/check.sh
 
 If host `/tmp` hits its quota, create `target/perf-tmp` and run the final check
 with `TMPDIR="$PWD/target/perf-tmp"` as well. The profile driver already puts
-compiler scratch and binary copies under `target/`; do not clear other workers'
+compiler scratch and binary copies under `apps/cli/target/`; do not clear other workers'
 temporary files or compiled caches.
 
 Some sandboxes require normal permission escalation to bind private IPC sockets

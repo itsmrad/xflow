@@ -36,7 +36,7 @@ def main():
         'schema_version': 1, 'profiles': {}, 'selection': None}
     result['selection'] = None
     # Binary copies belong on the checkout filesystem, not size-limited /tmp.
-    with tempfile.TemporaryDirectory(prefix='xflow-profiles-', dir=baseline.ROOT / 'target') as temp:
+    with tempfile.TemporaryDirectory(prefix='xflow-profiles-', dir=baseline.ROOT / 'apps/cli/target') as temp:
         for name in names:
             overrides = {'LTO': 'thin', 'OPT_LEVEL': '3', 'PANIC': 'unwind', 'CODEGEN_UNITS': '1',
                          'STRIP': 'true', **PROFILES[name]}
