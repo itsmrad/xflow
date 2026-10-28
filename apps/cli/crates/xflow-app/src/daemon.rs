@@ -704,16 +704,14 @@ impl Engine {
                 if raw.is_empty() {
                     return failed.map_or(Ok(None), Err);
                 }
-                let warning = match (warning, failed) {
-                    (warning, None) => warning,
-                    (warning, Some(e)) => {
-                        let lost = format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered");
-                        Some(bounded_message(&match warning {
-                            Some(warning) => format!("{warning}; {lost}"),
-                            None => lost,
-                        }))
+                let mut warning = warning;
+                if let Some(e) = failed {
+                    // A partial instruction must never run against the selection.
+                    if session_mode == Mode::Command {
+                        return Err(e.context("part of the command could not be transcribed; selection left untouched"));
                     }
-                };
+                    add_warning(&mut warning, &format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered"));
+                }
                 let target = if let Some(ref mut job) = context {
                     match tokio::time::timeout(Duration::from_secs(2), &mut *job).await {
                         Ok(Ok(c)) => c,
@@ -735,7 +733,6 @@ impl Engine {
                 let instructions = style
                     .and_then(|s| s.prompt.as_deref())
                     .or(config.cleanup.prompt.as_deref());
-                let mut warning = warning;
                 let text = if let Some(transformer) = services
                     .transformer
                     .filter(|_| session_mode == Mode::Command || mode != CleanupMode::Raw)
@@ -769,7 +766,7 @@ impl Engine {
                             bail!("command transformation failed; selection left untouched")
                         }
                         _ => {
-                            warning = Some("Cleanup failed; original transcript retained".into());
+                            add_warning(&mut warning, "Cleanup failed; original transcript retained");
                             local
                         }
                     }
@@ -797,7 +794,7 @@ impl Engine {
                 let entry = match store.append_current(entry, epoch, generation).await {
                     Ok(entry) => entry,
                     Err(_) => {
-                        warning = Some("History save failed; transcript available via last".into());
+                        add_warning(&mut warning, "History save failed; transcript available via last");
                         None
                     }
                 };
@@ -1090,7 +1087,7 @@ impl Engine {
                         let result = match delivery { Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
                         if delivery != Delivery::None { processed.timings.inject_ms = Some(ms(start.elapsed())); }
                         processed.timings.total_ms = ms(processed.stopped.elapsed());
-                        if let Some(entry) = &mut processed.entry { entry.latency_ms = Some(processed.timings.total_ms as u64); if store.set_latency(entry.id, processed.timings.total_ms as u64).await.is_err() { processed.warning = Some("History latency update failed".into()); } }
+                        if let Some(entry) = &mut processed.entry { entry.latency_ms = Some(processed.timings.total_ms as u64); if store.set_latency(entry.id, processed.timings.total_ms as u64).await.is_err() { add_warning(&mut processed.warning, "History latency update failed"); } }
                         let _ = tx.send(Completion::Finished { generation, processed, result }).await;
                     });
                 }
@@ -1457,6 +1454,13 @@ pub(crate) const COPIED: &str = "Copied — press ⌘V to paste";
 #[cfg(not(target_os = "macos"))]
 pub(crate) const COPIED: &str = "Copied — press Ctrl+V to paste";
 
+/// Warnings accumulate: a later failure must never hide an earlier lost segment.
+fn add_warning(warning: &mut Option<String>, message: &str) {
+    *warning = Some(bounded_message(&match warning.take() {
+        Some(earlier) => format!("{earlier}; {message}"),
+        None => message.into(),
+    }));
+}
 fn delivery_message(warning: Option<String>, outcome: Option<InjectionOutcome>) -> Option<String> {
     if outcome == Some(InjectionOutcome::ClipboardOnly) {
         Some(bounded_message(&match warning {
@@ -3098,6 +3102,63 @@ mod tests {
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }
+    }
+    #[tokio::test]
+    async fn a_lost_segment_warning_survives_a_cleanup_failure() {
+        let audio = Arc::new(StreamAudio::ramp(300, 290, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            broken: Some(|start| start >= 240_000),
+            ..SegmentStt::default()
+        });
+        let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio, stt.clone());
+        engine.config.cleanup.mode = CleanupMode::Light;
+        engine.services.transformer = Some(Arc::new(FailingCleanup));
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        wait_for(|| stt.clips.lock().unwrap().len() >= 4).await;
+        ask(&tx, Request::Stop).await;
+        let message = success(&mut events).await.message.unwrap();
+        assert!(
+            message.contains("Part of the dictation could not be transcribed"),
+            "{message}"
+        );
+        assert!(message.contains("Cleanup failed"), "{message}");
+        assert!(!desktop.injections.lock().unwrap()[0].contains("at241"));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_command_that_lost_a_segment_leaves_the_selection_untouched() {
+        let audio = Arc::new(StreamAudio::ramp(300, 290, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            broken: Some(|start| start >= 240_000),
+            ..SegmentStt::default()
+        });
+        let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio, stt.clone());
+        let transformer = Arc::new(RecordingTransformer::default());
+        engine.services.transformer = Some(transformer.clone());
+        let task = tokio::spawn(engine.run(rx));
+        let start = Request::Start {
+            mode: Mode::Command,
+            context: None,
+            t0_us: None,
+            delivery: Delivery::Inject,
+            hold: Default::default(),
+        };
+        assert!(ask(&tx, start).await.ok);
+        wait_for(|| stt.clips.lock().unwrap().len() >= 4).await;
+        ask(&tx, Request::Stop).await;
+        let failed = hotkey_state(&mut events, State::Error).await;
+        assert!(failed
+            .message
+            .unwrap()
+            .contains("part of the command could not be transcribed"));
+        assert!(transformer.0.lock().unwrap().is_empty());
+        assert!(desktop.injections.lock().unwrap().is_empty());
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
     }
     #[tokio::test]
     async fn a_dictation_with_nothing_transcribed_still_fails() {
