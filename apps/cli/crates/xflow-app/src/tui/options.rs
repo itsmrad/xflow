@@ -123,7 +123,7 @@ pub fn presets(key: &str) -> Vec<String> {
         ],
         "hotkey.double_tap_ms" => &["250", "350", "500"],
         "hotkey.hold_threshold_ms" => &["150", "200", "250", "350", "500"],
-        "recording.max_seconds" => &["30", "60", "120", "300", "600"],
+        "recording.max_seconds" => &["60", "300", "600", "1200"],
         "recording.min_ms" => &["0", "150", "300", "500", "1000"],
         "recording.auto_stop_secs" => &["0", "2", "5", "10", "30", "60"],
         "recording.keep_warm_secs" => &["0", "5", "15", "30", "60", "300", "600"],

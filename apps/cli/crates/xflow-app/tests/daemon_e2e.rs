@@ -373,7 +373,8 @@ async fn handle_provider_request(
         }
         assert!(multipart, "upload must use the multipart protocol");
         let length = length.expect("bounded content-length required");
-        assert!(length < 100_000);
+        // A 60 s segment, the longest upload, is a 1.9 MB WAV.
+        assert!(length < 2_000_000);
         let mut body = vec![0; length];
         reader.read_exact(&mut body).await.unwrap();
         sent.send(body).unwrap();
@@ -976,5 +977,79 @@ async fn killing_the_tui_releases_the_microphone() {
         let killed = tui.kill(signal);
         released(&daemon, &mut events, &mut mock, killed, what).await;
     }
+    daemon.stop_process().await;
+}
+
+#[tokio::test]
+async fn long_dictation_streams_segments_through_the_real_daemon() {
+    const WORDS: [&str; 8] = [
+        "one", "two", "three", "four", "five", "six", "seven", "eight",
+    ];
+    let mut mock = MockStt::start(WORDS.iter().map(|w| Plan::success(w)).collect()).await;
+    // Three minutes of 48 kHz "speech": 2.6 s tone bursts, then 0.4 s pauses.
+    const RATE: u32 = 48_000;
+    let mut daemon = Daemon::spawn_with(&mock.endpoint, "wav", true, |command, root| {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: RATE,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut wav = hound::WavWriter::create(root.join("input.wav"), spec).unwrap();
+        for i in 0..RATE * 180 {
+            let paused = i % (RATE * 3) >= RATE * 26 / 10;
+            let s = if paused {
+                0.0
+            } else {
+                0.3 * (i as f32 * 0.06).sin()
+            };
+            wav.write_sample((s * 32767.0) as i16).unwrap();
+        }
+        wav.finalize().unwrap();
+        command.env("XFLOW_TEST_AUDIO_SPEED", "30");
+    });
+    daemon.ready().await;
+    let mut events = daemon.events().await;
+    assert!(daemon.request(json!({"command":"start"})).await.ok);
+    state(&mut events, State::Listening).await;
+    // The capture finishes at the end of the file, which stops the dictation.
+    state(&mut events, State::Processing).await;
+    let mut uploads = Vec::new();
+    while let Ok(upload) = mock.uploads.try_recv() {
+        uploads.push(upload);
+    }
+    assert!(uploads.len() >= 2, "segments upload while recording");
+    let done = state(&mut events, State::Success).await;
+    while let Ok(upload) = timeout(Duration::from_millis(200), mock.upload()).await {
+        uploads.push(upload);
+    }
+    assert!(
+        (3..=6).contains(&uploads.len()),
+        "{} segments",
+        uploads.len()
+    );
+    assert_eq!(
+        fs::read_to_string(daemon.sink()).unwrap(),
+        WORDS[..uploads.len()].join(" ")
+    );
+    // Every input frame reaches the provider exactly once (16 kHz after resampling).
+    let frames: usize = uploads
+        .iter()
+        .map(|upload| {
+            let riff = upload.windows(4).position(|b| b == b"RIFF").unwrap();
+            let data = riff
+                + 12
+                + upload[riff + 12..]
+                    .windows(4)
+                    .position(|b| b == b"data")
+                    .unwrap();
+            u32::from_le_bytes(upload[data + 4..data + 8].try_into().unwrap()) as usize / 2
+        })
+        .sum();
+    assert!(
+        frames.abs_diff(16_000 * 180) <= uploads.len(),
+        "{frames} frames"
+    );
+    assert_eq!(done.timings.unwrap().audio_ms, 180_000);
     daemon.stop_process().await;
 }

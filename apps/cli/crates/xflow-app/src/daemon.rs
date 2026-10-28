@@ -30,7 +30,7 @@ use xflow_core::{
         PROTOCOL_VERSION,
     },
     AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, GlobalHotkeys,
-    HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
+    HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer, Transcript,
     TranscriptionOptions, TransformRequest,
 };
 
@@ -80,6 +80,8 @@ pub const MIC_WAITING: &str = "Waiting for microphone permission";
 const MIC_SLOW: Duration = Duration::from_secs(1);
 /// A late permission grant must not record for an expired request or gesture.
 const START_GRACE: Duration = Duration::from_secs(5);
+/// How often captured audio moves from the microphone buffer into segments.
+const DRAIN_EVERY: Duration = Duration::from_secs(1);
 struct Opening {
     mode: Mode,
     context: Option<AppContext>,
@@ -175,10 +177,25 @@ pub struct Engine {
     notifications: tokio::task::JoinSet<()>,
     started: Option<Instant>,
     silent_since: Option<Instant>,
+    segments: Segments,
     timings: Timings,
     last_timings: Option<Timings>,
     events: broadcast::Sender<Response>,
     desktop_events: broadcast::Sender<DesktopEvent>,
+}
+/// A segment's transcript, or its audio and energy flag for one retry after stop.
+type Piece = std::result::Result<Transcript, (anyhow::Error, AudioClip, bool)>;
+/// The current recording, transcribed in segments while it continues (see
+/// `speech::split_point`): memory stays bounded and stop only waits for the tail.
+#[derive(Default)]
+struct Segments {
+    /// Captured audio not yet sent.
+    tail: Option<AudioClip>,
+    /// Dropping the set aborts uploads, so cancel never delivers a stale segment.
+    sent: tokio::task::JoinSet<(usize, Piece)>,
+    count: usize,
+    audio_ms: u64,
+    heard: bool,
 }
 impl Engine {
     pub fn new(
@@ -225,6 +242,7 @@ impl Engine {
             notifications: tokio::task::JoinSet::new(),
             started: None,
             silent_since: None,
+            segments: Segments::default(),
             timings: Timings::default(),
             last_timings: None,
             events,
@@ -459,6 +477,7 @@ impl Engine {
         self.delivery = delivery;
         self.started = Some(Instant::now());
         self.silent_since = self.started;
+        self.segments = Segments::default();
         self.timings = Timings {
             open_ms: Some(ms(opened.elapsed())),
             hotkey_ms: t0_us
@@ -512,37 +531,115 @@ impl Engine {
         let stopped = Instant::now();
         self.started = None;
         self.silent_since = None;
-        let audio = match self.services.audio.stop().await {
-            Ok(a) => a,
+        // Segments sent while recording get one retry; the tail, like a short
+        // dictation, fails fast instead of doubling a provider timeout.
+        let live = self.segments.count;
+        let mut warning = None;
+        match self.services.audio.stop().await {
+            Ok(audio) => {
+                if let Err(e) = audio_duration(&audio) {
+                    self.segments = Segments::default();
+                    return Err(e);
+                }
+                self.queue(audio, true);
+            }
+            // A microphone lost minutes into a dictation keeps what was already captured.
+            Err(e) if live > 0 || self.segments.tail.is_some() => {
+                let _ = self.services.audio.cancel().await;
+                warning = Some(bounded_message(&format!(
+                    "{e:#}; transcribed the audio captured before it"
+                )));
+                if let Some(tail) = self.segments.tail.take() {
+                    self.send(tail);
+                }
+            }
             Err(e) => {
                 let _ = self.services.audio.cancel().await;
+                self.segments = Segments::default();
                 self.abort_context();
                 self.set_state(State::Error, Some(format!("{e:#}")));
                 return Err(e);
             }
-        };
-        let audio_ms = audio_duration(&audio)?;
-        if audio_ms < self.config.recording.min_ms {
+        }
+        let segments = std::mem::take(&mut self.segments);
+        if segments.audio_ms < u64::from(self.config.recording.min_ms) {
             self.abort_context();
             self.set_state(State::Idle, Some("Recording too short; discarded".into()));
             return Ok(());
         }
-        let activity = speech::activity(&audio, self.config.recording.silence_threshold);
-        if !activity.speech {
+        if !segments.heard {
             self.abort_context();
             self.set_state(State::Idle, Some(NOT_CAUGHT.into()));
             return Ok(());
         }
-        self.timings.audio_ms = audio_ms;
+        self.timings.audio_ms = segments.audio_ms.min(u64::from(u32::MAX)) as u32;
         self.cue(xflow_platform::Cue::Stop);
         self.set_state(State::Processing, None);
-        self.transcribe(audio, activity.low_energy, stopped, completion);
+        self.transcribe(segments.sent, live, warning, stopped, completion);
         Ok(())
+    }
+    /// Pulls the audio captured so far into the segment pipeline.
+    async fn drain(&mut self) {
+        // On error the capture keeps its samples and stop() reports the failure.
+        if let Ok(Some(audio)) = self.services.audio.drain().await {
+            self.queue(audio, false);
+        }
+    }
+    /// Appends captured audio and sends every finished segment; `last` sends the rest.
+    fn queue(&mut self, audio: AudioClip, last: bool) {
+        let mut tail = match self.segments.tail.take() {
+            Some(mut tail)
+                if (tail.sample_rate, tail.channels) == (audio.sample_rate, audio.channels) =>
+            {
+                tail.samples.extend_from_slice(&audio.samples);
+                tail
+            }
+            Some(tail) => {
+                self.send(tail);
+                audio
+            }
+            None => audio,
+        };
+        while let Some(cut) = speech::split_point(&tail) {
+            let rest = tail.samples.split_off(cut);
+            let head = AudioClip {
+                samples: std::mem::replace(&mut tail.samples, rest),
+                ..tail
+            };
+            self.send(head);
+        }
+        if last {
+            if !tail.samples.is_empty() {
+                self.send(tail);
+            }
+        } else {
+            self.segments.tail = Some(tail);
+        }
+    }
+    /// Uploads one segment in the background; silence is counted, never sent.
+    fn send(&mut self, audio: AudioClip) {
+        let segments = &mut self.segments;
+        segments.audio_ms += u64::from(audio_duration(&audio).unwrap_or(0));
+        let index = segments.count;
+        segments.count += 1;
+        let activity = speech::activity(&audio, self.config.recording.silence_threshold);
+        if !activity.speech {
+            return;
+        }
+        segments.heard = true;
+        let (stt, config) = (self.services.stt.clone(), self.config.clone());
+        segments.sent.spawn(async move {
+            (
+                index,
+                transcribe_segment(&*stt, audio, activity.low_energy, &config).await,
+            )
+        });
     }
     fn transcribe(
         &mut self,
-        audio: AudioClip,
-        low_energy: bool,
+        mut sent: tokio::task::JoinSet<(usize, Piece)>,
+        live: usize,
+        warning: Option<String>,
         stopped: Instant,
         completion: mpsc::Sender<Completion>,
     ) {
@@ -556,17 +653,31 @@ impl Engine {
         let mut timings = self.timings.clone();
         self.job = Some(tokio::spawn(async move {
             let result = async {
-                let options = TranscriptionOptions {
-                    vocabulary: vocabulary(&config),
-                    ..TranscriptionOptions::default()
-                };
-                let transcript = services.stt.transcribe(audio, options).await?;
+                let mut pieces = Vec::with_capacity(sent.len());
+                while let Some(joined) = sent.join_next().await {
+                    pieces.push(joined.context("transcription task failed")?);
+                }
+                pieces.sort_by_key(|(index, _)| *index);
+                let (mut parts, mut language) = (Vec::with_capacity(pieces.len()), None);
+                for (index, piece) in pieces {
+                    let transcript = match piece {
+                        Ok(transcript) => transcript,
+                        Err((_, audio, low_energy)) if index < live => {
+                            transcribe_segment(&*services.stt, audio, low_energy, &config)
+                                .await
+                                .map_err(|(e, ..)| e)?
+                        }
+                        Err((e, ..)) => return Err(e),
+                    };
+                    language = language.or(transcript.language);
+                    parts.push(transcript.text);
+                }
                 timings.stt_ms = ms(stopped.elapsed());
-                let raw = transcript.text;
+                let raw = join_parts(&parts);
                 if raw.len() > 32 * 1024 {
                     bail!("transcript exceeds 32 KiB safety limit");
                 }
-                if raw.trim().is_empty() || low_energy && speech::suspect(&raw, &config) {
+                if raw.is_empty() {
                     return Ok(None);
                 }
                 let target = if let Some(ref mut job) = context {
@@ -590,7 +701,7 @@ impl Engine {
                 let instructions = style
                     .and_then(|s| s.prompt.as_deref())
                     .or(config.cleanup.prompt.as_deref());
-                let mut warning = None;
+                let mut warning = warning;
                 let text = if let Some(transformer) = services
                     .transformer
                     .filter(|_| session_mode == Mode::Command || mode != CleanupMode::Raw)
@@ -642,7 +753,7 @@ impl Engine {
                     model: Some(services.stt.model().into()).filter(|s: &String| !s.is_empty()),
                     raw_text: (raw != text).then_some(raw),
                     app_id: target.app_id.clone(),
-                    language: transcript.language.or(config.stt.language),
+                    language: language.or(config.stt.language),
                     duration_ms: Some(timings.audio_ms as u64),
                     mode: session_mode,
                     ..HistoryEntry::default()
@@ -685,6 +796,7 @@ impl Engine {
         if let Some(job) = self.job.take() {
             job.abort();
         }
+        self.segments = Segments::default();
         self.abort_context();
         self.started = None;
         self.silent_since = None;
@@ -796,6 +908,8 @@ impl Engine {
         let (completion_tx, mut completion_rx) = mpsc::channel(8);
         let mut levels = tokio::time::interval(Duration::from_millis(40));
         levels.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut drains = tokio::time::interval(DRAIN_EVERY);
+        drains.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut pending: Option<Processed> = None;
         let mut queries = tokio::task::JoinSet::new();
         let mut deliveries = tokio::task::JoinSet::new();
@@ -997,6 +1111,7 @@ impl Engine {
                         self.reset_hotkeys();
                     }
                 }
+                _ = drains.tick(), if self.state == State::Listening => self.drain().await,
                 _ = async { if let Some(at) = opening { tokio::time::sleep_until(at.into()).await; } }, if opening.is_some() => {
                     if let Some(opening) = &mut self.opening {
                         if !std::mem::replace(&mut opening.waiting, true) {
@@ -1367,6 +1482,34 @@ fn audio_duration(audio: &AudioClip) -> Result<u32> {
             .min(u32::MAX as u64) as u32,
     )
 }
+async fn transcribe_segment(
+    stt: &dyn SpeechToText,
+    audio: AudioClip,
+    low_energy: bool,
+    config: &Config,
+) -> Piece {
+    let options = TranscriptionOptions {
+        vocabulary: vocabulary(config),
+        ..TranscriptionOptions::default()
+    };
+    match stt.transcribe(audio.clone(), options).await {
+        // Near-silent audio: drop the provider's stock hallucinations and hint echoes.
+        Ok(mut transcript) if low_energy && speech::suspect(&transcript.text, config) => {
+            transcript.text.clear();
+            Ok(transcript)
+        }
+        Ok(transcript) => Ok(transcript),
+        Err(error) => Err((error, audio, low_energy)),
+    }
+}
+fn join_parts(parts: &[String]) -> String {
+    parts
+        .iter()
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 fn vocabulary(config: &Config) -> Vec<String> {
     if config.dictionary.words.is_empty() {
         return vec![];
@@ -1482,6 +1625,16 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
         Err(error) => return Err(error.into()),
     }
+    // Under the daemon lock, so two starts never race on the file.
+    let marker = crate::paths::data_dir()?.join("migrated-recording-limit");
+    let config = match crate::config_edit::migrate_recording_limit(&config_path, &marker) {
+        Ok(true) => Config::load(&config_path)?,
+        Ok(false) => config,
+        Err(_) => {
+            log("warn", "could not migrate the legacy recording limit");
+            config
+        }
+    };
     let listener = UnixListener::bind(&path)?;
     let _guard = SocketGuard { path, _lock: lock };
     use std::os::unix::fs::PermissionsExt;
@@ -2632,6 +2785,224 @@ mod tests {
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }
+    }
+
+    /// A microphone whose first drain hands over `drained` samples; stop returns the rest.
+    struct StreamAudio {
+        samples: Vec<f32>,
+        drained: usize,
+        cursor: Mutex<usize>,
+        stop_fails: bool,
+    }
+    impl StreamAudio {
+        /// A rising ramp, so each sample's value identifies its position.
+        fn ramp(seconds: usize, drained_seconds: usize, stop_fails: bool) -> Self {
+            let len = seconds * 16_000;
+            Self {
+                samples: (0..len)
+                    .map(|i| 0.1 + 0.5 * i as f32 / len as f32)
+                    .collect(),
+                drained: drained_seconds * 16_000,
+                cursor: Mutex::new(0),
+                stop_fails,
+            }
+        }
+        fn clip(samples: &[f32]) -> AudioClip {
+            AudioClip {
+                samples: samples.to_vec(),
+                sample_rate: 16_000,
+                channels: 1,
+            }
+        }
+        /// Milliseconds into the recording where `clip` starts.
+        fn position(&self, clip: &AudioClip) -> usize {
+            let first = clip.samples[0];
+            self.samples.iter().position(|s| *s == first).unwrap() / 16
+        }
+    }
+    #[async_trait]
+    impl AudioCapture for StreamAudio {
+        async fn start(&self) -> Result<()> {
+            *self.cursor.lock().unwrap() = 0;
+            Ok(())
+        }
+        async fn stop(&self) -> Result<AudioClip> {
+            if self.stop_fails {
+                bail!("microphone stream failed: device disconnected");
+            }
+            let mut cursor = self.cursor.lock().unwrap();
+            let rest = Self::clip(&self.samples[*cursor..]);
+            *cursor = self.samples.len();
+            Ok(rest)
+        }
+        async fn cancel(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn drain(&self) -> Result<Option<AudioClip>> {
+            let mut cursor = self.cursor.lock().unwrap();
+            if *cursor > 0 {
+                return Ok(None);
+            }
+            *cursor = self.drained;
+            Ok(Some(Self::clip(&self.samples[..self.drained])))
+        }
+        fn level(&self) -> f32 {
+            0.2
+        }
+    }
+    /// Answers with the segment's start (ms); earlier segments answer later, the
+    /// first `failures` calls fail and `hang` never answers.
+    #[derive(Default)]
+    struct SegmentStt {
+        audio: Option<Arc<StreamAudio>>,
+        clips: Mutex<Vec<AudioClip>>,
+        failures: AtomicUsize,
+        hang: bool,
+        dropped: Arc<AtomicUsize>,
+    }
+    struct DropCount(Arc<AtomicUsize>);
+    impl Drop for DropCount {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    #[async_trait]
+    impl SpeechToText for SegmentStt {
+        fn name(&self) -> &str {
+            "fixture"
+        }
+        async fn transcribe(&self, clip: AudioClip, _: TranscriptionOptions) -> Result<Transcript> {
+            let _guard = DropCount(self.dropped.clone());
+            let start = self.audio.as_ref().unwrap().position(&clip);
+            self.clips.lock().unwrap().push(clip);
+            if self.hang {
+                std::future::pending::<()>().await;
+            }
+            if self
+                .failures
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok()
+            {
+                bail!("network unreachable");
+            }
+            tokio::time::sleep(Duration::from_millis(
+                400u64.saturating_sub(start as u64 / 500),
+            ))
+            .await;
+            Ok(Transcript {
+                text: format!("at{start}"),
+                language: Some("en".into()),
+            })
+        }
+    }
+    async fn wait_for(what: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !what() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    fn segment_fixture(
+        audio: Arc<StreamAudio>,
+        stt: Arc<SegmentStt>,
+    ) -> (
+        Engine,
+        mpsc::Sender<Command>,
+        mpsc::Receiver<Command>,
+        broadcast::Receiver<Response>,
+        Arc<RecordingDesktop>,
+    ) {
+        let desktop = Arc::new(RecordingDesktop::default());
+        let store = Store::open(std::path::Path::new("unused"), false, 5).unwrap();
+        let (mut engine, tx, rx, events, _) = fixture(Config::default(), desktop.clone(), store);
+        engine.services.audio = audio;
+        engine.services.stt = stt;
+        (engine, tx, rx, events, desktop)
+    }
+    #[tokio::test]
+    async fn long_dictations_upload_segments_while_recording_and_keep_every_sample_in_order() {
+        // 5 minutes: 290 s drained while recording, 10 s returned by stop.
+        let audio = Arc::new(StreamAudio::ramp(300, 290, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            failures: AtomicUsize::new(1),
+            ..SegmentStt::default()
+        });
+        let (engine, tx, rx, mut events, desktop) = segment_fixture(audio.clone(), stt.clone());
+        let task = tokio::spawn(engine.run(rx));
+        assert!(ask(&tx, Request::start()).await.ok);
+        // Segments go out on the first drain, before the user stops.
+        wait_for(|| stt.clips.lock().unwrap().len() >= 4).await;
+        ask(&tx, Request::Stop).await;
+        let done = success(&mut events).await;
+        let mut clips = std::mem::take(&mut *stt.clips.lock().unwrap());
+        let uploads = clips.len();
+        clips.sort_by_key(|clip| audio.position(clip));
+        clips.dedup_by_key(|clip| audio.position(clip));
+        assert_eq!(
+            uploads,
+            clips.len() + 1,
+            "the failed upload is retried once"
+        );
+        let rebuilt: Vec<f32> = clips.iter().flat_map(|c| c.samples.clone()).collect();
+        assert_eq!(rebuilt, audio.samples, "segments tile the recording");
+        assert!(clips.iter().all(|c| c.samples.len() <= 60 * 16_000));
+        assert!(clips.len() >= 6, "{} segments", clips.len());
+        let expected: Vec<String> = clips
+            .iter()
+            .map(|c| format!("at{}", audio.position(c)))
+            .collect();
+        // Earlier segments answered last, yet the text keeps recording order.
+        assert_eq!(
+            desktop.injections.lock().unwrap()[0].trim(),
+            expected.join(" ")
+        );
+        assert_eq!(done.timings.unwrap().audio_ms, 300_000);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn cancel_aborts_segment_uploads_in_flight() {
+        let audio = Arc::new(StreamAudio::ramp(200, 190, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            hang: true,
+            ..SegmentStt::default()
+        });
+        let (engine, tx, rx, _events, desktop) = segment_fixture(audio, stt.clone());
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        wait_for(|| stt.clips.lock().unwrap().len() >= 3).await;
+        let sent = stt.clips.lock().unwrap().len();
+        assert_eq!(ask(&tx, Request::Cancel).await.state, State::Idle);
+        wait_for(|| stt.dropped.load(Ordering::SeqCst) == sent).await;
+        assert!(desktop.injections.lock().unwrap().is_empty());
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_lost_microphone_keeps_the_audio_captured_before_it() {
+        let audio = Arc::new(StreamAudio::ramp(150, 150, true));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            ..SegmentStt::default()
+        });
+        let (engine, tx, rx, mut events, desktop) = segment_fixture(audio, stt.clone());
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        wait_for(|| !stt.clips.lock().unwrap().is_empty()).await;
+        ask(&tx, Request::Stop).await;
+        let done = success(&mut events).await;
+        assert!(done
+            .message
+            .unwrap()
+            .contains("device disconnected; transcribed the audio captured before it"));
+        assert!(desktop.injections.lock().unwrap()[0].starts_with("at0 at"));
+        assert_eq!(done.timings.unwrap().audio_ms, 150_000);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
     }
 
     #[tokio::test]

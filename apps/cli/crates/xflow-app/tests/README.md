@@ -29,7 +29,9 @@ The seam is compiled only with the explicit `test-support` feature. In that buil
 config and data directories must be its `run`, `config` and `data` children, the
 sink must be `delivered.txt` inside it, and display variables must be absent.
 `voice` yields one second of deterministic 16 kHz mono PCM; `silence` fails before
-upload. File delivery uses a private file and refuses symlinks. The production
+upload; `wav` streams the fixed `XFLOW_TEST_ROOT/input.wav` as a live microphone at
+`XFLOW_TEST_AUDIO_SPEED` times real time (default 1) and finishes at the end of the
+file, which exercises segmented long-dictation transcription. File delivery uses a private file and refuses symlinks. The production
 daemon change is only adapter selection at startup and in the reload service
 factory; release packaging
 builds without the feature and cannot activate this seam.
