@@ -10,22 +10,41 @@ pub const MAX_CANDIDATES: usize = 4;
 const MAX_HUNK_WORDS: usize = 3;
 const MAX_DIFF_WORDS: usize = 400;
 
-/// Where a dictation landed in a text field: the pasted text plus up to 16
-/// characters on each side. Never the rest of the field.
+/// Where a dictation landed in a text field: the field's own text of the paste
+/// plus up to 16 characters on each side. Never the rest of the field.
 pub struct Receipt {
     before: String,
     inserted: String,
     after: String,
 }
 impl Receipt {
-    /// Locate `inserted` in the field read just after the paste. It must occur
-    /// exactly once (a trailing space the app dropped is tolerated).
-    pub fn new(field: &str, inserted: &str) -> Option<Self> {
-        let inserted = [inserted, inserted.trim_end()]
+    /// Locate `inserted` in the field read just after the paste: right before
+    /// the caret (UTF-16 units, as the field reports it), else its only
+    /// occurrence. Apps' typographic substitutions are tolerated (see
+    /// `fold_char`), and so is a trailing space the app dropped.
+    pub fn new(field: &str, inserted: &str, caret: Option<usize>) -> Option<Self> {
+        let chars = folded(field);
+        let keys: Vec<char> = chars.iter().map(|c| c.0).collect();
+        let (i, n) = [inserted, inserted.trim_end()]
             .into_iter()
-            .find(|s| !s.trim().is_empty() && field.matches(*s).count() == 1)?;
-        let start = field.find(inserted)?;
-        let end = start + inserted.len();
+            .filter(|s| !s.trim().is_empty())
+            .find_map(|s| {
+                let needle: Vec<char> = s.chars().filter_map(fold_char).collect();
+                let n = needle.len();
+                let at_caret = caret.and_then(|c| utf16_to_byte(field, c)).and_then(|end| {
+                    let j = chars.partition_point(|c| c.1 < end);
+                    (j >= n && keys[j - n..j] == needle[..]).then(|| j - n)
+                });
+                let unique = || {
+                    let mut hits = keys
+                        .windows(n)
+                        .enumerate()
+                        .filter(|(_, w)| *w == &needle[..]);
+                    hits.next().filter(|_| hits.next().is_none()).map(|h| h.0)
+                };
+                at_caret.or_else(unique).map(|i| (i, n))
+            })?;
+        let (start, end) = (chars[i].1, chars[i + n - 1].2);
         let before = &field[..start];
         let after = &field[end..];
         let before = &before[before
@@ -39,16 +58,17 @@ impl Receipt {
             .map_or(after.len(), |(i, _)| i)];
         Some(Self {
             before: before.into(),
-            inserted: inserted.into(),
+            inserted: field[start..end].into(),
             after: after.into(),
         })
     }
     pub fn inserted(&self) -> &str {
         &self.inserted
     }
-    /// The span between the anchors in the field as it reads now. An empty anchor
-    /// means the field's start or end; any other anchor must occur exactly once.
-    /// A short dictation that filled an empty field has nothing to tell it apart
+    /// The span between the anchors in the field as it reads now, while it is
+    /// still recognisably the dictation (see `similar`). An empty anchor means
+    /// the field's start or end; any other anchor must occur exactly once. A
+    /// short dictation that filled an empty field has nothing to tell it apart
     /// from the next message typed there, so it is not trusted.
     pub fn corrected<'a>(&self, field: &'a str) -> Option<&'a str> {
         if self.before.is_empty()
@@ -72,41 +92,109 @@ impl Receipt {
         } else {
             unique(&self.after)?
         };
-        field.get(start..end)
+        field
+            .get(start..end)
+            .filter(|span| similar(&self.inserted, span))
     }
 }
-
-/// Close word corrections from `original` to `corrected` (at most four), skipping
-/// words the dictionary already has or the user removed. Shared by the paste
-/// observer and history edits. Nothing is learned from a mostly different text.
-pub fn corrections(
-    original: &str,
-    corrected: &str,
-    dictionary: &DictionaryConfig,
-) -> Vec<Replacement> {
-    let a: Vec<&str> = original.split_whitespace().map(key).collect();
-    let b: Vec<&str> = corrected.split_whitespace().map(key).collect();
-    if a.len() > MAX_DIFF_WORDS || b.len() > MAX_DIFF_WORDS {
-        return vec![];
+/// The comparison form of a character. Smart quotes and dashes, no-break
+/// spaces and auto-capitalisation fold away; CR and zero-width characters are
+/// dropped (CRLF reads as LF).
+// ponytail: no NFC; macOS text fields keep pasted code points as sent.
+fn fold_char(c: char) -> Option<char> {
+    Some(match c {
+        '\r' | '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}' => return None,
+        '‘' | '’' | '‚' | '‛' | '′' => '\'',
+        '“' | '”' | '„' | '‟' | '″' => '"',
+        '\u{2010}'..='\u{2015}' | '−' => '-',
+        '\u{A0}' | '\u{2007}' | '\u{202F}' => ' ',
+        c => c.to_lowercase().next().unwrap_or(c),
+    })
+}
+/// Folded characters with each one's byte range in `s`.
+fn folded(s: &str) -> Vec<(char, usize, usize)> {
+    s.char_indices()
+        .filter_map(|(i, c)| Some((fold_char(c)?, i, i + c.len_utf8())))
+        .collect()
+}
+/// Byte offset of a UTF-16 offset; None when it is past the end or splits a character.
+fn utf16_to_byte(s: &str, units: usize) -> Option<usize> {
+    let mut seen = 0;
+    for (i, c) in s.char_indices() {
+        if seen == units {
+            return Some(i);
+        }
+        seen += c.len_utf16();
     }
-    // Case-insensitive, so recapitalizing the next word is not part of a fix.
-    let lower =
-        |words: &[&str]| -> Vec<String> { words.iter().map(|w| w.to_lowercase()).collect() };
-    let (la, lb) = (lower(&a), lower(&b));
-    // Suffix LCS lengths; edits are the unmatched runs between matched words.
+    (seen == units).then_some(s.len())
+}
+/// Words compared case-insensitively, without the punctuation around them.
+fn words(s: &str) -> Vec<String> {
+    s.split_whitespace()
+        .map(|w| key(w).to_lowercase())
+        .collect()
+}
+/// Suffix LCS lengths of two word lists.
+fn lcs(a: &[String], b: &[String]) -> Vec<Vec<u16>> {
     let mut lcs = vec![vec![0u16; b.len() + 1]; a.len() + 1];
     for i in (0..a.len()).rev() {
         for j in (0..b.len()).rev() {
-            lcs[i][j] = if la[i] == lb[j] {
+            lcs[i][j] = if a[i] == b[j] {
                 lcs[i + 1][j + 1] + 1
             } else {
                 lcs[i + 1][j].max(lcs[i][j + 1])
             };
         }
     }
-    if usize::from(lcs[0][0]) * 2 < a.len() {
-        return vec![];
+    lcs
+}
+/// At least half of the original words survive, in order: an edit of the
+/// dictation, not a different text such as the next message. Words are split
+/// at punctuation and camelCase humps, so "get user name" survives as
+/// getUserName.
+fn similar(original: &str, corrected: &str) -> bool {
+    let parts = |s: &str| {
+        let mut parts = vec![];
+        let mut part = String::new();
+        let mut lower = false;
+        for c in s.chars() {
+            if (!c.is_alphanumeric() || (lower && c.is_uppercase())) && !part.is_empty() {
+                parts.push(std::mem::take(&mut part));
+            }
+            if c.is_alphanumeric() {
+                part.extend(c.to_lowercase());
+            }
+            lower = c.is_lowercase() || c.is_numeric();
+        }
+        if !part.is_empty() {
+            parts.push(part);
+        }
+        parts
+    };
+    let (a, b) = (parts(original), parts(corrected));
+    a.len() <= MAX_DIFF_WORDS
+        && b.len() <= MAX_DIFF_WORDS
+        && usize::from(lcs(&a, &b)[0][0]) * 2 >= a.len()
+}
+
+/// Close word corrections from `original` to `corrected` (at most four), skipping
+/// words the dictionary already has or the user removed. Shared by the paste
+/// observer and history edits. Nothing is learned from a mostly different text.
+/// Err names why nothing was learned, for a log line without the text.
+pub fn corrections(
+    original: &str,
+    corrected: &str,
+    dictionary: &DictionaryConfig,
+) -> Result<Vec<Replacement>, &'static str> {
+    let a: Vec<&str> = original.split_whitespace().map(key).collect();
+    let b: Vec<&str> = corrected.split_whitespace().map(key).collect();
+    // Case-insensitive, so recapitalizing the next word is not part of a fix.
+    if !similar(original, corrected) {
+        return Err("dissimilar");
     }
+    let (la, lb) = (words(original), words(corrected));
+    // Edits are the unmatched runs between matched words.
+    let lcs = lcs(&la, &lb);
     let known = |word: &str| {
         let word = word.to_lowercase();
         dictionary
@@ -116,19 +204,29 @@ pub fn corrections(
             .any(|known| known.to_lowercase() == word)
     };
     let mut found: Vec<Replacement> = vec![];
+    let mut rejected = "no-edit";
     let (mut i, mut j, mut from, mut to) = (0, 0, 0, 0);
     loop {
         let matched = i < a.len() && j < b.len() && la[i] == lb[j];
         if matched || (i == a.len() && j == b.len()) {
-            if let Some(c) = hunk(&a[from..i], &b[to..j]) {
-                // A removed word is not learned back in either direction.
-                if !known(&c.to)
-                    && !dictionary.never_learn.contains(&c.from.to_lowercase())
-                    && !found
-                        .iter()
-                        .any(|f| f.to.to_lowercase() == c.to.to_lowercase())
-                {
-                    found.push(c);
+            if from < i || to < j {
+                match hunk(&a[from..i], &b[to..j]) {
+                    // A removed word is not learned back in either direction.
+                    Ok(c)
+                        if known(&c.to)
+                            || dictionary.never_learn.contains(&c.from.to_lowercase()) =>
+                    {
+                        rejected = "known";
+                    }
+                    Ok(c) => {
+                        if !found
+                            .iter()
+                            .any(|f| f.to.to_lowercase() == c.to.to_lowercase())
+                        {
+                            found.push(c);
+                        }
+                    }
+                    Err(reason) => rejected = reason,
                 }
             }
             if !matched {
@@ -143,63 +241,103 @@ pub fn corrections(
         }
     }
     found.truncate(MAX_CANDIDATES);
-    found
+    if found.is_empty() {
+        Err(rejected)
+    } else {
+        Ok(found)
+    }
 }
 /// An edit hunk, or its aligned start or end when the user also typed or
 /// deleted words right next to the correction.
-fn hunk(from: &[&str], to: &[&str]) -> Option<Replacement> {
+fn hunk(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
     let (n, m) = (from.len(), to.len());
     let k = n.min(m);
     candidate(from, to)
-        .or_else(|| candidate(&from[..k], &to[..k]))
-        .or_else(|| candidate(&from[n - k..], &to[m - k..]))
+        .or_else(|e| candidate(&from[..k], &to[..k]).map_err(|_| e))
+        .or_else(|e| candidate(&from[n - k..], &to[m - k..]).map_err(|_| e))
 }
 /// A word without the punctuation around it.
 fn key(token: &str) -> &str {
     token.trim_matches(|c: char| !c.is_alphanumeric())
 }
-/// One edit is learnable when it replaces 1-3 words with 1-3 plain words that
-/// look or sound like what was dictated. Insertions, deletions, case or
-/// punctuation changes, numbers, URLs, paths, code and everyday words (so
-/// homophone and grammar fixes like their/there) are not.
-fn candidate(from: &[&str], to: &[&str]) -> Option<Replacement> {
+/// One edit is learnable when it replaces 1-3 plain dictated words with a term
+/// of 1-3 words that looks or sounds like them. Learning only adds vocabulary,
+/// so the term may be code-like (`useEffect`, `Next.js`, `k8s`, `shadcn/ui`).
+/// Insertions, deletions, case or punctuation changes, numbers, URLs, spoken
+/// punctuation and swaps between everyday words (their/there, deploy/deployed,
+/// every day/everyday) are not.
+fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
     if from.is_empty() || to.is_empty() || from.len() > MAX_HUNK_WORDS || to.len() > MAX_HUNK_WORDS
     {
-        return None;
+        return Err("shape");
     }
     let (from, to) = (from.join(" "), to.join(" "));
-    let plain = |s: &str| {
-        s.chars()
-            .all(|c| c.is_alphabetic() || matches!(c, ' ' | '\'' | '’' | '-'))
-    };
+    let plain = from
+        .chars()
+        .all(|c| c.is_alphabetic() || matches!(c, ' ' | '\'' | '’' | '-'));
+    let term = to
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '\'' | '’' | '-' | '.' | '_' | '/'));
     let fold = |s: &str| -> String {
         s.chars()
             .filter(|c| c.is_alphanumeric() || *c == ' ')
             .flat_map(char::to_lowercase)
             .collect()
     };
+    // Digits read as their names, so "kay eights" and "k8s" compare.
+    const DIGITS: [&str; 10] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ];
     let letters = |s: &str| -> Vec<char> {
         s.chars()
-            .filter(|c| c.is_alphabetic())
-            .flat_map(char::to_lowercase)
+            .flat_map(|c| match c.to_digit(10) {
+                Some(d) => DIGITS[d as usize].chars().collect(),
+                None if c.is_alphabetic() => c.to_lowercase().collect(),
+                None => vec![],
+            })
             .collect()
     };
     let (x, y) = (letters(&from), letters(&to));
     // At most a third of the letters changed, or the same consonant skeleton.
     let close = distance(&x, &y) * 3 <= x.len().max(y.len())
         || (x.len().min(y.len()) >= 5 && sounds(&x).len() >= 3 && sounds(&x) == sounds(&y));
-    // ponytail: lowerCamelCase over 6 chars reads as code; "iPhone"/"macOS" pass.
-    let code =
-        to.starts_with(char::is_lowercase) && to.chars().any(char::is_uppercase) && to.len() > 6;
-    (plain(&from)
-        && plain(&to)
-        && y.len() >= 2
-        && to.chars().count() <= 40
-        && fold(&from) != fold(&to)
-        && close
-        && !code
-        && !to.split(' ').all(common))
-    .then_some(Replacement { from, to })
+    let spoken = |name: &str, symbol: char| {
+        from.split(' ').any(|w| w.eq_ignore_ascii_case(name)) && to.contains(symbol)
+    };
+    let url = to.matches('/').count() >= 2
+        || spoken("dot", '.')
+        || spoken("slash", '/')
+        || spoken("underscore", '_')
+        || spoken("dash", '-')
+        || spoken("hyphen", '-')
+        || to.rsplit_once('.').is_some_and(|(_, tld)| {
+            ["com", "org", "net", "edu", "gov"].contains(&tld.to_lowercase().as_str())
+        });
+    // Everyday words in both texts with no new capital: a grammar or spelling
+    // fix, not a term. "re act" -> "React" adds a capital and is kept.
+    let capitals = |s: &str| s.chars().filter(|c| c.is_uppercase()).count();
+    let everyday = to
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .all(|w| crate::words::common(&w.to_lowercase()))
+        && capitals(&to) <= capitals(&from);
+    if !plain || !term {
+        Err("symbols")
+    } else if to.chars().count() > 40 {
+        Err("long")
+    } else if !to.chars().any(char::is_alphabetic) || y.len() < 2 {
+        Err("number")
+    } else if fold(&from) == fold(&to) {
+        Err("case-or-punctuation")
+    } else if !close {
+        Err("not-close")
+    } else if url {
+        Err("url")
+    } else if to.split(' ').all(common) || everyday {
+        Err("everyday-word")
+    } else {
+        Ok(Replacement { from, to })
+    }
 }
 pub(crate) fn distance(a: &[char], b: &[char]) -> usize {
     let mut row: Vec<usize> = (0..=b.len()).collect();
@@ -309,6 +447,7 @@ mod tests {
 
     fn learn(original: &str, corrected: &str) -> Vec<(String, String)> {
         corrections(original, corrected, &DictionaryConfig::default())
+            .unwrap_or_default()
             .into_iter()
             .map(|r| (r.from, r.to))
             .collect()
@@ -351,18 +490,12 @@ mod tests {
         assert!(learn("send the e-mail", "send the email").is_empty());
         assert!(learn("hello world", "hello brave new world").is_empty());
         assert!(learn("hello brave new world", "hello world").is_empty());
-        // Unrelated rewrites, everyday words, numbers, URLs, code.
+        // Unrelated rewrites.
         assert!(learn("the cat sat", "the dog sat").is_empty());
-        // Homophone and grammar fixes between everyday words.
-        assert!(learn("I went their", "I went there").is_empty());
         assert!(learn("check its done", "check it's done").is_empty());
         assert!(learn("buy a apple", "buy an apple").is_empty());
         // A different text is not a correction of this one.
         assert!(learn("deploy kubernetis now", "lunch at noon with Kubernetes").is_empty());
-        assert!(learn("call me at five", "call me at 5").is_empty());
-        assert!(learn("open example dot com", "open example.com").is_empty());
-        assert!(learn("call get user name", "call getUserName").is_empty());
-        assert!(learn("fix my_var", "fix my_vat").is_empty());
         // At most four per dictation.
         assert_eq!(
             learn(
@@ -375,52 +508,197 @@ mod tests {
     }
 
     #[test]
+    fn developer_terms_are_learnable_vocabulary() {
+        for (original, corrected, from, to) in [
+            (
+                "we use dev terms",
+                "we use DevTerms",
+                "dev terms",
+                "DevTerms",
+            ),
+            (
+                "call use effect here",
+                "call useEffect here",
+                "use effect",
+                "useEffect",
+            ),
+            (
+                "built with next js",
+                "built with Next.js",
+                "next js",
+                "Next.js",
+            ),
+            (
+                "run cube cuddle get pods",
+                "run kubectl get pods",
+                "cube cuddle",
+                "kubectl",
+            ),
+            ("deploy to kay eights", "deploy to k8s", "kay eights", "k8s"),
+            (
+                "we should try gpt four o now",
+                "we should try gpt-4o now",
+                "gpt four o",
+                "gpt-4o",
+            ),
+            (
+                "please add shad cn ui here",
+                "please add shadcn/ui here",
+                "shad cn ui",
+                "shadcn/ui",
+            ),
+            ("we like re act", "we like React", "re act", "React"),
+            // pr47 rejected camelCase over 6 chars; vocabulary-only learning allows it.
+            (
+                "call get user name",
+                "call getUserName",
+                "get user name",
+                "getUserName",
+            ),
+        ] {
+            assert_eq!(learn(original, corrected), pair(from, to), "{original}");
+        }
+    }
+
+    #[test]
+    fn grammar_numbers_urls_and_code_edits_are_not_learned() {
+        for (original, corrected, reason) in [
+            ("we deploy it", "we deployed it", "everyday-word"),
+            ("it will affect us", "it will effect us", "everyday-word"),
+            ("I went their", "I went there", "not-close"),
+            ("Their plan works", "There plan works", "not-close"),
+            ("we use the form", "we use the forms", "everyday-word"),
+            ("we ship every day", "we ship everyday", "everyday-word"),
+            (
+                "we always use an d or here",
+                "we always use and/or here",
+                "everyday-word",
+            ),
+            ("call me at five", "call me at 5", "number"),
+            ("open example dot com", "open example.com", "url"),
+            ("open example com now", "open example.com now", "url"),
+            ("see docs slash api slash v1", "see docs/api/v1", "shape"),
+            ("we use src app main now", "we use src/app/main now", "url"),
+            ("mail bob at example", "mail bob@example", "symbols"),
+            ("fix my_var", "fix my_vat", "symbols"),
+            ("send the e-mail", "send the email", "case-or-punctuation"),
+            ("the cat sat", "the dog sat", "not-close"),
+            ("hello postgres world", "hello postgres world", "no-edit"),
+            (
+                "deploy kubernetis now",
+                "lunch at noon with Kubernetes",
+                "dissimilar",
+            ),
+        ] {
+            assert_eq!(
+                corrections(original, corrected, &DictionaryConfig::default()).unwrap_err(),
+                reason,
+                "{original} -> {corrected}"
+            );
+        }
+        let long = "averyveryveryveryverylongidentifiername42x";
+        assert!(learn("use a very long name", &format!("use {long}")).is_empty());
+    }
+
+    #[test]
     fn learning_adds_vocabulary_only_and_removed_words_stay_removed() {
         let mut dictionary = DictionaryConfig::default();
-        let found = corrections("use kubernetis", "use Kubernetes", &dictionary);
+        let found = corrections("use kubernetis", "use Kubernetes", &dictionary).unwrap();
         assert_eq!(dictionary.learn(&found), ["Kubernetes"]);
         assert_eq!(dictionary.words, ["Kubernetes"]);
         assert_eq!(dictionary.learned, ["Kubernetes"]);
+        let found = corrections("we use dev terms", "we use DevTerms", &dictionary).unwrap();
+        assert_eq!(dictionary.learn(&found), ["DevTerms"]);
+        // Never a replacement, even for a join that #64's snap pass now handles.
         assert!(dictionary.replacements.is_empty());
-        assert!(corrections("use kubernetis", "use Kubernetes", &dictionary).is_empty());
+        assert_eq!(
+            corrections("use kubernetis", "use Kubernetes", &dictionary).unwrap_err(),
+            "known"
+        );
         dictionary.forget("Kubernetes");
-        assert!(dictionary.words.is_empty() && dictionary.learned.is_empty());
-        assert!(corrections("use kubernetis", "use Kubernetes", &dictionary).is_empty());
-        assert!(corrections("use Kubernetes", "use kubernetis", &dictionary).is_empty());
+        assert_eq!(dictionary.words, ["DevTerms"]);
+        assert_eq!(dictionary.learned, ["DevTerms"]);
+        assert!(corrections("use kubernetis", "use Kubernetes", &dictionary).is_err());
+        assert!(corrections("use Kubernetes", "use kubernetis", &dictionary).is_err());
     }
 
     #[test]
     fn receipt_refinds_the_pasted_span_by_its_anchors() {
         let inserted = "We deploy on kubernetis daily. ";
         let field = format!("Intro paragraph here. {inserted}Closing words stay.");
-        let receipt = Receipt::new(&field, inserted).unwrap();
+        let receipt = Receipt::new(&field, inserted, None).unwrap();
         // Edits elsewhere in the field do not matter.
         let edited =
             "Changed intro paragraph here. We deploy on Kubernetes daily. Closing words stay!";
         let span = receipt.corrected(edited).unwrap();
         assert_eq!(span, "We deploy on Kubernetes daily. ");
         assert_eq!(
-            corrections(receipt.inserted(), span, &DictionaryConfig::default())[0].to,
+            corrections(receipt.inserted(), span, &DictionaryConfig::default()).unwrap()[0].to,
             "Kubernetes"
         );
         // Pasted at the end of the field; the app dropped the trailing space; the
         // user typed more afterwards (an insertion, not learned).
-        let receipt = Receipt::new("Notes: we use postgress", "we use postgress ").unwrap();
+        let receipt = Receipt::new("Notes: we use postgress", "we use postgress ", None).unwrap();
         let span = receipt.corrected("Notes: we use Postgres today").unwrap();
         assert_eq!(
             learn(receipt.inserted(), span),
             pair("postgress", "Postgres")
         );
-        // Ambiguous: the text was pasted twice, or an anchor now occurs twice.
-        assert!(Receipt::new("hi there. hi there.", "hi there.").is_none());
-        let receipt = Receipt::new(&field, inserted).unwrap();
+        // Ambiguous without a caret: the text was pasted twice, or an anchor now occurs twice.
+        assert!(Receipt::new("hi there. hi there.", "hi there.", None).is_none());
+        let receipt = Receipt::new(&field, inserted, None).unwrap();
         assert!(receipt
             .corrected("Intro paragraph here. Intro paragraph here. We deploy. Closing words stay.")
             .is_none());
         // Anchor gone.
         assert!(receipt.corrected("Something else entirely").is_none());
         // A short dictation that filled an empty field has no anchors to trust.
-        let receipt = Receipt::new("use postgress", "use postgress").unwrap();
+        let receipt = Receipt::new("use postgress", "use postgress", None).unwrap();
         assert!(receipt.corrected("lunch with Postgres").is_none());
+    }
+
+    #[test]
+    fn receipt_uses_the_caret_and_tolerates_app_substitutions() {
+        // The caret picks the second of two identical pastes (UTF-16 offsets).
+        let field = "hi there. hi there.";
+        let receipt = Receipt::new(field, "hi there.", Some(19)).unwrap();
+        assert_eq!(receipt.before, "hi there. ");
+        assert_eq!(receipt.after, "");
+        let receipt = Receipt::new(field, "hi there.", Some(9)).unwrap();
+        assert_eq!(receipt.after, " hi there.");
+        // Emoji and CJK before the paste: the caret counts UTF-16 units, not bytes.
+        let field = "😀 日本 ok we use postgress now";
+        let caret = "😀 日本 ok we use postgress".encode_utf16().count();
+        assert_eq!(caret, 25);
+        let receipt = Receipt::new(field, "we use postgress", Some(caret)).unwrap();
+        assert_eq!(receipt.inserted(), "we use postgress");
+        assert_eq!(receipt.before, "😀 日本 ok ");
+        // A caret inside a surrogate pair or past the end falls back to the unique match.
+        assert!(Receipt::new(field, "we use postgress", Some(1)).is_some());
+        assert!(Receipt::new(field, "we use postgress", Some(999)).is_some());
+        assert_eq!(utf16_to_byte("😀a", 1), None);
+        assert_eq!(utf16_to_byte("😀a", 2), Some(4));
+        assert_eq!(utf16_to_byte("😀a", 3), Some(5));
+        // Smart quotes and dashes, NBSP, CRLF, a zero-width space and an
+        // auto-capitalised first letter: the receipt keeps the field's own text.
+        for (field, inserted) in [
+            ("Note: “Don’t” — ok", "\"don't\" - ok"),
+            ("x\u{a0}y and more", "x y and more"),
+            ("line one\r\nline two", "line one\nline two"),
+            ("we\u{200b} use it", "we use it"),
+            ("Ship it today", "ship it today"),
+        ] {
+            let receipt =
+                Receipt::new(field, inserted, None).unwrap_or_else(|| panic!("{field:?}"));
+            assert!(field.ends_with(receipt.inserted()), "{field:?}");
+        }
+        // The anchored span must still be the dictation, not the next message.
+        let receipt = Receipt::new("we use dev terms", "we use dev terms", Some(16)).unwrap();
+        assert_eq!(
+            receipt.corrected("we use DevTerms"),
+            Some("we use DevTerms")
+        );
+        assert_eq!(receipt.corrected(""), None);
+        assert_eq!(receipt.corrected("lunch at noon anyone"), None);
     }
 }
