@@ -5,10 +5,11 @@ import { Pool } from "pg";
 import * as schema from "./schema";
 
 const url = process.env.DATABASE_URL;
-if (!url) throw new Error("DATABASE_URL is not set");
+// `next build` imports route modules without running them; a build needs no database secret.
+if (!url && process.env.NEXT_PHASE !== "phase-production-build") throw new Error("DATABASE_URL is not set");
 
 // Neon URLs say sslmode=require; verify-full keeps the same checks without pg's warning.
-const pool = new Pool({ connectionString: url.replace("sslmode=require", "sslmode=verify-full"), max: 5 });
+const pool = new Pool({ connectionString: url?.replace("sslmode=require", "sslmode=verify-full"), max: 5 });
 // An idle connection dropping (compute scaled to zero) must not crash the process.
 pool.on("error", (error) => console.error("postgres pool error", error.message));
 attachDatabasePool(pool);
