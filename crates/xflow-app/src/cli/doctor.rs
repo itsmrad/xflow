@@ -51,7 +51,7 @@ fn checks(
         daemon.is_ok(),
         true,
         daemon.unwrap_or_else(|v| v),
-        "Run xflow daemon start, or run xflowd in a separate terminal",
+        "Run xflow daemon start",
     ));
     let gnome = desktop.to_lowercase().contains("gnome");
     checks.push(check(
@@ -161,9 +161,13 @@ fn permission_checks(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<
         ),
         check(
             "Input Monitoring",
-            permissions.input_monitoring,
+            permissions.events(),
             true,
-            "xflowd keyboard access",
+            if permissions.input_monitoring {
+                "xflowd keyboard access"
+            } else {
+                "covered by Accessibility"
+            },
             INPUT_MONITORING_FIX,
         ),
     ];

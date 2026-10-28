@@ -1,5 +1,6 @@
 #!/bin/sh
-# Start the xflow background worker for the logged-in user, then open guided setup.
+# Start the xflow background worker for the logged-in user. Setup is not opened
+# here: the conclusion page tells the user to type `xflow` in a terminal.
 user=$(stat -f%Su /dev/console)
 if [ "$user" = root ] || [ -z "$user" ]; then exit 0; fi
 uid=$(id -u "$user")
@@ -14,7 +15,4 @@ if [ -d "$home" ] && { [ -e "$old/xflow" ] || [ -e "$old/xflowd" ]; }; then
     for b in xflow xflowd; do [ -e "$old/$b" ] && sudo -u "$user" mv "$old/$b" "$keep/"; done
 fi
 launchctl asuser "$uid" sudo -H -u "$user" /usr/local/bin/xflow service install --enable || true
-# Guided setup opens System Settings at each permission xflowd still needs. Plain
-# open uses the user's own terminal for .command files (Terminal, Ghostty, ...).
-launchctl asuser "$uid" sudo -H -u "$user" /usr/bin/open "/usr/local/share/xflow/Set up xflow.command" || true
 exit 0

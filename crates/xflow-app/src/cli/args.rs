@@ -6,7 +6,7 @@ use std::path::PathBuf;
     name = "xflow",
     version,
     about = "Fast Linux dictation, from your terminal",
-    after_help = "Start here: xflow setup\nExplore: xflow <command> --help\nPipe text: xflow listen --seconds 5\nExit codes: 0 success, 1 operation failed, 2 usage, 3 daemon unavailable, 4 config, 5 provider, 6 doctor."
+    after_help = "Start here: xflow (in a terminal: setup, then the control centre)\nExplore: xflow <command> --help\nPipe text: xflow listen --seconds 5\nExit codes: 0 success, 1 operation failed, 2 usage, 3 daemon unavailable, 4 config, 5 provider, 6 doctor."
 )]
 pub struct Cli {
     /// Emit machine-readable JSON (watch emits one object per event).
@@ -156,12 +156,8 @@ pub enum Command {
     Completions { shell: clap_complete::Shell },
     /// Show CLI and, when available, daemon versions.
     Version,
-    /// Open the terminal control centre.
-    Tui {
-        /// After installing: walk through whatever setup is still missing, then a test.
-        #[arg(long, hide = true)]
-        onboard: bool,
-    },
+    /// Open the terminal control centre (also plain `xflow` in a terminal).
+    Tui,
     /// Create the default config without overwriting an existing file.
     #[command(hide = true)]
     Init,

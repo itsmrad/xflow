@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build dist/xflow-<version>.pkg: /usr/local/bin/{xflow,xflowd}, signed with stable
-# identifiers, plus the guided-setup launcher the postinstall opens.
+# identifiers.
 # Usage: scripts/package-macos-pkg.sh [bin-dir]   (default: build target/release)
 # OUT=<dir> changes the output directory; SIGN=<identity> the signing identity
 # (default xflow-dev, see README; - signs ad-hoc).
@@ -17,10 +17,9 @@ fi
 out=${OUT:-dist}
 work=$out/pkg-work
 rm -rf "$work"
-mkdir -p "$work/root/usr/local/bin" "$work/root/usr/local/share/xflow" "$work/component"
+mkdir -p "$work/root/usr/local/bin" "$work/component"
 cp -R packaging/macos/scripts "$work/scripts"
 install -m755 "$bin/xflow" "$bin/xflowd" "$work/root/usr/local/bin/"
-install -m755 "packaging/macos/Set up xflow.command" "$work/root/usr/local/share/xflow/"
 # Grants follow the designated requirement: with a certificate it is identifier +
 # certificate, stable across builds; ad-hoc it is the build's hash, so every new
 # build leaves a stale, switched-on row behind. An untrusted self-signed cert is fine.

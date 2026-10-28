@@ -541,7 +541,7 @@ fn errors_become_one_plain_sentence() {
         options::plain(
             "Daemon unavailable: cannot connect to /run/user/1000/xflow/daemon.sock: No such file"
         ),
-        "xflow's background helper isn't running. Open a terminal and run: xflowd"
+        "xflow's background helper isn't running yet — xflow starts it by itself."
     );
     assert!(options::plain("API key unavailable; set GROQ_API_KEY")
         .starts_with("This service needs an API key"));
