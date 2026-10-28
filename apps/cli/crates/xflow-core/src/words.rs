@@ -9,7 +9,8 @@
 //!   five letters, minus words.txt (only these can be sound-alike inputs).
 //!
 //! Entries are ASCII alphabetic, lowercased, sorted and front-coded: each line
-//! is `shared-prefix-bytes:suffix` relative to the previous entry.
+//! is one letter `A`..`Z` giving the bytes shared with the previous entry
+//! (0..25), then the lowercase suffix.
 use std::sync::OnceLock;
 
 /// A decoded list: one newline-joined string plus offsets (well under 1 MB,
@@ -20,8 +21,8 @@ fn contains(list: &'static List, data: &str, word: &str) -> bool {
     let (text, starts) = list.get_or_init(|| {
         let (mut text, mut starts, mut previous) = (String::new(), Vec::new(), 0);
         for line in data.lines() {
-            let (prefix, suffix) = line.split_once(':').expect("word-list separator");
-            let prefix: usize = prefix.parse().expect("word-list prefix");
+            let prefix = usize::from(line.as_bytes()[0] - b'A');
+            let suffix = &line[1..];
             let start = text.len();
             text.extend_from_within(previous..previous + prefix);
             text.push_str(suffix);
@@ -57,21 +58,26 @@ mod tests {
 
     #[test]
     fn list_is_sorted_bounded_and_protects_real_words() {
-        let mut previous = String::new();
-        let mut count = 0;
-        for line in include_str!("words.txt").lines() {
-            let (prefix, suffix) = line.split_once(':').unwrap();
-            let word = format!("{}{suffix}", &previous[..prefix.parse::<usize>().unwrap()]);
-            assert!(word > previous && word.bytes().all(|c| c.is_ascii_lowercase()));
-            previous = word;
-            count += 1;
+        for (data, entries, max_bytes) in [
+            (include_str!("words.txt"), 45_129, 200_000),
+            (include_str!("names.txt"), 8_175, 50_000),
+        ] {
+            let mut previous = String::new();
+            let mut count = 0;
+            for line in data.lines() {
+                let prefix = usize::from(line.as_bytes()[0] - b'A');
+                let word = format!("{}{}", &previous[..prefix], &line[1..]);
+                assert!(word > previous && word.bytes().all(|c| c.is_ascii_lowercase()));
+                previous = word;
+                count += 1;
+            }
+            assert_eq!(count, entries);
+            assert!(data.len() < max_bytes);
         }
-        assert_eq!(count, 45_129);
         for word in ["austen", "clyde", "merton", "austin", "claude"] {
             assert!(name(word), "{word}");
         }
         assert!(!name("kubernetes") && !name("everyday"));
-        assert!(include_str!("words.txt").len() < 240_000);
         for word in [
             "everyday",
             "anyway",
