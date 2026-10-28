@@ -1,5 +1,5 @@
 // Request validation for the hosted proxy. The accepted bodies are exactly what the Rust Groq
-// provider sends (crates/xflow-providers: stt.rs multipart, lib.rs chat JSON), so the CLI only
+// provider sends (apps/cli/crates/xflow-providers: stt.rs multipart, lib.rs chat JSON), so the CLI only
 // swaps the base URL and the bearer token. Anything else is rejected rather than forwarded.
 
 export const GROQ_BASE_URL = "https://api.groq.com/openai/v1";

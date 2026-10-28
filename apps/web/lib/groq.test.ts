@@ -22,7 +22,7 @@ function wav(seconds: number, rate = 16000): Uint8Array {
   return new Uint8Array(buf);
 }
 
-// What crates/xflow-providers/src/stt.rs sends to Groq today.
+// What apps/cli/crates/xflow-providers/src/stt.rs sends to Groq today.
 function rustForm(extra: Record<string, string> = {}): FormData {
   const form = new FormData();
   form.set("model", "whisper-large-v3-turbo");
@@ -88,7 +88,7 @@ describe("transcribe request", () => {
 });
 
 describe("cleanup request", () => {
-  // What crates/xflow-providers/src/lib.rs sends to Groq today.
+  // What apps/cli/crates/xflow-providers/src/lib.rs sends to Groq today.
   const rust = {
     model: "qwen/qwen3.8-27b",
     stream: false,

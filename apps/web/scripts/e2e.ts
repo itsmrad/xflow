@@ -135,7 +135,7 @@ try {
   check("me: free user is not Pro", me0.pro === false);
   const wavBytes = await Bun.file(audioPath).bytes();
   const audioForm = () => {
-    // Exactly the fields crates/xflow-providers/src/stt.rs sends.
+    // Exactly the fields apps/cli/crates/xflow-providers/src/stt.rs sends.
     const f = new FormData();
     f.set("model", "whisper-large-v3-turbo");
     f.set("file", new File([wavBytes], "dictation.wav", { type: "audio/wav" }));
