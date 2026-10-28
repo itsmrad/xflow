@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { usageEvents } from "@/db/schema";
 import { chatUsage, GROQ_BASE_URL } from "@/lib/groq";
 import { error } from "@/lib/http";
-import { acquireSlot, releaseSlot, withinLimit } from "@/lib/server/limits";
+import { admit, releaseSlot } from "@/lib/server/limits";
 import type { ApiCaller } from "@/lib/server/api-auth";
 
 type Kind = "transcribe" | "cleanup";
@@ -47,12 +47,9 @@ export type Forward = {
 /** Forwards one validated request to Groq with the central key, streams the reply, records usage. */
 export async function forward(f: Forward): Promise<Response> {
   const limits = LIMITS[f.kind];
-  const slotKey = `inflight:${f.kind}:${f.caller.userId}`;
-  const [minuteOk, dayOk, slot] = await Promise.all([
-    withinLimit(`${f.kind}:min:${f.caller.userId}`, limits.perMinute, 60),
-    withinLimit(`${f.kind}:day:${f.caller.userId}`, limits.perDay, 86_400),
-    acquireSlot(slotKey, limits.concurrent, SLOT_LEASE_SECONDS),
-  ]);
+  const prefix = `${f.kind}:${f.caller.userId}`;
+  const slotKey = `${prefix}:inflight`;
+  const { minuteOk, dayOk, slot } = await admit(prefix, limits, SLOT_LEASE_SECONDS);
   if (!minuteOk || !dayOk || !slot) {
     if (slot) after(() => releaseSlot(slotKey));
     if (!slot) return error(429, `at most ${limits.concurrent} ${f.kind} requests at a time`, { "retry-after": "1" });
