@@ -9,10 +9,13 @@ use std::{
 };
 use xflow_core::{
     config::{InjectionConfig, InjectionMethod},
-    AppContext, Desktop, InjectionOutcome,
+    AppContext, Desktop, FieldWatch, InjectionOutcome,
 };
 
 const MAX_TEXT: usize = 64 * 1024;
+// A child module so the observer reuses this file's private AX helpers.
+#[path = "macos_observe.rs"]
+mod observe;
 type Ref = *const c_void;
 #[link(name = "IOKit", kind = "framework")]
 extern "C" {
@@ -711,18 +714,12 @@ impl Desktop for MacDesktop {
         })
         .await?
     }
-    async fn focused_text(&self) -> Result<(AppContext, Option<String>)> {
-        tokio::task::spawn_blocking(|| {
-            let focus = focus();
-            let text =
-                if focus.editable != Some(true) || is_terminal(focus.context.app_id.as_deref()) {
-                    None
-                } else {
-                    focus.element.and_then(|e| e.text("AXValue"))
-                };
-            Ok((focus.context, text))
-        })
-        .await?
+    async fn watch_field(&self, target: &AppContext) -> Option<Box<dyn FieldWatch>> {
+        let target = target.clone();
+        let watch = tokio::task::spawn_blocking(move || observe::watch(&target))
+            .await
+            .ok()??;
+        Some(Box::new(watch))
     }
     async fn copy(&self, text: &str) -> Result<()> {
         let _delivery = self.delivery.lock().await;
@@ -989,10 +986,10 @@ mod tests {
             Some("com.apple.TextEdit"),
             "focus a scratch TextEdit document first"
         );
-        assert!(
-            desktop.focused_text().await.unwrap().1.is_some(),
-            "focused element must be editable"
-        );
+        let mut field = desktop
+            .watch_field(&context)
+            .await
+            .expect("focused element must be editable");
         assert_eq!(
             desktop
                 .inject("xflow macOS delivery check", &context)
@@ -1001,12 +998,11 @@ mod tests {
             InjectionOutcome::Pasted
         );
         tokio::time::sleep(Duration::from_millis(500)).await;
-        assert!(desktop
-            .focused_text()
+        assert!(field
+            .read()
             .await
             .unwrap()
-            .1
-            .unwrap()
+            .value
             .contains("xflow macOS delivery check"));
         assert_eq!(read_previous(CLIPBOARD.into()).await.unwrap(), previous);
     }
