@@ -19,7 +19,7 @@ use std::{
 use tokio::{
     io::BufReader,
     net::{UnixListener, UnixStream},
-    sync::{broadcast, mpsc, oneshot},
+    sync::{broadcast, mpsc, oneshot, watch},
     task::JoinHandle,
 };
 pub use xflow_core::ipc::Command;
@@ -162,6 +162,8 @@ pub struct Engine {
     persistence_warning: Option<String>,
     generation: u64,
     epoch: Arc<AtomicU64>,
+    /// The active session's generation, for connections that hold one (see `connection`).
+    live: watch::Sender<Option<u64>>,
     job: Option<JoinHandle<()>>,
     context_job: Option<JoinHandle<AppContext>>,
     context_abort: Option<tokio::task::AbortHandle>,
@@ -213,6 +215,7 @@ impl Engine {
             persistence_warning: None,
             generation: 0,
             epoch: Arc::new(AtomicU64::new(0)),
+            live: watch::Sender::new(None),
             job: None,
             context_job: None,
             context_abort: None,
@@ -282,6 +285,11 @@ impl Engine {
     fn active(&self) -> bool {
         matches!(self.state, State::Listening | State::Processing)
     }
+    fn track(&self) {
+        let live = self.active().then_some(self.generation);
+        self.live
+            .send_if_modified(|s| std::mem::replace(s, live) != live);
+    }
     /// Clients' probes (status, check-up, onboarding) are the only trigger: no polling.
     fn rearm(&mut self, events: bool, completion: &mpsc::Sender<Completion>) {
         if !events
@@ -328,6 +336,8 @@ impl Engine {
         self.state = state;
         self.quiet &= state == State::Listening;
         self.message = message.map(|s| bounded_message(&s));
+        // Before any reply: a holder must see its session live as soon as it learns of it.
+        self.track();
         self.publish();
         if state == State::Error {
             log("error", "session failed; see IPC status");
@@ -737,6 +747,7 @@ impl Engine {
                 context,
                 t0_us,
                 delivery,
+                ..
             } => {
                 self.start(mode, context, t0_us, delivery, completion)?;
                 return Ok(None);
@@ -747,6 +758,7 @@ impl Engine {
                 context,
                 t0_us,
                 delivery,
+                ..
             } => {
                 if self.state == State::Listening {
                     self.stop(completion.clone()).await?;
@@ -789,6 +801,8 @@ impl Engine {
         let mut deliveries = tokio::task::JoinSet::new();
         let mut desktop_ops = tokio::task::JoinSet::new();
         loop {
+            // Catches transitions made without `set_state`, e.g. the final Success.
+            self.track();
             let deadline = self.started.map(|s| {
                 tokio::time::Instant::from_std(
                     s + Duration::from_secs(self.config.recording.max_seconds as u64),
@@ -952,7 +966,7 @@ impl Engine {
                             // lone tap or a Fn+key shortcut shows and plays nothing.
                             self.quiet = action == HotkeyAction::Start && !self.active();
                             let request = match action {
-                                HotkeyAction::Start => Request::Start { mode: Mode::Dictation, context: None, t0_us: Some(monotonic_us()), delivery: Delivery::Inject },
+                                HotkeyAction::Start => Request::Start { mode: Mode::Dictation, context: None, t0_us: Some(monotonic_us()), delivery: Delivery::Inject, hold: false },
                                 HotkeyAction::Stop => Request::Stop,
                                 _ => Request::Cancel,
                             };
@@ -1570,6 +1584,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
             engine.hotkey_factory = Some(factory);
         }
     }
+    let live = engine.live.subscribe();
     let mut engine_task = tokio::spawn(engine.run(commands_rx));
     let capacity = Arc::new(tokio::sync::Semaphore::new(32));
     let mut clients = tokio::task::JoinSet::new();
@@ -1594,8 +1609,8 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
                 // macOS loses peer credentials when a probe disconnects before accept.
                 if !stream.peer_cred().is_ok_and(|peer| peer.uid() == unsafe { libc::geteuid() }) { continue; }
                 let Ok(permit) = capacity.clone().try_acquire_owned() else { continue; };
-                let commands = commands_tx.clone(); let events = events_tx.clone();
-                clients.spawn(async move { let _permit = permit; let _ = connection(stream, commands, events).await; });
+                let commands = commands_tx.clone(); let events = events_tx.clone(); let live = live.clone();
+                clients.spawn(async move { let _permit = permit; let _ = connection(stream, commands, events, live).await; });
             }
             _ = clients.join_next(), if !clients.is_empty() => (),
             result = &mut engine_task => { result?; engine_finished = true; break; }
@@ -1638,6 +1653,7 @@ async fn connection(
     stream: UnixStream,
     commands: mpsc::Sender<Command>,
     events: broadcast::Sender<Response>,
+    mut live: watch::Receiver<Option<u64>>,
 ) -> Result<()> {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
@@ -1656,6 +1672,10 @@ async fn connection(
             }
         };
     let subscribe = matches!(request, Request::Subscribe);
+    let hold = matches!(
+        request,
+        Request::Start { hold: true, .. } | Request::Toggle { hold: true, .. }
+    );
     // Subscribe first, then get an actor snapshot, avoiding missed state transitions.
     let mut receiver = events.subscribe();
     let (reply_tx, mut reply_rx) = oneshot::channel();
@@ -1697,6 +1717,15 @@ async fn connection(
     if let Err(e) = write_frame(&mut write, &response).await {
         abandon(&commands, response.session).await;
         return Err(e);
+    }
+    if let Some(session) = response.session.filter(|_| hold) {
+        // The requester owns its session: whatever ends the client (Ctrl-C, SIGHUP,
+        // kill -9) closes this socket, and the recording ends with it.
+        tokio::select! {
+            _ = &mut closed => abandon(&commands, Some(session)).await,
+            // Returning closes the socket: the session is over, so the hold is too.
+            _ = async { live.wait_for(|live| *live != Some(session)).await.is_ok() } => (),
+        }
     }
     if subscribe {
         // Keep the read future alive: canceling read_line can discard partial frames.
@@ -2720,6 +2749,7 @@ mod tests {
             context: None,
             t0_us: Some(monotonic_us()),
             delivery: Delivery::Inject,
+            hold: false,
         };
         assert_eq!(ask(&tx, request).await.state, State::Listening);
         assert!(!ask(&tx, Request::Reload).await.ok);
@@ -2818,6 +2848,7 @@ mod tests {
                     context: None,
                     t0_us: None,
                     delivery,
+                    hold: false,
                 },
             )
             .await;
@@ -2937,7 +2968,8 @@ mod tests {
                     mode: Mode::Command,
                     context: None,
                     t0_us: None,
-                    delivery: Delivery::Inject
+                    delivery: Delivery::Inject,
+                    hold: false,
                 }
             )
             .await
@@ -2979,7 +3011,8 @@ mod tests {
                     mode: Mode::Command,
                     context: None,
                     t0_us: None,
-                    delivery: Delivery::Inject
+                    delivery: Delivery::Inject,
+                    hold: false,
                 }
             )
             .await
@@ -3041,6 +3074,7 @@ mod tests {
                 context: Some(AppContext::default()),
                 t0_us: Some(u64::MAX),
                 delivery: Delivery::Inject,
+                hold: false,
             },
         )
         .await;
@@ -3079,6 +3113,7 @@ mod tests {
                     context: None,
                     t0_us: None,
                     delivery: Delivery::Inject,
+                    hold: false,
                 },
             )
             .await;
@@ -3211,7 +3246,12 @@ mod tests {
         let audio = Arc::new(GatedAudio::default());
         engine.services.audio = audio.clone();
         let (mut client, server) = UnixStream::pair().unwrap();
-        let connection = tokio::spawn(connection(server, tx.clone(), engine.events.clone()));
+        let connection = tokio::spawn(connection(
+            server,
+            tx.clone(),
+            engine.events.clone(),
+            engine.live.subscribe(),
+        ));
         let (keys, key_events) = mpsc::channel(4);
         engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
         let task = tokio::spawn(engine.run(rx));
@@ -3274,7 +3314,12 @@ mod tests {
         let audio = Arc::new(GatedAudio::default());
         engine.services.audio = audio.clone();
         let (mut client, server) = UnixStream::pair().unwrap();
-        let connection = tokio::spawn(connection(server, tx.clone(), engine.events.clone()));
+        let connection = tokio::spawn(connection(
+            server,
+            tx.clone(),
+            engine.events.clone(),
+            engine.live.subscribe(),
+        ));
         let task = tokio::spawn(engine.run(rx));
         write_frame(&mut client, &Request::start()).await.unwrap();
         let waiting = hotkey_state(&mut events, State::Idle).await;
@@ -3291,6 +3336,67 @@ mod tests {
         assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
         let stale = ask(&tx, Request::Abandon { session: 1 }).await;
         assert_eq!(stale.state, State::Listening);
+        ask(&tx, Request::Cancel).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_held_session_ends_with_its_connection_and_closes_it_when_done() {
+        let (mut engine, tx, rx, _, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        engine.services.audio = audio.clone();
+        let (events, live) = (engine.events.clone(), engine.live.subscribe());
+        let task = tokio::spawn(engine.run(rx));
+        let start = |hold| {
+            let (mut client, server) = UnixStream::pair().unwrap();
+            let connection =
+                tokio::spawn(connection(server, tx.clone(), events.clone(), live.clone()));
+            async move {
+                let request = Request::Start {
+                    mode: Mode::Dictation,
+                    context: None,
+                    t0_us: None,
+                    delivery: Delivery::None,
+                    hold,
+                };
+                write_frame(&mut client, &request).await.unwrap();
+                let mut client = BufReader::new(client);
+                let reply: Response = read_frame(&mut client).await.unwrap().unwrap();
+                assert_eq!(reply.state, State::Listening);
+                (client, connection)
+            }
+        };
+        let done = |connection: JoinHandle<Result<()>>| async {
+            tokio::time::timeout(Duration::from_secs(2), connection)
+                .await
+                .expect("connection outlived its session")
+                .unwrap()
+                .unwrap();
+        };
+        // The holder dies mid-recording (as with kill -9): the mic is released.
+        let (client, connection) = start(true).await;
+        drop(client);
+        done(connection).await;
+        assert_eq!(ask(&tx, Request::Status).await.state, State::Idle);
+        assert!(!audio.0.load(Ordering::SeqCst), "microphone still open");
+        // A session that ends on its own ends the hold: the client reads EOF.
+        let (mut client, connection) = start(true).await;
+        ask(&tx, Request::Stop).await;
+        let eof = tokio::time::timeout(
+            Duration::from_secs(3),
+            read_frame::<Response, _>(&mut client),
+        );
+        assert!(eof.await.unwrap().unwrap().is_none());
+        done(connection).await;
+        // Without a hold (xflow start, D-Bus) the session outlives its requester.
+        let (client, connection) = start(false).await;
+        done(connection).await;
+        drop(client);
+        assert_eq!(ask(&tx, Request::Status).await.state, State::Listening);
         ask(&tx, Request::Cancel).await;
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
@@ -3352,7 +3458,7 @@ mod tests {
         let (mut client, server) = UnixStream::pair().unwrap();
         let (commands, mut pending) = mpsc::channel(1);
         let (events, _) = broadcast::channel(1);
-        let task = tokio::spawn(connection(server, commands, events));
+        let task = tokio::spawn(connection(server, commands, events, watch::channel(None).1));
         write_frame(&mut client, &Request::Status).await.unwrap();
         let command = pending.recv().await.unwrap();
         let response: Response = tokio::time::timeout(

@@ -20,11 +20,14 @@ pub fn request(request: &Request) -> Result<Response> {
     block_on(send(request))
 }
 pub async fn send(request: &Request) -> Result<Response> {
-    let response = transport::request(request)
+    Ok(exchange(request).await?.0)
+}
+async fn exchange(request: &Request) -> Result<(Response, BufReader<tokio::net::UnixStream>)> {
+    let (response, stream) = transport::exchange(request)
         .await
         .map_err(|e| Error::new(3, e.to_string(), "Run xflow daemon start"))?;
     validate(&response, matches!(request, Request::Status))?;
-    Ok(response)
+    Ok((response, stream))
 }
 fn validate(response: &Response, require_protocol: bool) -> Result<()> {
     if response
@@ -66,7 +69,7 @@ fn validate(response: &Response, require_protocol: bool) -> Result<()> {
     }
     Ok(())
 }
-pub fn mode_request(toggle: bool, command: bool, delivery: Delivery) -> Request {
+pub fn mode_request(toggle: bool, command: bool, delivery: Delivery, hold: bool) -> Request {
     let mode = if command {
         Mode::Command
     } else {
@@ -87,6 +90,7 @@ pub fn mode_request(toggle: bool, command: bool, delivery: Delivery) -> Request 
             context: None,
             t0_us,
             delivery,
+            hold,
         }
     } else {
         Request::Start {
@@ -94,6 +98,7 @@ pub fn mode_request(toggle: bool, command: bool, delivery: Delivery) -> Request 
             context: None,
             t0_us,
             delivery,
+            hold,
         }
     }
 }
@@ -185,18 +190,19 @@ pub async fn listen(once: bool, seconds: Option<u64>, command: bool, out: &Outpu
         None
     };
     loop {
-        let request = mode_request(false, command, Delivery::None);
-        let start = send(&request);
+        // Held: if this process dies, however it dies, xflowd cancels the recording.
+        let request = mode_request(false, command, Delivery::None, true);
+        let start = exchange(&request);
         tokio::pin!(start);
-        tokio::select! {
-            result = &mut start => { result?; }
+        let _held = tokio::select! {
+            result = &mut start => result?.1,
             _ = interrupt.recv() => {
                 // Finish the bounded Start request before Cancel to preserve command order.
                 let _ = start.await;
                 let _ = send(&Request::Cancel).await;
                 return Err(cancelled());
             }
-        }
+        };
         if !out.quiet {
             eprintln!(
                 "Listening{}",
@@ -446,10 +452,11 @@ mod tests {
             1
         );
         assert!(matches!(
-            mode_request(false, true, Delivery::None),
+            mode_request(false, true, Delivery::None, true),
             Request::Start {
                 mode: Mode::Command,
                 delivery: Delivery::None,
+                hold: true,
                 ..
             }
         ));

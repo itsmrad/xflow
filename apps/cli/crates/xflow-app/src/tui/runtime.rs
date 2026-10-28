@@ -31,7 +31,12 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{io::BufReader, net::UnixStream, sync::mpsc, task::JoinSet};
+use tokio::{
+    io::{AsyncReadExt, BufReader},
+    net::UnixStream,
+    sync::mpsc,
+    task::JoinSet,
+};
 use xflow_core::{
     config::Config,
     ipc::{Request, Response},
@@ -176,7 +181,6 @@ pub async fn run(start: Option<Step>) -> Result<()> {
     let generation = Arc::new(AtomicU64::new(0));
     dispatch(
         vec![Effect::Load(app.path.clone())],
-        &mut app,
         &tx,
         &mut jobs,
         &generation,
@@ -274,13 +278,11 @@ pub async fn run(start: Option<Step>) -> Result<()> {
         if app.dirty && !app.saving && app.file.is_some() {
             effects.extend(app.action(Action::Save));
         }
-        dispatch(effects, &mut app, &tx, &mut jobs, &generation);
+        dispatch(effects, &tx, &mut jobs, &generation);
     }
+    // Dropping a held start's socket cancels exactly the recording it began.
     jobs.abort_all();
     while jobs.join_next().await.is_some() {}
-    if app.session_pending || app.starts > 0 {
-        let _ = transport::request(&Request::Cancel).await;
-    }
     Ok(())
 }
 
@@ -334,9 +336,6 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             }
         }
         Update::Reply(tag, result) => {
-            if matches!(tag, Tag::Session) {
-                app.starts = app.starts.saturating_sub(1);
-            }
             // An ask-again's answer: any restart is over (or never happened).
             if matches!(tag, Tag::Permissions(Some(_))) {
                 app.restarting = false;
@@ -483,17 +482,16 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
 
 fn dispatch(
     effects: Vec<Effect>,
-    app: &mut App,
     tx: &mpsc::Sender<Update>,
     jobs: &mut JoinSet<()>,
     generation: &Arc<AtomicU64>,
 ) {
     for mut effect in effects {
-        if let Effect::Request(request, tag) = &mut effect {
-            if matches!(request, Request::Start { .. } | Request::Toggle { .. }) && !app.active() {
-                app.starts += 1;
-                *tag = Tag::Session;
-            }
+        // A recording the TUI starts lives only as long as the TUI (#57).
+        if let Effect::Request(Request::Start { hold, .. } | Request::Toggle { hold, .. }, _) =
+            &mut effect
+        {
+            *hold = true;
         }
         let current = generation.clone();
         let history_generation = match &effect {
@@ -512,10 +510,15 @@ fn dispatch(
                     return;
                 }
             }
+            let mut held = None;
             let update = match effect {
-                Effect::Request(request, tag) => {
-                    Update::Reply(tag, transport::request(&request).await)
-                }
+                Effect::Request(request, tag) => match transport::exchange(&request).await {
+                    Ok((response, stream)) => {
+                        held = Some(stream);
+                        Update::Reply(tag, Ok(response))
+                    }
+                    Err(e) => Update::Reply(tag, Err(e)),
+                },
                 Effect::Load(path) => Update::Loaded(
                     blocking(move || {
                         let disk = read_optional(&path)?;
@@ -583,6 +586,11 @@ fn dispatch(
                 }
             };
             let _ = tx.send(update).await;
+            // A held start owns its recording until xflowd closes the socket; any
+            // other reply's socket is already closed.
+            if let Some(mut stream) = held {
+                let _ = stream.read_u8().await;
+            }
         });
     }
 }
@@ -1024,42 +1032,6 @@ mod tests {
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         assert!(matches!(app.key(enter)[..], [Effect::StartHelper]));
     }
-    #[tokio::test]
-    async fn quit_keeps_ownership_of_a_pending_start_but_not_another_clients_session() {
-        let mut app = App::new("unused".into(), ColorMode::TrueColor);
-        app.connected = true;
-        let (tx, _) = mpsc::channel(8);
-        let mut jobs = JoinSet::new();
-        let generation = Arc::new(AtomicU64::new(0));
-        let reply = |app: &mut App, response| {
-            handle(app, Update::Reply(Tag::Session, Ok(response)), &mut true);
-        };
-        // A second start while the first waits for the microphone is refused.
-        for _ in 0..2 {
-            let effects = app.action(Action::Toggle);
-            dispatch(effects, &mut app, &tx, &mut jobs, &generation);
-        }
-        // Never poll these requests: fixtures must not connect to the user's daemon.
-        jobs.abort_all();
-        assert_eq!(app.starts, 2);
-        reply(&mut app, Response::error(State::Idle, MIC_WAITING));
-        app.action(Action::Quit);
-        assert!(
-            app.quit && app.starts == 1,
-            "a refusal dropped the first start"
-        );
-        reply(&mut app, Response::status(State::Listening, 0.0));
-        assert!(app.session_pending && app.starts == 0);
-        app.event(Response::status(State::Listening, 0.0));
-        app.event(Response::status(State::Idle, 0.0));
-        assert!(!app.session_pending);
-        app.event(Response::status(State::Listening, 0.0));
-        let effects = app.action(Action::Toggle);
-        dispatch(effects, &mut app, &tx, &mut jobs, &generation);
-        jobs.abort_all();
-        assert!(!app.session_pending && app.starts == 0);
-        while jobs.join_next().await.is_some() {}
-    }
     #[test]
     fn reload_refused_while_the_microphone_opens_retries_when_idle() {
         let mut app = App::new("unused".into(), ColorMode::TrueColor);
@@ -1191,7 +1163,6 @@ mod tests {
                 },
                 Tag::History(1),
             )],
-            &mut App::new("unused".into(), ColorMode::TrueColor),
             &tx,
             &mut jobs,
             &generation,

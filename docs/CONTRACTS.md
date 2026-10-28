@@ -45,7 +45,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | Request (`"command"`) | Fields | Reply / semantics |
 | --- | --- | --- |
 | `status` | — | state, level, version, protocol, provider, model, mode (while active), optional daemon permissions (accessibility, input_monitoring, keyboard_events); last successful timings when inactive |
-| `start`, `toggle` | `mode` ("dictation"/"command", default dictation), `context` (AppContext captured by the caller), `t0_us` (caller CLOCK_MONOTONIC µs at hotkey), `delivery` ("inject" default / "clipboard" / "none" — none leaves the desktop untouched so a subscribed client such as `xflow listen` can print the text) | Mic opens **before** any focus query; provider connection is warmed in the background |
+| `start`, `toggle` | `mode` ("dictation"/"command", default dictation), `context` (AppContext captured by the caller), `t0_us` (caller CLOCK_MONOTONIC µs at hotkey), `delivery` ("inject" default / "clipboard" / "none" — none leaves the desktop untouched so a subscribed client such as `xflow listen` can print the text), `hold` (bool, default false: the client keeps the socket open; the daemon closes it when the session ends and cancels the session if the socket closes first, so a killed client never leaves the mic on. `xflow listen` and the TUI hold; `xflow start`, hotkeys and D-Bus don't) | Mic opens **before** any focus query; provider connection is warmed in the background |
 | `stop`, `cancel` | — | unchanged |
 | `last`, `copy_last`, `paste_last` | — | unchanged |
 | `history` | `limit`, `offset` (default 0), `query` (case-insensitive substring) | `history` rows newest first, `total` = matching rows |

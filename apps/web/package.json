@@ -1,0 +1,47 @@
+{
+  "name": "@xflow/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun --env-file=.env.local db/migrate.ts",
+    "test:db": "bun test --conditions react-server ./test/db"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "7.9.22",
+    "@neon/realtime": "0.1.2",
+    "@neon/realtime-react": "0.1.1",
+    "@vercel/functions": "3.10.4",
+    "aws4fetch": "1.0.20",
+    "dodopayments": "2.59.0",
+    "drizzle-orm": "0.45.4",
+    "geist": "1.8.2",
+    "next": "16.4.3",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "server-only": "0.0.1",
+    "standardwebhooks": "1.1.1"
+  },
+  "devDependencies": {
+    "@neon/config": "1.9.5",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/bun": "1.4.4",
+    "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "drizzle-kit": "0.31.11",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.4.3",
+    "postcss": "8.5.32",
+    "tailwindcss": "4.3.3",
+    "typescript": "6.0.3"
+  }
+}
