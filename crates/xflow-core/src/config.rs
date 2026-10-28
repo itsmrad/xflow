@@ -193,7 +193,7 @@ impl Default for RecordingConfig {
             min_ms: 300,
             auto_stop_secs: 0,
             keep_warm_secs: 0,
-            ignore_speakers: true,
+            ignore_speakers: false,
         }
     }
 }
@@ -575,6 +575,7 @@ mod tests {
         )
         .unwrap();
         config.validate().unwrap();
+        assert!(!config.recording.ignore_speakers);
         assert_eq!(
             config.injection.effective_method(),
             InjectionMethod::Clipboard

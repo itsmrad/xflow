@@ -754,18 +754,47 @@ mod tests {
         assert_eq!(warm_deadline(&config, false, now), None);
     }
     #[test]
-    fn speaker_cancelling_is_on_by_default_and_yields_to_a_chosen_microphone() {
-        assert!(voice_processing(&RecordingConfig::default()));
-        let off = RecordingConfig {
-            ignore_speakers: false,
+    fn speaker_cancelling_is_opt_in_and_yields_to_a_chosen_microphone() {
+        assert!(!voice_processing(&RecordingConfig::default()));
+        let on = RecordingConfig {
+            ignore_speakers: true,
             ..Default::default()
         };
-        assert!(!voice_processing(&off));
+        assert!(voice_processing(&on));
         let usb = RecordingConfig {
             device: Some("USB Microphone".into()),
-            ..Default::default()
+            ..on
         };
         assert!(!voice_processing(&usb));
+    }
+    #[test]
+    fn shared_input_callback_captures_audio_and_reports_the_limit() {
+        let config = RecordingConfig {
+            max_seconds: 1,
+            ..Default::default()
+        };
+        let finished = Arc::new(AtomicBool::new(false));
+        let buffer = CaptureBuffer::open(4, 1, &config, finished.clone()).unwrap();
+        let level = Arc::new(AtomicU32::new(0));
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let mut handle = input_handler::<f32>(
+            buffer.clone(),
+            sender,
+            level.clone(),
+            7,
+            Instant::now(),
+            4.0,
+        );
+        handle(&[0.5; 5]);
+        assert!(buffer.first_callback_us.load(Ordering::Relaxed) > 0);
+        assert!(f32::from_bits(level.load(Ordering::Relaxed)) > 0.0);
+        assert!(finished.load(Ordering::Acquire));
+        assert!(matches!(receiver.try_recv(), Ok(Command::Limit(7))));
+        let clip = buffer.take().unwrap().unwrap().finish().unwrap();
+        assert_eq!(clip.samples, vec![0.5; 4]);
+        handle(&[1.0]);
+        assert!(buffer.take().unwrap().is_none());
+        assert!(receiver.try_recv().is_err());
     }
     #[test]
     fn levels_attack_quickly_and_decay_smoothly() {

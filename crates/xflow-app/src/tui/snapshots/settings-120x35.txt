@@ -6,7 +6,7 @@
 │ 4  Snippets    ││            API key               Added                  ││ Walk through the speech service, key,   │
 │ 5  Styles      ││            Language              Automatic              ││ microphone and shortcut again.          │
 │ 6  Settings    ││            Microphone            System default         ││                                         │
-│ 7  Pill        ││            Ignore speaker sound  On                     ││ Enter to open.                          │
+│ 7  Pill        ││            Ignore speaker sound  Off                    ││ Enter to open.                          │
 │ 8  Your stats  ││            Check connection      Run check              ││                                         │
 │ 9  Check-up    ││  Shortcut  Key                   Fn (Globe)             ││                                         │
 │                ││            Shortcut              On                     ││                                         │

@@ -6,7 +6,7 @@
 │ 4  Snippets    ││            API key               Added                     │
 │ 5  Styles      ││            Language              Automatic                 │
 │ 6  Settings    ││            Microphone            System default            │
-│ 7  Pill        ││            Ignore speaker sound  On                        │
+│ 7  Pill        ││            Ignore speaker sound  Off                       │
 │ 8  Your stats  ││            Check connection      Run check                 │
 │ 9  Check-up    ││  Shortcut  Key                   Fn (Globe)                │
 │                ││            Shortcut              On                        │
