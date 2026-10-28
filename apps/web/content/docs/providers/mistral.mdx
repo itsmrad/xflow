@@ -1,0 +1,35 @@
+---
+title: Mistral
+description: Use Mistral for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [Mistral console](https://console.mistral.ai/api-keys/), then store it:
+
+```sh
+xflow key set mistral        # hidden input
+xflow providers use mistral
+xflow providers test mistral # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `MISTRAL_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "mistral"
+model = "voxtral-mini-latest"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `voxtral-mini-latest` (default) | Voxtral Mini Transcribe | Fast current transcription alias |
+| `voxtral-mini-2602` | Voxtral Mini Transcribe 2 | Pinned February 2026 release |
+
+Your dictionary words are sent as recognition hints with every recording.
+
+Provider documentation: [docs.mistral.ai/studio/audio/speech_to_text/offline_transcription](https://docs.mistral.ai/studio/audio/speech_to_text/offline_transcription)

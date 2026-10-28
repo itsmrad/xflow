@@ -1,0 +1,4 @@
+{
+  "title": "Providers",
+  "pages": ["index", "groq", "openai", "deepgram", "assemblyai", "elevenlabs", "gemini", "mistral", "together", "deepinfra", "openrouter", "local-and-offline"]
+}

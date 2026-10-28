@@ -1,0 +1,44 @@
+---
+title: Command mode
+description: Speak an instruction and apply it to the selected text.
+---
+
+In command mode, what you say is an instruction, not text to insert. xflow applies it to the selected text — “make this a bulleted list”, “translate to German” — or, with nothing selected, writes new text from the instruction.
+
+<Callout type="note">
+Command mode needs a [cleanup provider](#set-up-cleanup). Without one, the daemon refuses to start a command-mode recording.
+</Callout>
+
+## Start it
+
+| Where | How |
+| --- | --- |
+| CLI | `xflow toggle --command`; repeat to finish |
+| TUI | <Kbd>C</Kbd> on the Home screen |
+| GNOME | <Kbd>Super</Kbd>+<Kbd>Alt</Kbd>+<Kbd>R</Kbd> (the extension's `command-shortcut`) |
+| Pipe | `xflow listen --once --seconds 5 --command` |
+
+On macOS the selection is read through Accessibility. On GNOME it is the PRIMARY selection, up to 64 KiB.
+
+## Set up cleanup
+
+Cleanup is a chat-completions model. Pick a preset; its key is the one you stored for that provider.
+
+```toml title="config.toml"
+[cleanup]
+provider = "groq"
+model = "llama-3.1-8b-instant"
+mode = "raw"            # raw | light | polished | custom — for normal dictation
+```
+
+Setting a provider is enough for command mode. `mode` only decides whether normal dictations are cleaned up too; `raw` leaves them as transcribed.
+
+Presets: OpenAI, Groq, OpenRouter, Together, Fireworks, Mistral, DeepInfra, Gemini, Ollama, and a custom endpoint. A custom cleanup endpoint keeps its own key, separate from a custom speech endpoint:
+
+```sh
+xflow key set cleanup
+```
+
+If the model fails or returns nothing, the command is abandoned and your selection is left untouched.
+
+`cleanup.app_context = true` (the default) tells the model the focused app's id. It never sends window contents.

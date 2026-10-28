@@ -1,0 +1,36 @@
+---
+title: Recording pill
+description: The small overlay that shows what xflow is doing, and how to change it.
+---
+
+The pill is a small dark capsule just above the Dock, on the screen under the mouse. It never takes focus, and clicks pass through it except on the hands-free buttons.
+
+| State | Looks like |
+| --- | --- |
+| Listening | <Pill state="listening" /> A live waveform |
+| Hands-free | <Pill state="hands-free" /> Wider, with ✕ (cancel) and ■ (stop) |
+| Processing | <Pill state="processing" /> The bars collapse into shimmering dots |
+| Error | <Pill state="error" /> Flashes red with a shake, then fades |
+
+With Reduce Motion on, it shows and hides without animating.
+
+## Settings (macOS)
+
+```sh
+xflow overlay list
+xflow overlay set enabled false
+xflow overlay set position bottom-center
+xflow overlay set scale 1.2
+xflow overlay set opacity 0.9
+xflow overlay reset
+```
+
+These are stored in `overlay.json` next to `config.toml` and apply to the next pill.
+
+## How it runs
+
+The pill is a short-lived helper process, `xflow overlay-pill`, started for each session. It receives only the state, the audio level and a hands-free flag. It animates at about 60 fps only while visible and exits when the session ends. `xflowd` itself never loads AppKit, and a missing or crashed helper doesn't stop recording.
+
+## GNOME
+
+GNOME has its own renderer inside the Shell extension, with its own appearance settings (theme, position, monitor, scale, waveform style and more). See [Linux](/docs/linux#the-pill).

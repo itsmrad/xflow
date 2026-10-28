@@ -1,0 +1,50 @@
+---
+title: xflow doctor
+description: Diagnose configuration and desktop dependencies without recording.
+---
+
+```sh
+xflow doctor
+xflow doctor --json
+```
+
+`doctor` never opens the microphone and never contacts a provider. It prints one row per check:
+
+| Column | Meaning |
+| --- | --- |
+| `CHECK` | What was checked |
+| `RESULT` | `ok`, `FAIL` (required) or `optional` |
+| `DETAIL / FIX` | What it found, and the fix when it failed |
+
+It exits with code `6` when a required check fails, so scripts can gate on it.
+
+## What it checks
+
+| Check | Platform |
+| --- | --- |
+| `config` — the file parses and validates | All |
+| `daemon` — `xflowd` is reachable | All |
+| `session` — a graphical login is available | All |
+| `provider` — the configured speech provider exists | All |
+| `privacy` — offline guard on, or a note that cloud transcription uploads audio | All |
+| Dictionary words fit the provider's hint limit | All |
+| `launchd` / `systemd` — service management | macOS / Linux |
+| `Accessibility`, `Input Monitoring`, `Shortcut events` — checked inside `xflowd` | macOS |
+| `Globe key` — `AppleFnUsageType` is Do Nothing | macOS, with the `fn` hotkey |
+| `GNOME extension`, `GNOME tools`, Wayland and X11 clipboard and injection helpers | Linux |
+
+## What it can't check
+
+Doctor can't hear your microphone or see your target app. It lists these as manual checks:
+
+- Microphone quality
+- Desktop shortcuts and text delivery — hold the key and dictate into an editor while `xflow watch` runs
+- Provider credentials — run `xflow key status` and `xflow providers test <provider>`
+
+## JSON
+
+```json
+{ "ok": true, "checks": [ … ], "manual_checks": ["Microphone quality", "Desktop shortcuts and text delivery", "Provider credentials: xflow key status"] }
+```
+
+Each check has `name`, `ok`, `required`, `detail` and `hint`.

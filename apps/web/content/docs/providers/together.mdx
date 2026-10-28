@@ -1,0 +1,35 @@
+---
+title: Together AI
+description: Use Together AI for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [Together AI console](https://api.together.ai/settings/api-keys), then store it:
+
+```sh
+xflow key set together        # hidden input
+xflow providers use together
+xflow providers test together # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `TOGETHER_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "together"
+model = "openai/whisper-large-v3"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `openai/whisper-large-v3` (default) | Whisper Large v3 | Multilingual transcription |
+| `nvidia/parakeet-tdt-0.6b-v3` | Parakeet TDT v3 | No vocabulary prompts |
+
+Your dictionary words are sent as recognition hints with every recording.
+
+Provider documentation: [docs.together.ai/docs/speech-to-text](https://docs.together.ai/docs/speech-to-text)

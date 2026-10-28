@@ -1,0 +1,36 @@
+---
+title: Hands-free
+description: Dictate long passages without holding a key.
+---
+
+Double-tap <Kbd>Fn</Kbd>: a quick tap, then a second press within 500 ms of releasing it. Recording stays on after you let go.
+
+<Pill state="hands-free" />
+
+| To | Do |
+| --- | --- |
+| Finish and transcribe | Press <Kbd>Fn</Kbd> once more, or click ■ on the pill |
+| Cancel | Press <Kbd>Fn</Kbd> a third time within 500 ms of the second press, press <Kbd>Esc</Kbd>, or click ✕ on the pill |
+
+While latched, the pill is wider and shows the ✕ and ■ buttons, and `xflow watch` reports `Hands-free recording`.
+
+## Limits
+
+- Recordings stop at `recording.max_seconds`, 120 s by default.
+- `recording.auto_stop_secs` stops after that many seconds of silence. It is off (`0`) by default.
+
+```sh
+xflow config set recording.auto_stop_secs 3
+```
+
+## From the CLI or another shortcut
+
+`xflow toggle` starts a recording, and the next `xflow toggle` stops it and transcribes. Bind it to any key your desktop or launcher can run a command from.
+
+```sh
+xflow toggle      # start
+xflow toggle      # stop and transcribe
+xflow cancel      # discard instead
+```
+
+`xflow start` and `xflow stop` are the same pair split in two, for tools that can run one command on key press and another on release.

@@ -1,0 +1,34 @@
+---
+title: ElevenLabs
+description: Use ElevenLabs for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [ElevenLabs console](https://elevenlabs.io/app/settings/api-keys), then store it:
+
+```sh
+xflow key set elevenlabs        # hidden input
+xflow providers use elevenlabs
+xflow providers test elevenlabs # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `ELEVENLABS_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "elevenlabs"
+model = "scribe_v2"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `scribe_v2` (default) | Scribe v2 | Multilingual file transcription; keyterms cost extra |
+
+Your dictionary words are sent as recognition hints with every recording.
+
+Provider documentation: [elevenlabs.io/docs/api-reference/speech-to-text/convert](https://elevenlabs.io/docs/api-reference/speech-to-text/convert)

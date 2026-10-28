@@ -1,0 +1,35 @@
+---
+title: Groq
+description: Use Groq for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [Groq console](https://console.groq.com/keys), then store it:
+
+```sh
+xflow key set groq        # hidden input
+xflow providers use groq
+xflow providers test groq # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `GROQ_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "groq"
+model = "whisper-large-v3-turbo"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `whisper-large-v3-turbo` (default) | Whisper Large v3 Turbo | Fast multilingual dictation |
+| `whisper-large-v3` | Whisper Large v3 | Higher accuracy |
+
+Your dictionary words are sent as recognition hints with every recording.
+
+Provider documentation: [console.groq.com/docs/speech-to-text](https://console.groq.com/docs/speech-to-text)

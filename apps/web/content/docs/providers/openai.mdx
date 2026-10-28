@@ -1,0 +1,37 @@
+---
+title: OpenAI
+description: Use OpenAI for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [OpenAI console](https://platform.openai.com/api-keys), then store it:
+
+```sh
+xflow key set openai        # hidden input
+xflow providers use openai
+xflow providers test openai # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `OPENAI_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "openai"
+model = "gpt-transcribe"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `gpt-transcribe` (default) | GPT Transcribe | Current file transcription; language and keyword arrays |
+| `gpt-4o-mini-transcribe` | GPT-4o Mini Transcribe | Legacy; scheduled retirement February 2027 |
+| `gpt-4o-transcribe` | GPT-4o Transcribe | Legacy; scheduled retirement February 2027 |
+| `whisper-1` | Whisper 1 | Legacy; scheduled retirement February 2027 |
+
+Your dictionary words are sent as recognition hints with every recording.
+
+Provider documentation: [platform.openai.com/docs/guides/speech-to-text](https://platform.openai.com/docs/guides/speech-to-text)

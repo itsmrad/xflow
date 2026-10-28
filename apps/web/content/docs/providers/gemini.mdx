@@ -1,0 +1,35 @@
+---
+title: Google Gemini
+description: Use Google Gemini for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [Google Gemini console](https://aistudio.google.com/apikey), then store it:
+
+```sh
+xflow key set gemini        # hidden input
+xflow providers use gemini
+xflow providers test gemini # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `GEMINI_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "gemini"
+model = "gemini-3.5-transcribe"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `gemini-3.5-transcribe` (default) | Gemini 3.5 Transcribe | Dedicated verbatim ASR; inline path not live-tested |
+| `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | Prompted transcription; may hallucinate on silence |
+
+Your dictionary words are sent as recognition hints with every recording.
+
+Provider documentation: [ai.google.dev/gemini-api/docs/generate-content/transcribe](https://ai.google.dev/gemini-api/docs/generate-content/transcribe)

@@ -1,0 +1,35 @@
+---
+title: AssemblyAI
+description: Use AssemblyAI for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [AssemblyAI console](https://www.assemblyai.com/dashboard/), then store it:
+
+```sh
+xflow key set assemblyai        # hidden input
+xflow providers use assemblyai
+xflow providers test assemblyai # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `ASSEMBLYAI_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "assemblyai"
+model = "universal-3-5-pro"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `universal-3-5-pro` (default) | Universal 3.5 Pro | Async, auto language detection; sync protocol available |
+| `universal-2` | Universal 2 | Broad language coverage; async |
+
+Your dictionary words are sent as recognition hints with every recording.
+
+Provider documentation: [www.assemblyai.com/docs/api-reference/transcripts/submit](https://www.assemblyai.com/docs/api-reference/transcripts/submit)

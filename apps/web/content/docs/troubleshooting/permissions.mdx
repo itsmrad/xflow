@@ -1,0 +1,56 @@
+---
+title: macOS permissions
+description: What xflowd asks for, why, and how to fix a grant that won't stick.
+---
+
+`xflowd` needs two permissions, and sometimes a third:
+
+| Permission | Why |
+| --- | --- |
+| **Accessibility** | Typing into apps. It also lets the shortcut's listen-only event tap hear keys. |
+| **Microphone** | Recording. The microphone is open only while you record. |
+| **Input Monitoring** | A fallback, asked for only when the shortcut still isn't heard with Accessibility on. |
+
+`xflowd` asks for nothing when it starts, so no prompt appears mid-install. Plain `xflow` opens a permissions step when one is off and asks one grant per screen: it opens the exact System Settings pane, you find `xflowd` in the list and switch it on — you never add it yourself — and it moves on when the switch flips.
+
+## Check-up
+
+In the TUI, open Check-up (<Kbd>0</Kbd> or <Kbd>D</Kbd> for Doctor) and press <Kbd>Enter</Kbd> on any permission row to fix it. `xflow status`, `xflow doctor` and Check-up all report `xflowd`'s own checks, without prompting.
+
+A shortcut tap that hasn't received a keyboard event yet is reported as **unverified**. Press the shortcut, then refresh.
+
+## A permission stays off although xflowd looks on
+
+macOS lists a bare executable like `xflowd` by path and checks its code signature. Every older copy — `~/.local/bin`, earlier builds — can leave a look-alike row that is switched on but no longer matches.
+
+<Steps>
+<Step title="Remove the old rows">
+In System Settings › Privacy & Security › the pane in question, select each `xflowd` row and click **−**.
+</Step>
+<Step title="Ask again">
+Press <Kbd>Enter</Kbd> on the permission in Check-up (or in the setup permissions step). macOS asks only once per process, so this restarts `xflowd`, which asks again as it starts, then reopens the pane.
+</Step>
+<Step title="Switch on the new row">
+The row that appears is the current build.
+</Step>
+</Steps>
+
+`tccutil reset` only accepts app bundle identifiers, so xflow can't remove these rows for you.
+
+## Why rebuilds reset grants
+
+Grants and Keychain “Always Allow” follow the code signature's designated requirement. An ad-hoc build is identified by its hash, so every rebuild leaves a stale row. Signed with a certificate, the requirement is `identifier "com.xflow.xflowd" and certificate leaf = H"…"`, which is stable across builds. Check yours:
+
+```sh
+codesign -dr - "$(command -v xflowd)"
+```
+
+`xflow service install` re-signs `xflowd` with identifier `com.xflow.xflowd`, using a code-signing certificate named `xflow-dev` when one exists. The repository README has the one-time commands to create it.
+
+## The Globe key opens emoji
+
+Set System Settings › Keyboard › Press 🌐 key to › **Do Nothing**. `xflow doctor` reports the current value as `AppleFnUsageType` (`0` is Do Nothing).
+
+## Running from a terminal
+
+If you run `xflowd` in the foreground instead of as a service, macOS may attribute the grants to your terminal app instead.
