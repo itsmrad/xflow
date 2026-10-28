@@ -2,7 +2,7 @@ import { currentUser } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
-import { USER_ID_METADATA_KEY } from "@/lib/billing";
+import { proProductIds, USER_ID_METADATA_KEY } from "@/lib/billing";
 import { appUrl, error, json, sameOrigin, seeOther, wantsHtml } from "@/lib/http";
 import { dodo } from "@/lib/server/billing";
 import { ensureUser } from "@/lib/server/users";
@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   const email = clerk.primaryEmailAddress?.emailAddress ?? null;
   const userId = await ensureUser(clerk.id, email);
   const client = dodo();
-  const productId = process.env.DODO_PRO_PRODUCT_ID;
+  const productId = proProductIds()[0];
   if (!client || !productId) return error(503, "billing is not configured");
   if (await userIsPro(userId)) return wantsHtml(request) ? seeOther("/dashboard") : error(409, "already on Pro");
   if (!email) return error(400, "your account needs an email address to subscribe");
@@ -25,6 +25,9 @@ export async function POST(request: Request) {
   const session = await client.checkoutSessions.create({
     product_cart: [{ product_id: productId, quantity: 1 }],
     customer: user?.customer ? { customer_id: user.customer } : { email, name: clerk.fullName ?? undefined },
+    // One Dodo customer per xflow account. Matching by email would attach this checkout to another
+    // account's customer (a deleted and re-created account, say).
+    ...(user?.customer ? {} : { feature_flags: { always_create_new_customer: true } }),
     metadata: { [USER_ID_METADATA_KEY]: userId },
     return_url: `${appUrl()}/dashboard?checkout=done`,
   });

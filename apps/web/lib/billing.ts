@@ -2,9 +2,15 @@ import { Webhook, WebhookVerificationError } from "standardwebhooks";
 
 export const USER_ID_METADATA_KEY = "xflow_user_id";
 
+/** Dodo product ids that grant Pro (comma-separated, so an annual plan can be added later). */
+export function proProductIds(value = process.env.DODO_PRO_PRODUCT_ID): string[] {
+  return (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 export type SubscriptionUpdate = {
   dodoSubscriptionId: string;
   dodoCustomerId: string;
+  customerEmail: string | null;
   productId: string;
   status: string;
   /** Our users.id from checkout metadata, when present. */
@@ -61,6 +67,7 @@ export function subscriptionUpdate(event: unknown): SubscriptionUpdate | null {
   return {
     dodoSubscriptionId,
     dodoCustomerId,
+    customerEmail: str(customer.email),
     productId,
     status,
     userId: userId && UUID_RE.test(userId) ? userId : null,

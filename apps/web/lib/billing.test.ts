@@ -52,6 +52,7 @@ describe("subscription event parsing", () => {
     expect(subscriptionUpdate(fixture)).toEqual({
       dodoSubscriptionId: "sub_test_0001",
       dodoCustomerId: "cus_test_0001",
+      customerEmail: "pro@example.com",
       productId: "pdt_test_pro",
       status: "active",
       userId: "00000000-0000-4000-8000-000000000001",
