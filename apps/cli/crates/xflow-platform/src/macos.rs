@@ -42,7 +42,9 @@ extern "C" {
     fn CFStringGetCString(value: Ref, buffer: *mut c_char, size: isize, encoding: u32) -> bool;
     fn CFStringGetLength(value: Ref) -> isize;
     fn CFStringGetMaximumSizeForEncoding(len: isize, encoding: u32) -> isize;
+    fn CFDataCreate(allocator: Ref, bytes: *const u8, length: isize) -> Ref;
     fn CFDataGetBytePtr(data: Ref) -> *const u8;
+    fn CFDataGetLength(data: Ref) -> isize;
     static kCFBooleanTrue: Ref;
     fn CFDictionaryGetValue(dict: Ref, key: Ref) -> Ref;
     fn CFDictionaryCreate(
@@ -82,6 +84,25 @@ extern "C" {
     fn CGEventSetFlags(event: Ref, flags: u64);
     fn CGEventKeyboardSetUnicodeString(event: Ref, len: usize, text: *const u16);
     fn CGEventPost(tap: u32, event: Ref);
+    // HIServices Pasteboard Manager (part of ApplicationServices).
+    fn PasteboardCreate(name: Ref, out: *mut Ref) -> i32;
+    fn PasteboardClear(pb: Ref) -> i32;
+    fn PasteboardSynchronize(pb: Ref) -> u32;
+    fn PasteboardPutItemFlavor(
+        pb: Ref,
+        item: *const c_void,
+        flavor: Ref,
+        data: Ref,
+        flags: u32,
+    ) -> i32;
+    fn PasteboardCopyItemFlavorData(
+        pb: Ref,
+        item: *const c_void,
+        flavor: Ref,
+        out_data: *mut Ref,
+    ) -> i32;
+    fn PasteboardGetItemCount(pb: Ref, count: *mut usize) -> i32;
+    fn PasteboardGetItemIdentifier(pb: Ref, index: isize, item: *mut *const c_void) -> i32;
 }
 
 struct Owned(Ref);
@@ -170,6 +191,101 @@ fn cf_text(value: Ref) -> Option<String> {
             .ok()?
             .to_owned(),
     )
+}
+
+/// HIServices Pasteboard Manager: in-process clipboard access without AppKit
+/// or a pbcopy/pbpaste child per call.
+struct Pasteboard(Ref);
+// Every use runs under the DELIVERY lock.
+unsafe impl Send for Pasteboard {}
+unsafe impl Sync for Pasteboard {}
+impl Pasteboard {
+    const TEXT: &str = "public.utf8-plain-text";
+    fn open(name: &str) -> Result<Self> {
+        let name = Owned::string(name);
+        let mut pasteboard = ptr::null();
+        let status = unsafe { PasteboardCreate(name.0, &mut pasteboard) };
+        if status != 0 || pasteboard.is_null() {
+            bail!("cannot open the pasteboard (OSStatus {status})");
+        }
+        Ok(Self(pasteboard))
+    }
+    /// True until another process writes: the change-count check, without reading back.
+    fn owned(&self) -> bool {
+        // kPasteboardClientIsOwner
+        let flags = unsafe { PasteboardSynchronize(self.0) };
+        flags & 2 != 0
+    }
+    /// The first item's text, "" when it has none (as pbpaste); None on failure.
+    fn read(&self) -> Option<String> {
+        let mut count = 0;
+        let mut item = ptr::null();
+        unsafe {
+            PasteboardSynchronize(self.0);
+            if PasteboardGetItemCount(self.0, &mut count) != 0 {
+                return None;
+            }
+            if count == 0 {
+                return Some(String::new());
+            }
+            if PasteboardGetItemIdentifier(self.0, 1, &mut item) != 0 {
+                return None;
+            }
+        }
+        let flavor = Owned::string(Self::TEXT);
+        let mut data = ptr::null();
+        if unsafe { PasteboardCopyItemFlavorData(self.0, item, flavor.0, &mut data) } != 0 {
+            return Some(String::new());
+        }
+        let data = Owned::new(data)?;
+        let len = unsafe { CFDataGetLength(data.0) } as usize;
+        if len > MAX_TEXT {
+            return None;
+        }
+        if len == 0 {
+            return Some(String::new());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(CFDataGetBytePtr(data.0), len) };
+        String::from_utf8(bytes.to_vec()).ok()
+    }
+    fn write(&self, text: &str) -> Result<()> {
+        let status = unsafe { PasteboardClear(self.0) };
+        if status != 0 {
+            bail!("cannot clear the pasteboard (OSStatus {status})");
+        }
+        // Clearing takes ownership; synchronize before adding the item.
+        unsafe { PasteboardSynchronize(self.0) };
+        let flavor = Owned::string(Self::TEXT);
+        let data =
+            Owned::new(unsafe { CFDataCreate(ptr::null(), text.as_ptr(), text.len() as isize) })
+                .context("cannot allocate pasteboard data")?;
+        let status = unsafe { PasteboardPutItemFlavor(self.0, 1 as Ref, flavor.0, data.0, 0) };
+        if status != 0 {
+            bail!("cannot write the pasteboard (OSStatus {status})");
+        }
+        Ok(())
+    }
+    /// Put the user's text back only while the pasteboard still holds ours, so
+    /// another app's newer copy is never clobbered.
+    fn restore(&self, previous: &str) {
+        if self.owned() {
+            let _ = self.write(previous);
+        }
+    }
+}
+impl Drop for Pasteboard {
+    fn drop(&mut self) {
+        unsafe { CFRelease(self.0) };
+    }
+}
+fn clipboard() -> Result<&'static Pasteboard> {
+    static CLIPBOARD: OnceLock<Pasteboard> = OnceLock::new();
+    if let Some(clipboard) = CLIPBOARD.get() {
+        return Ok(clipboard);
+    }
+    // kPasteboardClipboard
+    let clipboard = Pasteboard::open("com.apple.pasteboard.clipboard")?;
+    Ok(CLIPBOARD.get_or_init(|| clipboard))
 }
 
 #[derive(Default)]
@@ -528,11 +644,11 @@ impl MacDesktop {
             delivery: DELIVERY.clone(),
         }
     }
-    async fn write(&self, text: &str) -> Result<()> {
+    fn write(&self, text: &str) -> Result<()> {
         if text.len() > MAX_TEXT {
             bail!("injection text exceeds 64 KiB");
         }
-        super::desktop::copy_with("/usr/bin/pbcopy", &[], text).await
+        clipboard()?.write(text)
     }
 }
 #[async_trait]
@@ -566,7 +682,7 @@ impl Desktop for MacDesktop {
     }
     async fn copy(&self, text: &str) -> Result<()> {
         let _delivery = self.delivery.lock().await;
-        self.write(text).await
+        self.write(text)
     }
     async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome> {
         if text.len() > MAX_TEXT {
@@ -584,22 +700,22 @@ impl Desktop for MacDesktop {
         match action {
             Decision::Refuse => bail!("refusing delivery into a secure field"),
             Decision::Copy => {
-                self.write(text).await?;
+                self.write(text)?;
                 return Ok(InjectionOutcome::ClipboardOnly);
             }
             _ => {}
         }
         // shortcut: restores text only; preserve native pasteboard formats in #27.
         let previous = if action == Decision::Paste && self.config.restore_clipboard {
-            super::desktop::output("/usr/bin/pbpaste", &[]).await.ok()
+            clipboard()?.read()
         } else {
             None
         };
         if action != Decision::Type {
-            self.write(text).await?;
+            self.write(text)?;
             // Cmd+V only while the pasteboard holds the transcript, never another writer's text.
-            if super::desktop::output("/usr/bin/pbpaste", &[]).await? != text {
-                self.write(text).await?;
+            if !clipboard()?.owned() {
+                self.write(text)?;
                 return Ok(InjectionOutcome::ClipboardOnly);
             }
         }
@@ -607,7 +723,6 @@ impl Desktop for MacDesktop {
         let text_owned = text.to_owned();
         let restore = previous.is_some();
         let restore_delay_ms = self.config.restore_delay_ms;
-        let runtime = tokio::runtime::Handle::current();
         let (reply, outcome) = tokio::sync::oneshot::channel();
         // Re-check focus just before the keys; the lock then stays with the pending paste.
         tokio::task::spawn_blocking(move || {
@@ -615,11 +730,7 @@ impl Desktop for MacDesktop {
             let current = focus();
             let action = decision(&text_owned, method, &target, &current);
             if matches!(action, Decision::Refuse | Decision::Copy) {
-                let copied = runtime.block_on(super::desktop::copy_with(
-                    "/usr/bin/pbcopy",
-                    &[],
-                    &text_owned,
-                ));
+                let copied = clipboard().and_then(|c| c.write(&text_owned));
                 return drop(reply.send(copied.map(|()| (Decision::Copy, false))));
             }
             let field = current
@@ -640,16 +751,8 @@ impl Desktop for MacDesktop {
                 .as_ref()
                 .is_none_or(|(_, before)| content_len(before).unwrap_or(0) == 0);
             let restore_previous = || {
-                if let Some(previous) = &previous {
-                    runtime.block_on(async {
-                        if super::desktop::output("/usr/bin/pbpaste", &[])
-                            .await
-                            .is_ok_and(|s| s == text_owned)
-                        {
-                            let _ =
-                                super::desktop::copy_with("/usr/bin/pbcopy", &[], previous).await;
-                        }
-                    });
+                if let (Some(previous), Ok(clipboard)) = (&previous, clipboard()) {
+                    clipboard.restore(previous);
                 }
             };
             let mut restored = false;
@@ -835,9 +938,7 @@ mod tests {
     #[ignore = "types a marker into the frontmost TextEdit document; run explicitly on macOS"]
     async fn native_textedit_paste() {
         let desktop = MacDesktop::new(&InjectionConfig::default());
-        let previous = super::super::desktop::output("/usr/bin/pbpaste", &[])
-            .await
-            .unwrap();
+        let previous = clipboard().unwrap().read().unwrap();
         let context = desktop.context().await.unwrap();
         assert_eq!(
             context.app_id.as_deref(),
@@ -863,12 +964,47 @@ mod tests {
             .1
             .unwrap()
             .contains("xflow macOS delivery check"));
-        assert!(
-            super::super::desktop::output("/usr/bin/pbpaste", &[])
-                .await
-                .unwrap()
-                == previous
+        assert_eq!(clipboard().unwrap().read().unwrap(), previous);
+    }
+    /// A private named pasteboard, so tests never touch the user's clipboard.
+    fn scratch(test: &str) -> (String, Pasteboard) {
+        let name = format!("com.xflow.test.{}.{test}", std::process::id());
+        let pasteboard = Pasteboard::open(&name).unwrap();
+        (name, pasteboard)
+    }
+    #[test]
+    fn pasteboard_round_trips_text_in_process() {
+        let (_, pasteboard) = scratch("round-trip");
+        for text in ["", "fix `cargo` — naïve 🚀\n  indented\r\n"] {
+            pasteboard.write(text).unwrap();
+            assert!(pasteboard.owned());
+            assert_eq!(pasteboard.read().as_deref(), Some(text));
+        }
+        pasteboard.write(&"x".repeat(MAX_TEXT + 1)).unwrap();
+        assert_eq!(pasteboard.read(), None, "oversized text is never restored");
+    }
+    #[test]
+    fn restore_never_clobbers_another_apps_newer_copy() {
+        let (name, pasteboard) = scratch("restore");
+        pasteboard.write("transcript").unwrap();
+        pasteboard.restore("previous");
+        assert_eq!(pasteboard.read().as_deref(), Some("previous"));
+
+        pasteboard.write("transcript").unwrap();
+        // A real AppKit app in another process copies while the paste is pending.
+        let script = format!(
+            "ObjC.import('AppKit'); var p = $.NSPasteboard.pasteboardWithName('{name}'); \
+             p.clearContents; p.setStringForType('newer copy', $.NSPasteboardTypeString)"
         );
+        let status = std::process::Command::new("/usr/bin/osascript")
+            .args(["-l", "JavaScript", "-e", &script])
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(!pasteboard.owned());
+        pasteboard.restore("previous");
+        assert_eq!(pasteboard.read().as_deref(), Some("newer copy"));
     }
     #[test]
     fn editability_selects_paste_copy_or_both() {
