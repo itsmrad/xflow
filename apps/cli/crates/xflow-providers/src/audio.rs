@@ -165,7 +165,8 @@ fn wav(samples: &[f32]) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-pub(crate) fn decode_wav(bytes: &[u8]) -> Result<AudioClip> {
+/// Decode PCM/float WAV without resampling; callers must bound the input bytes.
+pub fn decode_wav(bytes: &[u8]) -> Result<AudioClip> {
     let mut reader = hound::WavReader::new(std::io::Cursor::new(bytes))
         .map_err(|_| anyhow!("invalid WAV file"))?;
     let spec = reader.spec();

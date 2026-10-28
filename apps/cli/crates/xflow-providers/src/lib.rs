@@ -25,7 +25,7 @@ mod catalog;
 mod macos_keychain;
 #[cfg(test)]
 mod protocol_tests;
-pub use audio::encode_wav;
+pub use audio::{decode_wav, encode_wav};
 pub use catalog::*;
 
 const MAX_RESPONSE_BYTES: usize = 1_048_576;

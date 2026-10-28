@@ -34,6 +34,30 @@ use xflow_core::{
     TranscriptionOptions, TransformRequest,
 };
 
+#[cfg(debug_assertions)]
+mod test_audio;
+
+#[cfg(any(debug_assertions, test))]
+fn test_audio_path() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var_os("XFLOW_TEST_AUDIO").map(PathBuf::from)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
+fn native_audio(config: &xflow_core::config::RecordingConfig) -> Result<Arc<dyn AudioCapture>> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = test_audio_path() {
+        log("warn", "TEST AUDIO: using WAV instead of microphone");
+        return Ok(Arc::new(test_audio::WavCapture::new(path)));
+    }
+    Ok(Arc::new(xflow_platform::CpalCapture::new(config)?))
+}
+
 struct Processed {
     text: String,
     target: AppContext,
@@ -1291,7 +1315,7 @@ fn native_services(old: &Config, config: &Config, services: Services) -> Result<
         });
     }
     let audio = if old.recording != config.recording {
-        Arc::new(xflow_platform::CpalCapture::new(&config.recording)?) as Arc<dyn AudioCapture>
+        native_audio(&config.recording)?
     } else {
         services.audio
     };
@@ -1450,7 +1474,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let transformer = build_transformer(&config)?;
     let native_adapters = || -> Result<(Arc<dyn AudioCapture>, Arc<dyn Desktop>)> {
         Ok((
-            Arc::new(xflow_platform::CpalCapture::new(&config.recording)?),
+            native_audio(&config.recording)?,
             Arc::new(xflow_platform::NativeDesktop::new(&config.injection)),
         ))
     };
@@ -1720,6 +1744,40 @@ mod tests {
     };
     use tokio::sync::Notify;
     use xflow_core::{InjectionOutcome, Transcript};
+
+    #[tokio::test]
+    async fn test_audio_environment_is_debug_only() {
+        const CHILD: &str = "XFLOW_AUDIO_GATE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let expected = if cfg!(debug_assertions) {
+                Some(PathBuf::from("/nonexistent/qa.wav"))
+            } else {
+                None
+            };
+            assert_eq!(test_audio_path(), expected);
+            #[cfg(debug_assertions)]
+            {
+                let audio = native_audio(&Default::default()).unwrap();
+                let error = audio.start().await.unwrap_err();
+                assert!(format!("{error:#}").contains("XFLOW_TEST_AUDIO"));
+                #[cfg(feature = "test-support")]
+                assert!(crate::test_support::adapters().unwrap().is_none());
+            }
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::tests::test_audio_environment_is_debug_only",
+            ])
+            .env(CHILD, "1")
+            .env("XFLOW_TEST_AUDIO", "/nonexistent/qa.wav")
+            .env_remove("XFLOW_TEST_SINK")
+            .env_remove("XFLOW_TEST_ROOT")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
 
     struct FakeAudio(AtomicBool);
     #[async_trait]
@@ -2557,9 +2615,36 @@ mod tests {
         let (mut engine, tx, rx, mut events, _) =
             fixture(Config::default(), desktop.clone(), store);
         engine.config_path = Some(path.clone());
+        #[cfg(debug_assertions)]
+        let keys = {
+            let wav = dir.path().join("dictation.wav");
+            std::fs::write(
+                &wav,
+                xflow_providers::encode_wav(&AudioClip {
+                    samples: vec![0.2; 16_000],
+                    sample_rate: 16_000,
+                    channels: 1,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            engine.services.audio = Arc::new(test_audio::WavCapture::new(wav));
+            let (keys, key_events) = mpsc::channel(8);
+            engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
+            keys
+        };
         let task = tokio::spawn(engine.run(rx));
-        ask(&tx, Request::start()).await;
-        ask(&tx, Request::Stop).await;
+        #[cfg(debug_assertions)]
+        {
+            keys.send(HotkeyAction::Start).await.unwrap();
+            hotkey_state(&mut events, State::Listening).await;
+            keys.send(HotkeyAction::Stop).await.unwrap();
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+        }
         let id = success(&mut events).await.entry.unwrap().id;
         // After the baseline read, the user fixes a word and edits elsewhere.
         tokio::time::sleep(Duration::from_millis(400)).await;

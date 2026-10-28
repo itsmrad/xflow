@@ -5,6 +5,18 @@ use xflow_core::config::Config;
 
 #[derive(Parser)]
 #[command(version, about = "Local dictation daemon")]
+#[cfg_attr(
+    debug_assertions,
+    command(
+        after_help = "Development only: WAV capture without a microphone\n  XFLOW_TEST_AUDIO=/absolute/path/to.wav xflowd --config /path/to/qa.toml\nReloads the WAV on each recording; native STT, formatting and paste still run.\nDo not enable test-support or set XFLOW_TEST_SINK for desktop QA.\nRelease builds ignore XFLOW_TEST_AUDIO. See docs/test-audio.md."
+    )
+)]
+#[cfg_attr(
+    not(debug_assertions),
+    command(
+        after_help = "Release build: XFLOW_TEST_AUDIO is ignored. Use a debug build for WAV capture QA (docs/test-audio.md)."
+    )
+)]
 struct Args {
     #[arg(long)]
     config: Option<PathBuf>,
@@ -45,5 +57,22 @@ async fn main() -> Result<()> {
     #[cfg(not(unix))]
     {
         anyhow::bail!("native Windows daemon adapter is not implemented yet")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn help_explains_test_audio_build_gate() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(help.contains("XFLOW_TEST_AUDIO"));
+        assert!(help.contains(if cfg!(debug_assertions) {
+            "Development only"
+        } else {
+            "Release build: XFLOW_TEST_AUDIO is ignored"
+        }));
     }
 }
