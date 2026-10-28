@@ -2,16 +2,27 @@
 use crate::{
     config::Config,
     learn::{distance, sounds},
-    words::common,
+    words::{common, name},
 };
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, MutexGuard},
 };
 
-const FUNCTION_WORDS: [&str; 10] = [
-    "a", "an", "and", "are", "is", "of", "the", "to", "was", "were",
+/// Closed-class words never end a joined term ("just in" is not Justin), and
+/// sound-alikes never span one ("so late" is not SQLite).
+const FUNCTION_WORDS: [&str; 46] = [
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "get", "got", "had", "has",
+    "have", "he", "her", "his", "i", "if", "in", "into", "is", "it", "its", "no", "not", "of",
+    "on", "or", "our", "she", "so", "such", "than", "that", "the", "they", "this", "to", "up",
+    "us", "was", "we", "were", "with",
 ];
+/// Exact joins may still start on these: "i os", "no sql", "on prem", "up stash".
+const FOLD_PREFIXES: [&str; 4] = ["i", "no", "on", "up"];
+/// Sound-alikes only target terms this long, within ⌊letters / 5⌋ edits (at
+/// least one): two edits on a 6–9 letter term turned "dogger" into Docker.
+const MIN_SOUNDALIKE_LETTERS: usize = 6;
+const EDITS_PER_LETTER: usize = 5;
 
 #[derive(Debug)]
 struct Term {
@@ -66,8 +77,9 @@ fn index(config: &Config) -> MutexGuard<'_, Option<Index>> {
             bucket.push(Term {
                 text: text.clone(),
                 sound: sounds(&letters),
+                // ".NET" and "Log-In" are still the everyday "net" and "login".
+                common: common(&text.to_lowercase()) || common(&letters.iter().collect::<String>()),
                 letters,
-                common: common(&text.to_lowercase()),
             });
         }
         *cache = Some(Index {
@@ -80,7 +92,7 @@ fn index(config: &Config) -> MutexGuard<'_, Option<Index>> {
 }
 
 /// Eagerly build the index when a config is loaded, outside the dictation path.
-pub(crate) fn prepare(config: &Config) {
+pub fn prepare(config: &Config) {
     if config.formatting.snap_to_dictionary {
         drop(index(config));
     }
@@ -88,13 +100,12 @@ pub(crate) fn prepare(config: &Config) {
 
 impl Index {
     fn find(&self, input: &str, count: usize, folded_only: bool) -> Option<&str> {
-        let mut words = input.split_whitespace();
-        // "red is" is prose, not Redis: no term starts or ends on a function word.
+        let lower = input.to_lowercase();
+        let words: Vec<_> = lower.split_whitespace().collect();
+        let function = |w: &&str| FUNCTION_WORDS.contains(w);
         if count > 1
-            && [words.next(), words.next_back()]
-                .into_iter()
-                .flatten()
-                .any(|w| FUNCTION_WORDS.iter().any(|f| w.eq_ignore_ascii_case(f)))
+            && (function(&words[count - 1])
+                || (function(&words[0]) && !FOLD_PREFIXES.contains(&words[0])))
         {
             return None;
         }
@@ -108,47 +119,53 @@ impl Index {
                     .map(|t| t.text.as_str());
             }
         }
-        if folded_only || (count == 1 && common(&input.to_lowercase())) {
+        // Everyday words and real names (Austen is not Austin) are not misspellings.
+        if folded_only
+            || words.iter().any(function)
+            || (count == 1 && (common(&lower) || name(&lower)))
+        {
             return None;
         }
         let sound = sounds(&letters);
         // Non-rhotic "super base" has a silent r before the word boundary.
-        let non_rhotic = (count > 1
-            && input
-                .to_lowercase()
-                .split_whitespace()
-                .take(count - 1)
-                .any(|w| w.ends_with("er")))
-        .then(|| {
-            sounds(
-                &input
-                    .to_lowercase()
-                    .split_whitespace()
+        let non_rhotic = words[..count - 1]
+            .iter()
+            .any(|w| w.ends_with("er"))
+            .then(|| {
+                let letters: Vec<_> = words
+                    .iter()
                     .enumerate()
                     .flat_map(|(i, w)| {
-                        let w = if i + 1 < count {
-                            w.strip_suffix("er")
-                                .map_or(w, |prefix| &w[..prefix.len() + 1])
-                        } else {
-                            w
+                        let w = match w.strip_suffix('r') {
+                            Some(w) if i + 1 < count && w.ends_with('e') => w,
+                            _ => w,
                         };
-                        w.to_lowercase().chars().collect::<Vec<_>>()
+                        w.chars()
                     })
-                    .collect::<Vec<_>>(),
-            )
-        });
-        let words: Vec<_> = input.split_whitespace().collect();
+                    .collect();
+                (sounds(&letters), letters)
+            });
+        let digits = |l: &[char]| {
+            l.iter()
+                .filter(|c| c.is_numeric())
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        // Bucket bound only: a term of length t is reachable when |n - t| <= t / 5.
         let radius = n.div_ceil(4) + 1;
-        let mut found = None;
+        let mut found: Option<&Term> = None;
         for (_, terms) in self
             .terms
             .range((letters[0], n.saturating_sub(radius))..=(letters[0], n + radius))
         {
             for term in terms {
-                let limit = term.letters.len().div_ceil(5);
-                if term.letters.len() < 6
+                let limit = (term.letters.len() / EDITS_PER_LETTER).max(1);
+                if term.letters.len() < MIN_SOUNDALIKE_LETTERS
+                    || term.common
                     || n.abs_diff(term.letters.len()) > limit
-                    || (term.sound != sound && non_rhotic.as_ref() != Some(&term.sound))
+                    || (term.sound != sound && non_rhotic.as_ref().map(|r| &r.0) != Some(&term.sound))
+                    // python2 is never Python3.
+                    || digits(&term.letters) != digits(&letters)
                 {
                     continue;
                 }
@@ -158,18 +175,23 @@ impl Index {
                     self::letters(&part.join(" "))
                         .is_some_and(|l| distance(&l, &term.letters) <= limit)
                 };
-                if distance(&letters, &term.letters) <= limit
+                let edits = non_rhotic
+                    .as_ref()
+                    .map_or(usize::MAX, |r| distance(&r.1, &term.letters));
+                if distance(&letters, &term.letters).min(edits) <= limit
                     && (count == 1 || !(slack(&words[1..]) || slack(&words[..count - 1])))
                 {
-                    // Ambiguous sound-alikes are left alone rather than guessing.
-                    if found.is_some() {
-                        return None;
+                    // Ambiguous sound-alikes are left alone rather than guessing;
+                    // the same spelling saved twice is not ambiguous.
+                    match found {
+                        Some(other) if other.letters != term.letters => return None,
+                        Some(_) => {}
+                        None => found = Some(term),
                     }
-                    found = Some(term.text.as_str());
                 }
             }
         }
-        found
+        found.map(|t| t.text.as_str())
     }
 }
 
@@ -186,9 +208,10 @@ pub fn apply(text: &str, config: &Config) -> String {
     let tokens: Vec<_> = text
         .split_whitespace()
         .map(|chunk| {
-            let word = chunk.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+            let word = chunk.trim_matches(|c: char| !c.is_alphanumeric());
             let start = word.as_ptr() as usize - text.as_ptr() as usize;
-            let protected = chunk.contains(['@', '/', '\\']) || chunk.starts_with("www.");
+            // Identifiers, paths, URLs and emails are typed text, not speech.
+            let protected = chunk.contains(['@', '/', '\\', '_']) || chunk.starts_with("www.");
             (start, start + word.len(), !protected && !word.is_empty())
         })
         .collect();
@@ -288,6 +311,115 @@ mod tests {
         "Vitest",
         "Playwright",
     ];
+
+    /// Every false snap found by the PR #82 review, with the dictionaries that
+    /// produced it: DEV_TERMS, saved names, and dotted/hyphenated/versioned terms.
+    const REVIEW_TERMS: [&str; 20] = [
+        "Justin",
+        "Dustin",
+        "Austin",
+        "Martin",
+        "Devin",
+        "Weston",
+        "Hudson",
+        "Newton",
+        "Sherwin",
+        "Claude",
+        "Daniel",
+        ".NET",
+        "Log-In",
+        "Co-op",
+        "Python3",
+        "ES2022",
+        "Llama3",
+        "Windows11",
+        "Base32",
+        "OAuth2",
+    ];
+    const REVIEW_FALSE_SNAPS: [&str; 45] = [
+        "I am sorry for my calling so late, she said.",
+        "Those words sometimes convey no ideas at all.",
+        "He spent the morning obtaining a note as the bank asked.",
+        "It was a damp, drizzly November in my soul.",
+        "He was standing upon such a base as that.",
+        "They longed for that of terra firma, wild and green.",
+        "You unmannerly Dutch dogger!",
+        "The book was published so late as that.",
+        "I made it just in time.",
+        "There was no jest in his voice.",
+        "There was dust in the attic.",
+        "She ran out of the room.",
+        "I have my share in the profits.",
+        "We are not on friendly terms.",
+        "We sat on the bench in silence.",
+        "She resolved to act in that spirit.",
+        "Cut the work into as thin slices as you can.",
+        "He had soon forgotten it.",
+        "They were putting their heads on the table.",
+        "Miss Austen always liked the country.",
+        "Eckhaust and Clyde Cohen arrived.",
+        "We visited the Merton College Library.",
+        "Sibbald, Brisson, Marten and Bonneterre wrote about whales.",
+        "Orderi di Danilo, ran the headline.",
+        "Can you type a script for me?",
+        "What type of script do you need?",
+        "We need to get lab results back.",
+        "Can you get hub access?",
+        "Let's dev in a branch.",
+        "Bring an umbrella just in case.",
+        "Head west on the highway.",
+        "The post grows each day.",
+        "The net result is good.",
+        "Cast a net.",
+        "Please login.",
+        "The coop is full.",
+        "Use python2 here.",
+        "Target es2021 now.",
+        "Run llama2 locally.",
+        "Install windows10 today.",
+        "Encode base64 now.",
+        "Use oauth1 here.",
+        "Ask _Sophy about it.",
+        "Rename use_effect in the hook.",
+        "Red is my favourite colour.",
+    ];
+
+    #[test]
+    fn review_false_snaps_are_left_alone() {
+        let c = config(&[&DEV_TERMS[..], &REVIEW_TERMS[..]].concat());
+        let prose = include_str!("snap-prose.txt");
+        let snapped: Vec<_> = REVIEW_FALSE_SNAPS
+            .iter()
+            .map(|input| apply(input, &c))
+            .filter(|output| !REVIEW_FALSE_SNAPS.contains(&output.as_str()))
+            .collect();
+        assert!(snapped.is_empty(), "{snapped:#?}");
+        for input in REVIEW_FALSE_SNAPS {
+            assert!(
+                prose.lines().any(|l| l == input),
+                "add to snap-prose.txt: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn review_guards_keep_real_snaps() {
+        let mut c = config(&[
+            "NoSQL", "iOS", "MySQL", "Upstash", "Python3", "Supabase", "Redis",
+        ]);
+        c.stt.vocabulary = vec!["supabase".into()];
+        for (input, expected) in [
+            ("no sql", "NoSQL"),
+            ("i os", "iOS"),
+            ("my sql", "MySQL"),
+            ("up stash", "Upstash"),
+            ("python 3", "Python3"),
+            ("super base is up", "Supabase is up"),
+            ("redis is down", "Redis is down"),
+        ] {
+            assert_eq!(apply(input, &c), expected, "{input}");
+        }
+    }
 
     fn config(terms: &[&str]) -> Config {
         let mut config = Config::default();
@@ -443,8 +575,8 @@ mod tests {
 
     #[test]
     fn ambiguity_is_safe_and_explicit_replacements_follow_snapping() {
-        let c = config(&["Postgres", "Postgross"]);
-        assert_eq!(apply("postgrees", &c), "postgrees");
+        let c = config(&["Postgres", "Postgrus"]);
+        assert_eq!(apply("postgras", &c), "postgras");
         let mut c = config(&["DevTerms"]);
         c.dictionary.replacements.push(crate::config::Replacement {
             from: "DevTerms".into(),
@@ -471,7 +603,7 @@ mod tests {
 
     #[test]
     fn prose_control_changes_at_most_one_percent_of_words() {
-        let c = config(&DEV_TERMS);
+        let c = config(&[&DEV_TERMS[..], &REVIEW_TERMS[..]].concat());
         let (mut changed, mut total, mut sentences) = (0, 0, 0);
         for input in include_str!("snap-prose.txt")
             .lines()
