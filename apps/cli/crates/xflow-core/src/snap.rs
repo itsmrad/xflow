@@ -468,8 +468,7 @@ mod tests {
             .map(|l| l.split_once('\t').unwrap().1.split('|').collect::<Vec<_>>())
             .collect();
         let records = std::fs::read_to_string(root.join("results/transcripts.jsonl")).unwrap();
-        let mut scores: BTreeMap<(String, String, String), (usize, usize, usize, usize)> =
-            BTreeMap::new();
+        let mut scores = BTreeMap::new();
         let hit = |text: &str, term: &str| {
             text.match_indices(term).any(|(i, _)| {
                 let boundary = |c: char| !c.is_alphanumeric() && c != '_';
@@ -498,7 +497,7 @@ mod tests {
                 record["variant"].as_str().unwrap().to_owned(),
                 record["voice"].as_str().unwrap().to_owned(),
             );
-            let score = scores.entry(key).or_default();
+            let score = scores.entry(key).or_insert((0usize, 0usize, 0usize, 0usize));
             score.0 += before;
             score.1 += after;
             score.2 += cases[i].len();
