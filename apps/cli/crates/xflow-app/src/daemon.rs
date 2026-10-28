@@ -29,8 +29,9 @@ use xflow_core::{
         Delivery, Grant, HistoryEntry, Permissions, Request, Response, Timings, MAX_MESSAGE_BYTES,
         PROTOCOL_VERSION,
     },
-    AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, GlobalHotkeys,
-    HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer, Transcript,
+    AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, FieldEvent,
+    GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
+    Transcript,
     TranscriptionOptions, TransformRequest,
 };
 
@@ -1330,12 +1331,8 @@ fn fit_history(r: &mut Response, rows: Vec<HistoryEntry>) -> Result<()> {
     r.history.truncate(fit);
     Ok(())
 }
-/// Watch the field a dictation was pasted into, without polling: read it ~120 ms
-/// after the paste to anchor the inserted span, then once more when the next
-/// dictation starts or after 60 s. Only the span and 16 characters on each side
-/// are kept in between.
-// ponytail: focus changes are noticed at the final read only; an AXObserver
-// (or AT-SPI on Linux) could end the window earlier.
+/// Learn from the user's corrections of a pasted dictation, then log one outcome
+/// line at debug level. The outcome never contains field text.
 async fn observe(
     desktop: Arc<dyn Desktop>,
     target: AppContext,
@@ -1344,74 +1341,162 @@ async fn observe(
     path: PathBuf,
     completion: mpsc::Sender<Completion>,
 ) {
-    tokio::time::sleep(Duration::from_millis(120)).await;
-    let Some(receipt) = focused_field(&*desktop, &target)
-        .await
-        .and_then(|field| xflow_core::learn::Receipt::new(&field, &inserted))
-    else {
-        return;
+    let outcome = match watch_edit(&*desktop, &target, &inserted, finalize).await {
+        Ok((original, corrected)) => match learn(path, original, corrected, completion).await {
+            Ok(Ok(_)) => "learned".into(),
+            Ok(Err(reason)) => format!("filtered:{reason}"),
+            Err(_) => {
+                log("warn", "could not save learned dictionary words");
+                return;
+            }
+        },
+        Err(Some(outcome)) => outcome.into(),
+        // The daemon is stopping or another dictation replaced this one.
+        Err(None) => return,
     };
-    drop(inserted);
-    tokio::select! {
-        // A dropped sender means the daemon is stopping.
-        finalized = finalize => if finalized.is_err() { return; },
-        _ = tokio::time::sleep(Duration::from_secs(60)) => (),
-    }
-    let Some(corrected) = focused_field(&*desktop, &target)
-        .await
-        .and_then(|field| receipt.corrected(&field).map(str::to_owned))
-    else {
-        return;
-    };
-    if learn(path, receipt.inserted().to_owned(), corrected, completion)
-        .await
-        .is_err()
-    {
-        log("warn", "could not save learned dictionary words");
-    }
+    log("debug", &format!("auto-learn: {outcome}"));
 }
-/// Text of the focused field while focus is still on the paste target; 100 ms budget.
-async fn focused_field(desktop: &dyn Desktop, target: &AppContext) -> Option<String> {
-    tokio::time::timeout(Duration::from_millis(100), async {
-        let (now, text) = desktop.focused_text().await.ok()?;
-        if now.app_id != target.app_id || now.window_id != target.window_id {
-            return None;
+/// Throttle for field reads on change notifications: a leading read, then at
+/// most one per interval, plus a trailing read after the last change.
+const FIELD_READ_EVERY: Duration = Duration::from_millis(150);
+/// Pin the field a dictation was pasted into and return (dictated, corrected)
+/// spans. The field is read ~120 ms after the paste to anchor the span, then on
+/// its change notifications, keeping the last read that is still recognisably
+/// the dictation; when an edited dictation leaves the field (a chat app's
+/// Enter) that read is final. Otherwise the window ends when focus leaves the
+/// field (after a 250 ms grace), the next dictation starts, or after 60 s, with
+/// one last read. Only the span and 16 characters each side stay in memory.
+/// Err holds the outcome when there is nothing to learn, None when cancelled.
+async fn watch_edit(
+    desktop: &dyn Desktop,
+    target: &AppContext,
+    inserted: &str,
+    mut finalize: oneshot::Receiver<()>,
+) -> std::result::Result<(String, String), Option<&'static str>> {
+    use tokio::time::{sleep_until, timeout, Instant};
+    async fn read(field: &mut Box<dyn xflow_core::FieldWatch>) -> Option<xflow_core::FieldText> {
+        timeout(Duration::from_millis(250), field.read())
+            .await
+            .ok()
+            .flatten()
+    }
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let started = Instant::now();
+    let mut field = timeout(Duration::from_secs(1), desktop.watch_field(target))
+        .await
+        .ok()
+        .flatten()
+        .ok_or(Some("unreadable"))?;
+    let deadline = started + Duration::from_secs(60);
+    let mut receipt: Option<xflow_core::learn::Receipt> = None;
+    // The last read span that is still the dictation.
+    let mut good = String::new();
+    let (mut dirty, mut lost, mut left, mut sent) = (true, false, false, false);
+    let mut next_read = started;
+    let mut recheck: Option<Instant> = None;
+    loop {
+        tokio::select! {
+            biased;
+            finalized = &mut finalize => {
+                if finalized.is_err() {
+                    return Err(None);
+                }
+                break;
+            }
+            _ = sleep_until(deadline) => break,
+            _ = sleep_until(recheck.unwrap_or(deadline)), if recheck.is_some() => {
+                recheck = None;
+                if !field.focused().await {
+                    left = true;
+                    break;
+                }
+            }
+            _ = sleep_until(next_read), if dirty => {
+                dirty = false;
+                next_read = Instant::now() + FIELD_READ_EVERY;
+                let text = read(&mut field).await;
+                let Some(anchored) = &receipt else {
+                    let readable = text.is_some();
+                    receipt = text.and_then(|t| xflow_core::learn::Receipt::new(&t.value, inserted, t.caret));
+                    match &receipt {
+                        Some(r) => good = r.inserted().to_owned(),
+                        // Electron and Chromium can show the paste late.
+                        None if started.elapsed() < Duration::from_secs(1) => dirty = true,
+                        None => return Err(Some(if readable { "no-receipt" } else { "unreadable" })),
+                    }
+                    continue;
+                };
+                let Some(text) = text else { continue };
+                match anchored.corrected(&text.value) {
+                    Some(span) => good = span.to_owned(),
+                    None if good != anchored.inserted() => {
+                        sent = true;
+                        break;
+                    }
+                    None => lost = true,
+                }
+            }
+            event = field.next() => match event {
+                Some(FieldEvent::Changed) => dirty = true,
+                Some(FieldEvent::Focus) => recheck = Some(Instant::now() + Duration::from_millis(250)),
+                None => break,
+            },
         }
-        text
-    })
-    .await
-    .ok()
-    .flatten()
+    }
+    let receipt = receipt.ok_or(Some("no-receipt"))?;
+    if !sent {
+        if let Some(text) = read(&mut field).await {
+            match receipt.corrected(&text.value) {
+                Some(span) => good = span.to_owned(),
+                None => lost = true,
+            }
+        }
+    }
+    drop(field);
+    if good == receipt.inserted() {
+        return Err(Some(if lost {
+            "anchors-lost"
+        } else if left {
+            "focus-left-before-edit"
+        } else {
+            "no-edit"
+        }));
+    }
+    Ok((receipt.inserted().to_owned(), good))
 }
 /// The one learning path for corrected pastes and history edits: find close word
 /// corrections, save them to config.toml, and hand the new dictionary to the actor.
-/// Returns the user-facing message.
+/// Returns the user-facing message, or why nothing was learned.
 async fn learn(
     path: PathBuf,
     original: String,
     corrected: String,
     completion: mpsc::Sender<Completion>,
-) -> Result<Option<String>> {
+) -> Result<std::result::Result<String, &'static str>> {
     let learned = tokio::task::spawn_blocking(move || -> Result<_> {
         let _lock = crate::config_edit::lock(&path)?;
         let mut file = ConfigFile::load(&path)?;
         let mut dictionary = file.config()?.dictionary;
         if !dictionary.auto_learn {
-            return Ok(None);
+            return Ok(Err("disabled"));
         }
-        let found = xflow_core::learn::corrections(&original, &corrected, &dictionary);
+        let found = match xflow_core::learn::corrections(&original, &corrected, &dictionary) {
+            Ok(found) => found,
+            Err(reason) => return Ok(Err(reason)),
+        };
         let added = dictionary.learn(&found);
         if added.is_empty() {
-            return Ok(None);
+            return Ok(Err("dictionary-full"));
         }
         file.set_typed("dictionary.words", &dictionary.words)?;
         file.set_typed("dictionary.learned", &dictionary.learned)?;
         file.save()?;
-        Ok(Some((dictionary, added)))
+        Ok(Ok((dictionary, added)))
     })
     .await??;
-    let Some((dictionary, added)) = learned else {
-        return Ok(None);
+    let (dictionary, added) = match learned {
+        Ok(learned) => learned,
+        Err(reason) => return Ok(Err(reason)),
     };
     let words: Vec<_> = added.iter().map(|w| format!("'{w}'")).collect();
     let message = format!("Added {} to your dictionary", words.join(", "));
@@ -1421,7 +1506,7 @@ async fn learn(
             message: message.clone(),
         })
         .await;
-    Ok(Some(message))
+    Ok(Ok(message))
 }
 /// Save a corrected history entry, then learn from the correction.
 async fn edit_history(
@@ -1443,9 +1528,10 @@ async fn edit_history(
     // Command-mode output is the model's text, not speech recognition; nothing to learn.
     let dictated = r.entry.as_ref().is_some_and(|e| e.mode == Mode::Dictation);
     if let Some(path) = path.filter(|_| dictated) {
-        r.message = learn(path, original, text, completion)
-            .await
-            .unwrap_or_else(|e| Some(format!("Transcript saved; dictionary not updated: {e:#}")));
+        r.message = match learn(path, original, text, completion).await {
+            Ok(learned) => learned.ok(),
+            Err(e) => Some(format!("Transcript saved; dictionary not updated: {e:#}")),
+        };
     }
     fit_final(&mut r);
     Ok(r)
@@ -2460,7 +2546,33 @@ mod tests {
         block_context: Option<Arc<Notify>>,
         empty_selection: bool,
         /// The focused text field; pastes append to it.
-        field: Mutex<Option<String>>,
+        field: Arc<Mutex<Option<String>>>,
+        /// Scripted notifications for the next field watch.
+        field_events: Mutex<Option<mpsc::UnboundedReceiver<FieldEvent>>>,
+        /// Focus has left the watched field.
+        field_left: Arc<AtomicBool>,
+    }
+    struct ScriptedField {
+        field: Arc<Mutex<Option<String>>>,
+        events: Option<mpsc::UnboundedReceiver<FieldEvent>>,
+        left: Arc<AtomicBool>,
+    }
+    #[async_trait]
+    impl xflow_core::FieldWatch for ScriptedField {
+        async fn next(&mut self) -> Option<FieldEvent> {
+            match &mut self.events {
+                Some(events) => events.recv().await,
+                None => std::future::pending().await,
+            }
+        }
+        async fn read(&mut self) -> Option<xflow_core::FieldText> {
+            let value = self.field.lock().unwrap().clone()?;
+            let caret = Some(value.encode_utf16().count());
+            Some(xflow_core::FieldText { value, caret })
+        }
+        async fn focused(&mut self) -> bool {
+            !self.left.load(Ordering::SeqCst)
+        }
     }
     #[async_trait]
     impl Desktop for RecordingDesktop {
@@ -2488,8 +2600,13 @@ mod tests {
             }
             Ok(InjectionOutcome::Pasted)
         }
-        async fn focused_text(&self) -> Result<(AppContext, Option<String>)> {
-            Ok((self.context().await?, self.field.lock().unwrap().clone()))
+        async fn watch_field(&self, _: &AppContext) -> Option<Box<dyn xflow_core::FieldWatch>> {
+            self.field.lock().unwrap().as_ref()?;
+            Some(Box::new(ScriptedField {
+                field: self.field.clone(),
+                events: self.field_events.lock().unwrap().take(),
+                left: self.field_left.clone(),
+            }))
         }
     }
     struct ImmediateStt {
@@ -3331,7 +3448,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let desktop = Arc::new(RecordingDesktop {
-            field: Mutex::new(Some("Notes: ".into())),
+            field: Arc::new(Mutex::new(Some("Notes: ".into()))),
             ..RecordingDesktop::default()
         });
         let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
@@ -3373,18 +3490,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(400)).await;
         *desktop.field.lock().unwrap() = Some("My Notes: Postgres is ready ".into());
         ask(&tx, Request::start()).await;
-        let learned = tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if let Some(message) = events.recv().await.unwrap().message {
-                    if message.starts_with("Added") {
-                        return message;
-                    }
-                }
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(learned, "Added 'Postgres' to your dictionary");
+        assert_eq!(
+            learned_message(&mut events).await,
+            "Added 'Postgres' to your dictionary"
+        );
         ask(&tx, Request::Cancel).await;
         // History edits go through the same learning path.
         let edited = ask(
@@ -3417,6 +3526,106 @@ mod tests {
             )
             .await
             .ok
+        );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    async fn learned_message(events: &mut broadcast::Receiver<Response>) -> String {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(message) = events.recv().await.unwrap().message {
+                    if message.starts_with("Added") {
+                        return message;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("nothing learned")
+    }
+    /// A chat field: the user fixes a word and presses Enter within the read
+    /// throttle, then types a similar next message. The last read of the edited
+    /// dictation is learned at once, and the next dictation snaps to it (#64).
+    #[tokio::test]
+    async fn correction_sent_with_enter_learns_from_the_last_good_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (notify, field_events) = mpsc::unbounded_channel();
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some(String::new()))),
+            field_events: Mutex::new(Some(field_events)),
+            ..RecordingDesktop::default()
+        });
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop.clone(), store);
+        engine.config_path = Some(path.clone());
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        assert_eq!(
+            success(&mut events).await.text.as_deref(),
+            Some("post gres is ready ")
+        );
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let edit = |text: &str| {
+            *desktop.field.lock().unwrap() = Some(text.into());
+            // Closed once the observation has ended.
+            let _ = notify.send(FieldEvent::Changed);
+        };
+        edit("Postgres is ready ");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        edit("");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        edit("post Gres is ready now?");
+        assert_eq!(
+            learned_message(&mut events).await,
+            "Added 'Postgres' to your dictionary"
+        );
+        let dictionary = Config::load(&path).unwrap().dictionary;
+        assert_eq!(dictionary.words, ["Postgres"]);
+        assert!(dictionary.replacements.is_empty());
+        // The same misrecognition now comes out as the learned spelling.
+        *desktop.field.lock().unwrap() = None;
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        assert_eq!(
+            success(&mut events).await.text.as_deref(),
+            Some("Postgres is ready ")
+        );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// An app without value notifications: the edit is read when focus leaves
+    /// the field, not after 60 s or at the next dictation.
+    #[tokio::test]
+    async fn correction_is_learned_when_focus_leaves_the_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (notify, field_events) = mpsc::unbounded_channel();
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some("Notes: ".into()))),
+            field_events: Mutex::new(Some(field_events)),
+            ..RecordingDesktop::default()
+        });
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop.clone(), store);
+        engine.config_path = Some(path.clone());
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        success(&mut events).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        *desktop.field.lock().unwrap() = Some("Notes: Postgres is ready".into());
+        // A focus blip that comes back within the grace keeps watching.
+        notify.send(FieldEvent::Focus).unwrap();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        desktop.field_left.store(true, Ordering::SeqCst);
+        notify.send(FieldEvent::Focus).unwrap();
+        assert_eq!(
+            learned_message(&mut events).await,
+            "Added 'Postgres' to your dictionary"
         );
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
