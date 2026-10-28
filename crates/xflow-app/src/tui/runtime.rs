@@ -961,7 +961,7 @@ mod tests {
         reply.permissions.as_mut().unwrap().microphone = Some(true);
         app.response(reply, mic);
         assert!(app.permission_rows()[1].0.ends_with("Microphone is on"));
-        assert!(!app.watching());
+        assert!(app.watching(), "the shortcut still needs verification");
         // The fallback row appears once the tap proved blind with Accessibility on.
         app.armed_at = Instant::now().checked_sub(Duration::from_secs(2));
         app.typed = Instant::now().checked_sub(Duration::from_secs(1));
@@ -970,6 +970,36 @@ mod tests {
             .permission_rows()
             .iter()
             .any(|r| r.0 == "! Shortcut access off — Enter to fix"));
+    }
+    #[test]
+    fn checkup_probes_until_keyboard_events_can_verify_the_tap() {
+        let mut app = App::new("unused".into(), ColorMode::TrueColor);
+        app.connected = true;
+        app.page = Page::Doctor;
+        app.microphone = Some(true);
+        let mut response = Response::status(State::Idle, 0.0);
+        response.permissions = Some(xflow_core::ipc::Permissions {
+            accessibility: true,
+            input_monitoring: false,
+            keyboard_events: Some(false),
+            microphone: Some(true),
+        });
+        app.event(response.clone());
+        app.armed_at = Instant::now().checked_sub(Duration::from_secs(2));
+        app.typed = Instant::now().checked_sub(Duration::from_secs(1));
+        app.status_at = app.typed;
+        assert!(!app.tap_blind(), "no status after the key yet");
+        assert!(app.watching(), "Check-up must obtain that status");
+        assert!(matches!(
+            app.poll()[..],
+            [Effect::Request(Request::Status, Tag::Permissions(None))]
+        ));
+        app.event(response.clone());
+        assert!(app.tap_blind());
+        response.permissions.as_mut().unwrap().keyboard_events = Some(true);
+        app.event(response);
+        assert!(!app.tap_blind());
+        assert!(!app.watching(), "verified taps need no polling");
     }
     #[test]
     fn a_lost_helper_is_started_once_and_a_restart_is_not_an_outage() {

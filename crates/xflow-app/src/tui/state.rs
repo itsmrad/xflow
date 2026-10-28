@@ -832,6 +832,11 @@ impl App {
                 None => {
                     self.page == Page::Doctor
                         && (self.missing().iter().any(|g| *g != Grant::Microphone)
+                            || self.permissions.as_ref().is_some_and(|p| {
+                                p.accessibility
+                                    && !p.input_monitoring
+                                    && p.keyboard_events == Some(false)
+                            })
                             || self.waiting_for_microphone())
                 }
                 _ => false,
