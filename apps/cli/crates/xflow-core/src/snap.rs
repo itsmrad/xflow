@@ -9,6 +9,10 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+const FUNCTION_WORDS: [&str; 10] = [
+    "a", "an", "and", "are", "is", "of", "the", "to", "was", "were",
+];
+
 #[derive(Debug)]
 struct Term {
     text: String,
@@ -83,7 +87,17 @@ pub(crate) fn prepare(config: &Config) {
 }
 
 impl Index {
-    fn find(&self, input: &str, count: usize) -> Option<&str> {
+    fn find(&self, input: &str, count: usize, folded_only: bool) -> Option<&str> {
+        let mut words = input.split_whitespace();
+        // "red is" is prose, not Redis: no term starts or ends on a function word.
+        if count > 1
+            && [words.next(), words.next_back()]
+                .into_iter()
+                .flatten()
+                .any(|w| FUNCTION_WORDS.iter().any(|f| w.eq_ignore_ascii_case(f)))
+        {
+            return None;
+        }
         let letters = letters(input)?;
         let n = letters.len();
         if let Some(terms) = self.terms.get(&(letters[0], n)) {
@@ -94,7 +108,7 @@ impl Index {
                     .map(|t| t.text.as_str());
             }
         }
-        if count == 1 && common(&input.to_lowercase()) {
+        if folded_only || (count == 1 && common(&input.to_lowercase())) {
             return None;
         }
         let sound = sounds(&letters);
@@ -123,6 +137,7 @@ impl Index {
                     .collect::<Vec<_>>(),
             )
         });
+        let words: Vec<_> = input.split_whitespace().collect();
         let radius = n.div_ceil(4) + 1;
         let mut found = None;
         for (_, terms) in self
@@ -137,7 +152,15 @@ impl Index {
                 {
                     continue;
                 }
-                if distance(&letters, &term.letters) <= limit {
+                // Every word must be needed: "post gres is" or "so supabase"
+                // must not swallow a neighbour that the term doesn't need.
+                let slack = |part: &[&str]| {
+                    self::letters(&part.join(" "))
+                        .is_some_and(|l| distance(&l, &term.letters) <= limit)
+                };
+                if distance(&letters, &term.letters) <= limit
+                    && (count == 1 || !(slack(&words[1..]) || slack(&words[..count - 1])))
+                {
                     // Ambiguous sound-alikes are left alone rather than guessing.
                     if found.is_some() {
                         return None;
@@ -150,7 +173,8 @@ impl Index {
     }
 }
 
-/// Apply 1–3 token windows, longest first; never rescan inserted text.
+/// Apply fold-equal windows before sound-alikes, longest first within each.
+/// Never rescan inserted text.
 pub fn apply(text: &str, config: &Config) -> String {
     if !config.formatting.snap_to_dictionary
         || (config.dictionary.words.is_empty() && config.stt.vocabulary.is_empty())
@@ -172,23 +196,26 @@ pub fn apply(text: &str, config: &Config) -> String {
     let (mut cursor, mut i) = (0, 0);
     while i < tokens.len() {
         let mut matched = None;
-        for count in (1..=3.min(tokens.len() - i)).rev() {
-            let window = &tokens[i..i + count];
-            if !window.iter().all(|t| t.2)
-                || !window.windows(2).all(|w| {
-                    let gap = &text[w[0].1..w[1].0];
-                    !gap.is_empty()
-                        && gap
-                            .chars()
-                            .all(|c| c.is_whitespace() && c != '\n' && c != '\r')
-                })
-            {
-                continue;
-            }
-            let input = &text[window[0].0..window[count - 1].1];
-            if let Some(target) = index.find(input, count) {
-                matched = Some((count, target));
-                break;
+        // Exact folds beat sound-alikes starting at the same word.
+        'search: for folded_only in [true, false] {
+            for count in (1..=3.min(tokens.len() - i)).rev() {
+                let window = &tokens[i..i + count];
+                if !window.iter().all(|t| t.2)
+                    || !window.windows(2).all(|w| {
+                        let gap = &text[w[0].1..w[1].0];
+                        !gap.is_empty()
+                            && gap
+                                .chars()
+                                .all(|c| c.is_whitespace() && c != '\n' && c != '\r')
+                    })
+                {
+                    continue;
+                }
+                let input = &text[window[0].0..window[count - 1].1];
+                if let Some(target) = index.find(input, count, folded_only) {
+                    matched = Some((count, target));
+                    break 'search;
+                }
             }
         }
         if let Some((count, target)) = matched {
@@ -370,6 +397,8 @@ mod tests {
             "Every day is different.",
             "We should log in every day and react quickly.",
             "dash dash dry run",
+            "Red is my favourite colour.",
+            "the bread is red and the sky is blue",
         ];
         assert!(inputs.len() >= 40);
         for input in inputs {
@@ -394,6 +423,22 @@ mod tests {
         c.dictionary.words.clear();
         assert_eq!(apply("next js", &c), "next js");
         assert_eq!(apply("next js", &other), "Next.js");
+    }
+
+    #[test]
+    fn exact_windows_prevent_fuzzy_matches_from_consuming_following_words() {
+        let c = config(&["Postgres", "Supabase"]);
+        for (input, expected) in [
+            ("post gres is ready.", "Postgres is ready."),
+            ("post gress is ready.", "Postgres is ready."),
+            ("post gres a day", "Postgres a day"),
+            ("postgre is ready.", "postgre is ready."),
+            ("so supabase is up", "so Supabase is up"),
+            ("so supa base is up", "so Supabase is up"),
+            ("Postgres is ready.", "Postgres is ready."),
+        ] {
+            assert_eq!(before_cleanup(input, &c), expected);
+        }
     }
 
     #[test]
@@ -497,7 +542,9 @@ mod tests {
                 record["variant"].as_str().unwrap().to_owned(),
                 record["voice"].as_str().unwrap().to_owned(),
             );
-            let score = scores.entry(key).or_insert((0usize, 0usize, 0usize, 0usize));
+            let score = scores
+                .entry(key)
+                .or_insert((0usize, 0usize, 0usize, 0usize));
             score.0 += before;
             score.1 += after;
             score.2 += cases[i].len();
