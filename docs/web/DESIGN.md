@@ -1,6 +1,6 @@
 # xflow website: design system and page specs
 
-Status: proposed · Owner: web · Builds into `apps/web` (Next.js) · Companion issue: "Website: production site"
+Status: proposed · Owner: web · Builds into `apps/web` (Next.js) · Build issue: #73 "Website: production site"
 Backend contract: issue #69 (Clerk auth, device flow, Dodo billing, hosted proxy). This doc covers what users see. #69 covers what the server does.
 
 This is the build spec for the production site. Match it closely. Where this doc says **TBD** or **[verify]**, stop and ask rather than invent. Never ship a number or a competitor claim that isn't in the [claims ledger](#11-claims-ledger).
