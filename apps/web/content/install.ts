@@ -10,7 +10,7 @@ export const INSTALL: InstallMethod[] = [
     label: "macOS (source)",
     lines: [
       { cmd: "git clone https://github.com/itsmrad/xflow && cd xflow" },
-      { cmd: "cargo build --release --locked" },
+      { cmd: "cargo build --manifest-path apps/cli/Cargo.toml --release --locked" },
       { cmd: "scripts/install.sh" },
       { cmd: "xflow" },
     ],
@@ -21,7 +21,7 @@ export const INSTALL: InstallMethod[] = [
     label: "Linux (beta)",
     lines: [
       { cmd: "sudo apt install build-essential pkg-config libasound2-dev libdbus-1-dev wl-clipboard" },
-      { cmd: "cargo build --release --locked" },
+      { cmd: "cargo build --manifest-path apps/cli/Cargo.toml --release --locked" },
       { cmd: "scripts/install.sh" },
       { cmd: "xflow setup" },
     ],

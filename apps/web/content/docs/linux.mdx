@@ -13,7 +13,7 @@ On Linux, xflow records with ALSA (through PipeWire or PulseAudio) and uses a bu
 
 ```sh
 sudo apt install build-essential pkg-config libasound2-dev libdbus-1-dev wl-clipboard
-cargo build --release --locked
+cargo build --manifest-path apps/cli/Cargo.toml --release --locked
 scripts/install.sh
 xflow setup
 ```
