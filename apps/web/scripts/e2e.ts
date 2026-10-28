@@ -3,7 +3,8 @@
 //
 //   bun --conditions react-server --env-file=.env.local scripts/e2e.ts
 //
-// The app must run with DODO_PAYMENTS_WEBHOOK_SECRET=$E2E_WEBHOOK_SECRET and, for the stub,
+// The app must run with DODO_PAYMENTS_WEBHOOK_SECRET=$E2E_WEBHOOK_SECRET, DODO_PRO_PRODUCT_ID=pdt_test_pro
+// (the fixture's product) and, for the stub,
 // GROQ_BASE_URL=http://127.0.0.1:3901 GROQ_API_KEY=$E2E_STUB_KEY.
 import { createRealtimeClient, type SealedLiveQuery } from "@neon/realtime/client";
 import { AwsClient } from "aws4fetch";
@@ -179,10 +180,22 @@ try {
       metadata: { xflow_user_id: userId },
     },
   });
+  // Review M1: the Dodo customer is still linked to an older account with the same email.
+  const { rows: [oldAccount] } = await pool.query<{ id: string }>(
+    "INSERT INTO users (clerk_user_id, dodo_customer_id) VALUES ($1, $2) RETURNING id",
+    [`${clerkUserId}-old`, `cus_e2e_${userId.slice(0, 8)}`],
+  );
+  // Review S1: another product's active subscription must not grant Pro.
+  const other = await deliver({ ...event("subscription.active", "active", new Date().toISOString()), data: { ...event("subscription.active", "active", new Date().toISOString()).data, subscription_id: `${subId}_other`, product_id: "pdt_not_pro" } });
+  const meOther = (await (await fetch(`${BASE}/api/v1/me`, { headers: bearer })).json()) as { pro: boolean };
+  check("webhook: another product's subscription doesn't grant Pro", other.status === 200 && meOther.pro === false);
+  const { rows: [moved] } = await pool.query("SELECT (SELECT dodo_customer_id FROM users WHERE id = $1) AS payer, (SELECT dodo_customer_id FROM users WHERE id = $2) AS old", [userId, oldAccount!.id]);
+  check("webhook: customer held by an older account moves to the payer (M1)", moved.payer === `cus_e2e_${userId.slice(0, 8)}` && moved.old === null);
+  await pool.query("DELETE FROM users WHERE id = $1", [oldAccount!.id]);
   const forged = await deliver(event("subscription.active", "active", new Date().toISOString()), `whsec_${btoa("not-the-secret-000000000")}`);
   check("webhook: bad signature rejected", forged.status === 401, `${forged.status}`);
   const active = await deliver(event("subscription.active", "active", new Date().toISOString()));
-  check("webhook: subscription.active applied", active.status === 200 && ((await active.json()) as { result: string }).result === "applied");
+  check("webhook: subscription.active applied", active.status === 200 && ((await active.json()) as { result: string }).result === "applied", `${active.status}`);
   const stale = await deliver(event("subscription.expired", "expired", new Date(Date.now() - 3_600_000).toISOString()));
   check("webhook: older out-of-order event ignored", ((await stale.json()) as { result: string }).result === "stale");
   const me1 = (await (await fetch(`${BASE}/api/v1/me`, { headers: bearer })).json()) as { pro: boolean };
@@ -203,6 +216,7 @@ try {
   const tx = await fetch(`${BASE}/api/v1/transcribe`, { method: "POST", headers: bearer, body: audioForm() });
   const txBody = await tx.text();
   check("proxy: transcribe forwarded", tx.status === 200 && txBody.includes('"text"'), `${ms(t)}, ${tx.headers.get("server-timing")}: ${txBody.slice(0, 120)}`);
+  check("proxy: reply doesn't name the provider", !txBody.includes("x_groq") && !/groq/i.test(txBody));
   if (stub) {
     const last = seen.findLast((s) => s.path.endsWith("/audio/transcriptions"));
     check("proxy: Groq receives the Rust provider's exact fields + central key", JSON.stringify(last?.fields) === JSON.stringify(["file", "language", "model", "prompt", "response_format"]) && last?.auth === `Bearer ${stubKey}`, JSON.stringify(last?.fields));
@@ -230,8 +244,10 @@ try {
   t = performance.now();
   const cu = await fetch(`${BASE}/api/v1/cleanup`, { method: "POST", headers: { ...bearer, "content-type": "application/json" }, body: JSON.stringify(cleanupBody) });
   const cuBody = (await cu.json()) as { choices?: { message: { content: string } }[] };
-  check("proxy: cleanup forwarded", cu.status === 200 && !!cuBody.choices?.[0]?.message.content, `${ms(t)}: ${cuBody.choices?.[0]?.message.content}`);
-  if (stub) check("proxy: Groq receives the Rust chat body unchanged", JSON.stringify(seen.findLast((s) => s.json)?.json) === JSON.stringify(cleanupBody));
+  check("proxy: cleanup forwarded", cu.status === 200 && !!cuBody.choices?.[0]?.message.content, `${cu.status}, ${ms(t)}: ${cuBody.choices?.[0]?.message.content ?? JSON.stringify(cuBody).slice(0, 200)}`);
+  if (stub) {
+    check("proxy: Groq receives the Rust chat body plus the output cap", JSON.stringify(seen.findLast((s) => s.json)?.json) === JSON.stringify({ ...cleanupBody, max_completion_tokens: 512 }));
+  }
 
   await sub.awaitRows((rows) => rows.some((r) => r.kind === "cleanup" && r.requests >= 1) && rows.some((r) => r.kind === "transcribe" && r.requests >= 6), 20_000).then(
     () => check("realtime: live rows updated after the requests", true, JSON.stringify(sub.getSnapshot().data)),
@@ -246,6 +262,8 @@ try {
   // --- Limits ---------------------------------------------------------------------------------
   const bad = await fetch(`${BASE}/api/v1/cleanup`, { method: "POST", headers: { ...bearer, "content-type": "application/json" }, body: JSON.stringify({ ...cleanupBody, model: "gpt-5" }) });
   check("proxy: unknown model rejected", bad.status === 400, `${bad.status}`);
+  const greedy = await fetch(`${BASE}/api/v1/cleanup`, { method: "POST", headers: { ...bearer, "content-type": "application/json" }, body: JSON.stringify({ ...cleanupBody, max_completion_tokens: 32768 }) });
+  check("proxy: output token cap enforced (M2)", greedy.status === 400, `${greedy.status}`);
   const big = await fetch(`${BASE}/api/v1/cleanup`, { method: "POST", headers: { ...bearer, "content-type": "application/json" }, body: JSON.stringify({ ...cleanupBody, messages: [{ role: "user", content: "x".repeat(400_000) }] }) });
   check("proxy: oversized body rejected", big.status === 413, `${big.status}`);
   if (stub) {
@@ -254,6 +272,18 @@ try {
     );
     check("proxy: per-user concurrency capped at 2", burst.filter((s) => s === 429).length === 1 && burst.filter((s) => s === 200).length === 2, JSON.stringify(burst));
   }
+
+  // Review M2: once the day's spend budget is used up, Pro requests stop with a clear reason.
+  await Bun.sleep(1500); // reservations settle after each response is sent
+  const { rows: [spent] } = await pool.query("SELECT count FROM rate_limits WHERE key = $1", [`spend:${userId}:day`]);
+  const { rows: costs } = await pool.query("SELECT kind, count(*)::int AS n, sum(cost_micros)::int AS micros FROM usage_events WHERE user_id = $1 GROUP BY kind ORDER BY kind", [userId]);
+  const recorded = costs.reduce((n, c) => n + c.micros, 0);
+  check("fair use: reservations settle to the recorded cost exactly", spent?.count === recorded && recorded > 0, `day spend ${spent?.count} µ$ = Σ ${JSON.stringify(costs)}`);
+  await pool.query("UPDATE rate_limits SET count = 400000 WHERE key = $1", [`spend:${userId}:day`]);
+  const overBudget = await fetch(`${BASE}/api/v1/transcribe`, { method: "POST", headers: bearer, body: audioForm() });
+  const overBody = (await overBudget.json()) as { error: { code: string; message: string } };
+  check("fair use: daily budget exhausted → 429 fair_use_daily with retry-after", overBudget.status === 429 && overBody.error.code === "fair_use_daily" && Number(overBudget.headers.get("retry-after")) > 0, overBody.error.message);
+  await pool.query("UPDATE rate_limits SET count = 0 WHERE key = $1", [`spend:${userId}:day`]);
 
   // --- Object storage -------------------------------------------------------------------------
   const aws = new AwsClient({ accessKeyId: process.env.AWS_ACCESS_KEY_ID!, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!, region: process.env.AWS_REGION!, service: "s3" });
