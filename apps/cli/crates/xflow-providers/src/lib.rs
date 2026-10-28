@@ -670,6 +670,11 @@ impl HttpTransformer {
         } else if self.provider == "gemini" && self.model == "gemini-3.5-flash-lite" {
             body["reasoning_effort"] = json!("minimal");
         }
+        // Groq caps this model at 2048 output tokens by default, which cut a 12-minute
+        // dictation short; 8192 covers the 20-minute recording limit (~5.5k tokens).
+        if self.provider == "groq" && self.model == "qwen/qwen3.8-27b" {
+            body["max_completion_tokens"] = json!(8192);
+        }
         let builder = self.client.post(self.endpoint.clone()).json(&body);
         let response = self
             .credential
@@ -679,6 +684,14 @@ impl HttpTransformer {
             .await
             .map_err(http_error)?;
         let result: Value = self.credential.read(response).await?;
+        // Truncated output would silently drop the end of a long dictation.
+        if result
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+            == Some("length")
+        {
+            bail!("cleanup output hit the provider's length limit");
+        }
         let output = result
             .pointer("/choices/0/message/content")
             .and_then(Value::as_str)
@@ -1319,6 +1332,36 @@ mod tests {
                 .unwrap(),
             " raw "
         );
+    }
+    #[tokio::test]
+    async fn truncated_cleanup_output_is_an_error_not_a_shorter_transcript() {
+        let (url, _rx) = server(
+            "200 OK",
+            br#"{"choices":[{"finish_reason":"length","message":{"content":"Clean te"}}]}"#,
+            Duration::ZERO,
+            "",
+        )
+        .await;
+        let cfg = CleanupConfig {
+            mode: CleanupMode::Light,
+            endpoint: Some(url),
+            model: Some("local-editor".into()),
+            api_key_env: String::new(),
+            ..CleanupConfig::default()
+        };
+        let transformer = build_transformer(&cfg, true).unwrap().unwrap();
+        let error = transformer
+            .transform(TransformRequest {
+                text: "clean text",
+                mode: CleanupMode::Light,
+                instructions: None,
+                command: None,
+                app_id: None,
+                vocabulary: &[],
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("length limit"), "{error:#}");
     }
     #[test]
     fn secrets_have_sensitive_headers_and_redacted_validation() {

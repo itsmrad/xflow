@@ -662,6 +662,9 @@ async fn cleanup_reasoning_settings_only_for_verified_models() {
         let bytes = rx.await.unwrap();
         let body: Value = serde_json::from_slice(body(&bytes)).unwrap();
         assert_eq!(body["reasoning_effort"].as_str(), effort);
+        // Only the verified Groq preset gets an explicit output budget.
+        let budget = (id == "groq").then_some(8192);
+        assert_eq!(body["max_completion_tokens"].as_u64(), budget);
     }
 }
 
