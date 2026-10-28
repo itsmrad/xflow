@@ -91,30 +91,6 @@ pub async fn missing_keys(config: &Config) -> (KeySource, KeySource) {
     };
     (stt, cleanup)
 }
-/// Re-save Keychain keys once per signature of the xflow binaries, so a key saved
-/// by an older (or differently signed) build is readable by xflowd without asking.
-/// Returns whether anything was re-saved.
-pub async fn share_keys(ids: Vec<String>) -> Result<bool> {
-    let exe = std::env::current_exe()?;
-    // codesign prints each designated requirement on stdout.
-    let signature = tokio::process::Command::new("/usr/bin/codesign")
-        .args(["-d", "-r-"])
-        .args(["xflow", "xflowd"].map(|name| exe.with_file_name(name)))
-        .output()
-        .await?
-        .stdout;
-    let dir = crate::paths::data_dir()?;
-    let marker = dir.join("keychain-signature");
-    if std::fs::read(&marker).is_ok_and(|seen| seen == signature) {
-        return Ok(false);
-    }
-    for id in &ids {
-        xflow_providers::share_key(id).await?;
-    }
-    crate::paths::private_dir(&dir)?;
-    std::fs::write(&marker, signature)?;
-    Ok(true)
-}
 /// Non-billable key/reachability probe, answered in plain words.
 pub async fn check(config: &Config, cleanup: bool) -> Result<String> {
     let report = if cleanup {

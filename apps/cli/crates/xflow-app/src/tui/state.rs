@@ -170,8 +170,6 @@ pub enum Effect {
     AskAgain(Grant),
     /// Read "Press 🌐 key to" (macOS).
     Globe,
-    /// Re-save these Keychain keys so xflowd reads them without asking (macOS).
-    ShareKeys(Vec<String>),
     /// Start xflowd the way `xflow daemon start` does (launchd / systemd).
     StartHelper,
 }
@@ -365,9 +363,9 @@ pub struct App {
     pub overlay_error: bool,
     pub missing_key: bool,
     pub missing_cleanup_key: bool,
-    /// The keychain didn't answer, e.g. its Always Allow prompt is still open.
-    pub key_locked: bool,
-    pub cleanup_key_locked: bool,
+    /// A stored key xflow can't use yet, and what to do about it.
+    pub key_issue: Option<String>,
+    pub cleanup_key_issue: Option<String>,
     pub advanced: bool,
     pub setup: Option<Step>,
     pub setup_offered: bool,
@@ -386,8 +384,6 @@ pub struct App {
     pub mic_checked: bool,
     /// "Press 🌐 key to" is Do Nothing; None until read (or off macOS).
     pub globe: Option<bool>,
-    /// This session already re-saved its Keychain keys for xflowd.
-    pub keys_shared: bool,
     /// Step to open once settings load on a configured install: the wizard (`xflow setup`).
     pub start: Option<Step>,
     pub diagnostics: Vec<String>,
@@ -440,8 +436,8 @@ impl App {
             overlay_error: false,
             missing_key: false,
             missing_cleanup_key: false,
-            key_locked: false,
-            cleanup_key_locked: false,
+            key_issue: None,
+            cleanup_key_issue: None,
             advanced: false,
             setup: None,
             setup_offered: false,
@@ -453,7 +449,6 @@ impl App {
             permissions_offered: false,
             mic_checked: false,
             globe: None,
-            keys_shared: false,
             start: None,
             diagnostics: vec![],
             modal: None,
@@ -510,11 +505,11 @@ impl App {
         // An older lookup must not replace onboarding for a newly edited route.
         if config.stt == self.config.stt {
             self.missing_key = keys.0 == KeySource::Missing;
-            self.key_locked = keys.0 == KeySource::Locked;
+            self.key_issue = key_issue(&keys.0);
         }
         if config.cleanup == self.config.cleanup {
             self.missing_cleanup_key = keys.1 == KeySource::Missing;
-            self.cleanup_key_locked = keys.1 == KeySource::Locked;
+            self.cleanup_key_issue = key_issue(&keys.1);
         }
     }
     /// Leading "+ Add" rows on editable list pages.
@@ -596,8 +591,8 @@ impl App {
                 } else {
                     format!("! {}", self.helper_down())
                 };
-                let key = if self.key_locked {
-                    format!("! {}", xflow_providers::KEYCHAIN_WAITING)
+                let key = if let Some(issue) = &self.key_issue {
+                    format!("! {issue}")
                 } else if self.missing_key {
                     "! Your speech service has no API key — Settings → Speech → API key".into()
                 } else {
@@ -914,8 +909,8 @@ impl App {
                 "action.stt_key" => {
                     if matches!(self.config.stt.provider.as_str(), "local" | "custom") {
                         "Not needed"
-                    } else if self.key_locked {
-                        "Waiting for Keychain — click Always Allow"
+                    } else if self.key_issue.is_some() {
+                        "Needs attention — see Home"
                     } else if self.missing_key {
                         "Missing — add one"
                     } else {
@@ -925,8 +920,8 @@ impl App {
                 }
                 "action.cleanup_key" => if self.config.cleanup.provider.is_none() {
                     "Choose a service first"
-                } else if self.cleanup_key_locked {
-                    "Waiting for Keychain — click Always Allow"
+                } else if self.cleanup_key_issue.is_some() {
+                    "Needs attention — see Home"
                 } else if self.missing_cleanup_key {
                     "Missing — add one"
                 } else {
@@ -1716,7 +1711,7 @@ impl App {
         if let Some(url) = url {
             intro.push_str(&format!(" Get one at {url}"));
         }
-        intro.push_str("\nIt's kept in your system keychain, never in a file.");
+        intro.push_str("\nxflow keeps it encrypted on this computer, never in your settings file.");
         if setup {
             intro.push_str("\nAlready added one? Leave this empty and press Enter.");
         }
@@ -2165,7 +2160,7 @@ impl App {
                 if editor.fields[0].value.trim().is_empty() {
                     bail!("Paste your API key first");
                 }
-                // A custom cleanup server has its own keyring entry, never the STT one.
+                // A custom cleanup server has its own key entry, never the STT one.
                 let id = if cleanup {
                     xflow_providers::cleanup_key_id(&id).into()
                 } else {
@@ -2627,5 +2622,15 @@ fn overlay_choices(setting: &Setting) -> Vec<String> {
         .map(String::from)
         .to_vec(),
         _ => vec![],
+    }
+}
+
+/// What the user should do about a stored key xflow can't use; None if usable or absent.
+pub fn key_issue(source: &KeySource) -> Option<String> {
+    match source {
+        KeySource::Keychain if cfg!(target_os = "macos") => Some("Your key is still in the macOS Keychain. Run xflow key status in a terminal once to move it (macOS asks once), or add it again.".into()),
+        KeySource::Keychain => Some("Your key is still in your system keyring. Run xflow key status in a terminal once to move it, or add it again.".into()),
+        KeySource::Unreadable(why) => Some(format!("Your saved key can't be read: {why}")),
+        _ => None,
     }
 }

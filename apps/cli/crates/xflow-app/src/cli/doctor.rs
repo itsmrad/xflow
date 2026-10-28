@@ -123,7 +123,13 @@ fn checks(
         } else {
             "Cloud transcription uploads audio to the configured provider"
         };
-        checks.push(check("privacy", true, false, detail, "Review xflow config show; keys belong in environment variables or OS credential storage"));
+        checks.push(check(
+            "privacy",
+            true,
+            false,
+            detail,
+            "Review xflow config show; keys belong in environment variables or xflow key set",
+        ));
         // Over-budget dictionary words are optional; an unbuildable provider fails every dictation.
         let hints = super::config::hint_warning(&config);
         checks.push(check(
@@ -256,8 +262,21 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
             "provider",
             known.is_ok(),
             true,
-            cfg.stt.provider,
+            cfg.stt.provider.clone(),
             "Run xflow providers list and xflow providers use <provider>",
+        ));
+        let id = cfg.stt.provider.clone();
+        let env = cfg.stt.api_key_env.clone();
+        let source = super::ipc::block_on(async {
+            Ok(xflow_providers::key_status(&id, env.as_deref()).await)
+        })?;
+        let (kind, note) = super::provider::describe(&id, &source);
+        checks.push(check(
+            "key",
+            matches!(kind, "environment" | "keystore" | "not_required"),
+            false,
+            format!("{id}: {note}"),
+            "Run xflow key status",
         ));
         #[cfg(target_os = "linux")]
         if cfg.recording.ignore_speakers {
@@ -271,6 +290,21 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
             ));
         }
     }
+    // Refuses a damaged keystore, or one other users can read; the detail is the fix.
+    let keystore = xflow_providers::check_keystore();
+    checks.push(check(
+        "keystore",
+        keystore.is_ok(),
+        true,
+        match keystore {
+            Ok(true) => "Provider keys are encrypted in xflow's own store, not config.toml".into(),
+            Ok(false) => {
+                "No keys stored yet; xflow key set <provider> creates the encrypted store".into()
+            }
+            Err(e) => format!("{e:#}"),
+        },
+        "Apply the fix above, or re-enter keys with xflow key set <provider>",
+    ));
     if desktop.to_lowercase().contains("gnome") && present("gnome-extensions") {
         let extension = super::system::tool("gnome-extensions", &["info", "xflow@xflow.local"]);
         checks.push(check(

@@ -61,11 +61,11 @@ characters; its documented keyterm surcharge applies.
 - `stt_providers()`, `cleanup_providers()`, `find_provider(ProviderKind, id)`
   expose `ProviderInfo` / `ModelInfo`; factories retain existing signatures.
 - `key_status(provider, api_key_env)` returns only `Environment(name)`,
-  `Keyring`, `NotRequired`, `Missing` or `Locked` (the store didn't answer within
-  3 s or refused access, e.g. a pending macOS Always Allow prompt), never a secret.
-  Every keyring call holds one lock until the OS returns, so prompts never stack;
-  a caller waiting longer than 3 s gets `KEYCHAIN_WAITING`.
-  `save_key` / `delete_key` manage provider keyring accounts.
+  `Keystore`, `NotRequired`, `Missing`, `Keychain` (left in the OS keychain by an
+  older build; moving it needs approval once) or `Unreadable(why)`, never a secret.
+  `save_key` / `delete_key` manage entries in the encrypted keystore
+  (`keystore.rs`, see `docs/credentials.md`); `migrate_keychain` moves keys older
+  builds saved in the OS keychain, silently unless given a foreground notice.
 - `check_stt` / `check_cleanup` return `CheckReport { ok, latency_ms, detail }`.
   They use non-billing GET/HEAD account, token or model probes, never audio uploads.
   Success establishes acceptance of that request, not inference permission or
@@ -121,7 +121,7 @@ Remote endpoints require HTTPS; HTTP/offline endpoints require literal loopback
 addresses, not DNS names. Local presets cannot target remote hosts. Redirects,
 proxies and retries are disabled. Default cloud keys are resolved only for the
 canonical HTTPS host. Remote overrides require an explicit environment variable
-and cannot receive the named provider's keyring key. Anonymous loopback overrides
+and cannot receive the named provider's stored key. Anonymous loopback overrides
 do not read default cloud keys. Invalid/empty present environment keys fail
 without falling back to storage.
 
@@ -184,5 +184,4 @@ remain outside scope. Model catalogs are static; account/model availability is
 not validated through billable inference. Gemini's prompted fallback may
 hallucinate on silence; the dedicated inline path needs an authorized account
 test before claiming production validation. Custom endpoints can impose smaller
-format/size limits. Repeated keyring mutation was not exercised on the user's
-real credential store.
+format/size limits.

@@ -341,7 +341,7 @@ fn palette_routes_and_masked_key_never_appears_on_screen() {
     assert!(
         matches!(&effects[..], [Effect::SaveKey(id, secret)] if id == "groq" && secret.as_str() == "test-secret-never-rendered")
     );
-    // A custom cleanup server's key lives under its own keyring entry.
+    // A custom cleanup server's key lives under its own key entry.
     app.set("cleanup.provider", "custom").unwrap();
     app.set("cleanup.endpoint", "http://127.0.0.1:9/v1/chat/completions")
         .unwrap();
@@ -573,6 +573,18 @@ fn errors_become_one_plain_sentence() {
     );
     assert!(options::plain("API key unavailable; set GROQ_API_KEY")
         .starts_with("This service needs an API key"));
+    assert!(options::plain(
+        "API key unavailable; set the provider environment variable or run `xflow key set groq`"
+    )
+    .starts_with("This service needs an API key"));
+    assert!(options::plain(
+        "stored groq key can't be decrypted (damaged, or keystore.key changed); re-enter your key: `xflow key set groq`"
+    )
+    .contains("Add it again"));
+    assert!(options::plain(
+        "your groq key is still in the macOS Keychain, which asks before xflow can read it; run `xflow key status` once to move it"
+    )
+    .contains("xflow key status"));
     assert_eq!(
         options::plain("weird failure: at /tmp/x.toml line 3"),
         "Weird failure."
@@ -638,49 +650,49 @@ fn stale_key_lookups_cannot_suppress_setup() {
     assert!(screen(&app, 80, 24).contains("Let's get you set up"));
     let before = app.config.clone();
     app.set("stt.api_key_env", "NEW_KEY").unwrap();
-    app.key_status(&before, (KeySource::Locked, KeySource::Keyring));
+    app.key_status(&before, (KeySource::Keychain, KeySource::Keystore));
     assert!(app.missing_key);
-    assert!(!app.key_locked);
+    assert!(app.key_issue.is_none());
     let current = app.config.clone();
-    app.key_status(&current, (KeySource::Keyring, KeySource::Keyring));
+    app.key_status(&current, (KeySource::Keystore, KeySource::Keystore));
     assert!(!app.missing_key);
 }
 #[test]
-fn keychain_lock_and_missing_key_belong_to_their_own_routes() {
+fn keychain_and_missing_key_belong_to_their_own_routes() {
     let (_dir, mut app) = populated();
     app.set("cleanup.provider", "openai").unwrap();
     let config = app.config.clone();
-    app.key_status(&config, (KeySource::Missing, KeySource::Locked));
+    app.key_status(&config, (KeySource::Missing, KeySource::Keychain));
     let settings = app.settings();
     assert!(settings
         .iter()
         .any(|(k, v)| k == "action.stt_key" && v.contains("Missing")));
     assert!(settings
         .iter()
-        .any(|(k, v)| k == "action.cleanup_key" && v.contains("Always Allow")));
+        .any(|(k, v)| k == "action.cleanup_key" && v.contains("Needs attention")));
     app.page = Page::Doctor;
     assert!(app
         .rows()
         .iter()
         .any(|(text, _)| text.contains("no API key")));
     app.set("cleanup.provider", "groq").unwrap();
-    app.key_status(&config, (KeySource::Locked, KeySource::Keyring));
-    assert!(app.key_locked);
+    app.key_status(&config, (KeySource::Keychain, KeySource::Keystore));
+    assert!(app.key_issue.is_some());
     assert!(
-        app.cleanup_key_locked,
+        app.cleanup_key_issue.is_some(),
         "stale cleanup result replaced the current route"
     );
 }
 #[test]
-fn keychain_prompt_is_not_a_missing_key_and_the_wizard_never_vanishes() {
+fn key_left_in_keychain_is_not_a_missing_key_and_the_wizard_never_vanishes() {
     let (_dir, mut app) = populated();
     let config = app.config.clone();
-    app.key_status(&config, (KeySource::Locked, KeySource::Keyring));
+    app.key_status(&config, (KeySource::Keychain, KeySource::Keystore));
     assert!(!screen(&app, 100, 32).contains("Not set up"));
     assert!(app
         .settings()
         .iter()
-        .any(|(k, v)| k == "action.stt_key" && v.contains("Always Allow")));
+        .any(|(k, v)| k == "action.stt_key" && v.contains("Needs attention")));
     // "Already added one?" with an empty key shows the microphone step at once.
     app.open_setup(Step::Key);
     assert!(matches!(&key_enter(&mut app)[..], [Effect::Devices]));
@@ -688,7 +700,7 @@ fn keychain_prompt_is_not_a_missing_key_and_the_wizard_never_vanishes() {
         matches!(&app.modal, Some(Modal::Editor(e)) if matches!(e.target, EditTarget::Setup(Step::Microphone)))
     );
     // With no saved key, an empty Enter explains instead of closing.
-    app.key_status(&config, (KeySource::Missing, KeySource::Keyring));
+    app.key_status(&config, (KeySource::Missing, KeySource::Keystore));
     app.open_setup(Step::Key);
     key_enter(&mut app);
     assert!(editor(&app)
