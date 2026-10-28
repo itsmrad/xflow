@@ -20,6 +20,9 @@ pub const MAX_STYLES: usize = 100;
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// Derived dictionary index; excluded from configuration and equality.
+    #[serde(skip)]
+    pub snap: crate::snap::Cache,
     pub stt: SttConfig,
     pub cleanup: CleanupConfig,
     pub recording: RecordingConfig,
@@ -243,6 +246,8 @@ impl InjectionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct FormattingConfig {
+    /// Restore dictionary spellings locally, with common-word guards.
+    pub snap_to_dictionary: bool,
     /// Drop standalone filler words locally, before any cleanup model.
     pub remove_fillers: bool,
     pub fillers: Vec<String>,
@@ -252,6 +257,7 @@ pub struct FormattingConfig {
 impl Default for FormattingConfig {
     fn default() -> Self {
         Self {
+            snap_to_dictionary: true,
             remove_fillers: true,
             fillers: [
                 "um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm",
@@ -398,6 +404,7 @@ impl Config {
             Self::default()
         };
         config.validate()?;
+        crate::snap::prepare(&config);
         Ok(config)
     }
     pub fn validate(&self) -> Result<()> {
@@ -520,6 +527,19 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snap_switch_round_trips_and_defaults_on() {
+        let mut config: Config = toml::from_str("").unwrap();
+        assert!(config.formatting.snap_to_dictionary);
+        config.formatting.snap_to_dictionary = false;
+        config.dictionary.words = vec!["DevTerms".into()];
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded, config);
+        assert!(!decoded.formatting.snap_to_dictionary);
+        assert!(!encoded.contains("[snap]"));
+    }
 
     #[test]
     fn shipped_template_is_valid_and_matches_defaults() {

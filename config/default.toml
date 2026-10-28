@@ -45,6 +45,7 @@ restore_delay_ms = 300
 trailing_space = true
 
 [formatting]
+snap_to_dictionary = true    # restore dictionary/vocabulary spellings locally; false disables snapping
 remove_fillers = true
 fillers = ["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]
 spoken_punctuation = false   # "comma", "period", "new line", ... become punctuation
