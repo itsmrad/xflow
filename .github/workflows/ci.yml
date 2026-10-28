@@ -14,6 +14,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Tests never touch an OS keychain (keys live in the xflow keystore).
+  XFLOW_NO_KEYCHAIN: "1"
 
 jobs:
   rust:

@@ -74,6 +74,7 @@ impl Daemon {
                 format!("unix:path={}/no-bus", root.path().display()),
             )
             .env("XFLOW_TEST_ROOT", root.path())
+            .env("XFLOW_NO_KEYCHAIN", "1")
             .env("XFLOW_TEST_AUDIO", audio)
             .env("XFLOW_TEST_SINK", root.path().join("delivered.txt"))
             .stdin(Stdio::null())

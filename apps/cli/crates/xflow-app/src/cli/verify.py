@@ -126,7 +126,7 @@ def main():
         env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "VISUAL", "EDITOR")}
         env.update(XDG_CONFIG_HOME=str(root / "cfg"), XDG_DATA_HOME=str(root / "data"), XDG_RUNTIME_DIR=str(root / "run"),
                    XDG_CURRENT_DESKTOP="", XDG_SESSION_TYPE="", GSETTINGS_BACKEND="memory", NO_COLOR="1", TMPDIR=str(root),
-                   PATH=str(root / "bin") + os.pathsep + env["PATH"], XFLOW_TOOL_LOG=str(root / "tools.log"))
+                   PATH=str(root / "bin") + os.pathsep + env["PATH"], XFLOW_TOOL_LOG=str(root / "tools.log"), XFLOW_NO_KEYCHAIN="1")
 
         def run(*args, code=0, stdin=None):
             result = subprocess.run([str(binary), *args], env=env, input=stdin, text=True, capture_output=True, timeout=15)

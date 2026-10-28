@@ -48,7 +48,7 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     let mut device = options.device.clone();
     if interactive {
         eprintln!(
-            "XFlow setup — keys stay in OS credential storage; cloud providers receive audio."
+            "XFlow setup — keys are stored encrypted by xflow, never in config.toml; cloud providers receive audio."
         );
         let providers = provider::catalog();
         for (i, p) in providers.iter().enumerate() {

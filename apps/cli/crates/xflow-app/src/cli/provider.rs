@@ -1,4 +1,4 @@
-//! All provider/platform API wiring stays here; no independent catalog or keyring implementation.
+//! All provider/platform API wiring stays here; no independent catalog or credential store.
 use super::{args, config, ipc, output::Output, Error, Result};
 use std::{
     io::{IsTerminal, Read},
@@ -203,24 +203,41 @@ fn key_status(path: &Path, id: Option<&str>, out: &Output) -> Result<()> {
     } else {
         None
     };
+    move_legacy_keys();
     let source = ipc::block_on(async { Ok(xflow_providers::key_status(id, override_env).await) })?;
-    let (source, environment) = match source {
-        KeySource::Environment(name) => ("environment", Some(name)),
-        KeySource::Keyring => ("keyring", None),
-        KeySource::NotRequired => ("not_required", None),
-        KeySource::Missing => ("missing", None),
-        KeySource::Locked => ("locked", None),
+    let environment = match &source {
+        KeySource::Environment(name) => Some(name.clone()),
+        _ => None,
     };
-    let note = match &environment {
-        Some(name) => format!(" ({name})"),
-        None if source == "locked" => format!(" — {}", xflow_providers::KEYCHAIN_WAITING),
-        None => String::new(),
-    };
+    let (source, note) = describe(id, &source);
     out.data(
         &serde_json::json!({"provider":id,"source":source,"environment":environment}),
-        &format!("{id}: {source}{note}"),
+        &format!("{id}: {note}"),
     )?;
     Ok(())
+}
+/// Move keys an older xflow saved in the OS keychain. Only a person at a terminal
+/// is asked, after one line saying why; scripts and xflowd never are.
+pub fn move_legacy_keys() {
+    let notice = || eprintln!("{}", xflow_providers::MOVING_KEYS);
+    let foreground = std::io::stderr().is_terminal() && std::io::stdin().is_terminal();
+    let _ = xflow_providers::migrate_keychain(foreground.then_some(&notice as &dyn Fn()));
+}
+/// (JSON source, human description) for `key status` and `doctor`.
+pub fn describe(id: &str, source: &KeySource) -> (&'static str, String) {
+    match source {
+        KeySource::Environment(name) => ("environment", format!("environment ({name})")),
+        KeySource::Keystore => ("keystore", "xflow keystore (encrypted file)".into()),
+        KeySource::NotRequired => ("not_required", "not required".into()),
+        KeySource::Missing => ("missing", format!("missing — run xflow key set {id}")),
+        KeySource::Keychain if cfg!(target_os = "macos") => ("keychain", format!(
+            "keychain (not migrated: macOS must confirm the move once) — run xflow key status in a terminal and click Allow, or xflow key set {id}"
+        )),
+        KeySource::Keychain => ("keychain", format!(
+            "system keyring (not migrated) — run xflow key status in a terminal, or xflow key set {id}"
+        )),
+        KeySource::Unreadable(why) => ("unreadable", format!("unreadable: {why}")),
+    }
 }
 pub fn save_key(path: &Path, provider: &str, stdin: bool, out: &Output) -> Result<()> {
     credential_provider(provider)?;
@@ -273,7 +290,7 @@ pub fn save_key(path: &Path, provider: &str, stdin: bool, out: &Output) -> Resul
             .map_err(Error::provider)
     })?;
     ipc::reload_if_running(path, out)?;
-    out.confirm("Key stored in OS credential storage")?;
+    out.confirm("Key stored, encrypted, in the xflow keystore")?;
     Ok(())
 }
 pub fn transcribe(

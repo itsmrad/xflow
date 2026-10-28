@@ -50,6 +50,9 @@ async fn main() -> Result<()> {
         println!("Configuration valid");
         return Ok(());
     }
+    // Keys older builds left in the Keychain move once, silently; one that would
+    // need approval stays put (`xflow key status` moves it in the foreground).
+    std::thread::spawn(|| xflow_providers::migrate_keychain(None));
     #[cfg(unix)]
     {
         xflow_app::daemon::serve_with_path(config, path).await

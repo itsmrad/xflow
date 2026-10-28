@@ -58,7 +58,6 @@ enum Update {
     Opened(Result<()>),
     MicTimeout,
     Globe(Option<bool>),
-    KeysShared(Result<bool>),
     Started(Result<()>),
 }
 
@@ -389,29 +388,9 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             Err(_) => app.overlay_error = true,
         },
         Update::KeyStatus(config, missing) => {
-            // Keys saved by older builds trust only xflow: re-save them once so xflowd
-            // never asks "Always Allow". Unchanged signatures skip this (see share_keys).
-            let ids: Vec<String> = [
-                (missing.0 == KeySource::Keyring).then(|| config.stt.provider.clone()),
-                config
-                    .cleanup
-                    .provider
-                    .as_deref()
-                    .filter(|_| missing.1 == KeySource::Keyring)
-                    .map(|id| xflow_providers::cleanup_key_id(id).to_owned()),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            if cfg!(target_os = "macos")
-                && !ids.is_empty()
-                && !std::mem::replace(&mut app.keys_shared, true)
-            {
-                effects.push(Effect::ShareKeys(ids));
-            }
             app.key_status(&config, missing);
-            if app.key_locked || app.cleanup_key_locked {
-                app.toast = Some(xflow_providers::KEYCHAIN_WAITING.into());
+            if let Some(issue) = app.key_issue.as_ref().or(app.cleanup_key_issue.as_ref()) {
+                app.toast = Some(issue.clone());
             }
             if app.missing_key && !app.setup_offered && app.modal.is_none() {
                 effects.extend(app.open_setup(Step::Welcome));
@@ -437,16 +416,6 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
                 app.toast = Some(options::plain(&format!("{e:#}")));
             }
         }
-        Update::KeysShared(result) => match result {
-            Ok(true) => {
-                app.toast = Some(
-                    "Keychain ready: xflow's background helper reads your key without asking."
-                        .into(),
-                )
-            }
-            Ok(false) => *redraw = false,
-            Err(e) => app.toast = Some(options::plain(&format!("{e:#}"))),
-        },
         Update::Opened(result) => {
             if let Err(e) = result {
                 app.toast = Some(options::plain(&format!("{e:#}")));
@@ -470,7 +439,7 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             app.toast = Some(match result {
                 Ok(()) => {
                     effects.push(Effect::Request(Request::Reload, Tag::Reload));
-                    "Key saved in your system keychain.".into()
+                    "Key saved, encrypted, in xflow's keystore.".into()
                 }
                 Err(e) => options::plain(&format!("{e:#}")),
             });
@@ -566,7 +535,6 @@ fn dispatch(
                 }
                 Effect::Open(url) => Update::Opened(blocking(move || open(url)).await),
                 Effect::Globe => Update::Globe(blocking(|| Ok(globe())).await.ok().flatten()),
-                Effect::ShareKeys(ids) => Update::KeysShared(integrations::share_keys(ids).await),
                 Effect::StartHelper => Update::Started(blocking(start_helper).await),
                 Effect::AskAgain(grant) => {
                     // A fresh xflowd asks no grant by itself: ask it once it answers.

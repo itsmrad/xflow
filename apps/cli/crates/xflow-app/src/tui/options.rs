@@ -11,7 +11,7 @@ pub const SETTINGS: &[Row] = &[
     ("action.setup", "Start", "Guided setup", "Walk through the speech service, key, microphone and shortcut again."),
     ("stt.provider", "Speech", "Service", "The service that turns your voice into text. Changing it picks that service's recommended model."),
     ("stt.model", "Speech", "Model", "Models offered by the speech service you chose."),
-    ("action.stt_key", "Speech", "API key", "Your key for the speech service. It is stored in your system keychain, never in a file."),
+    ("action.stt_key", "Speech", "API key", "Your key for the speech service. xflow stores it encrypted on this computer, never in your settings file."),
     ("stt.language", "Speech", "Language", "Automatic works for most people. Pick a language if words come out in the wrong one."),
     ("recording.device", "Speech", "Microphone", "Which microphone to listen to. System default follows your computer's sound settings."),
     ("recording.ignore_speakers", "Speech", "Ignore speaker sound", "Off by default. On macOS, reduce speaker sound with the system default microphone; listening can take longer to start. On Linux, configure an echo-cancel input in Sound settings."),
@@ -23,7 +23,7 @@ pub const SETTINGS: &[Row] = &[
     ("cleanup.mode", "Writing", "Cleanup", "Off keeps your exact words. Light fixes punctuation and casing. Polished also smooths phrasing."),
     ("cleanup.provider", "Writing", "Service", "The AI service that tidies your text when cleanup is on."),
     ("cleanup.model", "Writing", "Model", "Models offered by the writing service you chose."),
-    ("action.cleanup_key", "Writing", "API key", "Your key for the writing service, stored in your system keychain."),
+    ("action.cleanup_key", "Writing", "API key", "Your key for the writing service, stored encrypted by xflow."),
     ("formatting.remove_fillers", "Writing", "Remove um and uh", "Leave out filler words such as um and uh."),
     ("formatting.spoken_punctuation", "Writing", "Spoken punctuation", "Say \"comma\", \"period\" or \"new line\" to type them."),
     ("injection.method", "Delivery", "Text arrives by", "Paste is fastest. Typing works where pasting is blocked. Copy only leaves the text ready for you to paste."),
@@ -345,8 +345,10 @@ pub fn plain(error: &str) -> String {
         ("timed out", "The service took too long to answer. Check your internet connection and try again."),
         ("dns", "Can't reach the service. Check your internet connection."),
         ("error sending request", "Can't reach the service. Check your internet connection."),
-        ("keyring", "Your system keychain couldn't store the key. Unlock your keychain and try again."),
-        ("keychain", "Your system keychain couldn't store the key. Unlock your keychain and try again."),
+        ("still in the macos keychain", "Your key is still in the macOS Keychain. Run xflow key status in a terminal once to move it (macOS asks once)."),
+        ("still in your system keyring", "Your key is still in your system keyring. Run xflow key status in a terminal once to move it."),
+        ("chmod 600", "Your saved keys are readable by other users. Run xflow doctor for the one-line fix."),
+        ("xflow key set", "Your saved key can't be read. Add it again: Settings → API key."),
     ];
     if let Some((_, text)) = rules.iter().find(|(needle, _)| lower.contains(needle)) {
         return text.to_string();

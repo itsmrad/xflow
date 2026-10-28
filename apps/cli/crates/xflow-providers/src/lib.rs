@@ -21,7 +21,8 @@ mod stt;
 pub use stt::{build_stt, check_stt, hint_fit, transcribe_file};
 mod audio;
 mod catalog;
-#[cfg(target_os = "macos")]
+pub mod keystore;
+#[cfg(all(not(test), target_os = "macos"))]
 mod macos_keychain;
 #[cfg(test)]
 mod protocol_tests;
@@ -30,32 +31,26 @@ pub use catalog::*;
 
 const MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_TEXT_BYTES: usize = 262_144;
+/// Service name of the keychain items older builds wrote (migration only).
+#[cfg(all(not(test), any(target_os = "macos", target_os = "linux")))]
 const KEYRING_SERVICE: &str = "xflow";
-static KEYRING_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-/// A read that doesn't answer by then is waiting on the user, not on the store.
-const KEYCHAIN_WAIT: Duration = Duration::from_secs(3);
+/// One keychain migration at a time: the interaction switch is process-wide.
+static MIGRATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(target_os = "macos")]
-pub const KEYCHAIN_WAITING: &str =
-    "xflow is waiting for Keychain access. Click Always Allow in the macOS prompt";
+pub const MOVING_KEYS: &str = "Moving your key out of the Keychain. macOS may ask once.";
 #[cfg(not(target_os = "macos"))]
-pub const KEYCHAIN_WAITING: &str =
-    "xflow is waiting for credential storage access. Unlock your system keyring";
+pub const MOVING_KEYS: &str =
+    "Moving keys saved by an older xflow out of your system keyring. It may ask you to unlock it.";
+#[cfg(target_os = "macos")]
+const IN_KEYCHAIN: &str = "is still in the macOS Keychain, which asks before xflow can read it";
+#[cfg(not(target_os = "macos"))]
+const IN_KEYCHAIN: &str = "is still in your system keyring";
 
-/// Runs one credential-store call off the async thread. The lock is held until the
-/// call returns, so a pending OS prompt is never stacked by a second read.
-async fn keychain<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> Result<T> {
-    let lock = KEYRING_LOCK.lock().await;
-    tokio::task::spawn_blocking(move || {
-        let _lock = lock;
-        call()
-    })
-    .await
-    .map_err(|_| anyhow!("credential storage task failed"))
-}
-async fn keychain_read<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> Result<T> {
-    tokio::time::timeout(KEYCHAIN_WAIT, keychain(call))
+/// Runs blocking store work (file IO, keychain migration) off the async thread.
+async fn blocking<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(call)
         .await
-        .map_err(|_| anyhow!(KEYCHAIN_WAITING))?
+        .map_err(|_| anyhow!("credential storage task failed"))
 }
 
 pub fn build_transformer(
@@ -138,7 +133,7 @@ struct Credentials {
     provider: String,
     env: Option<String>,
     allow_anonymous: bool,
-    allow_keyring: bool,
+    allow_store: bool,
     cache: tokio::sync::Mutex<CredentialCache>,
 }
 struct CredentialCache {
@@ -148,7 +143,7 @@ struct CredentialCache {
     value: Option<Option<Zeroizing<String>>>,
 }
 impl Credentials {
-    fn new(provider: &str, env: Option<String>, local: bool, allow_keyring: bool) -> Result<Self> {
+    fn new(provider: &str, env: Option<String>, local: bool, allow_store: bool) -> Result<Self> {
         validate_provider(provider)?;
         if let Some(name) = &env {
             if name.is_empty()
@@ -162,7 +157,7 @@ impl Credentials {
         Ok(Self {
             provider: provider.to_owned(),
             allow_anonymous: local && env.is_none(),
-            allow_keyring,
+            allow_store,
             env,
             cache: tokio::sync::Mutex::new(CredentialCache {
                 epoch: KEY_EPOCH.load(std::sync::atomic::Ordering::Relaxed),
@@ -223,19 +218,21 @@ impl Credentials {
         if self.allow_anonymous {
             return Ok(None);
         }
-        if !self.allow_keyring {
+        if !self.allow_store {
             bail!("API key unavailable in the configured environment variable");
         }
         let provider = self.provider.clone();
-        let value = keychain_read(move || {
-            let entry = keyring::Entry::new(KEYRING_SERVICE, &provider).map_err(|_| anyhow!("OS credential storage is unavailable"))?;
-            entry.get_password().map(Zeroizing::new).map_err(|e| match e {
-                keyring::Error::NoEntry => anyhow!("API key unavailable; set the provider environment variable or run `xflow key set {provider}`"),
-                // Denied or locked: the key may exist, so don't send the user to re-add it.
-                _ => anyhow!(KEYCHAIN_WAITING),
-            })
-        }).await??;
-        Ok(Some(value))
+        match blocking(move || lookup(&provider)).await?? {
+            Stored::Key(secret) => Ok(Some(secret.0)),
+            Stored::Missing => bail!(
+                "API key unavailable; set the provider environment variable or run `xflow key set {}`",
+                self.provider
+            ),
+            Stored::InKeychain => bail!(
+                "your {} key {IN_KEYCHAIN}; run `xflow key status` once to move it",
+                self.provider
+            ),
+        }
     }
     #[cfg(test)]
     async fn header(&self) -> Result<Option<HeaderValue>> {
@@ -297,11 +294,113 @@ fn validate_provider(provider: &str) -> Result<()> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeySource {
     Environment(String),
-    Keyring,
+    /// Encrypted in xflow's own store.
+    Keystore,
     NotRequired,
     Missing,
-    /// The store didn't answer or refused access, e.g. a pending Always Allow prompt.
-    Locked,
+    /// Still in the OS keychain: moving it needs the user's approval once.
+    Keychain,
+    /// Stored but unusable (damaged, a changed keystore.key, or unsafe
+    /// permissions); the text says why and how to fix it.
+    Unreadable(String),
+}
+enum Stored {
+    Key(keystore::Secret),
+    Missing,
+    InKeychain,
+}
+/// Every credential id xflow may have saved, for the keychain migration.
+fn credential_ids() -> Vec<&'static str> {
+    let mut ids: Vec<_> = stt_providers()
+        .iter()
+        .chain(cleanup_providers())
+        .filter(|p| !p.local)
+        .map(|p| p.id)
+        .chain(["cleanup", "custom"])
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+/// The keystore entry; while the keychain migration is unfinished, first a silent
+/// migration pass (no OS prompt).
+fn lookup(provider: &str) -> Result<Stored> {
+    let store = keystore::Store::open()?;
+    let (secret, migrated) = store.get(provider)?;
+    if let Some(secret) = secret {
+        return Ok(Stored::Key(secret));
+    }
+    if migrated {
+        return Ok(Stored::Missing);
+    }
+    if migrate_keychain(None)?.iter().any(|id| id == provider) {
+        return Ok(Stored::InKeychain);
+    }
+    Ok(store.get(provider)?.0.map_or(Stored::Missing, Stored::Key))
+}
+/// Read a key an older build saved; Err = it exists but needs the user's approval.
+fn legacy_read(id: &str, interactive: bool) -> Result<Option<Zeroizing<String>>> {
+    #[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
+    return {
+        let _ = (id, interactive);
+        Ok(None)
+    };
+    #[cfg(all(not(test), target_os = "macos"))]
+    let value = macos_keychain::read(KEYRING_SERVICE, id, interactive);
+    #[cfg(all(not(test), target_os = "linux"))]
+    let value = keyring::Entry::new(KEYRING_SERVICE, id).and_then(|e| e.get_password());
+    #[cfg(all(not(test), any(target_os = "macos", target_os = "linux")))]
+    match value {
+        Ok(value) => Ok(Some(Zeroizing::new(value))),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        // No Secret Service running: nothing there to move.
+        #[cfg(target_os = "linux")]
+        Err(keyring::Error::PlatformFailure(_)) => Ok(None),
+        Err(_) => Err(anyhow!("needs approval")),
+    }
+}
+/// `XFLOW_NO_KEYCHAIN=1` (CI, test harnesses): never touch the OS keychain.
+fn keychain_off() -> bool {
+    std::env::var_os("XFLOW_NO_KEYCHAIN").is_some_and(|v| v == "1")
+}
+fn legacy_delete(id: &str) {
+    if keychain_off() {
+        return;
+    }
+    #[cfg(all(not(test), target_os = "macos"))]
+    macos_keychain::delete(KEYRING_SERVICE, id);
+    #[cfg(all(not(test), target_os = "linux"))]
+    let _ = keyring::Entry::new(KEYRING_SERVICE, id).and_then(|e| e.delete_credential());
+    #[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
+    let _ = id;
+}
+/// Move keys older builds saved in the OS keychain into the keystore, once.
+/// Without `foreground` (xflowd, the TUI, lookups) it never prompts: macOS reads
+/// silently, and Linux, whose Secret Service may ask to unlock, waits for the
+/// foreground. With it, keys that need approval are read after `foreground`
+/// has told the user why the OS may ask. Returns the ids still in the keychain.
+pub fn migrate_keychain(foreground: Option<&dyn Fn()>) -> Result<Vec<String>> {
+    if keychain_off() {
+        return Ok(vec![]);
+    }
+    let _guard = MIGRATION.lock().unwrap_or_else(|e| e.into_inner());
+    let store = keystore::Store::open()?;
+    let ids = credential_ids();
+    let mut left = if cfg!(target_os = "linux") {
+        // The Secret Service may ask to unlock: only ever read it in the foreground.
+        match foreground {
+            Some(_) if !store.migrated()? => ids.iter().map(|id| id.to_string()).collect(),
+            _ => return Ok(vec![]),
+        }
+    } else {
+        store.migrate(&ids, |id| legacy_read(id, false), legacy_delete)?
+    };
+    if let (Some(notice), false) = (foreground, left.is_empty()) {
+        notice();
+        let pending: Vec<&str> = left.iter().map(String::as_str).collect();
+        left = store.migrate(&pending, |id| legacy_read(id, true), legacy_delete)?;
+    }
+    Ok(left)
 }
 pub async fn key_status(provider: &str, api_key_env: Option<&str>) -> KeySource {
     if validate_provider(provider).is_err() {
@@ -327,93 +426,41 @@ pub async fn key_status(provider: &str, api_key_env: Option<&str>) -> KeySource 
         return KeySource::NotRequired;
     }
     let provider = provider.to_owned();
-    keychain_read(move || {
-        match keyring::Entry::new(KEYRING_SERVICE, &provider)
-            .and_then(|e| e.get_password())
-            .map(Zeroizing::new)
-        {
-            Ok(value) if secret_header(value.clone()).is_ok() => KeySource::Keyring,
-            Ok(_) | Err(keyring::Error::NoEntry) => KeySource::Missing,
-            Err(_) => KeySource::Locked,
+    match blocking(move || lookup(&provider)).await {
+        Ok(Ok(Stored::Key(secret))) if secret_header(secret.0.clone()).is_ok() => {
+            KeySource::Keystore
         }
-    })
-    .await
-    .unwrap_or(KeySource::Locked)
+        Ok(Ok(Stored::Key(_) | Stored::Missing)) => KeySource::Missing,
+        Ok(Ok(Stored::InKeychain)) => KeySource::Keychain,
+        Ok(Err(e)) | Err(e) => KeySource::Unreadable(format!("{e:#}")),
+    }
 }
+/// Remove a stored key, and any copy an older build left in the OS keychain.
 pub async fn delete_key(provider: &str) -> Result<()> {
     validate_provider(provider)?;
     let provider = provider.to_owned();
-    keychain(move || {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, &provider)
-            .map_err(|_| anyhow!("OS credential storage is unavailable"))?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => bail!("could not delete API key from OS credential storage"),
-        }
+    blocking(move || {
+        keystore::Store::open()?.remove(&provider)?;
+        legacy_delete(&provider);
+        Ok::<_, anyhow::Error>(())
     })
     .await??;
     KEY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
-
-/// Persist in the OS credential store; environment variables take precedence.
-/// Linux requires an unlocked Secret Service (e.g. GNOME Keyring or KWallet).
+/// Persist encrypted in xflow's keystore; environment variables take precedence.
 pub async fn save_key(provider: &str, secret: &str) -> Result<()> {
-    store(provider, secret).await.map(drop)
-}
-/// Like [`save_key`]; true when xflowd may read the key without asking: always
-/// off macOS, and on macOS only when the shared access list was set.
-async fn store(provider: &str, secret: &str) -> Result<bool> {
     validate_provider(provider)?;
     let value = Zeroizing::new(secret.to_owned());
     secret_header(value.clone())?;
     let provider = provider.to_owned();
-    let shared = keychain(move || -> Result<bool> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, &provider)
-            .map_err(|_| anyhow!("OS credential storage is unavailable"))?;
-        // Trust both xflow binaries so xflowd never asks "Always Allow". An
-        // existing item is replaced, as only a new item takes an access list; the
-        // plain write stays the fallback, so a failed add keeps the key.
-        #[cfg(target_os = "macos")]
-        {
-            let apps = macos_keychain::trusted_apps();
-            let add = || macos_keychain::add(KEYRING_SERVICE, &provider, value.as_bytes(), &apps);
-            let mut status = add();
-            if matches!(status, Ok(macos_keychain::DUPLICATE)) && entry.delete_credential().is_ok()
-            {
-                status = add();
-            }
-            if matches!(status, Ok(0)) {
-                return Ok(true);
-            }
-        }
-        entry
-            .set_password(&value)
-            .map_err(|_| anyhow!("could not save API key in OS credential storage"))?;
-        Ok(!cfg!(target_os = "macos"))
-    })
-    .await??;
+    blocking(move || keystore::Store::open()?.set(&provider, &value)).await??;
     KEY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    Ok(shared)
-}
-/// Save a stored key again, e.g. so a key saved by an older build gets the
-/// access list that lets xflowd read it without asking.
-pub async fn share_key(provider: &str) -> Result<()> {
-    validate_provider(provider)?;
-    let id = provider.to_owned();
-    let secret = keychain_read(move || {
-        keyring::Entry::new(KEYRING_SERVICE, &id)
-            .and_then(|e| e.get_password())
-            .map(Zeroizing::new)
-    })
-    .await?
-    .map_err(|_| anyhow!("API key unavailable in OS credential storage"))?;
-    if !store(provider, &secret).await? {
-        bail!(
-            "Keychain kept the key but didn't let xflowd read it freely; it may ask Always Allow"
-        );
-    }
     Ok(())
+}
+/// Doctor: refuses a damaged keystore or one others can read, naming the fix.
+pub fn check_keystore() -> Result<()> {
+    keystore::Store::open()?.check()
 }
 
 fn http_error(error: reqwest::Error) -> anyhow::Error {
@@ -930,7 +977,7 @@ mod tests {
         assert!(!String::from_utf8_lossy(&rx.await.unwrap()).contains("authorization:"));
     }
     #[tokio::test]
-    async fn missing_override_key_does_not_fall_back_to_keyring() {
+    async fn missing_override_key_does_not_fall_back_to_the_store() {
         let credential = Credentials::new(
             "groq",
             Some("XFLOW_MISSING_OVERRIDE_KEY".into()),
@@ -944,31 +991,37 @@ mod tests {
             .contains("configured environment variable"));
     }
     #[tokio::test]
-    async fn pending_keychain_prompt_is_reported_not_a_provider_timeout() {
-        // Held lock = another read still waiting on the macOS Always Allow prompt.
-        let lock = KEYRING_LOCK.lock().await;
-        let write = tokio::spawn(keychain(|| ()));
-        let cfg = SttConfig {
-            api_key_env: Some("XFLOW_MISSING_TIMEOUT_KEY".into()),
-            timeout_secs: 10,
-            ..SttConfig::default()
-        };
-        let error = build_stt(&cfg, false)
+    async fn stored_key_is_used_and_env_still_overrides() {
+        const SENTINEL: &str = "SENTINEL-stored-key-7c1d";
+        let env = "XFLOW_STORED_KEY_TEST";
+        std::env::remove_var(env);
+        assert_eq!(key_status("mistral", Some(env)).await, KeySource::Missing);
+        let error = Credentials::new("mistral", Some(env.into()), false, true)
             .unwrap()
-            .transcribe(clip(), Default::default())
+            .header()
             .await
             .unwrap_err();
-        assert_eq!(error.to_string(), KEYCHAIN_WAITING);
+        assert!(error.to_string().contains("xflow key set mistral"));
+
+        save_key("mistral", SENTINEL).await.unwrap();
+        assert_eq!(key_status("mistral", Some(env)).await, KeySource::Keystore);
+        let credential = Credentials::new("mistral", Some(env.into()), false, true).unwrap();
+        let header = credential.header().await.unwrap().unwrap();
+        assert_eq!(header.to_str().unwrap(), format!("Bearer {SENTINEL}"));
+        assert!(!format!("{header:?}").contains("SENTINEL"));
+
+        std::env::set_var(env, "from-env");
         assert_eq!(
-            key_status("groq", Some("XFLOW_MISSING_TIMEOUT_KEY")).await,
-            KeySource::Locked
+            key_status("mistral", Some(env)).await,
+            KeySource::Environment(env.into())
         );
-        assert!(
-            !write.is_finished(),
-            "interactive writes must wait for approval"
-        );
-        drop(lock);
-        write.await.unwrap().unwrap();
+        std::env::remove_var(env);
+        // A newer key is picked up without rebuilding the provider.
+        save_key("mistral", "SENTINEL-newer").await.unwrap();
+        let header = credential.header().await.unwrap().unwrap();
+        assert_eq!(header.to_str().unwrap(), "Bearer SENTINEL-newer");
+        delete_key("mistral").await.unwrap();
+        assert_eq!(key_status("mistral", Some(env)).await, KeySource::Missing);
     }
     #[tokio::test]
     async fn groq_multipart_contract_auth_and_language() {
@@ -1182,7 +1235,7 @@ mod tests {
         assert!(Credentials::new("groq", Some("KEY=$secret".into()), false, true).is_err());
     }
     #[test]
-    fn custom_cleanup_uses_its_own_keyring_entry() {
+    fn custom_cleanup_uses_its_own_key_entry() {
         let cfg = CleanupConfig {
             mode: CleanupMode::Light,
             provider: Some("custom".into()),
@@ -1192,7 +1245,7 @@ mod tests {
         };
         let transformer = HttpTransformer::new(&cfg, false).unwrap();
         assert_eq!(transformer.credential.provider, "cleanup");
-        assert!(transformer.credential.allow_keyring);
+        assert!(transformer.credential.allow_store);
         assert_eq!(cleanup_key_id("custom"), "cleanup");
         assert_eq!(cleanup_key_id("groq"), "groq");
     }
