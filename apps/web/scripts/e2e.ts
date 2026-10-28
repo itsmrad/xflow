@@ -28,7 +28,7 @@ const check = (name: string, ok: boolean, detail = "") => {
 const ms = (t: number) => `${Math.round(performance.now() - t)} ms`;
 
 // --- Groq stub: records exactly what the proxy forwards ---------------------------------------
-const seen: { path: string; auth: string | null; fields?: string[]; json?: unknown }[] = [];
+const seen: { path: string; auth: string | null; fields?: string[]; format?: string; json?: unknown }[] = [];
 const stub = stubKey
   ? Bun.serve({
       port: 3901,
@@ -40,11 +40,30 @@ const stub = stubKey
         if (path.endsWith("/audio/transcriptions")) {
           const form = await req.formData();
           const file = form.get("file") as File;
-          seen.push({ path, auth, fields: [...form.keys()].sort() });
-          return Response.json({ text: `stub transcript of ${file.size} bytes (${file.name}, ${file.type})`, x_groq: { id: "req_stub" } });
+          const format = String(form.get("response_format"));
+          seen.push({ path, auth, fields: [...form.keys()].sort(), format });
+          // Like the provider: the billed duration is the decoded length; "STUB_LONG" plays a
+          // provider that decodes far more audio than the upload's size suggests.
+          const duration = String(form.get("prompt")).includes("STUB_LONG") ? 600 : (file.size - 44) / 32_000;
+          const text = `stub transcript of ${file.size} bytes (${file.name}, ${file.type})`;
+          return Response.json(format === "verbose_json" ? { task: "transcribe", language: "english", duration, text, segments: [], x_groq: { id: "req_stub" } } : { text, x_groq: { id: "req_stub" } });
         }
-        const json = await req.json();
+        const json = (await req.json()) as { messages: { content: string }[] };
         seen.push({ path, auth, json });
+        const said = json.messages.map((m) => m.content).join(" ");
+        if (said.includes("STUB_SLOW")) await Bun.sleep(1500); // the client hangs up before this answers
+        if (said.includes("STUB_DRIP")) {
+          // Headers now, body later: the client hangs up while the reply is arriving.
+          const body = new ReadableStream({
+            async start(c) {
+              c.enqueue(new TextEncoder().encode('{"choices":[{"index":0,"message":{"role":"assistant","content":"'));
+              await Bun.sleep(1500);
+              c.enqueue(new TextEncoder().encode('late"}}],"usage":{"prompt_tokens":42,"completion_tokens":7}}'));
+              c.close();
+            },
+          });
+          return new Response(body, { headers: { "content-type": "application/json" } });
+        }
         await Bun.sleep(400); // long enough for concurrent requests to overlap
         return Response.json({
           choices: [{ index: 0, message: { role: "assistant", content: "So, deploy the thing." }, finish_reason: "stop" }],
@@ -220,6 +239,7 @@ try {
   if (stub) {
     const last = seen.findLast((s) => s.path.endsWith("/audio/transcriptions"));
     check("proxy: Groq receives the Rust provider's exact fields + central key", JSON.stringify(last?.fields) === JSON.stringify(["file", "language", "model", "prompt", "response_format"]) && last?.auth === `Bearer ${stubKey}`, JSON.stringify(last?.fields));
+    check("proxy: upstream asked for verbose_json, client got {text} only (N2)", last?.format === "verbose_json" && JSON.stringify(Object.keys(JSON.parse(txBody))) === '["text"]', txBody.slice(0, 80));
   }
   // Warm proxy overhead: total time minus the upstream's own time (server-timing).
   const over: number[] = [];
@@ -271,6 +291,56 @@ try {
       [0, 1, 2].map(() => fetch(`${BASE}/api/v1/cleanup`, { method: "POST", headers: { ...bearer, "content-type": "application/json" }, body: JSON.stringify(cleanupBody) }).then((r) => r.status)),
     );
     check("proxy: per-user concurrency capped at 2", burst.filter((s) => s === 429).length === 1 && burst.filter((s) => s === 200).length === 2, JSON.stringify(burst));
+  }
+
+  if (stub) {
+    const spendNow = async () => Number((await pool.query("SELECT count FROM rate_limits WHERE key = $1", [`spend:${userId}:day`])).rows[0]?.count ?? 0);
+    const lastRow = async (kind: string) =>
+      (await pool.query("SELECT status, cost_micros, audio_ms FROM usage_events WHERE user_id = $1 AND kind = $2 ORDER BY created_at DESC LIMIT 1", [userId, kind])).rows[0];
+    const cleanupWith = (marker: string, signal?: AbortSignal) =>
+      fetch(`${BASE}/api/v1/cleanup`, {
+        method: "POST",
+        headers: { ...bearer, "content-type": "application/json" },
+        body: JSON.stringify({ ...cleanupBody, messages: [cleanupBody.messages[0], { role: "user", content: `um ${marker} deploy` }] }),
+        signal,
+      });
+
+    // Review N1: hanging up after the upload must not refund what the provider still bills.
+    await Bun.sleep(1500); // let earlier requests' reservations settle first
+    let before = await spendNow();
+    await cleanupWith("STUB_SLOW", AbortSignal.timeout(400)).catch(() => null);
+    await Bun.sleep(2500);
+    const hung = await lastRow("cleanup");
+    check("N1: client hang-up keeps the reservation", hung?.status === 499 && hung.cost_micros > 0 && (await spendNow()) - before === hung.cost_micros, JSON.stringify(hung));
+
+    // Review N3: hanging up while the provider's reply is arriving still records usage and frees the slot.
+    before = await spendNow();
+    await cleanupWith("STUB_DRIP", AbortSignal.timeout(500)).catch(() => null);
+    await Bun.sleep(2500);
+    const dripRow = await lastRow("cleanup");
+    const both = await Promise.all([cleanupWith("ok"), cleanupWith("ok")]).then((rs) => rs.map((r) => r.status));
+    check("N3: hang-up mid-reply records usage, keeps the charge, frees the slot", dripRow?.status === 499 && dripRow.cost_micros > 0 && (await spendNow()) - before >= dripRow.cost_micros && JSON.stringify(both) === "[200,200]", `${JSON.stringify(dripRow)} then ${JSON.stringify(both)}`);
+    await Bun.sleep(1500);
+
+    // Review N2: the provider's billed duration settles the charge when it exceeds the upload's.
+    const longForm = audioForm();
+    longForm.set("prompt", "STUB_LONG");
+    const long = await fetch(`${BASE}/api/v1/transcribe`, { method: "POST", headers: bearer, body: longForm });
+    await long.text();
+    await Bun.sleep(1500);
+    const longRow = await lastRow("transcribe");
+    check("N2: settles to the provider's billed duration", long.status === 200 && longRow?.audio_ms === 600_000 && longRow.cost_micros === Math.ceil((600_000 / 3_600_000) * 40_000), JSON.stringify(longRow));
+
+    const forged = new Uint8Array(wavBytes);
+    new DataView(forged.buffer).setUint32(28, 32_000 * 20, true); // byteRate x20
+    const forgedForm = audioForm();
+    forgedForm.set("file", new File([forged], "dictation.wav", { type: "audio/wav" }));
+    const forgedRes = await fetch(`${BASE}/api/v1/transcribe`, { method: "POST", headers: bearer, body: forgedForm });
+    check("N2: a forged WAV header is refused", forgedRes.status === 400, `${forgedRes.status} ${await forgedRes.text()}`);
+    const flacForm = audioForm();
+    flacForm.set("file", new File([new Uint8Array(4096)], "dictation.flac", { type: "audio/flac" }));
+    const flacRes = await fetch(`${BASE}/api/v1/transcribe`, { method: "POST", headers: bearer, body: flacForm });
+    check("N2: FLAC is refused on the hosted path", flacRes.status === 400, `${flacRes.status}`);
   }
 
   // Review M2: once the day's spend budget is used up, Pro requests stop with a clear reason.
