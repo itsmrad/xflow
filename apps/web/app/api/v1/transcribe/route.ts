@@ -1,4 +1,4 @@
-import { BadRequest, MAX_AUDIO_BYTES, transcribeRequest } from "@/lib/groq";
+import { BadRequest, billedAudioMs, MAX_AUDIO_BYTES, transcribeRequest, transcriptionReply } from "@/lib/groq";
 import { error } from "@/lib/http";
 import { audioCostMicros } from "@/lib/pricing";
 import { apiCaller, unauthorized } from "@/lib/server/api-auth";
@@ -30,8 +30,16 @@ export async function POST(request: Request) {
     body: parsed.form,
     audioBytes: parsed.audioBytes,
     audioMs: parsed.audioMs,
-    // Duration is exact from the header, so the reservation is the final charge.
+    // An upper bound from the byte count, settled to the duration the provider reports billing,
+    // whichever is larger.
     reserveMicros: audioCostMicros(parsed.model, parsed.audioMs),
+    actual: (reply) => {
+      const billed = billedAudioMs(reply);
+      if (billed === null) return null;
+      const audioMs = Math.max(billed, parsed.audioMs);
+      return { micros: audioCostMicros(parsed.model, audioMs), audioMs };
+    },
+    present: (reply) => transcriptionReply(reply, parsed.responseFormat),
     signal: request.signal,
   });
 }

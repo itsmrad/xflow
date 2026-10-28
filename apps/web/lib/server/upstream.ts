@@ -2,7 +2,7 @@ import "server-only";
 import { after } from "next/server";
 import { db } from "@/db";
 import { usageEvents } from "@/db/schema";
-import { GROQ_BASE_URL, publicBody, publicMessage } from "@/lib/groq";
+import { GROQ_BASE_URL, provablyNotSent, publicBody, publicMessage } from "@/lib/groq";
 import { json } from "@/lib/http";
 import { FAIR_USE } from "@/lib/pricing";
 import { admit, releaseSlot, settle, type Admission } from "@/lib/server/limits";
@@ -74,8 +74,10 @@ export type Forward = {
   audioMs?: number;
   /** Upper bound of this request's provider cost, reserved before forwarding. */
   reserveMicros: number;
-  /** Actual cost and token counts from a successful reply; null keeps the reservation. */
-  actual?: (reply: string) => { micros: number; inputTokens: number; outputTokens: number } | null;
+  /** Actual cost (and what it measured) from a successful reply; null keeps the reservation. */
+  actual?: (reply: string) => { micros: number; inputTokens?: number; outputTokens?: number; audioMs?: number } | null;
+  /** Shapes a successful reply for the client; defaults to the reply minus provider fields. */
+  present?: (reply: string) => { body: string; contentType: string };
   signal: AbortSignal;
 };
 
@@ -94,6 +96,9 @@ export async function forward(f: Forward): Promise<Response> {
   let status = 502;
   let charged = f.reserveMicros;
   let tokens = { inputTokens: 0, outputTokens: 0 };
+  let audioMs = f.audioMs ?? 0;
+  // null: the provider provably billed nothing (refund). A string: settle from it, or keep the
+  // reservation when it reports no usage (an empty string always keeps it).
   const finish = (reply: string | null) =>
     after(async () => {
       if (reply === null) {
@@ -102,7 +107,8 @@ export async function forward(f: Forward): Promise<Response> {
         const real = f.actual?.(reply);
         if (real) {
           charged = real.micros;
-          tokens = { inputTokens: real.inputTokens, outputTokens: real.outputTokens };
+          tokens = { inputTokens: real.inputTokens ?? 0, outputTokens: real.outputTokens ?? 0 };
+          audioMs = real.audioMs ?? audioMs;
         }
       }
       await Promise.allSettled([
@@ -115,7 +121,7 @@ export async function forward(f: Forward): Promise<Response> {
           model: f.model,
           status,
           audioBytes: f.audioBytes ?? 0,
-          audioMs: f.audioMs ?? 0,
+          audioMs,
           ...tokens,
           costMicros: charged,
           latencyMs: Math.round(performance.now() - started),
@@ -133,12 +139,21 @@ export async function forward(f: Forward): Promise<Response> {
     });
   } catch (e) {
     status = f.signal.aborted ? 499 : 504;
-    finish(null);
+    // A client that hangs up after uploading still gets billed for by the provider: keep the reservation.
+    finish(provablyNotSent(e) ? null : "");
     return fail(504, e instanceof Error && e.name === "TimeoutError" ? "provider timed out" : "provider unreachable");
   }
 
   status = upstream.status;
-  const reply = await readBounded(upstream);
+  let reply: string | null;
+  try {
+    reply = await readBounded(upstream);
+  } catch {
+    // The client hung up (or the connection dropped) while the reply was arriving. It was billed.
+    status = f.signal.aborted ? 499 : 502;
+    finish("");
+    return fail(status === 499 ? 499 : 502, "the reply was interrupted");
+  }
   const timing = { "server-timing": `upstream;dur=${Math.round(performance.now() - started)}` };
   if (!upstream.ok || reply === null) {
     // An oversized success was still billed, so it keeps its reservation.
@@ -157,9 +172,10 @@ export async function forward(f: Forward): Promise<Response> {
 
   finish(reply);
   const type = upstream.headers.get("content-type") ?? "application/json";
-  return new Response(type.includes("json") ? publicBody(reply) : reply, {
+  const out = f.present?.(reply) ?? { body: type.includes("json") ? publicBody(reply) : reply, contentType: type };
+  return new Response(out.body, {
     status: upstream.status,
-    headers: { "content-type": type, "cache-control": "no-store", ...timing },
+    headers: { "content-type": out.contentType, "cache-control": "no-store", ...timing },
   });
 }
 

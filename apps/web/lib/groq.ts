@@ -21,9 +21,11 @@ export const STT_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"] as cons
 export const CLEANUP_MODELS = ["qwen/qwen3.8-27b"] as const;
 const RESPONSE_FORMATS = ["json", "verbose_json", "text"];
 const REASONING_EFFORTS = ["none", "default", "low", "medium", "high"];
-// What the CLI uploads (encode_upload: WAV, or FLAC for longer clips). Both carry their
-// exact duration in the header, so a request is charged before it is forwarded.
-const AUDIO_EXTENSIONS: Record<string, string> = { wav: "audio/wav", flac: "audio/flac" };
+// Hosted audio is 16-bit PCM WAV only. Its duration follows from the byte count and a validated
+// format, so the cost charged up front is an upper bound the client can't forge. A compressed
+// container's length can't be bounded without decoding it (a 4.4 MB FLAC of digital silence holds
+// days of audio), so FLAC and friends stay on the bring-your-own-key path.
+const AUDIO_EXTENSIONS: Record<string, string> = { wav: "audio/wav" };
 
 export class BadRequest extends Error {
   constructor(
@@ -34,7 +36,16 @@ export class BadRequest extends Error {
   }
 }
 
-export type TranscribeRequest = { form: FormData; model: string; audioBytes: number; audioMs: number };
+export type TranscribeRequest = {
+  form: FormData;
+  model: string;
+  audioBytes: number;
+  /** Upper bound of the audio's length, from the byte count. */
+  audioMs: number;
+  /** What the client asked for; upstream always gets verbose_json, which reports the billed duration. */
+  responseFormat: ResponseFormat;
+};
+export type ResponseFormat = "json" | "verbose_json" | "text";
 
 export async function transcribeRequest(input: FormData): Promise<TranscribeRequest> {
   const allowed = new Set(["model", "file", "response_format", "language", "prompt"]);
@@ -56,11 +67,9 @@ export async function transcribeRequest(input: FormData): Promise<TranscribeRequ
   form.set("model", model);
   form.set("file", new File([file], `dictation.${ext}`, { type: mime }));
 
-  const responseFormat = textField(input, "response_format");
-  if (responseFormat !== null) {
-    if (!RESPONSE_FORMATS.includes(responseFormat)) throw new BadRequest("unsupported response_format");
-    form.set("response_format", responseFormat);
-  }
+  const requested = textField(input, "response_format") ?? "json";
+  if (!RESPONSE_FORMATS.includes(requested)) throw new BadRequest("unsupported response_format");
+  form.set("response_format", "verbose_json");
   const language = textField(input, "language");
   if (language !== null) {
     if (!/^[a-z]{2}$/.test(language)) throw new BadRequest("language must be a lowercase ISO-639-1 code");
@@ -72,10 +81,9 @@ export async function transcribeRequest(input: FormData): Promise<TranscribeRequ
     form.set("prompt", prompt);
   }
 
-  const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
-  const audioMs = ext === "wav" ? wavDurationMs(head, file.size) : flacDurationMs(head);
-  if (audioMs <= 0) throw new BadRequest(`could not read the ${ext.toUpperCase()} header`);
-  return { form, model, audioBytes: file.size, audioMs };
+  const audioMs = wavDurationMs(new Uint8Array(await file.slice(0, 4096).arrayBuffer()), file.size);
+  if (audioMs <= 0) throw new BadRequest("audio must be 16-bit PCM WAV (8–48 kHz, mono or stereo)");
+  return { form, model, audioBytes: file.size, audioMs, responseFormat: requested as ResponseFormat };
 }
 
 function textField(form: FormData, key: string): string | null {
@@ -142,7 +150,11 @@ export function cleanupRequest(input: unknown): CleanupRequest {
   return { body, model, messages: clean, maxCompletionTokens };
 }
 
-/** Duration of a PCM WAV from its header; 0 if the header can't be read. */
+/**
+ * Upper bound of a 16-bit PCM WAV's length; 0 unless the format chunk is self-consistent.
+ * Counts every byte after the data chunk header, whatever its size field claims, so a forged
+ * header can only make the charge larger, never smaller.
+ */
 export function wavDurationMs(head: Uint8Array, totalBytes: number): number {
   const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
   const tag = (at: number) => String.fromCharCode(...head.subarray(at, at + 4));
@@ -151,26 +163,46 @@ export function wavDurationMs(head: Uint8Array, totalBytes: number): number {
   for (let at = 12; at + 8 <= head.length; ) {
     const id = tag(at);
     const size = view.getUint32(at + 4, true);
-    if (id === "fmt " && at + 16 <= head.length) byteRate = view.getUint32(at + 16, true);
-    if (id === "data") {
-      if (!byteRate) return 0;
-      // Streaming writers leave the size as 0 or 0xffffffff; fall back to the file length.
-      const dataBytes = size === 0 || size === 0xffffffff ? totalBytes - at - 8 : Math.min(size, totalBytes - at - 8);
-      return Math.max(0, Math.round((dataBytes / byteRate) * 1000));
+    if (id === "fmt " && at + 24 <= head.length) {
+      const format = view.getUint16(at + 8, true);
+      const channels = view.getUint16(at + 10, true);
+      const rate = view.getUint32(at + 12, true);
+      const rateBytes = view.getUint32(at + 16, true);
+      const blockAlign = view.getUint16(at + 20, true);
+      const bits = view.getUint16(at + 22, true);
+      const pcm = format === 1 && bits === 16 && (channels === 1 || channels === 2) && rate >= 8000 && rate <= 48000;
+      if (!pcm || blockAlign !== channels * 2 || rateBytes !== rate * blockAlign) return 0;
+      byteRate = rateBytes;
     }
+    if (id === "data") return byteRate ? Math.ceil(((totalBytes - at - 8) / byteRate) * 1000) : 0;
     at += 8 + size + (size % 2);
   }
   return 0;
 }
 
-/** Duration of a FLAC stream from its STREAMINFO block; 0 if absent or unknown. */
-export function flacDurationMs(head: Uint8Array): number {
-  // "fLaC", then a metadata block header whose type (low 7 bits) is 0 = STREAMINFO.
-  if (head.length < 8 + 18 || String.fromCharCode(...head.subarray(0, 4)) !== "fLaC" || (head[4]! & 0x7f) !== 0) return 0;
-  const info = head.subarray(8);
-  const rate = (info[10]! << 12) | (info[11]! << 4) | (info[12]! >> 4);
-  const samples = (info[13]! & 0x0f) * 2 ** 32 + ((info[14]! << 24) >>> 0) + (info[15]! << 16) + (info[16]! << 8) + info[17]!;
-  return rate > 0 && samples > 0 ? Math.round((samples / rate) * 1000) : 0;
+/** The duration the provider billed, from its verbose_json reply; null if it isn't there. */
+export function billedAudioMs(reply: string): number | null {
+  try {
+    const duration = (JSON.parse(reply) as { duration?: unknown }).duration;
+    return typeof duration === "number" && Number.isFinite(duration) && duration >= 0 ? Math.ceil(duration * 1000) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Turns the upstream verbose_json reply back into what the client asked for. */
+export function transcriptionReply(reply: string, format: ResponseFormat): { body: string; contentType: string } {
+  if (format === "verbose_json") return { body: publicBody(reply), contentType: "application/json" };
+  let text = "";
+  try {
+    const t = (JSON.parse(reply) as { text?: unknown }).text;
+    if (typeof t === "string") text = t;
+  } catch {
+    // not JSON: an empty transcript
+  }
+  return format === "text"
+    ? { body: text, contentType: "text/plain; charset=utf-8" }
+    : { body: JSON.stringify({ text }), contentType: "application/json" };
 }
 
 /** Token counts from a chat-completions response; null when the response doesn't report them. */
@@ -208,4 +240,13 @@ export function publicMessage(body: string): string {
     // not JSON: keep the generic message
   }
   return message.replace(/groq(cloud)?/gi, "provider");
+}
+
+// Errors raised before a request leaves this server: the provider never saw it, so nothing was
+// billed. Anything else (client hang-up, timeout, reset mid-flight) may have been billed.
+const NOT_SENT = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "CERT_HAS_EXPIRED"]);
+
+export function provablyNotSent(e: unknown): boolean {
+  const code = (e as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return typeof code === "string" && NOT_SENT.has(code);
 }

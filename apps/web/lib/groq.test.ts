@@ -3,7 +3,9 @@ import {
   BadRequest,
   chatUsage,
   cleanupRequest,
-  flacDurationMs,
+  billedAudioMs,
+  provablyNotSent,
+  transcriptionReply,
   MAX_AUDIO_BYTES,
   MAX_COMPLETION_TOKENS,
   MIN_COMPLETION_TOKENS,
@@ -34,24 +36,6 @@ function wav(seconds: number, rate = 16000): Uint8Array {
   return new Uint8Array(buf);
 }
 
-/** A FLAC STREAMINFO header (as flacenc writes it) for `seconds` of 16 kHz mono audio. */
-function flac(seconds: number, rate = 16000): Uint8Array {
-  const out = new Uint8Array(8 + 34 + 16);
-  out.set([0x66, 0x4c, 0x61, 0x43], 0); // fLaC
-  out.set([0x80, 0, 0, 34], 4); // last block, STREAMINFO, 34 bytes
-  const info = out.subarray(8);
-  const samples = rate * seconds;
-  info[10] = (rate >> 12) & 0xff;
-  info[11] = (rate >> 4) & 0xff;
-  info[12] = ((rate & 0x0f) << 4) | (0 << 1) | 0; // mono, bps high bit
-  info[13] = (15 << 4) | Math.floor(samples / 2 ** 32); // 16 bps
-  info[14] = (samples >>> 24) & 0xff;
-  info[15] = (samples >>> 16) & 0xff;
-  info[16] = (samples >>> 8) & 0xff;
-  info[17] = samples & 0xff;
-  return out;
-}
-
 // What apps/cli/crates/xflow-providers/src/stt.rs sends to Groq today.
 function rustForm(extra: Record<string, string> = {}): FormData {
   const form = new FormData();
@@ -69,7 +53,9 @@ describe("transcribe request", () => {
     const r = await transcribeRequest(rustForm());
     expect([...r.form.keys()].sort()).toEqual(["file", "language", "model", "prompt", "response_format"]);
     expect(r.form.get("model")).toBe("whisper-large-v3-turbo");
-    expect(r.form.get("response_format")).toBe("json");
+    // Upstream always reports the billed duration; the client still gets the format it asked for.
+    expect(r.form.get("response_format")).toBe("verbose_json");
+    expect(r.responseFormat).toBe("json");
     expect(r.form.get("language")).toBe("en");
     expect(r.form.get("prompt")).toBe("Kubernetes, kubectl, xflowd");
     const file = r.form.get("file") as File;
@@ -79,28 +65,48 @@ describe("transcribe request", () => {
     expect(r.audioMs).toBe(2000);
   });
 
-  test("only model and file are required; FLAC duration comes from STREAMINFO", async () => {
+  test("only the file is required", async () => {
     const form = new FormData();
-    form.set("file", new File([flac(42) as BlobPart], "dictation.flac"));
+    form.set("file", new File([wav(1) as BlobPart], "dictation.wav"));
     const r = await transcribeRequest(form);
     expect(r.model).toBe("whisper-large-v3-turbo");
-    expect((r.form.get("file") as File).type).toBe("audio/flac");
-    expect(r.audioMs).toBe(42_000);
+    expect(r.responseFormat).toBe("json");
+    expect(r.audioMs).toBe(1000);
   });
 
-  // Review M2: spend is charged from the header duration, so audio without one is refused.
-  test("rejects audio whose duration can't be read, and containers the CLI doesn't send", async () => {
-    const junk = new FormData();
-    junk.set("file", new File([new Uint8Array([1, 2, 3])], "dictation.flac"));
-    await rejects(junk);
-    const notWav = new FormData();
-    notWav.set("file", new File([new Uint8Array(100)], "dictation.wav"));
-    await rejects(notWav);
-    for (const name of ["dictation.mp3", "dictation.ogg", "dictation.webm", "dictation.m4a"]) {
+  // Review N2: the charge must not trust a duration the client can forge.
+  test("refuses FLAC and other compressed containers (their length can't be bounded)", async () => {
+    for (const name of ["dictation.flac", "dictation.mp3", "dictation.ogg", "dictation.webm", "dictation.m4a"]) {
       const other = new FormData();
       other.set("file", new File([new Uint8Array(100)], name));
       await rejects(other);
     }
+  });
+
+  test("refuses WAV headers that aren't self-consistent 16-bit PCM", async () => {
+    const forge = (edit: (v: DataView) => void) => {
+      const w = wav(2);
+      edit(new DataView(w.buffer));
+      const f = new FormData();
+      f.set("file", new File([w as BlobPart], "dictation.wav"));
+      return f;
+    };
+    await rejects(forge((v) => v.setUint32(28, 32000 * 20, true))); // byteRate x20: would claim 1/20 the length
+    await rejects(forge((v) => v.setUint16(34, 8, true))); // 8-bit
+    await rejects(forge((v) => v.setUint16(20, 3, true))); // float
+    await rejects(forge((v) => v.setUint32(24, 1000, true))); // 1 kHz
+    await rejects(forge((v) => v.setUint16(22, 6, true))); // 6 channels
+    const junk = new FormData();
+    junk.set("file", new File([new Uint8Array(100)], "dictation.wav"));
+    await rejects(junk);
+  });
+
+  test("a shrunken data-size field can't shorten the charge", async () => {
+    const w = wav(5);
+    new DataView(w.buffer).setUint32(40, 3200, true); // claims 0.1 s of data
+    const f = new FormData();
+    f.set("file", new File([w as BlobPart], "dictation.wav"));
+    expect((await transcribeRequest(f)).audioMs).toBe(5000);
   });
 
   const rejects = async (form: FormData, status = 400) => {
@@ -199,23 +205,49 @@ describe("cleanup request", () => {
   });
 });
 
-describe("flac duration", () => {
-  test("reads STREAMINFO", () => expect(flacDurationMs(flac(90))).toBe(90_000));
-  test("unknown sample count reads as 0", () => expect(flacDurationMs(flac(0))).toBe(0));
-  test("non-FLAC reads as 0", () => expect(flacDurationMs(new Uint8Array(64))).toBe(0));
-});
-
 describe("wav duration", () => {
   test("reads PCM WAV headers", () => {
     const w = wav(3);
     expect(wavDurationMs(w.subarray(0, 4096), w.length)).toBe(3000);
   });
-  test("falls back to the file length for streaming headers", () => {
+  test("counts every byte after the data header, whatever its size says", () => {
     const w = wav(1);
     new DataView(w.buffer).setUint32(40, 0xffffffff, true);
     expect(wavDurationMs(w.subarray(0, 4096), w.length)).toBe(1000);
   });
   test("returns 0 for non-WAV data", () => {
     expect(wavDurationMs(new Uint8Array(100), 100)).toBe(0);
+  });
+});
+
+describe("provider replies", () => {
+  test("the billed duration is read from verbose_json", () => {
+    expect(billedAudioMs('{"text":"hi","duration":600.0001}')).toBe(600_001);
+    expect(billedAudioMs('{"text":"hi"}')).toBeNull();
+    expect(billedAudioMs("nope")).toBeNull();
+  });
+
+  test("transcripts come back in the format the client asked for", () => {
+    const upstream = '{"task":"transcribe","language":"english","duration":2.5,"text":" hi there","segments":[],"x_groq":{"id":"r"}}';
+    expect(transcriptionReply(upstream, "json")).toEqual({ body: '{"text":" hi there"}', contentType: "application/json" });
+    expect(transcriptionReply(upstream, "text")).toEqual({ body: " hi there", contentType: "text/plain; charset=utf-8" });
+    const verbose = JSON.parse(transcriptionReply(upstream, "verbose_json").body);
+    expect(verbose.duration).toBe(2.5);
+    expect(verbose.x_groq).toBeUndefined();
+  });
+});
+
+// Review N1: only a request that never left the server may be refunded.
+describe("refund classification", () => {
+  const err = (code?: string) => Object.assign(new TypeError("fetch failed"), code ? { cause: { code } } : {});
+  test("connection never made: refund", () => {
+    for (const code of ["ECONNREFUSED", "ENOTFOUND", "UND_ERR_CONNECT_TIMEOUT"]) expect(provablyNotSent(err(code))).toBe(true);
+  });
+  test("client hang-up, timeout or a reset mid-flight: keep the reservation", () => {
+    expect(provablyNotSent(new DOMException("aborted", "AbortError"))).toBe(false);
+    expect(provablyNotSent(new DOMException("timed out", "TimeoutError"))).toBe(false);
+    expect(provablyNotSent(err("ECONNRESET"))).toBe(false);
+    expect(provablyNotSent(err("UND_ERR_SOCKET"))).toBe(false);
+    expect(provablyNotSent(err())).toBe(false);
   });
 });
