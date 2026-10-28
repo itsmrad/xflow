@@ -8,3 +8,9 @@
 *.db-wal
 .env
 /dist/
+
+# web
+node_modules/
+.vercel
+.env*.local
+.clerk/

@@ -1,1 +1,11 @@
-{"private":true,"workspaces":["apps/*","packages/*"]}
+{
+  "name": "xflow",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "lint": "bun run --filter '*' lint",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun run --filter '*' test",
+    "build": "bun run --filter '*' build"
+  }
+}
