@@ -1,18 +1,18 @@
 #!/bin/sh
 # Build dist/xflow-<version>.pkg: /usr/local/bin/{xflow,xflowd}, signed with stable
 # identifiers.
-# Usage: scripts/package-macos-pkg.sh [bin-dir]   (default: build target/release)
+# Usage: scripts/package-macos-pkg.sh [bin-dir]   (default: build apps/cli/target/release)
 # OUT=<dir> changes the output directory; SIGN=<identity> the signing identity
 # (default xflow-dev, see README; - signs ad-hoc).
 set -eu
 cd "$(dirname "$0")/.."
 
-version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
-[ -n "$version" ] || { echo "error: workspace version not found in Cargo.toml" >&2; exit 1; }
+version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' apps/cli/Cargo.toml)
+[ -n "$version" ] || { echo "error: workspace version not found in apps/cli/Cargo.toml" >&2; exit 1; }
 bin=${1:-}
 if [ -z "$bin" ]; then
-    cargo build --release --locked -p xflow-app --bins
-    bin=target/release
+    cargo build --manifest-path apps/cli/Cargo.toml --release --locked -p xflow-app --bins
+    bin=apps/cli/target/release
 fi
 out=${OUT:-dist}
 work=$out/pkg-work

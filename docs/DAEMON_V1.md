@@ -120,10 +120,10 @@ and `b92709c` are retained.
 
 Passed during this continuation:
 
-- `cargo test -p xflow-app -p xflow-core --lib --locked --features xflow-app/test-support`:
+- `cargo test --manifest-path apps/cli/Cargo.toml -p xflow-app -p xflow-core --lib --locked --features xflow-app/test-support`:
   40 app and 15 core tests, including the timing-retention, capture-finished,
   generation/clear, reload, command, silence and delivery-cancellation regressions.
-- `cargo check -p xflow-app --bins --no-default-features --locked`: production
+- `cargo check --manifest-path apps/cli/Cargo.toml -p xflow-app --bins --no-default-features --locked`: production
   binaries compile without the fake-adapter feature.
 - Read-only Node execution of the overlay owner's `quick start/stop is serialized`
   regression: one passed. Extension shortcut ordering stays with its owner;

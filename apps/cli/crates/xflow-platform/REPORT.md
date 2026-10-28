@@ -112,7 +112,7 @@ isolated-test entries remain ignored by default.
 ```sh
 PATH=/home/mrad/.cache/xflow-dev/bin:$PATH sh scripts/check.sh
 env -u WAYLAND_DISPLAY -u DISPLAY dbus-run-session -- \
-  /home/mrad/.cache/xflow-dev/bin/cargo test -p xflow-platform \
+  /home/mrad/.cache/xflow-dev/bin/cargo test --manifest-path apps/cli/Cargo.toml -p xflow-platform \
   -- --ignored --nocapture --test-threads=1
 ```
 

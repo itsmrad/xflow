@@ -13,11 +13,11 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-source_dir=${bindir:-$root/target/release}
+source_dir=${bindir:-$root/apps/cli/target/release}
 for binary in xflow xflowd; do
     [ -f "$source_dir/$binary" ] && [ -x "$source_dir/$binary" ] || {
         echo "error: missing executable $source_dir/$binary" >&2
-        echo 'hint: build with cargo build --release --locked, or pass --bin-dir PATH' >&2
+        echo 'hint: build with cargo build --manifest-path apps/cli/Cargo.toml --release --locked, or pass --bin-dir PATH' >&2
         exit 1
     }
 done

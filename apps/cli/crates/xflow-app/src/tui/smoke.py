@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real TUI in a PTY against mock IPC, with fully isolated XDG roots.
 
-Run from the worktree: python3 crates/xflow-app/src/tui/smoke.py
+Run from the worktree: python3 apps/cli/crates/xflow-app/src/tui/smoke.py
 No audio, desktop delivery, keyring service, real daemon, or provider HTTP calls.
 """
 import fcntl
@@ -19,8 +19,8 @@ import termios
 import threading
 import time
 
-ROOT = Path(__file__).resolve().parents[4]
-BINARY = ROOT / "target/debug/xflow"
+ROOT = Path(__file__).resolve().parents[6]
+BINARY = ROOT / "apps/cli/target/debug/xflow"
 
 
 def run(online, columns, rows):

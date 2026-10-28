@@ -7,12 +7,12 @@ publish = false
 description = "Standalone micro-benchmarks for xflow hot paths (driven by scripts/benchmark.py)"
 
 # Own workspace: never part of the product build or scripts/check.sh. Cargo.lock
-# was seeded from the root lock so dependency versions match the shipped binaries.
+# was seeded from apps/cli/Cargo.lock so dependency versions match the shipped binaries.
 [workspace]
 
 [dependencies]
-xflow-core = { path = "../../../crates/xflow-core" }
-xflow-providers = { path = "../../../crates/xflow-providers" }
+xflow-core = { path = "../../../apps/cli/crates/xflow-core" }
+xflow-providers = { path = "../../../apps/cli/crates/xflow-providers" }
 anyhow = "1"
 base64 = "0.22"
 cpal = "0.15.3"
@@ -24,7 +24,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "time", "process", "fs"] }
 zbus = { version = "4.4", default-features = false, features = ["tokio"] }
 
-# Keep identical to the root [profile.release] so measured code matches shipped code.
+# Keep identical to apps/cli [profile.release] so measured code matches shipped code.
 [profile.release]
 lto = "thin"
 codegen-units = 1

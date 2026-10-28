@@ -818,7 +818,7 @@ async fn spawn(report: &mut Report, samples: usize, fake_keys: bool) -> Result<(
 
 // ---------------------------------------------------------------------- TUI
 
-/// Replica of the draw closure in crates/xflow-app/src/tui.rs.
+/// Replica of the draw closure in apps/cli/crates/xflow-app/src/tui.rs.
 fn draw_tui(frame: &mut ratatui::Frame, status: &Response, transcript: &str) {
     use ratatui::{
         layout::{Constraint, Layout},

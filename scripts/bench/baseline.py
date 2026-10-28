@@ -243,7 +243,7 @@ def run(args):
         "cpu_governor": text_command(['cat', '/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor']),
         "rustc": text_command(["rustc", "--version"]), "git_commit": text_command(["git", "rev-parse", "HEAD"]),
         "git_status": text_command(["git", "status", "--porcelain"]),
-        "cargo_lock_sha256": hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest(),
+        "cargo_lock_sha256": hashlib.sha256((ROOT / "apps/cli/Cargo.lock").read_bytes()).hexdigest(),
         "binaries": {k: {"bytes": v.stat().st_size, "sha256": hashlib.sha256(v.read_bytes()).hexdigest()}
                      for k, v in binaries.items()}}, "build_profile": args.profile_label,
         "measurements": measure_daemon(args), "error": None,

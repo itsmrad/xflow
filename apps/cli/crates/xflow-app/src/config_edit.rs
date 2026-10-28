@@ -10,7 +10,7 @@ use std::{
 use toml_edit::{DocumentMut, Item, Table};
 use xflow_core::config::Config;
 
-const TEMPLATE: &str = include_str!("../../../config/default.toml");
+const TEMPLATE: &str = include_str!("../../../../../config/default.toml");
 
 pub struct ConfigFile {
     path: PathBuf,

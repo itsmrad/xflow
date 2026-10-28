@@ -33,12 +33,17 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt,clippy --no-self-update
           rustup default stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/cli -> target
       - run: scripts/check.sh fmt
       - run: scripts/check.sh clippy
       # Runs on a private session bus, including the ignored D-Bus bridge test.
       - run: scripts/check.sh test
 
   macos:
+    defaults:
+      run:
+        working-directory: apps/cli
     name: macOS clippy, test
     runs-on: macos-latest
     timeout-minutes: 30
@@ -54,6 +59,8 @@ jobs:
           rustup toolchain install stable --profile minimal --component clippy --no-self-update
           rustup default stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/cli -> target
       - run: cargo clippy --workspace --all-targets --locked --features xflow-app/test-support -- -D warnings
       - run: cargo test --workspace --locked --features xflow-app/test-support
 
@@ -73,6 +80,9 @@ jobs:
       - run: scripts/check.sh extension
 
   msrv:
+    defaults:
+      run:
+        working-directory: apps/cli
     name: MSRV
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -91,4 +101,6 @@ jobs:
           rustup toolchain install "$msrv" --profile minimal --no-self-update
           rustup default "$msrv"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/cli -> target
       - run: cargo check --workspace --locked

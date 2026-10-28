@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure xflow daemon startup, idle RSS/CPU, and Unix status IPC latency.
 
-Example: scripts/benchmark.py --daemon target/release/xflowd --cli target/release/xflow --output benchmark.json
+Example: scripts/benchmark.py --daemon apps/cli/target/release/xflowd --cli apps/cli/target/release/xflow --output benchmark.json
 
 Uses only Python's standard library. The child runs with isolated XDG runtime,
 config, and data directories and a privacy-safe config. The CLI path is recorded

@@ -8,6 +8,18 @@ macOS now has configurable Fn/Globe hold-to-talk and double-tap hands-free input
 with an on-demand recording pill. See [hotkey setup and verification](docs/hotkeys.md)
 for Input Monitoring, the Globe keyboard setting, live rebinding and current manual checks.
 
+## Repository layout
+
+- `apps/cli/`: Rust workspace (`Cargo.toml`, `Cargo.lock`, and `crates/`); build output is `apps/cli/target/`.
+- `apps/web/`: reserved for the web application, supplied by a separate PR.
+- `packages/`: reserved for shared packages; empty until needed.
+- `scripts/`, `config/`, `packaging/`, and `docs/`: shared tooling, assets, and documentation.
+
+The root `package.json` declares Bun workspaces for `apps/*` and `packages/*`.
+Commands below run from the repository root. For direct Cargo commands, use
+`--manifest-path apps/cli/Cargo.toml` or run Cargo from `apps/cli`.
+`scripts/check.sh`, the installer, and the package scripts run from any directory.
+
 ## Build and run
 
 The locked dependency set declares Rust 1.88 as its highest minimum compiler version (notably `instability`, `darling`, and ICU crates). Rust 1.88 is the declared lower bound; CI has not separately tested that compiler. Native development libraries are also required:
@@ -17,9 +29,9 @@ The locked dependency set declares Rust 1.88 as its highest minimum compiler ver
 sudo apt install build-essential pkg-config libasound2-dev libdbus-1-dev wl-clipboard
 # Fedora (build recipe; desktop validation is still pending)
 sudo dnf install gcc gcc-c++ pkgconf-pkg-config alsa-lib-devel dbus-devel wl-clipboard
-cargo build --release --locked
-install -Dm755 target/release/xflow ~/.local/bin/xflow
-install -Dm755 target/release/xflowd ~/.local/bin/xflowd
+cargo build --manifest-path apps/cli/Cargo.toml --release --locked
+install -Dm755 apps/cli/target/release/xflow ~/.local/bin/xflow
+install -Dm755 apps/cli/target/release/xflowd ~/.local/bin/xflowd
 xflow init
 xflow key groq                 # hidden input, OS Secret Service/keychain
 # Alternatively set GROQ_API_KEY in the daemon's environment.
@@ -51,7 +63,7 @@ GNOME Wayland needs the bundled Shell extension for native shortcuts, focus disc
 
 ## macOS
 
-Build with `cargo build -p xflow-app --locked` (Xcode Command Line Tools required), then install both `xflow` and `xflowd` beside each other, for example in `~/.local/bin`. Run `xflow` and `xflow doctor`. In a terminal, plain `xflow` opens the TUI, which walks through setup until it is complete; `xflow setup` reopens the guided setup even on a configured install and starts the LaunchAgent if xflowd isn't running (speech service, key, microphone, shortcut, then permissions); `xflow setup --yes` with flags is the scripted path.
+Build with `cargo build --manifest-path apps/cli/Cargo.toml -p xflow-app --locked` (Xcode Command Line Tools required), then install both `xflow` and `xflowd` beside each other, for example in `~/.local/bin`. Run `xflow` and `xflow doctor`. In a terminal, plain `xflow` opens the TUI, which walks through setup until it is complete; `xflow setup` reopens the guided setup even on a configured install and starts the LaunchAgent if xflowd isn't running (speech service, key, microphone, shortcut, then permissions); `xflow setup --yes` with flags is the scripted path.
 
 Installer package: `scripts/package-macos-pkg.sh` builds release binaries and writes `dist/xflow-<version>.pkg` (pass a directory holding prebuilt `xflow`/`xflowd` to skip the build; `OUT=<dir>` changes the output directory). It installs both into `/usr/local/bin`, signed as `com.xflow.xflowd`/`com.xflow.xflow` with the `xflow-dev` certificate (`SIGN=<identity>` picks another; without one it warns and signs ad-hoc); the scripts and pages live in `packaging/macos/`. Its postinstall moves older `~/.local/bin` copies to `~/.local/share/xflow-backup/`, and installs and starts the LaunchAgent for the logged-in user. It opens no window: the last installer page says “Open Terminal and type: xflow”, which runs setup (the full setup on a first install, otherwise only what is missing) and ends with a “hold Fn and say something” test.
 
@@ -80,7 +92,7 @@ The daemon creates no application windows or NSApplication and runs no Accessibi
 
 ## Providers and privacy
 
-See [default configuration](config/default.toml) and [provider contracts](crates/xflow-providers/README.md). Provider keys stay out of TOML; headless usage accepts environment variables. Provider calls require credentials and send recorded audio to the selected endpoint. Cleanup is separate and opt-in; failure preserves the original transcript.
+See [default configuration](config/default.toml) and [provider contracts](apps/cli/crates/xflow-providers/README.md). Provider keys stay out of TOML; headless usage accepts environment variables. Provider calls require credentials and send recorded audio to the selected endpoint. Cleanup is separate and opt-in; failure preserves the original transcript.
 
 For OpenRouter, set `stt.provider = "openrouter"`, store `xflow key openrouter` or supply `OPENROUTER_API_KEY`. OpenRouter uses its documented JSON/base64 audio format; Groq/OpenAI-compatible servers use multipart WAV. Batch adapters also cover OpenAI, Deepgram, AssemblyAI, ElevenLabs, Gemini, Mistral, Together and DeepInfra. Fireworks is a cleanup provider, not an STT adapter. Streaming and arbitrary custom WebSocket protocols remain future work; provider/model quality and live credentials are unvalidated.
 
@@ -94,8 +106,8 @@ History is local plaintext SQLite in a private directory, retained to 500 entrie
 scripts/check.sh
 node --input-type=module --check < packaging/gnome-extension/extension.js
 glib-compile-schemas --strict --dry-run packaging/gnome-extension/schemas
-cargo build --release --locked
-scripts/benchmark.py --daemon target/release/xflowd --cli target/release/xflow --output docs/benchmarks/linux-headless.json
+cargo build --manifest-path apps/cli/Cargo.toml --release --locked
+scripts/benchmark.py --daemon apps/cli/target/release/xflowd --cli apps/cli/target/release/xflow --output docs/benchmarks/linux-headless.json
 ```
 
 See [shared contracts](docs/CONTRACTS.md), [daemon behavior](docs/DAEMON_V1.md) and the CLI guide below for implemented v1 scope. Tests use synthetic audio, fake desktops, and local mock HTTP; they do not make paid API requests or type into your desktop. The [headless result](docs/benchmarks/linux-headless.json) measures startup, idle RSS/CPU and status IPC only. Physical hotkey, microphone, cloud latency, injection and overlay measurements need a real GNOME session. See [performance methodology](PERFORMANCE.md), [product requirements](PRD.md), [architecture](ARCHITECTURE.md), [roadmap](ROADMAP.md) and [source research](docs/RESEARCH.md).
@@ -171,9 +183,9 @@ Config writes use the shared comment-preserving editor, validate the whole docum
 | 6 | Required doctor checks failed |
 | 130 | `listen` interrupted and cancelled |
 
-CLI acceptance uses [the isolated harness](crates/xflow-app/src/cli/verify.py): `python3 crates/xflow-app/src/cli/verify.py target/debug/xflow`. It creates temporary XDG directories, a fake Unix-socket daemon and fake system tools. It checks configuration/personalization, editor rollback, daemon reload, history formats, delivery-free listening and cancellation, errors, aliases, completions and installation without touching a real desktop, microphone, keyring or provider. Live GNOME onboarding, credential storage and real provider quality still need user acceptance.
+CLI acceptance uses [the isolated harness](apps/cli/crates/xflow-app/src/cli/verify.py): `python3 apps/cli/crates/xflow-app/src/cli/verify.py apps/cli/target/debug/xflow`. It creates temporary XDG directories, a fake Unix-socket daemon and fake system tools. It checks configuration/personalization, editor rollback, daemon reload, history formats, delivery-free listening and cancellation, errors, aliases, completions and installation without touching a real desktop, microphone, keyring or provider. Live GNOME onboarding, credential storage and real provider quality still need user acceptance.
 
-CLI process startup is measured separately by [the fake-daemon benchmark](crates/xflow-app/src/cli/benchmark.py). Build with the release profile, then run `python3 crates/xflow-app/src/cli/benchmark.py target/release/xflow`; it measures spawn through exit over 100 samples after 10 warmups, including IPC for `toggle --quiet`. See [the recorded measurements](crates/xflow-app/src/cli/benchmark.json) and [the CLI completion report](crates/xflow-app/src/cli/REPORT.md) for results and scope limits. This measures CLI overhead; microphone opening, physical shortcuts and cloud transcription require separate measurements.
+CLI process startup is measured separately by [the fake-daemon benchmark](apps/cli/crates/xflow-app/src/cli/benchmark.py). Build with the release profile, then run `python3 apps/cli/crates/xflow-app/src/cli/benchmark.py apps/cli/target/release/xflow`; it measures spawn through exit over 100 samples after 10 warmups, including IPC for `toggle --quiet`. See [the recorded measurements](apps/cli/crates/xflow-app/src/cli/benchmark.json) and [the CLI completion report](apps/cli/crates/xflow-app/src/cli/REPORT.md) for results and scope limits. This measures CLI overhead; microphone opening, physical shortcuts and cloud transcription require separate measurements.
 
 ## License
 
