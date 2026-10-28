@@ -43,14 +43,14 @@ def main():
             env = {k: v for k, v in os.environ.items() if not k.startswith('CARGO_PROFILE_RELEASE_')}
             env['TMPDIR'] = temp
             env.update({f'CARGO_PROFILE_RELEASE_{k}': v for k, v in overrides.items()})
-            command = [str(Path(args.cargo).resolve()), 'build', '--release', '--workspace', '--locked', '--offline']
+            command = [str(Path(args.cargo).resolve()), 'build', '--manifest-path', 'apps/cli/Cargo.toml', '--release', '--workspace', '--locked', '--offline']
             started = time.monotonic()
             subprocess.run(command, cwd=baseline.ROOT, env=env, check=True)
             build_seconds = time.monotonic() - started
             folder = Path(temp) / name
             folder.mkdir()
             for binary in ('xflow', 'xflowd'):
-                shutil.copy2(baseline.ROOT / 'target/release' / binary, folder / binary)
+                shutil.copy2(baseline.ROOT / 'apps/cli/target/release' / binary, folder / binary)
             params = argparse.Namespace(daemon=str(folder / 'xflowd'), cli=str(folder / 'xflow'),
                 output=str(folder / 'measurement.json'), bench=None, idle_seconds=args.idle_seconds, warmup_seconds=5,
                 startup_samples=30, samples=200, profile_label=name, network=False, network_samples=3)

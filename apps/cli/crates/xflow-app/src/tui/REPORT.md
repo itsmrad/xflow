@@ -88,14 +88,14 @@ All terminal-cell symbols are sanitized against control-byte injection from tran
 
 ## Verification
 
-- `cargo test -p xflow-app tui --locked` through the shared Cargo gate: **17 passed**.
+- `cargo test --manifest-path apps/cli/Cargo.toml -p xflow-app tui --locked` through the shared Cargo gate: **17 passed**.
   Covers reducer/forms, validation, stale search/detail/command/key results, real preset/model
   activation, anonymous loopback GET probe, save conflicts, private exports, masked keys,
   Unicode cursor editing, modal/mouse behavior, fragmented subscription frames and reconnect.
 - Six exact TestBackend snapshots: Home, History, Settings at **120x35 and 80x24**.
   All ten screens additionally render at both sizes and at 34x11 and 1x1.
-- `cargo build -p xflow-app --bin xflow --locked` through the shared Cargo gate.
-- `python3 crates/xflow-app/src/tui/smoke.py`: four real-binary PTY runs, online/offline at
+- `cargo build --manifest-path apps/cli/Cargo.toml -p xflow-app --bin xflow --locked` through the shared Cargo gate.
+- `python3 apps/cli/crates/xflow-app/src/tui/smoke.py`: four real-binary PTY runs, online/offline at
   **80x24 and 120x35**, with private XDG roots, unavailable private session bus and mock IPC.
   Checks dictation state events, history query, stats, word/multiline snippet save, theme save,
   reload requests, tiny resize, clean quit, original termios and alternate-screen restoration.

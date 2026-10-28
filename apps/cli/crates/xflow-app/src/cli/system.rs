@@ -11,14 +11,14 @@ use std::{
 };
 const UUID: &str = "xflow@xflow.local";
 #[cfg(any(target_os = "linux", test))]
-const UNIT: &str = include_str!("../../../../packaging/xflow.service");
+const UNIT: &str = include_str!("../../../../../../packaging/xflow.service");
 const ASSETS: &[(&str, &[u8])] = &[
-    ("logic.js", include_bytes!("../../../../packaging/gnome-extension/logic.js")),
-    ("prefs.js", include_bytes!("../../../../packaging/gnome-extension/prefs.js")),
-    ("extension.js", include_bytes!("../../../../packaging/gnome-extension/extension.js")),
-    ("metadata.json", include_bytes!("../../../../packaging/gnome-extension/metadata.json")),
-    ("stylesheet.css", include_bytes!("../../../../packaging/gnome-extension/stylesheet.css")),
-    ("schemas/org.gnome.shell.extensions.xflow.gschema.xml", include_bytes!("../../../../packaging/gnome-extension/schemas/org.gnome.shell.extensions.xflow.gschema.xml")),
+    ("logic.js", include_bytes!("../../../../../../packaging/gnome-extension/logic.js")),
+    ("prefs.js", include_bytes!("../../../../../../packaging/gnome-extension/prefs.js")),
+    ("extension.js", include_bytes!("../../../../../../packaging/gnome-extension/extension.js")),
+    ("metadata.json", include_bytes!("../../../../../../packaging/gnome-extension/metadata.json")),
+    ("stylesheet.css", include_bytes!("../../../../../../packaging/gnome-extension/stylesheet.css")),
+    ("schemas/org.gnome.shell.extensions.xflow.gschema.xml", include_bytes!("../../../../../../packaging/gnome-extension/schemas/org.gnome.shell.extensions.xflow.gschema.xml")),
 ];
 fn xdg(name: &str, fallback: &str) -> Result<PathBuf> {
     std::env::var_os(name)

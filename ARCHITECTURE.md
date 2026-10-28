@@ -31,7 +31,7 @@ No Electron, embedded browser or default local model runtime. Reuse native captu
 
 ## Existing trait contracts
 
-The canonical declarations are in `crates/xflow-core/src/lib.rs`:
+The canonical declarations are in `apps/cli/crates/xflow-core/src/lib.rs`:
 
 | Contract | Meaning and boundary |
 | --- | --- |
@@ -74,7 +74,7 @@ Audio remains inside the capture/provider pipeline. Normal UI events carry state
 
 ## Provider transport and secret boundaries
 
-The integrated catalog includes ten cloud batch STT adapters plus custom/local servers (see [provider contracts](crates/xflow-providers/README.md)). Groq uses multipart WAV upload. OpenRouter uses a distinct JSON/base64 `input_audio` request; the [official reference](https://openrouter.ai/docs/api/api-reference/stt/create-transcription) is the contract, not assumptions based on an OpenAI-looking URL. A custom OpenAI-compatible REST adapter accepts a full transcription endpoint; it is not arbitrary-protocol support. Language/vocabulary fields are only sent when supported. Model-dependent limits and rejected fields need clear user diagnostics.
+The integrated catalog includes ten cloud batch STT adapters plus custom/local servers (see [provider contracts](apps/cli/crates/xflow-providers/README.md)). Groq uses multipart WAV upload. OpenRouter uses a distinct JSON/base64 `input_audio` request; the [official reference](https://openrouter.ai/docs/api/api-reference/stt/create-transcription) is the contract, not assumptions based on an OpenAI-looking URL. A custom OpenAI-compatible REST adapter accepts a full transcription endpoint; it is not arbitrary-protocol support. Language/vocabulary fields are only sent when supported. Model-dependent limits and rejected fields need clear user diagnostics.
 
 Reuse HTTP clients across sessions, apply deadlines and bound response bodies. Reject empty/malformed successful responses. Do not return raw server bodies or request URLs containing credentials in logs. No automatic provider failover: audio must stay with the explicitly configured endpoint. Future retry policy must distinguish transient failures and avoid repeating completed billable requests or injection.
 

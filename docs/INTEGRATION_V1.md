@@ -47,7 +47,7 @@ used. Verification logs are retained in the integration worktree's `target/iv`.
   all 38 extension tests, strict schema compilation, 140 Rust unit tests,
   11 daemon end-to-end tests, three private-bus tests and two fake-tool fallback
   tests passed on the final source tree.
-- Production `cargo build --release --locked`, without test-support, passed.
+- Production `cargo build --manifest-path apps/cli/Cargo.toml --release --locked`, without test-support, passed.
 - The production CLI acceptance script passed config/personalization,
   fake system tools, IPC/history/listen/cancel, errors and completions.
 - Production TUI PTY smoke passed online and offline at 80×24 and 120×35:

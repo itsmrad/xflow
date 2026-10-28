@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure complete CLI process latency against the acceptance harness's fake daemon.
 
-Usage: python3 crates/xflow-app/src/cli/benchmark.py target/release/xflow [output.json]
+Usage: python3 apps/cli/crates/xflow-app/src/cli/benchmark.py apps/cli/target/release/xflow [output.json]
 No real daemon, audio, desktop, credentials or provider calls are used.
 """
 import json

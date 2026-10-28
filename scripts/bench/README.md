@@ -3,21 +3,21 @@
 The v1 harness complements the original `scripts/benchmark.py` (its CLI and
 schema stay compatible). Python uses only the standard library. Required host
 tools: Linux `/proc`, `dbus-daemon`, Python ≥3.10, Cargo and Rust dependencies
-from the root lockfile. GJS is optional; curl is needed only with `--network`.
+from `apps/cli/Cargo.lock`. GJS is optional; curl is needed only with `--network`.
 
 All Cargo invocations on this shared development host **must** use its gate:
 
 ```sh
-/home/mrad/.cache/xflow-dev/bin/cargo build --release --workspace --locked --offline
-/home/mrad/.cache/xflow-dev/bin/cargo build --release --locked --offline --target-dir target --manifest-path scripts/bench/rust/Cargo.toml
-python3 -B scripts/bench/baseline.py --daemon target/release/xflowd --cli target/release/xflow --bench target/release/xflow-bench --output docs/benchmarks/linux-baseline-v1.json
+/home/mrad/.cache/xflow-dev/bin/cargo build --manifest-path apps/cli/Cargo.toml --release --workspace --locked --offline
+/home/mrad/.cache/xflow-dev/bin/cargo build --release --locked --offline --target-dir apps/cli/target --manifest-path scripts/bench/rust/Cargo.toml
+python3 -B scripts/bench/baseline.py --daemon apps/cli/target/release/xflowd --cli apps/cli/target/release/xflow --bench apps/cli/target/release/xflow-bench --output docs/benchmarks/linux-baseline-v1.json
 ```
 
 On an independent checkout use its own Cargo executable instead of the
 host-specific gate, and omit `--offline` if dependencies are not cached.
 The nested Rust package has its own workspace/lockfile and is intentionally
 excluded from the product build. Keep both release profiles identical when
-changing root settings. The standalone crate currently measures the MVP at
+changing `apps/cli/Cargo.toml` settings. The standalone crate currently measures the MVP at
 `96e19eb`; updating core/provider APIs requires updating fixture constructors.
 
 Add `--network` for three unauthenticated GET `/` probes per assigned host plus
@@ -90,8 +90,8 @@ small timing differences cannot justify a profile change.
 ```sh
 python3 -B scripts/bench/test_baseline.py
 /home/mrad/.cache/xflow-dev/bin/cargo fmt --manifest-path scripts/bench/rust/Cargo.toml -- --check
-/home/mrad/.cache/xflow-dev/bin/cargo clippy --offline --locked --all-targets --target-dir target --manifest-path scripts/bench/rust/Cargo.toml -- -D warnings
-/home/mrad/.cache/xflow-dev/bin/cargo test --offline --locked --target-dir target --manifest-path scripts/bench/rust/Cargo.toml
+/home/mrad/.cache/xflow-dev/bin/cargo clippy --offline --locked --all-targets --target-dir apps/cli/target --manifest-path scripts/bench/rust/Cargo.toml -- -D warnings
+/home/mrad/.cache/xflow-dev/bin/cargo test --offline --locked --target-dir apps/cli/target --manifest-path scripts/bench/rust/Cargo.toml
 PATH=/home/mrad/.cache/xflow-dev/bin:$PATH sh scripts/check.sh
 ```
 

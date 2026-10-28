@@ -1,4 +1,6 @@
 /target/
+/apps/cli/target/
+/scripts/bench/rust/target/
 /.worktrees/
 /.firecrawl/
 *.db

@@ -165,7 +165,7 @@ audio-owner follow-up to remove stop-time resampling cost.
 Reproduce with the mandatory shared gate:
 
 ```sh
-/home/mrad/.cache/xflow-dev/bin/cargo run -p xflow-providers --release --example latency -- /path/to/speech48k_stereo.wav 2
+/home/mrad/.cache/xflow-dev/bin/cargo run --manifest-path apps/cli/Cargo.toml -p xflow-providers --release --example latency -- /path/to/speech48k_stereo.wav 2
 ```
 
 The example without arguments uses a synthetic tone, whose compression differs

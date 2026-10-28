@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real TUI in a PTY against mock IPC, with fully isolated XDG roots.
 
-Run from the worktree: python3 crates/xflow-app/src/tui/smoke.py
+Run from the worktree: python3 apps/cli/crates/xflow-app/src/tui/smoke.py
 No audio, desktop delivery, keyring service, real daemon, or provider HTTP calls.
 """
 import fcntl

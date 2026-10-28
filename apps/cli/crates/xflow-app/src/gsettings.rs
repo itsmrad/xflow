@@ -219,7 +219,7 @@ mod tests {
         std::fs::copy(
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../packaging/gnome-extension/schemas/org.gnome.shell.extensions.xflow.gschema.xml"
+                "/../../../../packaging/gnome-extension/schemas/org.gnome.shell.extensions.xflow.gschema.xml"
             ),
             dir.path().join("org.gnome.shell.extensions.xflow.gschema.xml"),
         )

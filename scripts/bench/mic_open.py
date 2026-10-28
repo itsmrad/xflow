@@ -7,7 +7,7 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--bench', default='target/release/xflow-bench')
+    parser.add_argument('--bench', default='apps/cli/target/release/xflow-bench')
     parser.add_argument('--samples', type=int, default=5)
     args = parser.parse_args()
     if args.samples < 1:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Isolated CLI acceptance tests: fake daemon/tools; no microphone/keyring/cloud.
 
-Run after cargo build -p xflow-app --bin xflow:
-python3 crates/xflow-app/src/cli/verify.py target/debug/xflow
+Run after cargo build --manifest-path apps/cli/Cargo.toml -p xflow-app --bin xflow:
+python3 apps/cli/crates/xflow-app/src/cli/verify.py apps/cli/target/debug/xflow
 """
 import csv
 import io
@@ -193,7 +193,7 @@ def main():
             path.write_text("#!/bin/sh\nexit 0\n")
             path.chmod(0o755)
         prefix = root / "prefix with spaces"
-        installer = Path(__file__).resolve().parents[4] / "scripts/install.sh"
+        installer = Path(__file__).resolve().parents[6] / "scripts/install.sh"
         installed = subprocess.run(["sh", str(installer), "--prefix", str(prefix), "--bin-dir", str(source)], env=env, capture_output=True, text=True, timeout=10)
         assert installed.returncode == 0, installed.stderr
         assert all((prefix / "bin" / name).stat().st_mode & 0o777 == 0o755 for name in ("xflow", "xflowd"))

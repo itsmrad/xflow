@@ -16,7 +16,7 @@ Build dependencies and clipboard tools:
 
 ```sh
 sudo apt install build-essential pkg-config libasound2-dev wl-clipboard xclip xdotool
-cargo build --release
+cargo build --manifest-path apps/cli/Cargo.toml --release
 ```
 
 Install the extension runtime assets (run from the repository root):
@@ -158,8 +158,8 @@ removes shortcuts and actors, and terminates owned CLI subprocesses.
 ## Verification and manual release checks
 
 ```sh
-cargo test -p xflow-platform
-dbus-run-session -- cargo test -p xflow-platform -- --ignored
+cargo test --manifest-path apps/cli/Cargo.toml -p xflow-platform
+dbus-run-session -- cargo test --manifest-path apps/cli/Cargo.toml -p xflow-platform -- --ignored
 node --input-type=module --check < packaging/gnome-extension/extension.js
 glib-compile-schemas --strict --dry-run packaging/gnome-extension/schemas
 ```

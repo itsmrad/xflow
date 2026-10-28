@@ -2,7 +2,7 @@
 
 Revision: 2026-10-02. Authoritative interface between the daemon, CLI, TUI, providers, platform
 adapters and the GNOME extension. Code is the source of truth for exact types:
-`crates/xflow-core/src/{lib,config,ipc}.rs`, `crates/xflow-platform/src/bridge.rs`. Change a contract
+`apps/cli/crates/xflow-core/src/{lib,config,ipc}.rs`, `apps/cli/crates/xflow-platform/src/bridge.rs`. Change a contract
 only through the v1 orchestrator so every consumer moves together.
 
 ## Configuration (`~/.config/xflow/config.toml`)

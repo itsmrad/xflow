@@ -10,7 +10,7 @@ use xflow_core::{
     CleanupMode,
 };
 
-pub const TEMPLATE: &str = include_str!("../../../../config/default.toml");
+pub const TEMPLATE: &str = include_str!("../../../../../../config/default.toml");
 pub fn load(path: &Path) -> Result<ConfigFile> {
     ConfigFile::load(path).map_err(Error::config)
 }

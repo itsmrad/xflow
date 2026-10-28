@@ -134,13 +134,13 @@ Reproduce CLI acceptance and process measurements after a gated build:
 
 ```sh
 env MISE_RUST_VERSION=1.98.1 TMPDIR="$PWD/target/compiler-tmp" \
-  /home/mrad/.cache/xflow-dev/bin/cargo build --release --locked -p xflow-app --bin xflow
+  /home/mrad/.cache/xflow-dev/bin/cargo build --manifest-path apps/cli/Cargo.toml --release --locked -p xflow-app --bin xflow
 mkdir -p target/t
 chmod 700 target/t
 env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$PWD/target/t" \
-  python3 crates/xflow-app/src/cli/verify.py target/release/xflow
+  python3 apps/cli/crates/xflow-app/src/cli/verify.py apps/cli/target/release/xflow
 env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$PWD/target/t" \
-  python3 crates/xflow-app/src/cli/benchmark.py target/release/xflow
+  python3 apps/cli/crates/xflow-app/src/cli/benchmark.py apps/cli/target/release/xflow
 ```
 
 The [benchmark artifact](benchmark.json) records 100 complete process executions after ten warmups per command, using the release profile with thin LTO and one codegen unit. It includes spawning, dynamic loading, parsing, fake-daemon IPC for toggle and process exit. Python spawning and host scheduling are included; no baseline subtraction is applied. The daemon receives exactly one request per toggle; config path and help make no daemon requests. Results vary with host load and are not physical shortcut or microphone measurements. The original approximately 1 ms process aspiration is not claimed as achieved.

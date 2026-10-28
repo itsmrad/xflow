@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn shipped_template_is_valid_and_matches_defaults() {
         let template: Config =
-            toml::from_str(include_str!("../../../config/default.toml")).unwrap();
+            toml::from_str(include_str!("../../../../../config/default.toml")).unwrap();
         template.validate().unwrap();
         assert_eq!(template, Config::default());
     }
