@@ -1,0 +1,26 @@
+{
+  "business_id": "bus_test_xflow",
+  "type": "subscription.active",
+  "timestamp": "2026-10-29T10:00:00Z",
+  "data": {
+    "payload_type": "Subscription",
+    "subscription_id": "sub_test_0001",
+    "status": "active",
+    "product_id": "pdt_test_pro",
+    "quantity": 1,
+    "currency": "USD",
+    "recurring_pre_tax_amount": 500,
+    "payment_frequency_interval": "Month",
+    "payment_frequency_count": 1,
+    "subscription_period_interval": "Year",
+    "subscription_period_count": 10,
+    "previous_billing_date": "2026-10-29T10:00:00Z",
+    "next_billing_date": "2026-11-29T10:00:00Z",
+    "cancel_at_next_billing_date": false,
+    "created_at": "2026-10-29T09:59:58Z",
+    "customer": { "customer_id": "cus_test_0001", "email": "pro@example.com", "name": "Pro User" },
+    "metadata": { "xflow_user_id": "00000000-0000-4000-8000-000000000001" },
+    "past_due_ends_at": null,
+    "payment_id": null
+  }
+}
