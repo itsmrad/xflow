@@ -2403,7 +2403,9 @@ mod tests {
         }
         new_keys.send(HotkeyAction::Start).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while ask(&tx, Request::Status).await.state != State::Listening {
+            while ask(&tx, Request::Status).await.state != State::Listening
+                || ASKED.load(Ordering::SeqCst) != 1
+            {
                 tokio::task::yield_now().await;
             }
         })
