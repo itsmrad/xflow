@@ -740,11 +740,7 @@ async fn assembly_rejects_bad_ids_and_redacts_job_errors() {
 #[tokio::test]
 async fn whisper_prompt_fallback_preserves_audio_and_retries_once() {
     for protocol in ["openai", "whisper-cpp"] {
-        for status in [
-            "400 Bad Request",
-            "500 Internal Server Error",
-            "503 Service Unavailable",
-        ] {
+        for status in ["400 Bad Request", "500 Internal Server Error"] {
             let (url, task) = scripted(
                 vec![
                     (status, json!({"error":"rejected"})),
@@ -794,6 +790,9 @@ async fn whisper_fallback_does_not_retry_auth_other_errors_or_unprompted_request
         ("401 Unauthorized", true, 1),
         ("403 Forbidden", true, 1),
         ("429 Too Many Requests", true, 1),
+        ("502 Bad Gateway", true, 1),
+        ("503 Service Unavailable", true, 1),
+        ("504 Gateway Timeout", true, 1),
         ("500 Internal Server Error", false, 1),
         ("500 Internal Server Error", true, 2),
     ] {
@@ -815,4 +814,27 @@ async fn whisper_fallback_does_not_retry_auth_other_errors_or_unprompted_request
         assert_eq!(task.await.unwrap().len(), replies);
         std::env::remove_var(env);
     }
+}
+
+#[tokio::test]
+async fn whisper_retry_transport_failure_is_reported_as_the_retry() {
+    // One scripted reply: the hint-free retry finds the listener gone.
+    let (url, task) = scripted(
+        vec![("500 Internal Server Error", json!({"error":"rejected"}))],
+        "/transcribe",
+    )
+    .await;
+    let mut cfg = config("groq", url);
+    cfg.vocabulary = vec!["PostgreSQL".into()];
+    let env = set_test_key(&mut cfg);
+    let error = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe(clip(), Default::default())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("retry without dictionary hints"), "{error}");
+    assert!(!error.contains("not retried"), "{error}");
+    assert_eq!(task.await.unwrap().len(), 1);
+    std::env::remove_var(env);
 }

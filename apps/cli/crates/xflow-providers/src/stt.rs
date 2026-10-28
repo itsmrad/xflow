@@ -112,6 +112,11 @@ fn prompt_tokens(prompt: &str) -> usize {
 }
 /// Whisper truncates prompts at 224 tokens; leave room for estimator/tokenizer drift.
 const PROMPT_TOKENS: usize = 200;
+/// Every byte is at most one token, so 224 bytes (the old rule) always fits; only
+/// longer prompts need the estimate, which counts non-ASCII and digits bytewise.
+fn over_prompt_budget(bytes: usize, tokens: impl FnOnce() -> usize) -> bool {
+    bytes > 896 || bytes > 224 && tokens() > PROMPT_TOKENS
+}
 // benchmarks/devterms (2026-10-29, 1,136 terms): turbo list 53.1% vs `Glossary: …` 52.3%,
 // large-v3 60.9% vs 61.2%. A tie, so keep the plain list: no wrapper tokens.
 fn vocabulary_prompt(hints: &[String]) -> String {
@@ -137,7 +142,7 @@ fn validate_options(
     }
     let bytes = hints.iter().map(String::len).sum::<usize>() + hints.len().saturating_sub(1) * 2;
     match protocol {
-        Protocol::Multipart|Protocol::WhisperCpp if bytes>896 || prompt_tokens(&vocabulary_prompt(hints))>PROMPT_TOKENS=>bail!("vocabulary hints exceed 200 estimated tokens or 896 UTF-8 bytes"),
+        Protocol::Multipart|Protocol::WhisperCpp if over_prompt_budget(bytes, || prompt_tokens(&vocabulary_prompt(hints)))=>bail!("vocabulary hints exceed 224 bytes and 200 estimated tokens, or 896 bytes"),
         Protocol::Multipart if model.contains("parakeet") && !hints.is_empty()=>bail!("this model does not support vocabulary prompts"),
         Protocol::Router if !hints.is_empty()=>bail!("OpenRouter vocabulary keyterms require model support; select a direct provider"),
         Protocol::Deepgram if bytes>500=>bail!("Deepgram vocabulary exceeds the conservative 500-byte token budget"),
@@ -160,7 +165,8 @@ fn push_hints(
     model: &str,
 ) -> usize {
     let mut sent = 0;
-    let mut tokens = prompt_tokens(&vocabulary_prompt(hints));
+    let prompt = vocabulary_prompt(hints);
+    let (mut bytes, mut tokens) = (prompt.len(), prompt_tokens(&prompt));
     for term in extra {
         if hints.iter().any(|h| h.eq_ignore_ascii_case(&term)) {
             sent += 1;
@@ -171,13 +177,13 @@ fn push_hints(
         }
         // The estimator never merges across ", ", so a term adds "," plus " term".
         // Rejecting on that keeps big dictionaries from recounting the whole prompt.
-        let cost = if hints.is_empty() {
-            prompt_tokens(&term)
+        let (extra_bytes, cost) = if hints.is_empty() {
+            (term.len(), prompt_tokens(&term))
         } else {
-            1 + prompt_tokens(&format!(" {term}"))
+            (term.len() + 2, 1 + prompt_tokens(&format!(" {term}")))
         };
         if matches!(protocol, Protocol::Multipart | Protocol::WhisperCpp)
-            && tokens + cost > PROMPT_TOKENS
+            && over_prompt_budget(bytes + extra_bytes, || tokens + cost)
         {
             continue;
         }
@@ -186,6 +192,7 @@ fn push_hints(
             hints.pop();
             continue;
         }
+        bytes += extra_bytes;
         tokens += cost;
         sent += 1;
     }
@@ -470,7 +477,8 @@ impl HttpProvider {
             .map_err(http_error)?;
         let status = response.status();
         let response = if let Some(data) =
-            retry_audio.filter(|_| status.as_u16() == 400 || status.is_server_error())
+            // 400/500 can be a rejected prompt; 502-504 are upstream load, which a retry worsens.
+            retry_audio.filter(|_| matches!(status.as_u16(), 400 | 500))
         {
             // Hints must never fail a dictation; log the status only, never the body.
             eprintln!("STT prompt fallback: {}", status.as_u16());
@@ -485,7 +493,9 @@ impl HttpProvider {
                 .await?
                 .send()
                 .await
-                .map_err(http_error)?
+                .map_err(|_| {
+                    anyhow!("provider request failed on the retry without dictionary hints")
+                })?
         } else {
             response
         };
@@ -890,16 +900,6 @@ mod prompt_tests {
     }
 
     #[test]
-    fn token_and_byte_limits_are_independent() {
-        for protocol in [Protocol::Multipart, Protocol::WhisperCpp] {
-            let hints = vec![" world".repeat(149)];
-            assert!(validate_options(None, &hints, protocol, "whisper").is_ok());
-            assert!(validate_options(None, &[" world".repeat(150)], protocol, "whisper").is_err());
-            assert!(validate_options(None, &["Q".repeat(224)], protocol, "whisper").is_err());
-        }
-    }
-
-    #[test]
     fn overflowing_term_does_not_hide_later_short_term() {
         let mut hints = vec!["Q".repeat(180)];
         let sent = push_hints(
@@ -921,9 +921,16 @@ mod prompt_tests {
                 validate_options(None, std::slice::from_ref(&bytes), protocol, "whisper").is_ok()
             );
             assert!(validate_options(None, &[format!("{bytes}.")], protocol, "whisper").is_err());
-            assert_eq!(prompt_tokens(&"Q".repeat(200)), 200);
-            assert!(validate_options(None, &["Q".repeat(200)], protocol, "whisper").is_ok());
-            assert!(validate_options(None, &["Q".repeat(201)], protocol, "whisper").is_err());
+            // Up to 224 bytes always fits; past that the 200-token estimate decides.
+            assert_eq!(prompt_tokens(&"Q".repeat(225)), 225);
+            assert!(validate_options(None, &["Q".repeat(224)], protocol, "whisper").is_ok());
+            assert!(validate_options(None, &["Q".repeat(225)], protocol, "whisper").is_err());
+            let tokens = format!("{}{}", "Q".repeat(194), " world".repeat(6));
+            assert_eq!((tokens.len(), prompt_tokens(&tokens)), (230, 200));
+            assert!(
+                validate_options(None, std::slice::from_ref(&tokens), protocol, "whisper").is_ok()
+            );
+            assert!(validate_options(None, &[format!("Q{tokens}")], protocol, "whisper").is_err());
         }
     }
 }

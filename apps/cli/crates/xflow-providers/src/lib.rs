@@ -887,7 +887,7 @@ mod tests {
             .err()
             .unwrap()
             .to_string()
-            .contains("200 estimated tokens or 896 UTF-8 bytes"));
+            .contains("224 bytes and 200 estimated tokens, or 896 bytes"));
         cfg.provider = "openrouter".into();
         cfg.vocabulary = vec!["Postgres".into()];
         assert!(build_stt(&cfg, true)
@@ -895,6 +895,22 @@ mod tests {
             .unwrap()
             .to_string()
             .contains("OpenRouter vocabulary"));
+    }
+    #[test]
+    fn non_ascii_hints_keep_the_old_224_byte_allowance() {
+        // Estimated tokens count CJK bytewise; 224 bytes must still fit as before #63.
+        let mut cfg = config("groq", "http://127.0.0.1:9/x".into());
+        cfg.vocabulary = (0..5)
+            .map(|i| char::from_u32(0x6570 + i).unwrap().to_string().repeat(14))
+            .collect();
+        assert_eq!(cfg.vocabulary.join(", ").len(), 218);
+        assert!(build_stt(&cfg, true).is_ok());
+        cfg.vocabulary.clear();
+        let words: Vec<_> = (0..30)
+            .map(|i| char::from_u32(0x4e00 + i).unwrap().to_string().repeat(3))
+            .collect();
+        // 20 × 9 bytes + 19 × ", " = 218; one more would be 229.
+        assert_eq!(hint_fit(&cfg, &words).unwrap(), 20);
     }
     #[tokio::test]
     async fn merged_request_options_are_validated_before_network() {

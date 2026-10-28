@@ -57,7 +57,7 @@ def select(terms, variant):
         if variant == 'old':
             if len(prompt.encode()) > 224:
                 break
-        elif len(prompt.encode()) > 896 or tokens(prompt) > 200:
+        elif len(prompt.encode()) > 896 or len(prompt.encode()) > 224 and tokens(prompt) > 200:
             continue
         sent.append(term)
     return sent
