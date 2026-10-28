@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
+import { proProductIds } from "@/lib/billing";
 import { isEntitled } from "@/lib/entitlement";
 import { userSubscriptions, userTokens } from "@/lib/server/account";
 import { initialUsage, sealUsage, usageWindowStart } from "@/lib/server/realtime";
@@ -22,7 +23,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/dashboard"
     initialUsage(userId, since),
     searchParams,
   ]);
-  const pro = isEntitled(subs, new Date());
+  const pro = isEntitled(subs, new Date(), proProductIds());
   const current = subs[0];
   const realtimeUrl = process.env.NEXT_PUBLIC_NEON_REALTIME_URL;
 

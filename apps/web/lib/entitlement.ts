@@ -2,6 +2,7 @@
 // customer cancels at period end, so `cancelled` means access is over.
 
 export type SubscriptionState = {
+  productId: string;
   status: string;
   currentPeriodEnd: Date | null;
   pastDueEndsAt: Date | null;
@@ -10,8 +11,10 @@ export type SubscriptionState = {
 // A renewal webhook can arrive late; don't cut off a paying user the minute the period rolls.
 const RENEWAL_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
 
-export function isEntitled(subs: readonly SubscriptionState[], now: Date): boolean {
+/** Only the Pro product(s) count; with none configured, nothing does. */
+export function isEntitled(subs: readonly SubscriptionState[], now: Date, proProducts: readonly string[]): boolean {
   return subs.some((s) => {
+    if (!proProducts.includes(s.productId)) return false;
     if (s.status === "active") {
       return !s.currentPeriodEnd || s.currentPeriodEnd.getTime() + RENEWAL_GRACE_MS > now.getTime();
     }

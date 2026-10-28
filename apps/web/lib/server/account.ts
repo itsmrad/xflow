@@ -2,11 +2,13 @@ import "server-only";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { apiTokens, subscriptions } from "@/db/schema";
+import { proProductIds } from "@/lib/billing";
 import { isEntitled } from "@/lib/entitlement";
 
 export async function userSubscriptions(userId: string) {
   return db
     .select({
+      productId: subscriptions.productId,
       status: subscriptions.status,
       currentPeriodEnd: subscriptions.currentPeriodEnd,
       pastDueEndsAt: subscriptions.pastDueEndsAt,
@@ -18,7 +20,7 @@ export async function userSubscriptions(userId: string) {
 }
 
 export async function userIsPro(userId: string): Promise<boolean> {
-  return isEntitled(await userSubscriptions(userId), new Date());
+  return isEntitled(await userSubscriptions(userId), new Date(), proProductIds());
 }
 
 export async function userTokens(userId: string) {

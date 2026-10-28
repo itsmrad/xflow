@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { after } from "next/server";
 import { db } from "@/db";
 import { error } from "@/lib/http";
+import { proProductIds } from "@/lib/billing";
 import { isEntitled, type SubscriptionState } from "@/lib/entitlement";
 import { bearerToken, sha256 } from "@/lib/tokens";
 
@@ -16,11 +17,11 @@ export async function apiCaller(request: Request): Promise<ApiCaller | null> {
     token_id: string;
     user_id: string;
     stale: boolean;
-    subs: { status: string; current_period_end: string | null; past_due_ends_at: string | null }[] | null;
+    subs: { product_id: string; status: string; current_period_end: string | null; past_due_ends_at: string | null }[] | null;
   }>(sql`
     SELECT t.id AS token_id, t.user_id,
            (t.last_used_at IS NULL OR t.last_used_at < now() - interval '5 minutes') AS stale,
-           (SELECT json_agg(json_build_object('status', s.status,
+           (SELECT json_agg(json_build_object('product_id', s.product_id, 'status', s.status,
                                               'current_period_end', s.current_period_end,
                                               'past_due_ends_at', s.past_due_ends_at))
               FROM subscriptions s WHERE s.user_id = t.user_id) AS subs
@@ -32,11 +33,12 @@ export async function apiCaller(request: Request): Promise<ApiCaller | null> {
     after(() => db.execute(sql`UPDATE api_tokens SET last_used_at = now() WHERE id = ${row.token_id}`));
   }
   const subs: SubscriptionState[] = (row.subs ?? []).map((s) => ({
+    productId: s.product_id,
     status: s.status,
     currentPeriodEnd: s.current_period_end ? new Date(s.current_period_end) : null,
     pastDueEndsAt: s.past_due_ends_at ? new Date(s.past_due_ends_at) : null,
   }));
-  return { tokenId: row.token_id, userId: row.user_id, pro: isEntitled(subs, new Date()) };
+  return { tokenId: row.token_id, userId: row.user_id, pro: isEntitled(subs, new Date(), proProductIds()) };
 }
 
 export function unauthorized(): Response {
