@@ -643,21 +643,18 @@ async fn concurrent_clients_and_malformed_frames_leave_daemon_responsive() {
         b"not json\n".to_vec(),
         b"{\"command\":\"unknown\"}\n".to_vec(),
         b"{\"command\":\"status\"}".to_vec(),
-        vec![b'x'; MAX_MESSAGE_BYTES + 2],
+        // Reject at the read limit without racing a close against remaining writes.
+        vec![b'x'; MAX_MESSAGE_BYTES + 1],
     ] {
         let mut stream = UnixStream::connect(daemon.socket()).await.unwrap();
         stream.write_all(&frame).await.unwrap();
-        stream.shutdown().await.unwrap();
-        let mut output = Vec::new();
-        // Invalid frames receive a bounded error; a reset is also valid for oversized input.
-        let _ = timeout(DEADLINE, stream.read_to_end(&mut output))
-            .await
-            .unwrap();
-        if !output.is_empty() {
-            let response: Response = serde_json::from_slice(&output).unwrap();
-            assert!(!response.ok);
-            assert_eq!(response.protocol, Some(PROTOCOL_VERSION));
+        // Only truncated frames need EOF; the daemon may already have closed the others.
+        if frame.len() <= MAX_MESSAGE_BYTES && !frame.ends_with(b"\n") {
+            stream.shutdown().await.unwrap();
         }
+        let response = event(&mut BufReader::new(stream)).await;
+        assert!(!response.ok);
+        assert_eq!(response.protocol, Some(PROTOCOL_VERSION));
         assert!(daemon.request(json!({"command":"status"})).await.ok);
     }
     daemon.stop_process().await;
