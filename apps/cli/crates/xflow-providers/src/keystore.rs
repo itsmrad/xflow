@@ -1,11 +1,12 @@
 //! xflow's own credential store. Provider keys are sealed with ChaCha20-Poly1305
 //! (the provider id is the AAD, so entries can't be swapped) in
 //! `$XDG_CONFIG_HOME/xflow/credentials`, under 32 random bytes kept apart in
-//! `$XDG_DATA_HOME/xflow/keystore.key`. Both are 0600 in 0700 directories.
+//! `$XDG_DATA_HOME/xflow/keystore.key`. Both are 0600 in 0700 directories that
+//! are opened once (never through a symlink) and used by descriptor.
 //!
-//! Threat model: encrypted at rest against casual disclosure (`cat`, backups, a
-//! copied or committed config dir, other OS users). Not protection from malware
-//! running as you, which can read both files.
+//! Threat model: encrypted at rest against casual disclosure of the config dir
+//! (`cat`, a copied, synced or committed `~/.config`, other OS users). Not
+//! protection from malware running as you, nor from a backup holding both files.
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ring::{
@@ -14,14 +15,21 @@ use ring::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
-    fs::{File, OpenOptions},
+    collections::{BTreeMap, BTreeSet},
+    ffi::CString,
+    fs::File,
     io::{Read, Write},
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::{ffi::OsStrExt, fs::DirBuilderExt, fs::MetadataExt, fs::PermissionsExt},
+    },
     path::{Path, PathBuf},
 };
 use zeroize::Zeroizing;
 
 const MAX_FILE: u64 = 1 << 20;
+const CREDENTIALS: &str = "credentials";
+const KEY: &str = "keystore.key";
 
 /// A key read from the store; `Debug` never shows it.
 pub struct Secret(pub Zeroizing<String>);
@@ -34,9 +42,13 @@ impl std::fmt::Debug for Secret {
 #[derive(Default, Serialize, Deserialize)]
 struct Contents {
     v: u32,
-    /// Every key the OS keychain held for xflow has been moved here.
+    /// Every key the OS keychain held for xflow has been moved here, and every
+    /// moved keychain copy is confirmed deleted.
     #[serde(default)]
     migrated_keychain: bool,
+    /// Moved here, but the keychain copy isn't confirmed deleted yet.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pending_delete: BTreeSet<String>,
     #[serde(default)]
     entries: BTreeMap<String, Sealed>,
 }
@@ -45,10 +57,30 @@ struct Sealed {
     nonce: String,
     ct: String,
 }
+enum Parsed {
+    Ok(Contents),
+    Damaged,
+    Newer,
+}
+/// One rule for reads and writes: a valid file of another version is never
+/// touched; only an unparseable one may be replaced.
+fn parse(bytes: &[u8]) -> Parsed {
+    let version = serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|v| v.get("v").and_then(serde_json::Value::as_u64));
+    match version {
+        Some(v) if v != 1 => Parsed::Newer,
+        _ => serde_json::from_slice(bytes).map_or(Parsed::Damaged, Parsed::Ok),
+    }
+}
+
+/// Identity of the credentials file; every write renames a new inode into place,
+/// so a change here means another process (or this one) wrote the store.
+pub type Stamp = (u64, u64, i64, i64, u64);
 
 pub struct Store {
-    file: PathBuf,
-    key: PathBuf,
+    config: PathBuf,
+    data: PathBuf,
 }
 impl Store {
     /// Same layout as xflow-app's `paths`: config beside `config.toml`, key in data.
@@ -57,10 +89,7 @@ impl Store {
         // Unit tests never touch the user's real store.
         #[cfg(test)]
         {
-            static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-            let root = ROOT.get_or_init(|| {
-                std::env::temp_dir().join(format!("xflow-providers-test-{}", std::process::id()))
-            });
+            let root = test_root();
             return Ok(Self::at(&root.join("config"), &root.join("data")));
         }
         let env = |name| std::env::var_os(name).filter(|v| !v.is_empty());
@@ -77,9 +106,13 @@ impl Store {
     }
     pub fn at(config_dir: &Path, data_dir: &Path) -> Self {
         Self {
-            file: config_dir.join("credentials"),
-            key: data_dir.join("keystore.key"),
+            config: config_dir.to_owned(),
+            data: data_dir.to_owned(),
         }
+    }
+    pub fn stamp(&self) -> Option<Stamp> {
+        let m = std::fs::symlink_metadata(self.config.join(CREDENTIALS)).ok()?;
+        Some((m.dev(), m.ino(), m.mtime(), m.mtime_nsec(), m.len()))
     }
 
     /// The stored key, and whether the keychain migration is complete.
@@ -90,7 +123,11 @@ impl Store {
         };
         let reenter = || format!("re-enter your key: `xflow key set {provider}`");
         let Some(cipher) = self.cipher(false)? else {
-            bail!("{} is missing; {}", self.key.display(), reenter());
+            bail!(
+                "{} is missing; {}",
+                self.data.join(KEY).display(),
+                reenter()
+            );
         };
         let nonce = STANDARD.decode(&sealed.nonce).ok();
         let mut data = Zeroizing::new(STANDARD.decode(&sealed.ct).unwrap_or_default());
@@ -121,7 +158,8 @@ impl Store {
     pub fn remove(&self, provider: &str) -> Result<()> {
         let _lock = self.lock()?;
         let mut contents = self.load_for_write()?;
-        if contents.entries.remove(provider).is_some() {
+        let pending = contents.pending_delete.remove(provider);
+        if contents.entries.remove(provider).is_some() || pending {
             self.save(&contents)?;
         }
         Ok(())
@@ -129,29 +167,33 @@ impl Store {
     pub fn migrated(&self) -> Result<bool> {
         Ok(self.load()?.migrated_keychain)
     }
-    /// Refuses files that are damaged or not private; the error names the fix.
-    pub fn check(&self) -> Result<()> {
+    /// Refuses a store that is damaged or not private; the error names the fix.
+    /// Ok(false) when nothing is stored yet.
+    pub fn check(&self) -> Result<bool> {
+        let exists = read_private(&self.config, CREDENTIALS)?.is_some();
         self.load()?;
-        read_private(&self.key)?;
-        Ok(())
+        read_private(&self.data, KEY)?;
+        Ok(exists)
     }
 
-    /// Move keys out of the OS keychain, once. `read` is Ok(None) for no item and
-    /// Err for an item it couldn't read without asking; those stay put, and the
-    /// migration runs again next time. Items are deleted only after the store has
-    /// their copy on disk. Returns the ids left in the keychain.
+    /// Move keys out of the OS keychain, once. `read` is Ok(None) only when there
+    /// is no item; Err (needs approval, service unavailable) leaves the item and
+    /// the migration runs again next time. A keychain copy is deleted only after
+    /// its stored copy reads back from disk; until `delete` confirms, it stays
+    /// pending and is retried. Returns the ids that couldn't be read.
     pub fn migrate(
         &self,
         ids: &[&str],
         read: impl Fn(&str) -> Result<Option<Zeroizing<String>>>,
-        delete: impl Fn(&str),
+        delete: impl Fn(&str) -> Result<()>,
     ) -> Result<Vec<String>> {
         let before = self.load()?;
         if before.migrated_keychain {
             return Ok(vec![]);
         }
         let (mut found, mut blocked) = (vec![], vec![]);
-        // A key saved here wins: its keychain copy is neither read nor deleted.
+        // A key saved here wins: its keychain copy is neither read nor deleted
+        // (unless this migration moved it and its deletion is pending).
         for &id in ids.iter().filter(|id| !before.entries.contains_key(**id)) {
             match read(id) {
                 Ok(Some(secret)) if !secret.is_empty() => found.push((id, secret)),
@@ -159,7 +201,9 @@ impl Store {
                 Err(_) => blocked.push(id.to_owned()),
             }
         }
-        {
+        let pending = if found.is_empty() {
+            before.pending_delete
+        } else {
             // Read without the lock (a foreground read may wait on the user), then
             // merge into the current file: a concurrent `xflow key set` wins.
             let _lock = self.lock()?;
@@ -169,12 +213,24 @@ impl Store {
                     let sealed = self.seal(id, secret)?;
                     contents.entries.insert((*id).to_owned(), sealed);
                 }
+                contents.pending_delete.insert((*id).to_owned());
             }
-            contents.migrated_keychain = blocked.is_empty();
             self.save(&contents)?;
-        }
-        for (id, _) in found {
-            delete(id);
+            contents.pending_delete
+        };
+        let deleted: Vec<_> = pending
+            .iter()
+            .filter(|id| matches!(self.get(id), Ok((Some(_), _))) && delete(id).is_ok())
+            .collect();
+        let done = blocked.is_empty() && deleted.len() == pending.len();
+        if !deleted.is_empty() || done {
+            let _lock = self.lock()?;
+            let mut contents = self.load_for_write()?;
+            for id in deleted {
+                contents.pending_delete.remove(id);
+            }
+            contents.migrated_keychain = blocked.is_empty() && contents.pending_delete.is_empty();
+            self.save(&contents)?;
         }
         Ok(blocked)
     }
@@ -201,11 +257,11 @@ impl Store {
     /// The data key; with `create`, a missing or damaged one is replaced (callers
     /// hold the lock). Entries sealed under an old key then ask to be re-entered.
     fn cipher(&self, create: bool) -> Result<Option<LessSafeKey>> {
-        let bytes = match read_private(&self.key)? {
+        let bytes = match read_private(&self.data, KEY)? {
             Some(bytes) if bytes.len() == 32 => bytes,
             Some(_) if !create => bail!(
                 "{} is damaged; re-enter your keys with `xflow key set <provider>`",
-                self.key.display()
+                self.data.join(KEY).display()
             ),
             _ if !create => return Ok(None),
             _ => {
@@ -213,7 +269,7 @@ impl Store {
                 SystemRandom::new()
                     .fill(&mut fresh)
                     .map_err(|_| anyhow!("no secure randomness"))?;
-                write_private(&self.key, &fresh)?;
+                write_private(&self.data, KEY, &fresh)?;
                 fresh
             }
         };
@@ -222,67 +278,137 @@ impl Store {
         Ok(Some(LessSafeKey::new(key)))
     }
     fn load(&self) -> Result<Contents> {
-        let Some(bytes) = read_private(&self.file)? else {
-            return Ok(Contents::default());
-        };
-        let contents: Contents = serde_json::from_slice(&bytes).map_err(|_| {
-            anyhow!(
+        let path = self.config.join(CREDENTIALS);
+        match read_private(&self.config, CREDENTIALS)?.map(|bytes| parse(&bytes)) {
+            None => Ok(Contents::default()),
+            Some(Parsed::Ok(contents)) => Ok(contents),
+            Some(Parsed::Damaged) => bail!(
                 "{} is damaged; re-enter your keys with `xflow key set <provider>`",
-                self.file.display()
-            )
-        })?;
-        if contents.v != 1 {
-            bail!("{} was written by a newer xflow", self.file.display());
+                path.display()
+            ),
+            Some(Parsed::Newer) => newer(&path),
         }
-        Ok(contents)
     }
     /// Like `load`, but a damaged file is replaced: the user is re-entering keys.
-    /// Unsafe permissions are still refused.
+    /// A newer version and unsafe permissions are still refused.
     fn load_for_write(&self) -> Result<Contents> {
-        let contents = match read_private(&self.file)? {
-            Some(bytes) => serde_json::from_slice::<Contents>(&bytes)
-                .ok()
-                .filter(|c| c.v == 1),
-            None => None,
-        };
-        Ok(contents.unwrap_or(Contents {
+        let fresh = Contents {
             v: 1,
             ..Contents::default()
-        }))
+        };
+        match read_private(&self.config, CREDENTIALS)?.map(|bytes| parse(&bytes)) {
+            Some(Parsed::Ok(contents)) => Ok(contents),
+            Some(Parsed::Newer) => newer(&self.config.join(CREDENTIALS)),
+            None | Some(Parsed::Damaged) => Ok(fresh),
+        }
     }
     fn save(&self, contents: &Contents) -> Result<()> {
-        write_private(&self.file, &serde_json::to_vec_pretty(contents)?)
+        let bytes = serde_json::to_vec_pretty(contents)?;
+        write_private(&self.config, CREDENTIALS, &bytes)
     }
     /// Serializes writers (CLI, TUI, xflowd); readers tolerate the atomic rename.
     fn lock(&self) -> Result<File> {
-        let dir = self.file.parent().context("invalid credentials path")?;
-        private_dir(dir)?;
-        let file = open(&dir.join("credentials.lock"), true)?;
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-                bail!("could not lock {}", dir.display());
-            }
+        let dir = Dir::open(&self.config, true)?.context("keystore directory unavailable")?;
+        let file = dir.open_file("credentials.lock", libc::O_RDWR | libc::O_CREAT, 0o600)?;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            bail!("could not lock {}", self.config.display());
         }
         Ok(file)
     }
 }
-
-/// Open without following a symlink; `write` creates the file 0600.
-fn open(path: &Path, write: bool) -> std::io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(!write).write(write).create(write);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-    options.open(path)
+fn newer<T>(path: &Path) -> Result<T> {
+    bail!(
+        "{} was written by a newer xflow; update xflow (nothing was changed)",
+        path.display()
+    )
 }
-/// None when absent; refuses files that others can read or that aren't yours.
-fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
-    let file = match open(path, false) {
+
+#[cfg(test)]
+pub(crate) fn test_root() -> PathBuf {
+    // A child test process is pointed at its parent's store.
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        std::env::var_os("XFLOW_TEST_STORE").map_or_else(
+            || std::env::temp_dir().join(format!("xflow-providers-test-{}", std::process::id())),
+            PathBuf::from,
+        )
+    })
+    .clone()
+}
+
+/// A private directory, opened once without following a symlink and then used
+/// by descriptor, so a path swapped afterwards can't redirect reads or writes.
+struct Dir {
+    file: File,
+    path: PathBuf,
+}
+impl Dir {
+    /// None when absent and not `create`d. Created directories are 0700 from the
+    /// start (no umask window); a created or written one is narrowed to 0700.
+    fn open(path: &Path, create: bool) -> Result<Option<Dir>> {
+        if create {
+            let mut builder = std::fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            builder
+                .create(path)
+                .with_context(|| format!("could not create {}", path.display()))?;
+        }
+        let name = CString::new(path.as_os_str().as_bytes())?;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        let fd = unsafe { libc::open(name.as_ptr(), flags) };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            bail!(
+                "{} must be a directory, not a symlink; fix: make it a real directory owned by you",
+                path.display()
+            );
+        }
+        let dir = Dir {
+            file: unsafe { File::from_raw_fd(fd) },
+            path: path.to_owned(),
+        };
+        let metadata = dir.file.metadata()?;
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            bail!("{} belongs to another user", path.display());
+        }
+        if create && metadata.mode() & 0o077 != 0 {
+            dir.file
+                .set_permissions(std::fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(Some(dir))
+    }
+    /// Refuses a directory others can read or write.
+    fn private(&self) -> Result<()> {
+        if self.file.metadata()?.mode() & 0o077 != 0 {
+            bail!(
+                "{} is accessible to other users; fix: chmod 700 {}",
+                self.path.display(),
+                self.path.display()
+            );
+        }
+        Ok(())
+    }
+    fn open_file(&self, name: &str, flags: i32, mode: libc::c_uint) -> std::io::Result<File> {
+        let name = CString::new(name)?;
+        let flags = flags | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        let fd = unsafe { libc::openat(self.file.as_raw_fd(), name.as_ptr(), flags, mode) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+}
+/// None when absent; refuses files, or their directory, that others can reach or
+/// that aren't yours.
+fn read_private(dir: &Path, name: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    let path = dir.join(name);
+    let Some(dir) = Dir::open(dir, false)? else {
+        return Ok(None);
+    };
+    let file = match dir.open_file(name, libc::O_RDONLY, 0) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => bail!(
@@ -290,26 +416,25 @@ fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
             path.display()
         ),
     };
+    // Checked only once a file exists: an older, broader config dir is fine
+    // until xflow writes a key into it (and narrows it).
+    dir.private()?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         bail!("{} is not a regular file", path.display());
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != unsafe { libc::geteuid() } {
-            bail!(
-                "{} belongs to another user; fix: delete it, then `xflow key set <provider>`",
-                path.display()
-            );
-        }
-        if metadata.mode() & 0o077 != 0 {
-            bail!(
-                "{} is readable by other users; fix: chmod 600 {}",
-                path.display(),
-                path.display()
-            );
-        }
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        bail!(
+            "{} belongs to another user; fix: delete it, then `xflow key set <provider>`",
+            path.display()
+        );
+    }
+    if metadata.mode() & 0o077 != 0 {
+        bail!(
+            "{} is readable by other users; fix: chmod 600 {}",
+            path.display(),
+            path.display()
+        );
     }
     let mut bytes = Zeroizing::new(Vec::new());
     file.take(MAX_FILE + 1).read_to_end(&mut bytes)?;
@@ -318,42 +443,33 @@ fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
     }
     Ok(Some(bytes))
 }
-/// Atomic: a temp file is written and fsynced, then renamed over `path`. A failed
-/// write leaves the previous file intact.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    let dir = path.parent().context("invalid keystore path")?;
-    private_dir(dir)?;
-    let tmp = path.with_extension("tmp");
-    let write = || -> std::io::Result<()> {
-        let mut file = open(&tmp, true)?;
-        file.set_len(0)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
+/// Atomic: a fresh, exclusively created temp file is written and fsynced, then
+/// renamed over `name`. A failed write removes it and leaves the old file intact.
+fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    let path = dir.join(name);
+    let dir = Dir::open(dir, true)?.context("keystore directory unavailable")?;
+    let mut random = [0u8; 8];
+    SystemRandom::new()
+        .fill(&mut random)
+        .map_err(|_| anyhow!("no secure randomness"))?;
+    let tmp = format!(".{name}.{:016x}.tmp", u64::from_le_bytes(random));
+    let mut file = dir
+        .open_file(&tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL, 0o600)
+        .with_context(|| format!("could not write {}", path.display()))?;
+    let (tmp_c, name_c) = (CString::new(tmp)?, CString::new(name)?);
+    let fd = dir.file.as_raw_fd();
+    let mut write = || -> std::io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
-        std::fs::rename(&tmp, path)?;
-        File::open(dir)?.sync_all()
+        if unsafe { libc::renameat(fd, tmp_c.as_ptr(), fd, name_c.as_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        dir.file.sync_all()
     };
-    write().with_context(|| format!("could not write {}", path.display()))
-}
-/// 0700 and owned by you; created if missing.
-fn private_dir(dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let metadata = std::fs::metadata(dir)?;
-        if !metadata.is_dir() || metadata.uid() != unsafe { libc::geteuid() } {
-            bail!("{} is not your directory", dir.display());
-        }
-        if metadata.mode() & 0o077 != 0 {
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        }
-    }
-    Ok(())
+    write().map_err(|e| {
+        unsafe { libc::unlinkat(fd, tmp_c.as_ptr(), 0) };
+        anyhow!(e).context(format!("could not write {}", path.display()))
+    })
 }
 
 #[cfg(test)]
@@ -371,14 +487,23 @@ mod tests {
     fn get(store: &Store, id: &str) -> Result<Option<String>> {
         Ok(store.get(id)?.0.map(|s| s.0.to_string()))
     }
+    fn file(store: &Store) -> PathBuf {
+        store.config.join(CREDENTIALS)
+    }
+    fn key(store: &Store) -> PathBuf {
+        store.data.join(KEY)
+    }
+    fn chmod(path: &Path, mode: u32) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
     fn file_json(store: &Store) -> serde_json::Value {
-        serde_json::from_slice(&std::fs::read(&store.file).unwrap()).unwrap()
+        serde_json::from_slice(&std::fs::read(file(store)).unwrap()).unwrap()
     }
     fn write_json(store: &Store, value: &serde_json::Value) {
-        std::fs::write(&store.file, serde_json::to_vec(value).unwrap()).unwrap();
+        std::fs::write(file(store), serde_json::to_vec(value).unwrap()).unwrap();
     }
 
     #[test]
@@ -389,11 +514,11 @@ mod tests {
         store.set("openai", "sk-other").unwrap();
         assert_eq!(get(&store, "groq").unwrap().as_deref(), Some(SENTINEL));
         assert_eq!(get(&store, "openai").unwrap().as_deref(), Some("sk-other"));
-        assert_eq!(mode(&store.file), 0o600);
-        assert_eq!(mode(&store.key), 0o600);
-        assert_eq!(mode(store.file.parent().unwrap()), 0o700);
-        assert_eq!(mode(store.key.parent().unwrap()), 0o700);
-        for path in [&store.file, &store.key] {
+        assert_eq!(mode(&file(&store)), 0o600);
+        assert_eq!(mode(&key(&store)), 0o600);
+        assert_eq!(mode(file(&store).parent().unwrap()), 0o700);
+        assert_eq!(mode(key(&store).parent().unwrap()), 0o700);
+        for path in [&file(&store), &key(&store)] {
             let bytes = std::fs::read(path).unwrap();
             assert!(!String::from_utf8_lossy(&bytes).contains("SENTINEL"));
         }
@@ -434,8 +559,8 @@ mod tests {
     fn tampered_or_truncated_file_asks_to_reenter() {
         let (_dir, store) = store();
         store.set("groq", SENTINEL).unwrap();
-        let bytes = std::fs::read(&store.file).unwrap();
-        std::fs::write(&store.file, &bytes[..bytes.len() / 2]).unwrap();
+        let bytes = std::fs::read(file(&store)).unwrap();
+        std::fs::write(file(&store), &bytes[..bytes.len() / 2]).unwrap();
         assert!(get(&store, "groq")
             .unwrap_err()
             .to_string()
@@ -454,10 +579,10 @@ mod tests {
     fn wrong_or_missing_key_file_asks_to_reenter() {
         let (_dir, store) = store();
         store.set("groq", SENTINEL).unwrap();
-        std::fs::write(&store.key, [7u8; 32]).unwrap();
+        std::fs::write(key(&store), [7u8; 32]).unwrap();
         let error = get(&store, "groq").unwrap_err().to_string();
         assert!(error.contains("xflow key set groq"), "{error}");
-        std::fs::remove_file(&store.key).unwrap();
+        std::fs::remove_file(key(&store)).unwrap();
         let error = get(&store, "groq").unwrap_err().to_string();
         assert!(error.contains("missing") && error.contains("xflow key set groq"));
         // Setting again makes a new key; the entry decrypts under it.
@@ -468,7 +593,7 @@ mod tests {
     fn broad_permissions_are_refused_with_a_fix() {
         let (_dir, store) = store();
         store.set("groq", SENTINEL).unwrap();
-        for path in [&store.file, &store.key] {
+        for path in [&file(&store), &key(&store)] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
             let error = store.check().unwrap_err().to_string();
             assert!(error.contains("chmod 600"), "{error}");
@@ -477,7 +602,7 @@ mod tests {
         }
         store.check().unwrap();
         // Writes refuse too, rather than silently fixing an exposed file.
-        std::fs::set_permissions(&store.file, std::fs::Permissions::from_mode(0o640)).unwrap();
+        std::fs::set_permissions(file(&store), std::fs::Permissions::from_mode(0o640)).unwrap();
         assert!(store.set("groq", "new").is_err());
     }
     #[test]
@@ -485,8 +610,8 @@ mod tests {
         let (dir, store) = store();
         store.set("groq", SENTINEL).unwrap();
         let elsewhere = dir.0.join("elsewhere");
-        std::fs::rename(&store.file, &elsewhere).unwrap();
-        std::os::unix::fs::symlink(&elsewhere, &store.file).unwrap();
+        std::fs::rename(file(&store), &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, file(&store)).unwrap();
         assert!(store.get("groq").is_err());
     }
     #[test]
@@ -494,9 +619,105 @@ mod tests {
         let (_dir, store) = store();
         store.set("groq", SENTINEL).unwrap();
         // The temp file can't be created: the write fails before any rename.
-        std::fs::create_dir(store.file.with_extension("tmp")).unwrap();
+        chmod(&store.config, 0o500);
         assert!(store.set("groq", "replacement").is_err());
+        chmod(&store.config, 0o700);
         assert_eq!(get(&store, "groq").unwrap().as_deref(), Some(SENTINEL));
+        let leftovers = std::fs::read_dir(&store.config)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+    #[test]
+    fn planted_temp_files_and_hardlinks_are_never_written_through() {
+        let (dir, store) = store();
+        store.set("groq", SENTINEL).unwrap();
+        let unrelated = dir.0.join("unrelated");
+        std::fs::write(&unrelated, "do not touch").unwrap();
+        chmod(&unrelated, 0o600);
+        for planted in ["keystore.tmp", ".keystore.key.tmp", "credentials.tmp"] {
+            let dir = if planted.contains("credentials") {
+                &store.config
+            } else {
+                &store.data
+            };
+            std::fs::hard_link(&unrelated, dir.join(planted)).unwrap();
+        }
+        std::fs::remove_file(key(&store)).unwrap();
+        store.set("groq", SENTINEL).unwrap();
+        assert_eq!(std::fs::read_to_string(&unrelated).unwrap(), "do not touch");
+        for path in [key(&store), file(&store)] {
+            assert_eq!(std::fs::metadata(path).unwrap().nlink(), 1);
+        }
+        assert_eq!(get(&store, "groq").unwrap().as_deref(), Some(SENTINEL));
+    }
+    #[test]
+    fn new_directories_are_private_even_with_an_open_umask() {
+        let (dir, _) = store();
+        let store = Store::at(&dir.0.join("a/b/config"), &dir.0.join("c/data"));
+        let old = unsafe { libc::umask(0) };
+        let result = store.set("groq", SENTINEL);
+        unsafe { libc::umask(old) };
+        result.unwrap();
+        for path in [&store.config, &store.data] {
+            assert_eq!(mode(path), 0o700);
+        }
+        assert_eq!(mode(&dir.0.join("a")), 0o700);
+        assert_eq!(mode(&file(&store)), 0o600);
+        assert_eq!(mode(&key(&store)), 0o600);
+    }
+    #[test]
+    fn symlinked_or_shared_directories_are_refused() {
+        let (dir, store) = store();
+        store.set("groq", SENTINEL).unwrap();
+        // A config dir others can enter is refused with the fix.
+        chmod(&store.config, 0o777);
+        let error = get(&store, "groq").unwrap_err().to_string();
+        assert!(error.contains("chmod 700"), "{error}");
+        assert!(store.check().is_err());
+        chmod(&store.config, 0o700);
+        // A config dir replaced by a symlink to a real store is refused too.
+        let moved = dir.0.join("moved");
+        std::fs::rename(&store.config, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &store.config).unwrap();
+        let error = get(&store, "groq").unwrap_err().to_string();
+        assert!(error.contains("not a symlink"), "{error}");
+        assert!(store.set("groq", "x").is_err());
+        // A broad config dir with no credentials yet (older installs) is fine.
+        std::fs::remove_file(&store.config).unwrap();
+        std::fs::create_dir(&store.config).unwrap();
+        chmod(&store.config, 0o755);
+        assert_eq!(get(&store, "groq").unwrap(), None);
+        store.set("groq", SENTINEL).unwrap();
+        assert_eq!(mode(&store.config), 0o700);
+    }
+    #[test]
+    fn a_newer_store_is_never_overwritten() {
+        let (_dir, store) = store();
+        store.set("groq", SENTINEL).unwrap();
+        store.set("openai", "sk-other").unwrap();
+        let mut json = file_json(&store);
+        json["v"] = 2.into();
+        write_json(&store, &json);
+        let before = std::fs::read(file(&store)).unwrap();
+        for error in [
+            store.get("groq").unwrap_err(),
+            store.set("groq", "x").unwrap_err(),
+            store.remove("openai").unwrap_err(),
+            store
+                .migrate(&["groq"], |_| Ok(None), |_| Ok(()))
+                .unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("newer xflow"), "{error}");
+        }
+        assert_eq!(std::fs::read(file(&store)).unwrap(), before);
     }
     #[test]
     fn concurrent_writers_both_land() {
@@ -536,8 +757,9 @@ mod tests {
                 None => Ok(None),
             }
         };
-        let delete = |id: &str| {
+        let delete = |id: &str| -> Result<()> {
             keychain.borrow_mut().remove(id);
+            Ok(())
         };
         let ids = ["groq", "openai", "deepgram"];
         assert_eq!(store.migrate(&ids, read, delete).unwrap(), ["openai"]);
@@ -566,12 +788,105 @@ mod tests {
             .migrate(
                 &["groq"],
                 |_| panic!("a key set here is never read from the keychain"),
-                |id| deleted.borrow_mut().push(id.to_owned()),
+                |id| {
+                    deleted.borrow_mut().push(id.to_owned());
+                    Ok(())
+                },
             )
             .unwrap();
         assert!(blocked.is_empty());
         assert_eq!(get(&store, "groq").unwrap().as_deref(), Some("new-key"));
         assert!(deleted.borrow().is_empty());
+    }
+
+    #[test]
+    fn failed_or_interrupted_delete_is_retried_and_completes_later() {
+        let (_dir, store) = store();
+        let keychain = RefCell::new(BTreeMap::from([("groq", SENTINEL)]));
+        let read = |id: &str| -> Result<Option<Zeroizing<String>>> {
+            Ok(keychain
+                .borrow()
+                .get(id)
+                .map(|v| Zeroizing::new(v.to_string())))
+        };
+        // The delete fails (or the process dies before it): the copy is stored,
+        // the keychain item stays, and nothing is marked done.
+        let blocked = store
+            .migrate(&["groq"], read, |_| bail!("delete failed"))
+            .unwrap();
+        assert!(blocked.is_empty());
+        assert_eq!(get(&store, "groq").unwrap().as_deref(), Some(SENTINEL));
+        assert!(!store.migrated().unwrap());
+        assert!(file_json(&store)["pending_delete"][0] == "groq");
+        // Next run ("restart"): the pending delete is retried and confirmed.
+        let deleted = RefCell::new(vec![]);
+        let delete = |id: &str| -> Result<()> {
+            deleted.borrow_mut().push(id.to_owned());
+            keychain.borrow_mut().remove(id);
+            Ok(())
+        };
+        store.migrate(&["groq"], read, delete).unwrap();
+        assert_eq!(*deleted.borrow(), ["groq"]);
+        assert!(keychain.borrow().is_empty());
+        assert!(store.migrated().unwrap());
+        assert!(file_json(&store).get("pending_delete").is_none());
+    }
+    #[test]
+    fn keychain_copy_is_kept_when_the_stored_copy_doesnt_read_back() {
+        let (_dir, store) = store();
+        let read = |_: &str| Ok(Some(Zeroizing::new(SENTINEL.to_owned())));
+        store
+            .migrate(&["groq"], read, |_| bail!("delete failed"))
+            .unwrap();
+        // The stored copy becomes unreadable before the retry: never delete then.
+        std::fs::write(key(&store), [9u8; 32]).unwrap();
+        let blocked = store
+            .migrate(&["groq"], read, |_| panic!("deleted an unverified copy"))
+            .unwrap();
+        assert!(blocked.is_empty());
+        assert!(!store.migrated().unwrap());
+    }
+    #[test]
+    fn service_outage_leaves_migration_pending_until_it_recovers() {
+        let (_dir, store) = store();
+        let up = std::cell::Cell::new(false);
+        let read = |_: &str| -> Result<Option<Zeroizing<String>>> {
+            if !up.get() {
+                bail!("Secret Service unavailable");
+            }
+            Ok(Some(Zeroizing::new(SENTINEL.to_owned())))
+        };
+        assert_eq!(
+            store.migrate(&["groq"], read, |_| Ok(())).unwrap(),
+            ["groq"]
+        );
+        assert!(!store.migrated().unwrap());
+        up.set(true);
+        assert!(store
+            .migrate(&["groq"], read, |_| Ok(()))
+            .unwrap()
+            .is_empty());
+        assert_eq!(get(&store, "groq").unwrap().as_deref(), Some(SENTINEL));
+        assert!(store.migrated().unwrap());
+    }
+    #[test]
+    fn removing_a_key_drops_its_pending_delete() {
+        let (_dir, store) = store();
+        let read = |_: &str| Ok(Some(Zeroizing::new(SENTINEL.to_owned())));
+        store
+            .migrate(&["groq"], read, |_| bail!("delete failed"))
+            .unwrap();
+        store.remove("groq").unwrap();
+        assert!(file_json(&store).get("pending_delete").is_none());
+        assert!(store.migrate(&[], read, |_| Ok(())).unwrap().is_empty());
+        assert!(store.migrated().unwrap());
+    }
+    #[test]
+    fn check_reports_whether_anything_is_stored() {
+        let (_dir, store) = store();
+        assert!(!store.check().unwrap());
+        store.set("groq", SENTINEL).unwrap();
+        assert!(store.check().unwrap());
     }
 
     /// A self-deleting temp dir; no new dev-dependency for one helper.

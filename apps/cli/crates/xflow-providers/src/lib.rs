@@ -137,7 +137,8 @@ struct Credentials {
     cache: tokio::sync::Mutex<CredentialCache>,
 }
 struct CredentialCache {
-    epoch: u64,
+    /// The keystore file this value was resolved against (any process may write it).
+    stamp: Option<keystore::Stamp>,
     auth: Option<Auth>,
     // Outer None = unresolved; Some(None) = explicitly anonymous.
     value: Option<Option<Zeroizing<String>>>,
@@ -160,7 +161,7 @@ impl Credentials {
             allow_store,
             env,
             cache: tokio::sync::Mutex::new(CredentialCache {
-                epoch: KEY_EPOCH.load(std::sync::atomic::Ordering::Relaxed),
+                stamp: store_stamp(),
                 auth: None,
                 value: None,
             }),
@@ -168,9 +169,9 @@ impl Credentials {
     }
     async fn header_for(&self, auth: Auth) -> Result<Option<HeaderValue>> {
         let mut cached = self.cache.lock().await;
-        let epoch = KEY_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
-        if cached.epoch != epoch || cached.auth != Some(auth) {
-            cached.epoch = epoch;
+        let stamp = store_stamp();
+        if cached.stamp != stamp || cached.auth != Some(auth) {
+            cached.stamp = stamp;
             cached.auth = Some(auth);
             cached.value = None;
         }
@@ -270,7 +271,11 @@ enum Auth {
     Token,
     Raw(&'static str),
 }
-static KEY_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// One stat per request: a key set by `xflow key set` in any process, with any
+/// `--config`, is used by the next dictation without a reload.
+fn store_stamp() -> Option<keystore::Stamp> {
+    keystore::Store::open().ok()?.stamp()
+}
 
 fn secret_header(secret: Zeroizing<String>) -> Result<HeaderValue> {
     if secret.is_empty() || secret.len() > 16384 {
@@ -338,7 +343,8 @@ fn lookup(provider: &str) -> Result<Stored> {
     }
     Ok(store.get(provider)?.0.map_or(Stored::Missing, Stored::Key))
 }
-/// Read a key an older build saved; Err = it exists but needs the user's approval.
+/// Read a key an older build saved; Err = it exists but needs the user's approval,
+/// or the store couldn't be asked.
 fn legacy_read(id: &str, interactive: bool) -> Result<Option<Zeroizing<String>>> {
     #[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
     return {
@@ -346,33 +352,44 @@ fn legacy_read(id: &str, interactive: bool) -> Result<Option<Zeroizing<String>>>
         Ok(None)
     };
     #[cfg(all(not(test), target_os = "macos"))]
-    let value = macos_keychain::read(KEYRING_SERVICE, id, interactive);
+    return legacy_result(macos_keychain::read(KEYRING_SERVICE, id, interactive));
     #[cfg(all(not(test), target_os = "linux"))]
-    let value = keyring::Entry::new(KEYRING_SERVICE, id).and_then(|e| e.get_password());
-    #[cfg(all(not(test), any(target_os = "macos", target_os = "linux")))]
+    return {
+        let _ = interactive;
+        legacy_result(keyring::Entry::new(KEYRING_SERVICE, id).and_then(|e| e.get_password()))
+    };
+}
+/// Only "no such item" proves absence. Anything else (needs approval, Secret
+/// Service down) keeps the migration pending, so it's retried later.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn legacy_result(value: keyring::Result<String>) -> Result<Option<Zeroizing<String>>> {
     match value {
         Ok(value) => Ok(Some(Zeroizing::new(value))),
         Err(keyring::Error::NoEntry) => Ok(None),
-        // No Secret Service running: nothing there to move.
-        #[cfg(target_os = "linux")]
-        Err(keyring::Error::PlatformFailure(_)) => Ok(None),
-        Err(_) => Err(anyhow!("needs approval")),
+        Err(_) => Err(anyhow!("keychain item not readable now")),
     }
 }
 /// `XFLOW_NO_KEYCHAIN=1` (CI, test harnesses): never touch the OS keychain.
 fn keychain_off() -> bool {
     std::env::var_os("XFLOW_NO_KEYCHAIN").is_some_and(|v| v == "1")
 }
-fn legacy_delete(id: &str) {
+/// Ok only once the item is confirmed gone (deleted, or already absent).
+fn legacy_delete(id: &str) -> Result<()> {
     if keychain_off() {
-        return;
+        bail!("keychain access is disabled");
     }
     #[cfg(all(not(test), target_os = "macos"))]
-    macos_keychain::delete(KEYRING_SERVICE, id);
+    return macos_keychain::delete(KEYRING_SERVICE, id);
     #[cfg(all(not(test), target_os = "linux"))]
-    let _ = keyring::Entry::new(KEYRING_SERVICE, id).and_then(|e| e.delete_credential());
+    return match keyring::Entry::new(KEYRING_SERVICE, id).and_then(|e| e.delete_credential()) {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => bail!("could not delete the keyring item"),
+    };
     #[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
-    let _ = id;
+    {
+        let _ = id;
+        Ok(())
+    }
 }
 /// Move keys older builds saved in the OS keychain into the keystore, once.
 /// Without `foreground` (xflowd, the TUI, lookups) it never prompts: macOS reads
@@ -441,11 +458,12 @@ pub async fn delete_key(provider: &str) -> Result<()> {
     let provider = provider.to_owned();
     blocking(move || {
         keystore::Store::open()?.remove(&provider)?;
-        legacy_delete(&provider);
+        // Best effort: an item this build can't delete is never read again once
+        // the migration is complete.
+        let _ = legacy_delete(&provider);
         Ok::<_, anyhow::Error>(())
     })
     .await??;
-    KEY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 /// Persist encrypted in xflow's keystore; environment variables take precedence.
@@ -455,11 +473,11 @@ pub async fn save_key(provider: &str, secret: &str) -> Result<()> {
     secret_header(value.clone())?;
     let provider = provider.to_owned();
     blocking(move || keystore::Store::open()?.set(&provider, &value)).await??;
-    KEY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 /// Doctor: refuses a damaged keystore or one others can read, naming the fix.
-pub fn check_keystore() -> Result<()> {
+/// Ok(false) when no key is stored yet.
+pub fn check_keystore() -> Result<bool> {
     keystore::Store::open()?.check()
 }
 
@@ -989,6 +1007,61 @@ mod tests {
         assert!(error
             .to_string()
             .contains("configured environment variable"));
+    }
+    /// Run only as the child of `key_set_by_another_process_is_used_next_request`.
+    #[test]
+    #[ignore]
+    fn child_process_sets_a_key() {
+        if let Some(value) = std::env::var_os("XFLOW_TEST_CHILD_KEY") {
+            let value = value.into_string().unwrap();
+            keystore::Store::open()
+                .unwrap()
+                .set("deepgram", &value)
+                .unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn key_set_by_another_process_is_used_next_request() {
+        let env = "XFLOW_CROSS_PROCESS_TEST_KEY";
+        keystore::Store::open()
+            .unwrap()
+            .set("deepgram", "first")
+            .unwrap();
+        let credential = Credentials::new("deepgram", Some(env.into()), false, true).unwrap();
+        let header = credential.header().await.unwrap().unwrap();
+        assert_eq!(header.to_str().unwrap(), "Bearer first");
+        // Another process (e.g. `xflow --config other.toml key set`) writes the
+        // store; nothing tells this process, yet the next request uses the new key.
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::child_process_sets_a_key",
+                "--ignored",
+                "--quiet",
+            ])
+            .env("XFLOW_TEST_STORE", keystore::test_root())
+            .env("XFLOW_TEST_CHILD_KEY", "second")
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "{status:?}");
+        let header = credential.header().await.unwrap().unwrap();
+        assert_eq!(header.to_str().unwrap(), "Bearer second");
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn only_a_missing_item_counts_as_absent() {
+        assert!(legacy_result(Err(keyring::Error::NoEntry))
+            .unwrap()
+            .is_none());
+        let outage = || std::io::Error::other("org.freedesktop.DBus.Error.ServiceUnknown");
+        for error in [
+            keyring::Error::PlatformFailure(Box::new(outage())),
+            keyring::Error::NoStorageAccess(Box::new(outage())),
+        ] {
+            assert!(legacy_result(Err(error)).is_err());
+        }
+        let found = legacy_result(Ok("k".into())).unwrap().unwrap();
+        assert_eq!(found.as_str(), "k");
     }
     #[tokio::test]
     async fn stored_key_is_used_and_env_still_overrides() {

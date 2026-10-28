@@ -19,11 +19,16 @@ pub fn read(service: &str, account: &str, interactive: bool) -> keyring::Result<
 
 /// Apple's `security` deletes an item another build wrote without asking, where
 /// SecItemDelete from this binary is refused (errSecInvalidOwnerEdit, -25244).
-pub fn delete(service: &str, account: &str) {
-    let _ = Command::new("/usr/bin/security")
+/// Ok once the item is gone: deleted (0) or not found (44).
+pub fn delete(service: &str, account: &str) -> anyhow::Result<()> {
+    let status = Command::new("/usr/bin/security")
         .args(["delete-generic-password", "-s", service, "-a", account])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()?;
+    match status.code() {
+        Some(0 | 44) => Ok(()),
+        _ => anyhow::bail!("Keychain item {service}/{account} was not deleted ({status})"),
+    }
 }

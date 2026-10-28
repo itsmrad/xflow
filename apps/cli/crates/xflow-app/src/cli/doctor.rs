@@ -296,10 +296,13 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
         "keystore",
         keystore.is_ok(),
         true,
-        keystore.map_or_else(
-            |e| format!("{e:#}"),
-            |()| "Provider keys are encrypted in xflow's own store, not config.toml".into(),
-        ),
+        match keystore {
+            Ok(true) => "Provider keys are encrypted in xflow's own store, not config.toml".into(),
+            Ok(false) => {
+                "No keys stored yet; xflow key set <provider> creates the encrypted store".into()
+            }
+            Err(e) => format!("{e:#}"),
+        },
         "Apply the fix above, or re-enter keys with xflow key set <provider>",
     ));
     if desktop.to_lowercase().contains("gnome") && present("gnome-extensions") {
