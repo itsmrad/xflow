@@ -136,6 +136,8 @@ pub fn is_terminal(app: Option<&str>) -> bool {
         "ghostty",
         "rxvt",
         "st-256color",
+        "tabby",
+        "raphaelamorim.rio",
     ]
     .iter()
     .any(|terminal| app.contains(terminal))
@@ -582,6 +584,8 @@ mod tests {
             "alacritty",
             "org.wezfurlong.wezterm",
             "ghostty",
+            "org.tabby",
+            "com.raphaelamorim.rio",
         ] {
             let context = target(Some(app), Some("1"));
             assert_eq!(paste_shortcut(Some(app)), "ctrl+shift+v", "{app}");
@@ -596,6 +600,11 @@ mod tests {
         let editor = target(Some("code"), Some("2"));
         assert!(safe_target("line one\nline two", &editor, &editor));
         assert_eq!(paste_shortcut(Some("code")), "ctrl+v");
+        // The daemon's list guard uses the same check on macOS bundle ids.
+        for app in ["com.googlecode.iterm2", "com.apple.Terminal", "org.tabby"] {
+            assert!(is_terminal(Some(app)), "{app}");
+        }
+        assert!(!is_terminal(Some("com.tinyspeck.slackmacgap")));
     }
     #[test]
     fn injection_options_and_outcomes_follow_contract() {

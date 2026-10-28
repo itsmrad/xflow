@@ -163,7 +163,7 @@ pub fn before_cleanup(text: &str, config: &Config, terminal: bool) -> String {
     let text = replace(&text, &pairs, false);
     // After replacements, so list items carry the corrected terms.
     if config.formatting.lists && !terminal {
-        crate::lists::format(&text).unwrap_or(text)
+        crate::lists::format(&text, &config.dictionary).unwrap_or(text)
     } else {
         text
     }
