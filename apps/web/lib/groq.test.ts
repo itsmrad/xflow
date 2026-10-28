@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { BadRequest, chatUsage, cleanupRequest, MAX_AUDIO_BYTES, transcribeRequest, wavDurationMs } from "./groq";
+import {
+  BadRequest,
+  chatUsage,
+  cleanupRequest,
+  flacDurationMs,
+  MAX_AUDIO_BYTES,
+  MAX_COMPLETION_TOKENS,
+  MIN_COMPLETION_TOKENS,
+  publicBody,
+  publicMessage,
+  transcribeRequest,
+  wavDurationMs,
+} from "./groq";
 
 function wav(seconds: number, rate = 16000): Uint8Array {
   const data = rate * 2 * seconds;
@@ -20,6 +32,24 @@ function wav(seconds: number, rate = 16000): Uint8Array {
   put(36, "data");
   v.setUint32(40, data, true);
   return new Uint8Array(buf);
+}
+
+/** A FLAC STREAMINFO header (as flacenc writes it) for `seconds` of 16 kHz mono audio. */
+function flac(seconds: number, rate = 16000): Uint8Array {
+  const out = new Uint8Array(8 + 34 + 16);
+  out.set([0x66, 0x4c, 0x61, 0x43], 0); // fLaC
+  out.set([0x80, 0, 0, 34], 4); // last block, STREAMINFO, 34 bytes
+  const info = out.subarray(8);
+  const samples = rate * seconds;
+  info[10] = (rate >> 12) & 0xff;
+  info[11] = (rate >> 4) & 0xff;
+  info[12] = ((rate & 0x0f) << 4) | (0 << 1) | 0; // mono, bps high bit
+  info[13] = (15 << 4) | Math.floor(samples / 2 ** 32); // 16 bps
+  info[14] = (samples >>> 24) & 0xff;
+  info[15] = (samples >>> 16) & 0xff;
+  info[16] = (samples >>> 8) & 0xff;
+  info[17] = samples & 0xff;
+  return out;
 }
 
 // What apps/cli/crates/xflow-providers/src/stt.rs sends to Groq today.
@@ -49,12 +79,28 @@ describe("transcribe request", () => {
     expect(r.audioMs).toBe(2000);
   });
 
-  test("only model and file are required", async () => {
+  test("only model and file are required; FLAC duration comes from STREAMINFO", async () => {
     const form = new FormData();
-    form.set("file", new File([new Uint8Array([1, 2, 3])], "dictation.flac"));
+    form.set("file", new File([flac(42) as BlobPart], "dictation.flac"));
     const r = await transcribeRequest(form);
     expect(r.model).toBe("whisper-large-v3-turbo");
     expect((r.form.get("file") as File).type).toBe("audio/flac");
+    expect(r.audioMs).toBe(42_000);
+  });
+
+  // Review M2: spend is charged from the header duration, so audio without one is refused.
+  test("rejects audio whose duration can't be read, and containers the CLI doesn't send", async () => {
+    const junk = new FormData();
+    junk.set("file", new File([new Uint8Array([1, 2, 3])], "dictation.flac"));
+    await rejects(junk);
+    const notWav = new FormData();
+    notWav.set("file", new File([new Uint8Array(100)], "dictation.wav"));
+    await rejects(notWav);
+    for (const name of ["dictation.mp3", "dictation.ogg", "dictation.webm", "dictation.m4a"]) {
+      const other = new FormData();
+      other.set("file", new File([new Uint8Array(100)], name));
+      await rejects(other);
+    }
   });
 
   const rejects = async (form: FormData, status = 400) => {
@@ -99,8 +145,34 @@ describe("cleanup request", () => {
     reasoning_effort: "none",
   };
 
-  test("forwards the Rust provider's JSON body unchanged", () => {
-    expect(cleanupRequest(rust).body).toEqual(rust);
+  test("forwards the Rust provider's JSON body, adding only an output cap sized to the text", () => {
+    expect(cleanupRequest(rust).body).toEqual({ ...rust, max_completion_tokens: MIN_COMPLETION_TOKENS });
+  });
+
+  test("the output cap grows with the text, up to the maximum", () => {
+    const withText = (n: number) => ({ ...rust, messages: [rust.messages[0]!, { role: "user", content: "x".repeat(n) }] });
+    expect(cleanupRequest(withText(3000)).maxCompletionTokens).toBe(2000);
+    expect(cleanupRequest(withText(60_000)).maxCompletionTokens).toBe(MAX_COMPLETION_TOKENS);
+    // A client may ask for less, never more than the text warrants.
+    expect(cleanupRequest({ ...withText(3000), max_completion_tokens: 100 }).maxCompletionTokens).toBe(100);
+    expect(cleanupRequest({ ...withText(30), max_completion_tokens: 4000 }).maxCompletionTokens).toBe(MIN_COMPLETION_TOKENS);
+  });
+
+  // Review M2: a 310 KB prompt with max_completion_tokens 32768 on a 70B model was forwarded.
+  test("bounds cost per request: models, text size, output tokens", () => {
+    expect(() => cleanupRequest({ ...rust, model: "llama-3.3-70b-versatile" })).toThrow(BadRequest);
+    expect(() => cleanupRequest({ ...rust, max_completion_tokens: 32768 })).toThrow(BadRequest);
+    expect(cleanupRequest({ ...rust, max_completion_tokens: 256 }).body.max_completion_tokens).toBe(256);
+    const big = { ...rust, messages: [rust.messages[0]!, { role: "user", content: "x".repeat(70_000) }] };
+    const err = (() => {
+      try {
+        cleanupRequest(big);
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(BadRequest);
+    expect((err as BadRequest).status).toBe(413);
   });
 
   test("rejects streaming, unknown models, fields and roles", () => {
@@ -115,8 +187,22 @@ describe("cleanup request", () => {
 
   test("reads token usage from a chat response", () => {
     expect(chatUsage('{"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30}}')).toEqual({ inputTokens: 120, outputTokens: 30 });
-    expect(chatUsage("not json")).toEqual({ inputTokens: 0, outputTokens: 0 });
+    expect(chatUsage("not json")).toBeNull();
+    expect(chatUsage('{"choices":[]}')).toBeNull();
   });
+
+  test("replies don't name the provider", () => {
+    expect(JSON.parse(publicBody('{"text":"hi","x_groq":{"id":"req_1"}}'))).toEqual({ text: "hi" });
+    expect(publicBody("plain text")).toBe("plain text");
+    expect(publicMessage('{"error":{"message":"Groq could not decode the file"}}')).toBe("provider could not decode the file");
+    expect(publicMessage("<html>")).toBe("the request was rejected");
+  });
+});
+
+describe("flac duration", () => {
+  test("reads STREAMINFO", () => expect(flacDurationMs(flac(90))).toBe(90_000));
+  test("unknown sample count reads as 0", () => expect(flacDurationMs(flac(0))).toBe(0));
+  test("non-FLAC reads as 0", () => expect(flacDurationMs(new Uint8Array(64))).toBe(0));
 });
 
 describe("wav duration", () => {

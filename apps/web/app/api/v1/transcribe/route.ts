@@ -1,5 +1,6 @@
 import { BadRequest, MAX_AUDIO_BYTES, transcribeRequest } from "@/lib/groq";
 import { error } from "@/lib/http";
+import { audioCostMicros } from "@/lib/pricing";
 import { apiCaller, unauthorized } from "@/lib/server/api-auth";
 import { forward, gate } from "@/lib/server/upstream";
 
@@ -29,6 +30,8 @@ export async function POST(request: Request) {
     body: parsed.form,
     audioBytes: parsed.audioBytes,
     audioMs: parsed.audioMs,
+    // Duration is exact from the header, so the reservation is the final charge.
+    reserveMicros: audioCostMicros(parsed.model, parsed.audioMs),
     signal: request.signal,
   });
 }

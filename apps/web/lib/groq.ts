@@ -7,24 +7,23 @@ export const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 // Vercel caps a function request body at 4.5 MB. 16 kHz mono 16-bit WAV is 32 KB/s, so this is
 // ~135 s of WAV, or far longer as FLAC/Opus.
 export const MAX_AUDIO_BYTES = 4_400_000;
-export const MAX_CLEANUP_BODY_BYTES = 320 * 1024;
+// Dictated text is small: 64 KiB of user text is over an hour of speech.
+export const MAX_CLEANUP_BODY_BYTES = 128 * 1024;
+export const MAX_CLEANUP_USER_BYTES = 64 * 1024;
+// Cleanup output is about the size of its input. The provider counts the *requested* output
+// against the account's output-tokens-per-minute limit, so ask for what the text needs:
+// twice its estimated tokens, at least MIN_COMPLETION_TOKENS (commands that write new text).
+export const MAX_COMPLETION_TOKENS = 4096;
+export const MIN_COMPLETION_TOKENS = 512;
 
 export const STT_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"] as const;
-export const CLEANUP_MODELS = ["qwen/qwen3.8-27b", "llama-3.1-8b-instant", "llama-3.3-70b-versatile"] as const;
+// Only the CLI default; the Llama presets need a provider enterprise account.
+export const CLEANUP_MODELS = ["qwen/qwen3.8-27b"] as const;
 const RESPONSE_FORMATS = ["json", "verbose_json", "text"];
 const REASONING_EFFORTS = ["none", "default", "low", "medium", "high"];
-const AUDIO_EXTENSIONS: Record<string, string> = {
-  wav: "audio/wav",
-  flac: "audio/flac",
-  mp3: "audio/mpeg",
-  mpeg: "audio/mpeg",
-  mpga: "audio/mpeg",
-  m4a: "audio/mp4",
-  mp4: "audio/mp4",
-  ogg: "audio/ogg",
-  opus: "audio/ogg",
-  webm: "audio/webm",
-};
+// What the CLI uploads (encode_upload: WAV, or FLAC for longer clips). Both carry their
+// exact duration in the header, so a request is charged before it is forwarded.
+const AUDIO_EXTENSIONS: Record<string, string> = { wav: "audio/wav", flac: "audio/flac" };
 
 export class BadRequest extends Error {
   constructor(
@@ -73,7 +72,9 @@ export async function transcribeRequest(input: FormData): Promise<TranscribeRequ
     form.set("prompt", prompt);
   }
 
-  const audioMs = ext === "wav" ? wavDurationMs(new Uint8Array(await file.slice(0, 4096).arrayBuffer()), file.size) : 0;
+  const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
+  const audioMs = ext === "wav" ? wavDurationMs(head, file.size) : flacDurationMs(head);
+  if (audioMs <= 0) throw new BadRequest(`could not read the ${ext.toUpperCase()} header`);
   return { form, model, audioBytes: file.size, audioMs };
 }
 
@@ -85,7 +86,12 @@ function textField(form: FormData, key: string): string | null {
   return value;
 }
 
-export type CleanupRequest = { body: Record<string, unknown>; model: string };
+export type CleanupRequest = {
+  body: Record<string, unknown>;
+  model: string;
+  messages: { role: string; content: string }[];
+  maxCompletionTokens: number;
+};
 
 export function cleanupRequest(input: unknown): CleanupRequest {
   if (typeof input !== "object" || input === null || Array.isArray(input)) throw new BadRequest("body must be a JSON object");
@@ -108,6 +114,8 @@ export function cleanupRequest(input: unknown): CleanupRequest {
     if (typeof content !== "string") throw new BadRequest("message content must be text");
     return { role, content };
   });
+  const userBytes = clean.reduce((n, m) => n + (m.role === "system" ? 0 : new TextEncoder().encode(m.content).length), 0);
+  if (userBytes > MAX_CLEANUP_USER_BYTES) throw new BadRequest(`text exceeds ${MAX_CLEANUP_USER_BYTES} bytes`, 413);
 
   const body: Record<string, unknown> = { model, stream: false, messages: clean };
   if (raw.reasoning_effort !== undefined) {
@@ -120,12 +128,18 @@ export function cleanupRequest(input: unknown): CleanupRequest {
     if (typeof raw.temperature !== "number" || !(raw.temperature >= 0 && raw.temperature <= 2)) throw new BadRequest("temperature must be 0–2");
     body.temperature = raw.temperature;
   }
+  const userTokens = Math.ceil(userBytes / 3);
+  let maxCompletionTokens = Math.min(MAX_COMPLETION_TOKENS, Math.max(MIN_COMPLETION_TOKENS, 2 * userTokens));
   if (raw.max_completion_tokens !== undefined) {
     const n = raw.max_completion_tokens;
-    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 32768) throw new BadRequest("max_completion_tokens must be 1–32768");
-    body.max_completion_tokens = n;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > MAX_COMPLETION_TOKENS) {
+      throw new BadRequest(`max_completion_tokens must be 1–${MAX_COMPLETION_TOKENS}`);
+    }
+    maxCompletionTokens = Math.min(n, maxCompletionTokens);
   }
-  return { body, model };
+  // Always sent, so the reservation charged up front is a true upper bound.
+  body.max_completion_tokens = maxCompletionTokens;
+  return { body, model, messages: clean, maxCompletionTokens };
 }
 
 /** Duration of a PCM WAV from its header; 0 if the header can't be read. */
@@ -149,13 +163,49 @@ export function wavDurationMs(head: Uint8Array, totalBytes: number): number {
   return 0;
 }
 
-/** Token counts from a chat-completions response, if present. */
-export function chatUsage(body: string): { inputTokens: number; outputTokens: number } {
+/** Duration of a FLAC stream from its STREAMINFO block; 0 if absent or unknown. */
+export function flacDurationMs(head: Uint8Array): number {
+  // "fLaC", then a metadata block header whose type (low 7 bits) is 0 = STREAMINFO.
+  if (head.length < 8 + 18 || String.fromCharCode(...head.subarray(0, 4)) !== "fLaC" || (head[4]! & 0x7f) !== 0) return 0;
+  const info = head.subarray(8);
+  const rate = (info[10]! << 12) | (info[11]! << 4) | (info[12]! >> 4);
+  const samples = (info[13]! & 0x0f) * 2 ** 32 + ((info[14]! << 24) >>> 0) + (info[15]! << 16) + (info[16]! << 8) + info[17]!;
+  return rate > 0 && samples > 0 ? Math.round((samples / rate) * 1000) : 0;
+}
+
+/** Token counts from a chat-completions response; null when the response doesn't report them. */
+export function chatUsage(body: string): { inputTokens: number; outputTokens: number } | null {
   try {
     const usage = (JSON.parse(body) as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }).usage;
-    const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0);
-    return { inputTokens: n(usage?.prompt_tokens), outputTokens: n(usage?.completion_tokens) };
+    const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : null);
+    const inputTokens = n(usage?.prompt_tokens);
+    const outputTokens = n(usage?.completion_tokens);
+    return inputTokens === null || outputTokens === null ? null : { inputTokens, outputTokens };
   } catch {
-    return { inputTokens: 0, outputTokens: 0 };
+    return null;
   }
+}
+
+/** Drops the provider's own fields (`x_groq`) from a JSON reply; xflow doesn't name its provider. */
+export function publicBody(body: string): string {
+  try {
+    const value: unknown = JSON.parse(body);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return body;
+    const out = Object.fromEntries(Object.entries(value).filter(([k]) => !k.startsWith("x_groq")));
+    return JSON.stringify(out);
+  } catch {
+    return body;
+  }
+}
+
+/** A provider error message with the provider's name taken out. */
+export function publicMessage(body: string): string {
+  let message = "the request was rejected";
+  try {
+    const m = (JSON.parse(body) as { error?: { message?: unknown } }).error?.message;
+    if (typeof m === "string" && m.trim()) message = m.slice(0, 500);
+  } catch {
+    // not JSON: keep the generic message
+  }
+  return message.replace(/groq(cloud)?/gi, "provider");
 }

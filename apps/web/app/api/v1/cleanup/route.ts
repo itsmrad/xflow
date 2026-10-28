@@ -1,4 +1,5 @@
-import { BadRequest, cleanupRequest, MAX_CLEANUP_BODY_BYTES } from "@/lib/groq";
+import { BadRequest, chatUsage, cleanupRequest, MAX_CLEANUP_BODY_BYTES } from "@/lib/groq";
+import { estimateInputTokens, tokenCostMicros } from "@/lib/pricing";
 import { error } from "@/lib/http";
 import { apiCaller, unauthorized } from "@/lib/server/api-auth";
 import { forward, gate } from "@/lib/server/upstream";
@@ -19,7 +20,8 @@ export async function POST(request: Request) {
   try {
     parsed = cleanupRequest(JSON.parse(raw));
   } catch (e) {
-    return error(400, e instanceof BadRequest ? e.message : "body must be JSON");
+    if (e instanceof BadRequest) return error(e.status, e.message);
+    return error(400, "body must be JSON");
   }
   return forward({
     kind: "cleanup",
@@ -28,6 +30,12 @@ export async function POST(request: Request) {
     path: "/chat/completions",
     body: JSON.stringify(parsed.body),
     contentType: "application/json",
+    // Worst case up front (estimated input + the full output cap), settled to the reported usage.
+    reserveMicros: tokenCostMicros(parsed.model, estimateInputTokens(parsed.messages), parsed.maxCompletionTokens),
+    actual: (reply) => {
+      const usage = chatUsage(reply);
+      return usage && { micros: tokenCostMicros(parsed.model, usage.inputTokens, usage.outputTokens), ...usage };
+    },
     signal: request.signal,
   });
 }

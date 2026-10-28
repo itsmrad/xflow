@@ -2,34 +2,65 @@ import "server-only";
 import { after } from "next/server";
 import { db } from "@/db";
 import { usageEvents } from "@/db/schema";
-import { chatUsage, GROQ_BASE_URL } from "@/lib/groq";
-import { error } from "@/lib/http";
-import { admit, releaseSlot } from "@/lib/server/limits";
+import { GROQ_BASE_URL, publicBody, publicMessage } from "@/lib/groq";
+import { json } from "@/lib/http";
+import { FAIR_USE } from "@/lib/pricing";
+import { admit, releaseSlot, settle, type Admission } from "@/lib/server/limits";
 import type { ApiCaller } from "@/lib/server/api-auth";
 
 type Kind = "transcribe" | "cleanup";
 
-// Pro is unlimited for a person dictating; these only stop scripts and leaked tokens.
-// Daily: 2,000 transcriptions is ~8 hours of back-to-back 15 s dictations.
+// Request ceilings stop scripts; the spend budget in FAIR_USE bounds what any account costs.
 const LIMITS: Record<Kind, { perMinute: number; perDay: number; concurrent: number }> = {
   transcribe: { perMinute: 40, perDay: 2000, concurrent: 2 },
   cleanup: { perMinute: 60, perDay: 4000, concurrent: 2 },
 };
 const UPSTREAM_TIMEOUT_MS = 55_000;
 const SLOT_LEASE_SECONDS = 90;
+const MAX_REPLY_BYTES = 1024 * 1024;
 
 export function groqKey(): string | null {
   return process.env.GROQ_API_KEY || null;
 }
 
-// Server env only: lets a test run point at a stub, or ops at another Groq endpoint.
+// Server env only: lets a test run point at a stub, or ops at another endpoint.
 const groqBase = () => (process.env.GROQ_BASE_URL || GROQ_BASE_URL).replace(/\/+$/, "");
+
+function fail(status: number, message: string, code?: string, headers: HeadersInit = {}): Response {
+  return json({ error: { message, ...(code ? { code } : {}) } }, status, headers);
+}
 
 /** Gate shared by both proxy routes. Returns an error response, or null to proceed. */
 export function gate(caller: ApiCaller): Response | null {
-  if (!caller.pro) return error(402, "hosted transcription needs xflow Pro; subscribe at /dashboard");
-  if (!groqKey()) return error(503, "hosted transcription is not configured");
+  if (!caller.pro) return fail(402, "hosted transcription needs xflow Pro; subscribe at /dashboard", "pro_required");
+  if (!groqKey()) return fail(503, "hosted transcription is not configured");
   return null;
+}
+
+function secondsUntil(next: Date): string {
+  return String(Math.max(1, Math.ceil((next.getTime() - Date.now()) / 1000)));
+}
+
+function refused(a: Exclude<Admission, "ok">, kind: Kind): Response {
+  const now = new Date();
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  switch (a) {
+    case "concurrency":
+      return fail(429, `at most ${LIMITS[kind].concurrent} ${kind} requests at a time`, "concurrency", { "retry-after": "1" });
+    case "minute":
+      return fail(429, "too many requests; slow down", "rate_limited", { "retry-after": "10" });
+    case "day":
+      return fail(429, "daily request ceiling reached; resets at 00:00 UTC", "daily_requests", { "retry-after": secondsUntil(tomorrow) });
+    case "budget_day":
+      return fail(429, "Pro fair-use limit for today reached; resets at 00:00 UTC. Your own API key still works.", "fair_use_daily", {
+        "retry-after": secondsUntil(tomorrow),
+      });
+    case "budget_month":
+      return fail(429, "Pro fair-use limit for this month reached; resets on the 1st (UTC). Your own API key still works.", "fair_use_monthly", {
+        "retry-after": secondsUntil(nextMonth),
+      });
+  }
 }
 
 export type Forward = {
@@ -41,41 +72,52 @@ export type Forward = {
   contentType?: string;
   audioBytes?: number;
   audioMs?: number;
+  /** Upper bound of this request's provider cost, reserved before forwarding. */
+  reserveMicros: number;
+  /** Actual cost and token counts from a successful reply; null keeps the reservation. */
+  actual?: (reply: string) => { micros: number; inputTokens: number; outputTokens: number } | null;
   signal: AbortSignal;
 };
 
-/** Forwards one validated request to Groq with the central key, streams the reply, records usage. */
+/** Forwards one validated request with the central key, after admission and a spend reservation. */
 export async function forward(f: Forward): Promise<Response> {
-  const limits = LIMITS[f.kind];
-  const prefix = `${f.kind}:${f.caller.userId}`;
-  const slotKey = `${prefix}:inflight`;
-  const { minuteOk, dayOk, slot } = await admit(prefix, limits, SLOT_LEASE_SECONDS);
-  if (!minuteOk || !dayOk || !slot) {
-    if (slot) after(() => releaseSlot(slotKey));
-    if (!slot) return error(429, `at most ${limits.concurrent} ${f.kind} requests at a time`, { "retry-after": "1" });
-    return error(429, minuteOk ? "daily request ceiling reached" : "too many requests; slow down", {
-      "retry-after": minuteOk ? "3600" : "10",
-    });
-  }
+  const userId = f.caller.userId;
+  const admission = await admit(f.kind, userId, f.reserveMicros, {
+    ...LIMITS[f.kind],
+    leaseSeconds: SLOT_LEASE_SECONDS,
+    dayBudgetMicros: FAIR_USE.dailyMicros,
+    monthBudgetMicros: FAIR_USE.monthlyMicros,
+  });
+  if (admission !== "ok") return refused(admission, f.kind);
 
   const started = performance.now();
   let status = 502;
-  let usageText: Promise<string> = Promise.resolve("");
-  const finish = () =>
+  let charged = f.reserveMicros;
+  let tokens = { inputTokens: 0, outputTokens: 0 };
+  const finish = (reply: string | null) =>
     after(async () => {
-      const text = await usageText.catch(() => "");
-      const usage = f.kind === "cleanup" ? chatUsage(text) : { inputTokens: 0, outputTokens: 0 };
+      if (reply === null) {
+        charged = 0; // the provider billed nothing: refund the reservation
+      } else {
+        const real = f.actual?.(reply);
+        if (real) {
+          charged = real.micros;
+          tokens = { inputTokens: real.inputTokens, outputTokens: real.outputTokens };
+        }
+      }
       await Promise.allSettled([
-        releaseSlot(slotKey),
+        releaseSlot(f.kind, userId),
+        settle(userId, charged - f.reserveMicros),
         db.insert(usageEvents).values({
-          userId: f.caller.userId,
+          userId,
           tokenId: f.caller.tokenId,
           kind: f.kind,
           model: f.model,
           status,
           audioBytes: f.audioBytes ?? 0,
           audioMs: f.audioMs ?? 0,
-          ...usage,
+          ...tokens,
+          costMicros: charged,
           latencyMs: Math.round(performance.now() - started),
         }),
       ]);
@@ -91,41 +133,51 @@ export async function forward(f: Forward): Promise<Response> {
     });
   } catch (e) {
     status = f.signal.aborted ? 499 : 504;
-    finish();
-    return error(504, e instanceof Error && e.name === "TimeoutError" ? "provider timed out" : "provider unreachable");
+    finish(null);
+    return fail(504, e instanceof Error && e.name === "TimeoutError" ? "provider timed out" : "provider unreachable");
   }
 
-  const upstreamMs = Math.round(performance.now() - started);
   status = upstream.status;
-  const timing = { "server-timing": `upstream;dur=${upstreamMs}` };
-  if (!upstream.ok || !upstream.body) {
-    const detail = (await upstream.text().catch(() => "")).slice(0, 2000);
-    finish();
+  const reply = await readBounded(upstream);
+  const timing = { "server-timing": `upstream;dur=${Math.round(performance.now() - started)}` };
+  if (!upstream.ok || reply === null) {
+    // An oversized success was still billed, so it keeps its reservation.
+    finish(upstream.ok ? "" : null);
     if (upstream.status === 401 || upstream.status === 403) {
-      console.error(`groq rejected the central key: ${upstream.status}`);
-      return error(502, "provider rejected the request", timing);
+      console.error(`provider rejected the central key: ${upstream.status}`);
+      return fail(502, "provider rejected the request", undefined, timing);
     }
     if (upstream.status === 429) {
-      return error(503, "provider is busy; retry shortly", { ...timing, "retry-after": upstream.headers.get("retry-after") ?? "2" });
+      return fail(503, "provider is busy; retry shortly", "provider_busy", { ...timing, "retry-after": upstream.headers.get("retry-after") ?? "2" });
     }
-    if (upstream.status >= 500) return error(502, "provider error", timing);
-    // 400/413/422: the provider's own message is the most useful thing to show.
-    return new Response(detail, {
-      status: upstream.status,
-      headers: { "content-type": upstream.headers.get("content-type") ?? "application/json", "cache-control": "no-store", ...timing },
-    });
+    if (upstream.status >= 500 || reply === null) return fail(502, "provider error", undefined, timing);
+    // 400/413/422: the provider's own reason is the useful part, without its name.
+    return fail(upstream.status, publicMessage(reply), "invalid_request", timing);
   }
 
-  // Stream the reply straight through; the second branch feeds usage accounting after it's sent.
-  const [client, meter] = upstream.body.tee();
-  usageText = f.kind === "cleanup" ? new Response(meter).text() : meter.cancel().then(() => "");
-  finish();
-  return new Response(client, {
+  finish(reply);
+  const type = upstream.headers.get("content-type") ?? "application/json";
+  return new Response(type.includes("json") ? publicBody(reply) : reply, {
     status: upstream.status,
-    headers: {
-      "content-type": upstream.headers.get("content-type") ?? "application/json",
-      "cache-control": "no-store",
-      ...timing,
-    },
+    headers: { "content-type": type, "cache-control": "no-store", ...timing },
   });
+}
+
+/** The reply as text, or null if it exceeds MAX_REPLY_BYTES (replies here are a few KB). */
+async function readBounded(res: Response): Promise<string | null> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_REPLY_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }

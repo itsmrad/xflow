@@ -99,6 +99,8 @@ export const usageEvents = pgTable(
     audioMs: integer("audio_ms").notNull().default(0),
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),
+    // Provider cost charged against the user's fair-use budget, in micro-dollars.
+    costMicros: integer("cost_micros").notNull().default(0),
     latencyMs: integer("latency_ms").notNull(),
     createdAt: createdAt(),
   },

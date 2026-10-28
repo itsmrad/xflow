@@ -14,52 +14,39 @@ export async function withinLimit(key: string, limit: number, windowSeconds: num
   return (rows[0]?.count ?? Infinity) <= limit;
 }
 
-export async function releaseSlot(key: string): Promise<void> {
-  await db.execute(sql`UPDATE rate_limits SET count = greatest(count - 1, 0) WHERE key = ${key}`);
-}
+export type Admission = "ok" | "concurrency" | "minute" | "day" | "budget_day" | "budget_month";
 
-export type Admission = { minuteOk: boolean; dayOk: boolean; slot: boolean };
+export type AdmitLimits = {
+  perMinute: number;
+  perDay: number;
+  concurrent: number;
+  leaseSeconds: number;
+  dayBudgetMicros: number;
+  monthBudgetMicros: number;
+};
 
 /**
- * The proxy's three checks in one round trip: per-minute and per-day fixed windows, plus one
- * of `concurrent` slots. The row lock serialises racers; a slot leaked by a killed function
- * frees itself once no slot was taken for `leaseSeconds`.
+ * One round trip (db function xflow_admit, migration 0001): takes a concurrency slot, counts the
+ * request and reserves `costMicros` of the user's daily and monthly budget — all or nothing.
  */
-export async function admit(
-  prefix: string,
-  limits: { perMinute: number; perDay: number; concurrent: number },
-  leaseSeconds: number,
-): Promise<Admission> {
-  const { rows } = await db.execute<{ minute: number; day: number; slot: number | null }>(sql`
-    WITH minute AS (
-      INSERT INTO rate_limits (key, window_start, count)
-      VALUES (${`${prefix}:min`}, to_timestamp(floor(extract(epoch FROM now()) / 60) * 60), 1)
-      ON CONFLICT (key) DO UPDATE SET
-        count = CASE WHEN rate_limits.window_start = excluded.window_start THEN rate_limits.count + 1 ELSE 1 END,
-        window_start = excluded.window_start
-      RETURNING count
-    ), day AS (
-      INSERT INTO rate_limits (key, window_start, count)
-      VALUES (${`${prefix}:day`}, to_timestamp(floor(extract(epoch FROM now()) / 86400) * 86400), 1)
-      ON CONFLICT (key) DO UPDATE SET
-        count = CASE WHEN rate_limits.window_start = excluded.window_start THEN rate_limits.count + 1 ELSE 1 END,
-        window_start = excluded.window_start
-      RETURNING count
-    ), slot AS (
-      INSERT INTO rate_limits (key, window_start, count) VALUES (${`${prefix}:inflight`}, now(), 1)
-      ON CONFLICT (key) DO UPDATE SET
-        count = CASE WHEN rate_limits.window_start < now() - make_interval(secs => ${leaseSeconds})
-                     THEN 1 ELSE rate_limits.count + 1 END,
-        window_start = now()
-      WHERE rate_limits.count < ${limits.concurrent}
-         OR rate_limits.window_start < now() - make_interval(secs => ${leaseSeconds})
-      RETURNING count
-    )
-    SELECT (SELECT count FROM minute) AS minute, (SELECT count FROM day) AS day, (SELECT count FROM slot) AS slot`);
-  const row = rows[0];
-  return {
-    minuteOk: !!row && row.minute <= limits.perMinute,
-    dayOk: !!row && row.day <= limits.perDay,
-    slot: row?.slot != null,
-  };
+export async function admit(kind: string, userId: string, costMicros: number, l: AdmitLimits): Promise<Admission> {
+  const { rows } = await db.execute<{ result: Admission }>(sql`
+    SELECT xflow_admit(${userId}, ${kind}, ${l.perMinute}::int, ${l.perDay}::int, ${l.concurrent}::int,
+                       ${l.leaseSeconds}::int, ${costMicros}::int, ${l.dayBudgetMicros}::int,
+                       ${l.monthBudgetMicros}::int) AS result`);
+  return rows[0]?.result ?? "concurrency";
+}
+
+export async function releaseSlot(kind: string, userId: string): Promise<void> {
+  await db.execute(sql`UPDATE rate_limits SET count = greatest(count - 1, 0) WHERE key = ${`${kind}:${userId}:inflight`}`);
+}
+
+/** Corrects a reservation by `deltaMicros` once the real cost is known. */
+export async function settle(userId: string, deltaMicros: number): Promise<void> {
+  if (deltaMicros !== 0) await db.execute(sql`SELECT xflow_settle(${userId}, ${deltaMicros}::int)`);
+}
+
+/** Per-IP device-flow counters are the only rows keyed by something unbounded. */
+export async function pruneIpLimits(): Promise<void> {
+  await db.execute(sql`DELETE FROM rate_limits WHERE key LIKE 'device-%' AND window_start < now() - interval '1 day'`);
 }
