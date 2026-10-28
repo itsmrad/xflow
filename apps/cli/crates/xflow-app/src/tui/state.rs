@@ -140,7 +140,6 @@ pub fn fuzzy(query: &str, text: &str) -> bool {
 #[derive(Clone, Debug)]
 pub enum Tag {
     Ordinary,
-    Session,
     Done(&'static str),
     Last,
     History(u64),
@@ -333,10 +332,6 @@ pub struct App {
     pub saving: bool,
     /// The daemon was busy when we asked it to reload; ask again once it's idle.
     pub reload_pending: bool,
-    /// TUI starts awaiting their reply; one may still begin a recording.
-    pub starts: usize,
-    /// A recording a TUI start began; cancel it on exit.
-    pub session_pending: bool,
     pub connected: bool,
     pub connection: String,
     /// Ask-again restarted xflowd: its disconnect is expected, not a failure.
@@ -465,8 +460,6 @@ impl App {
             toast: None,
             quit: false,
             reload_pending: false,
-            starts: 0,
-            session_pending: false,
             colors,
             theme,
             scroll: 0,
@@ -1009,10 +1002,6 @@ impl App {
         }
     }
     pub fn response(&mut self, response: Response, tag: Tag) -> Vec<Effect> {
-        // Only the start that began capture owns it; another start's refusal doesn't.
-        if matches!(tag, Tag::Session) && response.ok && response.state == State::Listening {
-            self.session_pending = true;
-        }
         if matches!(tag, Tag::Permissions(Some(Grant::Microphone))) {
             self.asking = false;
         }
@@ -1118,7 +1107,7 @@ impl App {
                     self.transcript = response.text.unwrap_or_default();
                 }
             }
-            Tag::Ordinary | Tag::Session => {
+            Tag::Ordinary => {
                 // The subscription owns session state; a delayed command reply
                 // must never roll a newer state event back to an older state.
                 if let Some(text) = response.text {
@@ -1132,11 +1121,6 @@ impl App {
         vec![]
     }
     pub fn event(&mut self, mut response: Response) {
-        if !matches!(response.state, State::Listening | State::Processing)
-            && matches!(self.status.state, State::Listening | State::Processing)
-        {
-            self.session_pending = false;
-        }
         if let Some(text) = response.text.take() {
             self.transcript = text;
             self.scroll = 0;
@@ -1481,6 +1465,7 @@ impl App {
                         context: None,
                         t0_us: None,
                         delivery: Delivery::Inject,
+                        hold: false,
                     },
                     Tag::Ordinary,
                 )]
@@ -1841,6 +1826,7 @@ impl App {
                         context: None,
                         t0_us: None,
                         delivery: Delivery::None,
+                        hold: false,
                     },
                     Tag::Ordinary,
                 )];
@@ -2524,6 +2510,7 @@ fn mic_check(config: &Config) -> Vec<Effect> {
                 context: None,
                 t0_us: None,
                 delivery: Delivery::None,
+                hold: false,
             },
             Tag::Ordinary,
         ),
