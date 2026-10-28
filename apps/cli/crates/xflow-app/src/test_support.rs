@@ -20,6 +20,16 @@ pub(crate) fn adapters() -> Result<Option<Adapters>> {
     if audio.is_none() && sink.is_none() {
         return Ok(None);
     }
+    // A debug WAV source uses the native desktop, outside the isolated harness.
+    #[cfg(debug_assertions)]
+    if sink.is_none()
+        && std::env::var_os("XFLOW_TEST_ROOT").is_none()
+        && audio
+            .as_ref()
+            .is_some_and(|a| a != "voice" && a != "silence")
+    {
+        return Ok(None);
+    }
     let audio = audio.context("XFLOW_TEST_AUDIO and XFLOW_TEST_SINK must be set together")?;
     let sink =
         PathBuf::from(sink.context("XFLOW_TEST_AUDIO and XFLOW_TEST_SINK must be set together")?);
