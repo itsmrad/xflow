@@ -186,6 +186,44 @@ fn permission_checks(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<
     }
     checks
 }
+// PipeWire and PulseAudio both answer pactl. A monitor source records speakers.
+#[cfg(any(target_os = "linux", test))]
+fn echo_check(device: Option<&str>, default: &str, sources: &str) -> Check {
+    if device.is_some() {
+        return check(
+            "Ignore speakers",
+            false,
+            false,
+            "Cannot verify echo cancelling for a selected microphone",
+            "Select the system default microphone in xflow, then make an echo-cancel source the default in Sound settings",
+        );
+    }
+    let echo = |name: &str| {
+        let name = name.to_lowercase();
+        name.contains("echo") && name.contains("cancel") && !name.ends_with(".monitor")
+    };
+    let found = sources
+        .lines()
+        .filter_map(|l| l.split('\t').nth(1))
+        .find(|&n| echo(n));
+    let hint = match found {
+        Some(name) => format!("Make it your microphone: pactl set-default-source '{name}'"),
+        None => "Turn on echo cancelling. PipeWire: save `context.modules = [ { name = libpipewire-module-echo-cancel args = { monitor.mode = true } } ]` as ~/.config/pipewire/pipewire.conf.d/echo-cancel.conf, run systemctl --user restart pipewire, then pick the echo-cancel source as your microphone in Sound settings. PulseAudio: pactl load-module module-echo-cancel aec_method=webrtc, then select its echo-cancel input and output in Sound settings".into(),
+    };
+    check(
+        "Ignore speakers",
+        echo(default),
+        false,
+        if echo(default) {
+            format!(
+                "Echo-cancel input selected ({default}); verify playback routing in Sound settings"
+            )
+        } else {
+            "Sound from your speakers can reach the microphone".into()
+        },
+        &hint,
+    )
+}
 pub fn run(path: &Path, out: &Output) -> Result<()> {
     let status = super::ipc::request(&xflow_core::ipc::Request::Status);
     let daemon = status
@@ -221,6 +259,17 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
             cfg.stt.provider,
             "Run xflow providers list and xflow providers use <provider>",
         ));
+        #[cfg(target_os = "linux")]
+        if cfg.recording.ignore_speakers {
+            let default = super::system::tool("pactl", &["get-default-source"]).unwrap_or_default();
+            let sources =
+                super::system::tool("pactl", &["list", "short", "sources"]).unwrap_or_default();
+            checks.push(echo_check(
+                cfg.recording.device.as_deref(),
+                default.trim(),
+                &sources,
+            ));
+        }
     }
     if desktop.to_lowercase().contains("gnome") && present("gnome-extensions") {
         let extension = super::system::tool("gnome-extensions", &["info", "xflow@xflow.local"]);
@@ -292,6 +341,26 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn echo_diagnostic_checks_the_input_and_never_recommends_a_monitor() {
+        let sources = "1\techo_cancel.monitor\tdriver\n2\techo_cancel.source\tdriver";
+        assert!(echo_check(None, "echo_cancel.source", sources).ok);
+        let selected = echo_check(Some("USB Microphone"), "echo_cancel.source", sources);
+        assert!(!selected.ok && !selected.required);
+        assert!(selected.detail.contains("Cannot verify"));
+        let plain = echo_check(None, "alsa_input", sources);
+        assert!(!plain.ok);
+        assert!(plain.hint.ends_with("'echo_cancel.source'"));
+        let monitor = echo_check(
+            None,
+            "echo_cancel.monitor",
+            "1\techo_cancel.monitor\tdriver",
+        );
+        assert!(!monitor.ok);
+        assert!(!monitor.hint.contains("set-default-source"));
+        assert!(monitor.hint.contains("monitor.mode = true"));
+        assert!(!echo_check(None, "", "").ok);
+    }
     #[test]
     fn permissions_come_from_daemon_even_when_a_tap_exists() {
         use xflow_core::ipc::Permissions;

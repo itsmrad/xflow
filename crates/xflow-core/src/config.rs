@@ -179,6 +179,10 @@ pub struct RecordingConfig {
     /// Keep the microphone stream open this long after a recording for faster
     /// back-to-back dictation; 0 = close immediately (privacy default).
     pub keep_warm_secs: u32,
+    /// Cancel sound from this computer's speakers (music, calls) so only the
+    /// user's voice is heard. macOS voice processing; Linux uses the system
+    /// echo-cancel source when it is the default input.
+    pub ignore_speakers: bool,
 }
 impl Default for RecordingConfig {
     fn default() -> Self {
@@ -189,6 +193,7 @@ impl Default for RecordingConfig {
             min_ms: 300,
             auto_stop_secs: 0,
             keep_warm_secs: 0,
+            ignore_speakers: false,
         }
     }
 }
@@ -570,6 +575,7 @@ mod tests {
         )
         .unwrap();
         config.validate().unwrap();
+        assert!(!config.recording.ignore_speakers);
         assert_eq!(
             config.injection.effective_method(),
             InjectionMethod::Clipboard

@@ -35,6 +35,7 @@ silence_threshold = 0.005    # minimum 20 ms frame RMS; speech must last at leas
 min_ms = 300                 # shorter taps are discarded without upload
 auto_stop_secs = 0           # stop after N s of silence (0 = off)
 keep_warm_secs = 0           # keep the mic open N s after a recording (0 = off)
+ignore_speakers = false      # opt in to cancelling speaker sound (macOS, system default mic)
 
 [injection]
 method = "paste"             # paste | type | clipboard
