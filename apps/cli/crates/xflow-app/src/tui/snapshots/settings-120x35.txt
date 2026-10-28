@@ -6,9 +6,10 @@
 │ 4  Snippets    ││            API key               Added                  ││ Walk through the speech service, key,   │
 │ 5  Styles      ││            Language              Automatic              ││ microphone and shortcut again.          │
 │ 6  Settings    ││            Microphone            System default         ││                                         │
-│ 7  Pill        ││            Check connection      Run check              ││ Enter to open.                          │
-│ 8  Your stats  ││  Shortcut  Key                   Fn (Globe)             ││                                         │
-│ 9  Check-up    ││            Shortcut              On                     ││                                         │
+│ 7  Pill        ││            Ignore speaker sound  Off                    ││ Enter to open.                          │
+│ 8  Your stats  ││            Check connection      Run check              ││                                         │
+│ 9  Check-up    ││  Shortcut  Key                   Fn (Globe)             ││                                         │
+│                ││            Shortcut              On                     ││                                         │
 │                ││            Double-tap speed      500 ms                 ││                                         │
 │                ││            Hold delay            500 ms                 ││                                         │
 │                ││  Writing   Cleanup               Off — exact words      ││                                         │
@@ -29,7 +30,6 @@
 │                ││            Share app name        On                     ││                                         │
 │                ││  Look      Theme                 Paper                  ││                                         │
 │                ││            Mouse                 On                     ││                                         │
-│                ││  Advanced  Advanced settings     Hide                   ││                                         │
 ╰────────────────╯╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────╯
 
  ↑↓ move · Enter change · Esc back · Tab next page · ? help · q quit

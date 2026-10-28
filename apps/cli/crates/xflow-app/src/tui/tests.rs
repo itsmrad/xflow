@@ -164,6 +164,34 @@ fn every_screen_renders_in_plain_language_at_any_size() {
     }
 }
 #[test]
+fn speaker_cancelling_toggle_starts_off_and_saves_both_choices() {
+    let (_dir, mut app) = app();
+    app.page = Page::Settings;
+    app.selected[Page::Settings.index()] = app
+        .settings()
+        .iter()
+        .position(|(name, _)| name == "recording.ignore_speakers")
+        .unwrap();
+    assert!(!app.config.recording.ignore_speakers);
+    for enabled in [true, false] {
+        key_enter(&mut app);
+        key(&mut app, if enabled { KeyCode::Up } else { KeyCode::Down });
+        key_enter(&mut app);
+        assert!(app.modal.is_none());
+        let file = app.file.as_ref().unwrap();
+        file.save().unwrap();
+        assert_eq!(
+            ConfigFile::load(file.path())
+                .unwrap()
+                .config()
+                .unwrap()
+                .recording
+                .ignore_speakers,
+            enabled
+        );
+    }
+}
+#[test]
 fn every_setting_is_an_option_list_that_ignores_typing_and_stages_a_choice() {
     let (_dir, mut app) = populated();
     app.page = Page::Settings;
