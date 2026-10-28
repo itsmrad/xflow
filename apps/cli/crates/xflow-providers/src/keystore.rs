@@ -191,10 +191,11 @@ impl Store {
     /// Refuses a store that is damaged or not private; the error names the fix.
     /// Ok(false) when nothing is stored yet.
     pub fn check(&self) -> Result<bool> {
-        let exists = read_private(&self.config, CREDENTIALS)?.is_some();
-        self.load()?;
+        // A file holding only migration bookkeeping (e.g. after `key remove`)
+        // stores no key.
+        let stored = !self.load()?.entries.is_empty();
         read_private(&self.data, KEY)?;
-        Ok(exists)
+        Ok(stored)
     }
 
     /// Move keys out of the OS keychain, once. `read` is Ok(None) only when there
@@ -233,6 +234,11 @@ impl Store {
             // `xflow key remove` wins.
             let _lock = self.lock()?;
             let mut contents = self.load_for_write()?;
+            if contents.migrated_keychain {
+                // Another process finished the migration (and cleared its
+                // tombstones) while we read: our reads are stale.
+                return Ok(vec![]);
+            }
             for (id, secret) in &found {
                 if contents.removed.contains(*id) {
                     continue;
@@ -255,6 +261,10 @@ impl Store {
         if !deleted.is_empty() || done {
             let _lock = self.lock()?;
             let mut contents = self.load_for_write()?;
+            if contents.migrated_keychain {
+                // Finished elsewhere meanwhile: never mark it unfinished again.
+                return Ok(vec![]);
+            }
             for id in deleted {
                 contents.pending_delete.remove(id);
             }
@@ -961,6 +971,44 @@ mod tests {
         assert!(store.migrated().unwrap());
     }
     #[test]
+    fn a_migration_finished_elsewhere_during_a_read_wins() {
+        let (_dir, store) = store();
+        // While this migration reads (unlocked), the key is removed and another
+        // process completes the migration, clearing its tombstones.
+        let read = |_: &str| -> Result<Option<Zeroizing<String>>> {
+            store.remove("groq").unwrap();
+            store.migrate(&["groq"], |_| Ok(None), |_| Ok(())).unwrap();
+            assert!(store.migrated().unwrap());
+            Ok(Some(Zeroizing::new(SENTINEL.to_owned())))
+        };
+        assert!(store
+            .migrate(&["groq"], read, |_| Ok(()))
+            .unwrap()
+            .is_empty());
+        assert_eq!(get(&store, "groq").unwrap(), None, "removed key came back");
+        assert!(store.migrated().unwrap());
+    }
+    #[test]
+    fn a_completed_migration_is_never_marked_unfinished() {
+        let (_dir, store) = store();
+        // This pass is blocked on "openai"; while it deletes groq's keychain copy,
+        // another process completes the migration.
+        let read = |id: &str| -> Result<Option<Zeroizing<String>>> {
+            match id {
+                "openai" => bail!("needs approval"),
+                _ => Ok(Some(Zeroizing::new(SENTINEL.to_owned()))),
+            }
+        };
+        let delete = |_: &str| -> Result<()> {
+            store.migrate(&[], |_| Ok(None), |_| Ok(())).unwrap();
+            assert!(store.migrated().unwrap());
+            Ok(())
+        };
+        store.migrate(&["groq", "openai"], read, delete).unwrap();
+        assert!(store.migrated().unwrap());
+        assert_eq!(get(&store, "groq").unwrap().as_deref(), Some(SENTINEL));
+    }
+    #[test]
     fn a_key_set_again_after_removal_is_kept() {
         let (_dir, store) = store();
         store.remove("groq").unwrap();
@@ -1001,6 +1049,9 @@ mod tests {
         assert!(!store.check().unwrap());
         store.set("groq", SENTINEL).unwrap();
         assert!(store.check().unwrap());
+        // Only bookkeeping left after a remove: nothing is stored.
+        store.remove("groq").unwrap();
+        assert!(!store.check().unwrap());
     }
 
     /// A self-deleting temp dir; no new dev-dependency for one helper.
