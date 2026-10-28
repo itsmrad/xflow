@@ -10,7 +10,7 @@ const signedIn = () => /(?:^|; )__client_uat=(?!0(?:;|$))\d+/.test(document.cook
 export function ProCta({ size = "lg", label = "Get Pro" }: { size?: "md" | "lg"; label?: string }) {
   const on = useSyncExternalStore(() => () => {}, signedIn, () => false);
   return (
-    <Link href={on ? "/checkout" : "/sign-up?redirect_url=/checkout"} className={buttonClass("primary", size, "w-full sm:w-[168px]")}>
+    <Link href={on ? "/dashboard#plan" : "/sign-up?redirect_url=/dashboard%23plan"} className={buttonClass("primary", size, "w-full sm:w-[168px]")}>
       {label}
     </Link>
   );

@@ -10,7 +10,7 @@ import { CtaBand, OsButton } from "@/components/cta";
 import { Terminal } from "@/components/terminal";
 import { Button, Callout, Kbd, LinkMono, Ref } from "@/components/ui";
 import { Wave } from "@/components/wordmark";
-import { FAQ, PRO_PROVIDER } from "@/content/marketing";
+import { FAQ } from "@/content/marketing";
 
 export const dynamic = "force-static";
 
@@ -78,7 +78,9 @@ export default function Home() {
             className="t-mono-sm inline-flex h-7 items-center gap-2 rounded-full border border-line-strong bg-bg-raised px-3 text-fg-muted transition-colors duration-[120ms] hover:text-fg"
           >
             <span aria-hidden className="size-1.5 rounded-full bg-ok" />
-            v0.1 · macOS · Linux beta · open source
+            <span className="whitespace-nowrap">
+              v0.1 · macOS · Linux beta<span className="max-sm:hidden"> · open source</span>
+            </span>
             <span aria-hidden>›</span>
           </Link>
           <h1 id="hero-title" className="t-display mx-auto mt-8 max-w-[20ch] text-fg">
@@ -236,7 +238,7 @@ export default function Home() {
             </div>
             <div className="mt-10 border-t border-line pt-6">
               <Callout type="note" title="On Pro,">
-                audio goes through xflow&apos;s server to our speech provider ({PRO_PROVIDER}). We keep a usage record (time, duration, size) for
+                audio goes through xflow&apos;s server to our speech provider. We keep a usage record (time, duration, size) for
                 billing and abuse limits.
               </Callout>
             </div>
@@ -254,9 +256,9 @@ export default function Home() {
               lede="xflow is a Rust binary with no Electron, no WebView and no model running in the background. It starts in milliseconds and idles at the size of a photo."
             />
           </div>
-          <div className="cells cells-2 border-t border-line">
+          <div className="border-t border-line">
             <div className="flex flex-col">
-              <div className="cells cells-2 flex-1">
+              <div className="cells cells-4 lg:!grid-cols-2">
                 <Fig n={1} value="11 MB" caption="Idle RSS" claim={1} visual={<Bars seed={1} filled={9} />} />
                 <Fig n={2} value="~3 ms" caption="Cold start, p50" claim={2} visual={<Bars seed={2} filled={3} />} />
               </div>
@@ -264,7 +266,7 @@ export default function Home() {
                 Measured on Linux (release build). macOS figures come with the signed release.
               </p>
             </div>
-            <div className="cell">
+            <div className="cell border-t border-line">
               <Terminal
                 title="xflow doctor"
                 lines={[
@@ -310,7 +312,7 @@ export default function Home() {
               <p className="t-mono text-fg">
                 <span className="text-syn-muted">$ </span>xflow key set groq
               </p>
-              <p className="t-caption mt-2 text-fg-subtle">Hidden input. Stored in your system keychain.</p>
+              <p className="t-caption mt-2 text-fg-subtle">Hidden input. Never printed or logged.</p>
             </div>
           </div>
         </div>
@@ -326,15 +328,15 @@ export default function Home() {
               lede="A full CLI for scripts and a TUI for everything else. Pipe transcripts, search history, edit your dictionary, without leaving the terminal."
             />
           </div>
-          <div className="grid gap-6 px-[var(--cell-p)] lg:grid-cols-12">
-            <div className="lg:col-span-5">
+          <div className="grid gap-6 px-[var(--cell-p)]">
+            <div>
               <CodeBlock filename="shell" lang="sh" code={CLI} />
               <LinkMono href="/docs/reference/cli" className="mt-4 inline-block">
                 Full CLI reference →
               </LinkMono>
             </div>
-            <div className="lg:col-span-7">
-              <TuiShot />
+            <div>
+              <HelpShot />
             </div>
           </div>
         </div>
@@ -381,20 +383,29 @@ export default function Home() {
   );
 }
 
-/** A real capture of `xflow tui` (§9.1.8), never a mock. Rendered from the TUI's own ANSI output. */
-function TuiShot() {
+/** Real `xflow --help` output (first lines), not a mock. */
+function HelpShot() {
+  const cmds: [string, string][] = [
+    ["setup", "Set up a provider, microphone and optional desktop integration"],
+    ["listen", "Print dictation to stdout without changing the desktop"],
+    ["transcribe", "Transcribe an audio file without a running daemon"],
+    ["history", "Browse, search and export local dictation history"],
+    ["dictionary", "Manage vocabulary and text replacements"],
+    ["snippets", "Manage spoken shortcuts that expand to saved text"],
+    ["styles", "Manage cleanup styles selected by focused application"],
+    ["watch", "Subscribe to daemon events until interrupted"],
+    ["doctor", "Diagnose configuration and desktop dependencies without recording"],
+    ["tui", "Open the terminal control centre (also plain `xflow` in a terminal)"],
+  ];
   return (
-    <figure className="overflow-hidden rounded-md border border-line bg-[#0A0A0A] shadow-1">
-      {/* eslint-disable-next-line @next/next/no-img-element -- static AVIF with fixed dimensions; no optimizer needed */}
-      <img
-        src="/shots/tui-home.avif"
-        width={1200}
-        height={760}
-        loading="lazy"
-        decoding="async"
-        alt="xflow TUI home screen showing status, recent dictations and the keymap"
-        className="block h-auto w-full"
-      />
-    </figure>
+    <Terminal
+      title="xflow --help"
+      lines={[
+        { kind: "cmd", text: "xflow --help" },
+        { kind: "muted", text: "Commands:" },
+        ...cmds.map(([c, d]) => ({ kind: "out" as const, text: <>{"  "}<span className="text-syn-keyword">{c.padEnd(12)}</span><span className="text-fg-muted">{d}</span></> })),
+        { kind: "muted", text: "  … 20 more. Explore: xflow <command> --help" },
+      ]}
+    />
   );
 }

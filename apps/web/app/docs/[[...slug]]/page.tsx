@@ -28,7 +28,6 @@ export async function generateMetadata({ params }: { params: Promise<{ slug?: st
     title,
     description: page.data.description,
     alternates: { canonical: page.url },
-    openGraph: { images: `/og/docs${slug ? `/${slug.join("/")}` : ""}.png` },
   };
 }
 
@@ -54,7 +53,7 @@ export default async function DocsPage({ params }: { params: Promise<{ slug?: st
     <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_220px]">
       <article className="min-w-0 px-[var(--cell-p)] py-10 lg:py-12">
         <p aria-hidden className="t-mono-label text-fg-subtle">
-          [ <span className="text-fg-muted">{home ? "Docs" : page.url.split("/").slice(2, -1).join(" / ") || "Docs"}</span> ]
+          [ <span className="text-fg-muted">{home ? "Docs" : page.url.split("/").slice(2, -1).join(" / ").replace(/-/g, " ") || "Docs"}</span> ]
         </p>
         <h1 className="t-h1 mt-4 text-fg">{home ? "Docs" : page.data.title}</h1>
         {page.data.description && <p className="t-lede mt-4 max-w-[64ch] text-fg-muted">{page.data.description}</p>}

@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
+import { mono, sans } from "@/lib/fonts";
 import { SITE_URL } from "@/content/site";
 import "./globals.css";
 
@@ -10,7 +9,7 @@ export const metadata: Metadata = {
   title: { default: "xflow — voice dictation for developers", template: "%s — xflow" },
   description: "Hold Fn and talk. xflow types it. A native Rust daemon that turns speech into clean, correctly spelled text wherever your cursor is.",
   applicationName: "xflow",
-  openGraph: { type: "website", siteName: "xflow", images: "/og/home.png" },
+  openGraph: { type: "website", siteName: "xflow" },
   twitter: { card: "summary_large_image" },
 };
 
@@ -26,7 +25,7 @@ const THEME = `try{var t=localStorage.getItem('theme'),d=t?t==='dark':matchMedia
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${sans.variable} ${mono.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME }} />
       </head>

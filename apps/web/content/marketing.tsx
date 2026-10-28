@@ -1,9 +1,6 @@
 import type { ReactNode } from "react";
 import { WISPR } from "./site";
 
-/** Hosted provider for Pro (#69). Named publicly: more honest than "our provider" (§13.5). */
-export const PRO_PROVIDER = "Groq";
-
 export const FAQ: { q: string; a: ReactNode; text: string }[] = [
   {
     q: "Is the free plan really unlimited?",
@@ -17,8 +14,8 @@ export const FAQ: { q: string; a: ReactNode; text: string }[] = [
   },
   {
     q: "Does xflow send my audio anywhere?",
-    text: `Only to the speech provider you pick, or nowhere in offline mode. On Pro, audio goes through xflow's server to ${PRO_PROVIDER}.`,
-    a: `Only to the speech provider you pick, or nowhere in offline mode. On Pro, audio goes through xflow's server to ${PRO_PROVIDER}.`,
+    text: `Only to the speech provider you pick, or nowhere in offline mode. On Pro, audio goes through xflow's server to our speech provider.`,
+    a: `Only to the speech provider you pick, or nowhere in offline mode. On Pro, audio goes through xflow's server to our speech provider.`,
   },
   {
     q: "Which apps does it type into?",
@@ -40,9 +37,10 @@ export const FAQ: { q: string; a: ReactNode; text: string }[] = [
 export const BILLING_FAQ: { q: string; a: string; text: string }[] = [
   { q: "Can I cancel?", a: "Yes, from the dashboard. Pro stays on until the end of the period you paid for." },
   { q: "What happens to my settings if I cancel?", a: "Nothing. xflow drops back to Free and uses your own key if you've set one." },
+  { q: "Do you offer refunds?", a: "Yes. Ask within 14 days of a charge and we refund it in full. Email [SUPPORT_EMAIL]." },
   { q: "Annual plan?", a: "Not yet. $5/month is already the low price." },
   { q: "Which payment methods?", a: "Whatever Dodo Payments supports in your country. Cards and local methods are shown at checkout." },
-  { q: "Team or company billing?", a: "Not yet. Open an issue on GitHub if you need it, so we can see the demand." },
+  { q: "Team or company billing?", a: "Not yet. Email [SUPPORT_EMAIL] if you need it." },
 ].map((x) => ({ ...x, text: x.a }));
 
 export type Row = { label: string; xflow: string; wispr: string; note?: 13 };

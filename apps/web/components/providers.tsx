@@ -16,15 +16,15 @@ export function ProviderGrid() {
   return (
     <ul className="cells cells-4 border-t border-line">
       {tiles.map((t) => (
-        <li key={t.key} className={`group relative p-5 transition-colors duration-[120ms] hover:bg-ink-a4 ${t.pro ? "shadow-[inset_0_2px_0_var(--volt)]" : ""}`}>
-          <div className="flex items-start justify-between gap-3">
+        <li key={t.key} className={`group relative p-4 sm:p-5 transition-colors duration-[120ms] hover:bg-ink-a4 ${t.pro ? "shadow-[inset_0_2px_0_var(--volt)]" : ""}`}>
+          <div className="flex flex-col-reverse items-start justify-between gap-2 sm:flex-row sm:gap-3">
             <Link href={t.href} className="stretch font-mono text-[14px] font-medium leading-[22px] text-fg">
               {t.name}
             </Link>
             <Badge tone={t.tone}>{t.badge}</Badge>
           </div>
           <p className="t-mono-sm mt-2 truncate text-fg-subtle">{t.model}</p>
-          <p className="t-mono-label mt-4 text-fg-muted">{t.meta}</p>
+          <p className="t-mono-label mt-3 text-fg-muted sm:mt-4">{t.meta}</p>
         </li>
       ))}
     </ul>

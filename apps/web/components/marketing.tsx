@@ -36,7 +36,7 @@ export function NumberedRows({ rows, active }: { rows: { title: ReactNode; body:
 export function Fig({ n, value, caption, claim, visual }: { n: number; value: string; caption: string; claim: ClaimId; visual?: ReactNode }) {
   return (
     <figure className="cell flex flex-col">
-      {visual && <div aria-hidden className="mb-6 h-12">{visual}</div>}
+      {visual && <div aria-hidden className="mb-6 hidden h-12 sm:block">{visual}</div>}
       <p className="t-stat text-fg">{value}</p>
       <figcaption className="t-mono-sm mt-4 border-t border-line pt-3 text-fg-subtle">
         <a href={CLAIMS[claim].href} title={CLAIMS[claim].text} className="hover:text-fg">
@@ -86,7 +86,7 @@ export function ComparisonTable() {
               </th>
               <td className="t-body-sm bg-volt-soft px-4 py-4 font-medium text-fg">
                 {r.xflow}
-                <span className="t-caption mt-1 block font-normal text-fg-subtle md:hidden">
+                <span className="t-caption mt-1 block font-normal text-fg-muted md:hidden">
                   Wispr Flow: {r.wispr}
                   {r.note && <Ref n={r.note} />}
                 </span>

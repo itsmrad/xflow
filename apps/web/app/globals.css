@@ -125,12 +125,11 @@ abbr[title] { text-decoration: none; cursor: help; }
 .cells { display: grid; }
 .cells > * { background-image: var(--dt, none), var(--dl, none); background-size: 8px 1px, 1px 8px; background-repeat: repeat-x, repeat-y; background-position: top left, top left; }
 .cells > * + * { --dt: var(--dash-h); }
-@media (min-width: 640px) {
-  .cells-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .cells-4 > * { --dt: initial; --dl: initial; }
-  .cells-4 > :nth-child(n+3) { --dt: var(--dash-h); }
-  .cells-4 > :nth-child(2n) { --dl: var(--dash-v); }
-}
+/* Stats and provider tiles are 2-up even on phones. */
+.cells-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cells-4 > * { --dt: initial; --dl: initial; }
+.cells-4 > :nth-child(n+3) { --dt: var(--dash-h); }
+.cells-4 > :nth-child(2n) { --dl: var(--dash-v); }
 @media (min-width: 768px) {
   .cells-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cells-2 > * { --dt: initial; --dl: initial; }
@@ -156,6 +155,8 @@ abbr[title] { text-decoration: none; cursor: help; }
   mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 40%, transparent 100%); }
 .bg-dots { background: radial-gradient(color-mix(in oklab, var(--line-strong) 60%, transparent) 1px, transparent 1px) 0 0 / 16px 16px; }
 .bg-dots-faint { background: radial-gradient(color-mix(in oklab, var(--line-strong) 30%, transparent) 1px, transparent 1px) 0 0 / 16px 16px; }
+
+.art { mask-size: 100% 100%; mask-repeat: no-repeat; -webkit-mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; }
 
 /* Highlighter (§9.1 hero H1 line 2) */
 .hl { background: var(--highlight); box-decoration-break: clone; -webkit-box-decoration-break: clone; padding-inline: .06em; }
