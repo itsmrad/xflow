@@ -2,11 +2,12 @@ import "server-only";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { DEFAULT_POLL_INTERVAL_SECONDS, DEVICE_CODE_TTL_SECONDS, nextInterval, pollOutcome, type PollOutcome } from "@/lib/device";
+import { pruneIpLimits } from "@/lib/server/limits";
 import { newApiToken, newDeviceCode, newUserCode } from "@/lib/tokens";
 
 export async function createDeviceCode(clientName: string) {
   // Old rows only matter until they expire; drop them so user codes can be reused.
-  await db.execute(sql`DELETE FROM device_codes WHERE expires_at < now() - interval '1 day'`);
+  await Promise.all([db.execute(sql`DELETE FROM device_codes WHERE expires_at < now() - interval '1 day'`), pruneIpLimits()]);
   for (let attempt = 0; ; attempt++) {
     const { deviceCode, hash } = newDeviceCode();
     const userCode = newUserCode();

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { normalizeUserCode } from "@/lib/tokens";
 import { pendingDevice } from "@/lib/server/device";
+import { withinLimit } from "@/lib/server/limits";
+import { sessionUserId } from "@/lib/server/users";
 
 export const metadata: Metadata = { title: "Sign in the xflow CLI" };
 
@@ -13,14 +15,18 @@ export default async function DevicePage({ searchParams }: PageProps<"/device">)
   if (done === "deny") return <Notice text="Sign-in denied. The CLI will not get access." />;
 
   const code = normalizeUserCode(one(params.code) ?? "");
-  const device = code ? await pendingDevice(code) : null;
-  const expired = one(params.error) === "expired" || (code && !device);
+  const userId = code ? await sessionUserId() : null;
+  // Looking codes up shares the approval limit, so this page can't be used to probe codes.
+  const limited = !!userId && !(await withinLimit(`device-decide:${userId}`, 20, 600));
+  const device = code && userId && !limited ? await pendingDevice(code) : null;
+  const expired = one(params.error) === "expired" || (code && !device && !limited);
 
   if (!device) {
     return (
       <main>
         <h1>Sign in the xflow CLI</h1>
         {expired && <p role="alert">That code is expired or already used. Run `xflow login` again.</p>}
+        {limited && <p role="alert">Too many attempts. Wait a few minutes and try again.</p>}
         <form method="get" action="/device">
           <label>
             Code shown in your terminal
@@ -36,8 +42,8 @@ export default async function DevicePage({ searchParams }: PageProps<"/device">)
     <main>
       <h1>Sign in the xflow CLI?</h1>
       <p>
-        Code <code>{device.userCode}</code> from <strong>{device.clientName}</strong>, requested at{" "}
-        {device.createdAt.toISOString().slice(11, 16)} UTC.
+        Code <code>{device.userCode}</code> from <strong>{device.clientName}</strong>, requested{" "}
+        {minutesAgo(device.createdAt)}.
       </p>
       <p>Only approve if you just ran `xflow login` yourself and the code matches your terminal.</p>
       <form method="post" action="/api/v1/device/decide">
@@ -51,6 +57,11 @@ export default async function DevicePage({ searchParams }: PageProps<"/device">)
       </form>
     </main>
   );
+}
+
+function minutesAgo(at: Date): string {
+  const minutes = Math.floor((Date.now() - at.getTime()) / 60_000);
+  return minutes < 1 ? "just now" : `${minutes} min ago`;
 }
 
 function Notice({ text }: { text: string }) {
