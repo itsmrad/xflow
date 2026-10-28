@@ -207,6 +207,17 @@ try {
     const last = seen.findLast((s) => s.path.endsWith("/audio/transcriptions"));
     check("proxy: Groq receives the Rust provider's exact fields + central key", JSON.stringify(last?.fields) === JSON.stringify(["file", "language", "model", "prompt", "response_format"]) && last?.auth === `Bearer ${stubKey}`, JSON.stringify(last?.fields));
   }
+  // Warm proxy overhead: total time minus the upstream's own time (server-timing).
+  const over: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    const t0 = performance.now();
+    const r = await fetch(`${BASE}/api/v1/transcribe`, { method: "POST", headers: bearer, body: audioForm() });
+    await r.text();
+    const upstreamMs = Number(r.headers.get("server-timing")?.match(/dur=(\d+)/)?.[1] ?? 0);
+    over.push(performance.now() - t0 - upstreamMs);
+  }
+  over.sort((a, b) => a - b);
+  console.log(`INFO  warm proxy overhead per transcribe (incl. 2 DB round trips to Neon): p50 ${Math.round(over[2]!)} ms, min ${Math.round(over[0]!)} ms`);
   const cleanupBody = {
     model: "qwen/qwen3.8-27b",
     stream: false,
@@ -222,7 +233,7 @@ try {
   check("proxy: cleanup forwarded", cu.status === 200 && !!cuBody.choices?.[0]?.message.content, `${ms(t)}: ${cuBody.choices?.[0]?.message.content}`);
   if (stub) check("proxy: Groq receives the Rust chat body unchanged", JSON.stringify(seen.findLast((s) => s.json)?.json) === JSON.stringify(cleanupBody));
 
-  await sub.awaitRows((rows) => rows.some((r) => r.kind === "cleanup" && r.requests >= 1) && rows.some((r) => r.kind === "transcribe"), 20_000).then(
+  await sub.awaitRows((rows) => rows.some((r) => r.kind === "cleanup" && r.requests >= 1) && rows.some((r) => r.kind === "transcribe" && r.requests >= 6), 20_000).then(
     () => check("realtime: live rows updated after the requests", true, JSON.stringify(sub.getSnapshot().data)),
     () => check("realtime: live rows updated after the requests", false, JSON.stringify(sub.getSnapshot().data)),
   );
@@ -272,7 +283,7 @@ try {
 } finally {
   if (clerkUserId) {
     const { rows } = await pool.query<{ id: string }>("DELETE FROM users WHERE clerk_user_id = $1 RETURNING id", [clerkUserId]);
-    for (const r of rows) await pool.query("DELETE FROM rate_limits WHERE key LIKE $1", [`%${r.id}`]);
+    for (const r of rows) await pool.query("DELETE FROM rate_limits WHERE key LIKE $1", [`%${r.id}%`]);
     await clerk(`/users/${clerkUserId}`, { method: "DELETE" }).catch(() => {});
     console.log("cleanup: test user removed from Clerk and Neon");
   }
