@@ -43,6 +43,11 @@ pub enum Request {
         t0_us: Option<u64>,
         #[serde(default)]
         delivery: Delivery,
+        /// The session belongs to this connection: the client keeps it open, the
+        /// daemon closes it when the session ends and cancels the session if the
+        /// client closes it first (or dies, `kill -9` included).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hold: bool,
     },
     Stop,
     /// Start when idle, stop when listening; same fields as Start.
@@ -55,6 +60,8 @@ pub enum Request {
         t0_us: Option<u64>,
         #[serde(default)]
         delivery: Delivery,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hold: bool,
     },
     Cancel,
     Last,
@@ -113,6 +120,7 @@ impl Request {
             context: None,
             t0_us: None,
             delivery: Delivery::Inject,
+            hold: false,
         }
     }
     pub fn toggle() -> Self {
@@ -121,6 +129,7 @@ impl Request {
             context: None,
             t0_us: None,
             delivery: Delivery::Inject,
+            hold: false,
         }
     }
 }
@@ -344,7 +353,8 @@ mod tests {
                 mode: Mode::Command,
                 context: Some(_),
                 t0_us: Some(42),
-                delivery: Delivery::Inject
+                delivery: Delivery::Inject,
+                hold: false,
             }
         ));
     }

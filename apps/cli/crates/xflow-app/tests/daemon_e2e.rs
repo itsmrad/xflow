@@ -788,3 +788,192 @@ async fn sighup_reloads_only_the_isolated_daemon() {
     assert!(stopped.message.unwrap().contains("too short"));
     daemon.stop_process().await;
 }
+
+/// The real `xflow` binary, confined to this daemon's sandbox paths.
+fn client(daemon: &Daemon) -> Command {
+    let root = daemon.root.path();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xflow"));
+    command
+        .env_clear()
+        .env("HOME", root.join("home"))
+        .env("XDG_RUNTIME_DIR", root.join("run"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path={}/no-bus", root.display()),
+        );
+    command
+}
+
+/// Kills the client on unwind, before the daemon it talks to is dropped.
+struct Owner(Child);
+impl Owner {
+    fn kill(&mut self, signal: libc::c_int) -> std::time::Instant {
+        assert_eq!(unsafe { libc::kill(self.0.id() as libc::pid_t, signal) }, 0);
+        let killed = std::time::Instant::now();
+        self.0.wait().unwrap();
+        killed
+    }
+}
+impl Drop for Owner {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The owner died while Listening: xflowd alone must notice and release the mic.
+async fn released(
+    daemon: &Daemon,
+    events: &mut BufReader<UnixStream>,
+    mock: &mut MockStt,
+    killed: std::time::Instant,
+    what: &str,
+) {
+    state(events, State::Idle).await;
+    let held = killed.elapsed();
+    assert!(held < Duration::from_secs(1), "{what}: mic held {held:?}");
+    eprintln!("{what}: mic released {held:?} after the owner died");
+    let status = daemon.request(json!({"command":"status"})).await;
+    assert_eq!(status.state, State::Idle, "{what}");
+    assert!(
+        timeout(Duration::from_millis(200), mock.uploads.recv())
+            .await
+            .is_err(),
+        "{what}: an orphaned recording was uploaded"
+    );
+    assert!(daemon.history().await.history.is_empty(), "{what}");
+    assert!(!daemon.sink().exists(), "{what}");
+}
+
+#[tokio::test]
+async fn killing_xflow_listen_releases_the_microphone() {
+    let mut mock = MockStt::start(vec![]).await;
+    let mut daemon = Daemon::spawn(&mock.endpoint, "voice", true);
+    daemon.ready().await;
+    let mut events = daemon.events().await;
+    for (signal, what) in [
+        (libc::SIGTERM, "listen SIGTERM"),
+        (libc::SIGHUP, "listen SIGHUP"),
+        (libc::SIGKILL, "listen SIGKILL"),
+    ] {
+        let mut cli = Owner(
+            client(&daemon)
+                .args(["listen", "--seconds", "60"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        state(&mut events, State::Listening).await;
+        let killed = cli.kill(signal);
+        released(&daemon, &mut events, &mut mock, killed, what).await;
+    }
+    // Detached starts (`xflow start`, hotkeys, D-Bus) still outlive their requester.
+    let started = client(&daemon)
+        .arg("start")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{started:?}");
+    sleep(Duration::from_millis(200)).await;
+    let status = daemon.request(json!({"command":"status"})).await;
+    assert_eq!(status.state, State::Listening);
+    assert!(daemon.request(json!({"command":"cancel"})).await.ok);
+    daemon.stop_process().await;
+}
+
+/// A fresh pseudo-terminal: (master, terminal).
+fn pty() -> (File, std::os::fd::OwnedFd) {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    // ptsname returns a static buffer; tests run on parallel threads.
+    static NAME: Mutex<()> = Mutex::new(());
+    unsafe {
+        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        assert!(master >= 0);
+        let master = OwnedFd::from_raw_fd(master);
+        assert_eq!(libc::grantpt(master.as_raw_fd()), 0);
+        assert_eq!(libc::unlockpt(master.as_raw_fd()), 0);
+        let path = {
+            let _name = NAME.lock().unwrap();
+            std::ffi::CStr::from_ptr(libc::ptsname(master.as_raw_fd())).to_owned()
+        };
+        let terminal = libc::open(path.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+        assert!(terminal >= 0);
+        let terminal = OwnedFd::from_raw_fd(terminal);
+        let size = libc::winsize {
+            ws_row: 40,
+            ws_col: 120,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            libc::ioctl(terminal.as_raw_fd(), libc::TIOCSWINSZ, &size),
+            0
+        );
+        (File::from(master), terminal)
+    }
+}
+
+#[tokio::test]
+async fn killing_the_tui_releases_the_microphone() {
+    use std::{io::Read, io::Write, os::unix::process::CommandExt};
+    let mut mock = MockStt::start(vec![]).await;
+    let mut daemon = Daemon::spawn(&mock.endpoint, "voice", true);
+    daemon.ready().await;
+    let mut events = daemon.events().await;
+    for (signal, what) in [
+        (libc::SIGTERM, "TUI SIGTERM"),
+        // What closing the terminal window sends.
+        (libc::SIGHUP, "TUI SIGHUP"),
+        (libc::SIGKILL, "TUI SIGKILL"),
+    ] {
+        let (mut master, terminal) = pty();
+        let mut command = client(&daemon);
+        command
+            .arg("tui")
+            .env("TERM", "xterm-256color")
+            .stdin(terminal.try_clone().unwrap())
+            .stdout(terminal.try_clone().unwrap())
+            .stderr(terminal);
+        // Its own session, with the pty as controlling terminal, like a terminal tab.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut tui = Owner(command.spawn().unwrap());
+        drop(command);
+        // Drain the screen so the TUI never blocks on a full pty buffer.
+        let screen = Arc::new(Mutex::new(Vec::new()));
+        let (mut reader, drawn) = (master.try_clone().unwrap(), screen.clone());
+        std::thread::spawn(move || {
+            let mut buf = [0; 4096];
+            while let Ok(n @ 1..) = reader.read(&mut buf) {
+                drawn.lock().unwrap().extend_from_slice(&buf[..n]);
+            }
+        });
+        timeout(DEADLINE, async {
+            while !String::from_utf8_lossy(&screen.lock().unwrap()).contains("dictate") {
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "{what}: TUI never drew its home screen: {}",
+                String::from_utf8_lossy(&screen.lock().unwrap())
+            )
+        });
+        master.write_all(b" ").unwrap();
+        state(&mut events, State::Listening).await;
+        let killed = tui.kill(signal);
+        released(&daemon, &mut events, &mut mock, killed, what).await;
+    }
+    daemon.stop_process().await;
+}

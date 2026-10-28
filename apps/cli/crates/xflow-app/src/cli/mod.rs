@@ -187,6 +187,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
                 matches!(cli.command, Command::Toggle(_)),
                 mode.command,
                 xflow_core::ipc::Delivery::Inject,
+                false,
             ))?;
             if out.json {
                 out.response(&response)?;

@@ -58,15 +58,18 @@ pub async fn connect() -> Result<UnixStream> {
     Ok(stream)
 }
 pub async fn request(request: &Request) -> Result<Response> {
-    let mut stream = connect().await?;
-    write_frame(&mut stream, request).await?;
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        read_frame(&mut BufReader::new(stream)),
-    )
-    .await
-    .context("daemon request timed out")??
-    .context("daemon closed connection")
+    Ok(exchange(request).await?.0)
+}
+/// One request and its reply, plus the connection: a held start (`hold: true`)
+/// owns its recording only while this stays open.
+pub async fn exchange(request: &Request) -> Result<(Response, BufReader<UnixStream>)> {
+    let mut stream = BufReader::new(connect().await?);
+    write_frame(stream.get_mut(), request).await?;
+    let response = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut stream))
+        .await
+        .context("daemon request timed out")??
+        .context("daemon closed connection")?;
+    Ok((response, stream))
 }
 
 #[cfg(test)]
