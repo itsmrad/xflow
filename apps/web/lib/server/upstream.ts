@@ -22,6 +22,9 @@ export function groqKey(): string | null {
   return process.env.GROQ_API_KEY || null;
 }
 
+// Server env only: lets a test run point at a stub, or ops at another Groq endpoint.
+const groqBase = () => (process.env.GROQ_BASE_URL || GROQ_BASE_URL).replace(/\/+$/, "");
+
 /** Gate shared by both proxy routes. Returns an error response, or null to proceed. */
 export function gate(caller: ApiCaller): Response | null {
   if (!caller.pro) return error(402, "hosted transcription needs xflow Pro; subscribe at /dashboard");
@@ -83,7 +86,7 @@ export async function forward(f: Forward): Promise<Response> {
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${GROQ_BASE_URL}${f.path}`, {
+    upstream = await fetch(`${groqBase()}${f.path}`, {
       method: "POST",
       headers: { authorization: `Bearer ${groqKey()}`, ...(f.contentType ? { "content-type": f.contentType } : {}) },
       body: f.body,
