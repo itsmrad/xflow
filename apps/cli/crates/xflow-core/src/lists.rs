@@ -35,7 +35,7 @@ const DETERMINERS: [&str; 16] = [
     "of", "every", "each",
 ];
 const MAX_ITEM_WORDS: usize = 25;
-/// "one or two things", "one to three", "one hundred": counting, not items.
+/// A lone "or" ("one or two things"), "to" ("one to three") or "hundred": counting, not an item.
 const NOT_ITEMS: [&str; 7] = ["or", "to", "of", "by", "hundred", "thousand", "million"];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -118,8 +118,11 @@ fn markers(text: &str) -> Vec<Marker<'_>> {
             i += 1;
             Some((Kind::Number, n, !modifier(first)))
         } else if let Some(n) = numeral(i) {
-            // "1." / "1)" are explicit, as Whisper writes them.
-            let explicit = digit(text, &w[i]).is_some() && text[w[i].end..].starts_with(['.', ')']);
+            // "1." / "1)" are explicit, as Whisper writes them; so is "one, to …"
+            // ("1,000" never gets here: `digit` rejects it).
+            let after = &text[w[i].end..];
+            let explicit = after.starts_with(',')
+                || digit(text, &w[i]).is_some() && after.starts_with(['.', ')']);
             Some((Kind::Number, n, explicit || boundary(i)))
         } else if let Some(n) = ordinal {
             // Whisper often drops the comma before "first"/"second"; ordinals
@@ -218,8 +221,8 @@ fn item(s: &str) -> Option<&str> {
         s = rest;
     }
     let n = s.split_whitespace().count();
-    let first = s.split_whitespace().next().unwrap_or_default();
-    (n > 0 && n <= MAX_ITEM_WORDS && position(&NOT_ITEMS, first).is_none()).then_some(s)
+    // Only a lone stop word: "first, to ship faster" is a real item.
+    (n > 0 && n <= MAX_ITEM_WORDS && !(n == 1 && position(&NOT_ITEMS, s).is_some())).then_some(s)
 }
 
 /// `None` when `text` holds no list.
@@ -257,16 +260,17 @@ fn list(
         - tail
             .trim_start_matches(|c: char| c.is_whitespace() || ",.:;)-".contains(c))
             .len();
-    let cut = tail[skip..]
-        .char_indices()
-        .find(|&(i, c)| {
-            c == '\n' || ".?!".contains(c) && tail[skip + i + 1..].starts_with(char::is_whitespace)
-        })
-        .map_or(tail.len(), |(i, _)| skip + i);
-    // "one, two, three, five": the sequence breaks inside the list.
-    if breaker.is_some_and(|b| b < last.end + cut) {
-        return None;
-    }
+    // Search only up to the next same-kind marker: no sentence end before it
+    // means the sequence breaks inside the list ("one, two, three, five").
+    // Only the last candidate has no breaker, so this stays linear.
+    let limit = breaker.map_or(tail.len(), |b| (b - last.end).max(skip));
+    let cut = match tail[skip..limit].char_indices().find(|&(i, c)| {
+        c == '\n' || ".?!".contains(c) && tail[skip + i + 1..].starts_with(char::is_whitespace)
+    }) {
+        Some((i, _)) => skip + i,
+        None if breaker.is_some() => return None,
+        None => tail.len(),
+    };
     let mut items: Vec<&str> = Vec::with_capacity(run.len());
     for (k, m) in run.iter().enumerate() {
         let end = run.get(k + 1).map_or(last.end + cut, |n| n.start);
@@ -514,6 +518,23 @@ mod tests {
                 "Fruits: one apple, two pears, three plums. Veg: one leek, two kale, three peas.",
                 "Fruits:\n1. Apple\n2. Pears\n3. Plums\n\nVeg: one leek, two kale, three peas.",
             ),
+            // Round 2, R2: items may start with "to/by/of".
+            (
+                "Goals: first, to ship faster. Second, to hire. Third, to grow.",
+                "Goals:\n1. To ship faster\n2. To hire\n3. To grow",
+            ),
+            (
+                "Our goals are one, to reduce latency, two, to improve accuracy, and three, to cut costs.",
+                "Our goals are:\n1. To reduce latency\n2. To improve accuracy\n3. To cut costs",
+            ),
+            (
+                "Deadlines: one, by Friday the API, two, by Monday the UI, three, by June the launch.",
+                "Deadlines:\n1. By Friday the API\n2. By Monday the UI\n3. By June the launch",
+            ),
+            (
+                "Steps: first, of course, back up. Second, migrate. Third, verify.",
+                "Steps:\n1. Of course, back up\n2. Migrate\n3. Verify",
+            ),
             // A sentence-per-item list keeps going across sentence breaks.
             (
                 "First, install deps. Second, run tests. Third, deploy. Fourth, tag it.",
@@ -540,6 +561,13 @@ mod tests {
             "take one take two take three",
             "line one is fine line two is broken line three is fine",
             "count one to three then two to four and three to five",
+            // Round 2: "one," is explicit, so comma-led counting must still fail.
+            "Call at 1, lunch at 2, demo at 3.",
+            "On October 1, 2 and 3 we are off.",
+            "Twenty one, twenty two, twenty three.",
+            "Page one, line two, column three.",
+            "It took one, two, three tries.",
+            "Option one, the fast path, option two, the cheap path, option three, the safe path.",
         ] {
             assert_eq!(format(input), None, "{input}");
         }
@@ -594,5 +622,26 @@ mod tests {
         // Unoptimised builds on a loaded CI runner get headroom; release must hold 1 ms.
         let bound = if cfg!(debug_assertions) { 5_000 } else { 1_000 };
         assert!(each.as_micros() < bound, "{each:?}");
+        // Round 2, R1: the 32 KiB transcript cap stays linear. Quadratic
+        // candidate scans took ~500 ms debug / 32 ms release here.
+        for unit in [
+            "one a, two b, three c, five d, ",
+            "one a, two b, three c, one d, ",
+            "one x, ",
+            "bullet x ",
+            "first, ",
+            "one a two b three c ",
+        ] {
+            let big = unit.repeat(32 * 1024 / unit.len());
+            let start = std::time::Instant::now();
+            std::hint::black_box(format(&big));
+            let took = start.elapsed();
+            let bound = if cfg!(debug_assertions) {
+                40_000
+            } else {
+                2_000
+            };
+            assert!(took.as_micros() < bound, "{unit:?}: {took:?}");
+        }
     }
 }
