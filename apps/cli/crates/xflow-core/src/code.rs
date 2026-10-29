@@ -210,18 +210,14 @@ const DETERMINERS: &[&str] = &[
 ];
 const ENV_SUFFIXES: &[&str] = &["example", "local", "development", "production", "test"];
 /// What Whisper hears inside a span: "user i'd", "dot jason", "appy base url".
+/// Only forms that are never a real word in their position: "eye", "eyed",
+/// "ide", "happy", "earl" and "as" are (leftEye, defaultIde, happyPath, asString).
 const REPAIRS: &[(&str, &str)] = &[
     ("i'd", "id"),
-    ("eye", "id"),
-    ("eyed", "id"),
-    ("ide", "id"),
     ("envy", "env"),
     ("jason", "json"),
     ("appy", "api"),
-    ("happy", "api"),
-    ("earl", "url"),
     ("erl", "url"),
-    ("as", "is"),
 ];
 
 /// A repaired spelling, for words where it applies: ids end a span, "api"
@@ -231,7 +227,7 @@ fn repair(word: &str, position: Position) -> Option<&'static str> {
     let (_, to) = REPAIRS.iter().find(|r| r.0 == lower)?;
     let ok = match *to {
         "id" | "url" => position == Position::Later,
-        "api" | "is" => position == Position::First,
+        "api" => position == Position::First,
         _ => position == Position::Extension,
     };
     ok.then_some(*to)
@@ -506,7 +502,7 @@ fn identifier(
         return None;
     }
     let (first, last_word) = (&w[start], &w[end - 1]);
-    // "as" for "is" only where a name is expected: "use camel case as default" is prose.
+    // "as" starts a name (asString) only where one is expected: "use camel case as default" is prose.
     let is_like = lead || is(first, "is") || is(first, "as") && context != Before::Weak;
     let prefix = (is_like || any(first, PREFIXES))
         && (2..=3).contains(&n)
@@ -784,10 +780,10 @@ mod tests {
             ("rename it to CamelCaseAccountide", "rename it to accountId"),
             (
                 "camel case user-eyed snake case user-eyed",
-                "userId user_id",
+                "userEyed user_eyed",
             ),
             ("change camel cases open to false", "change isOpen to false"),
-            ("SnakeCase as admin", "is_admin"),
+            ("SnakeCase as admin", "as_admin"),
             ("use camel case as default", "use camel case as default"),
             ("Okay, snake case retry count.", "Okay, retry_count."),
             (
@@ -939,7 +935,23 @@ mod tests {
             ("Node.js handles it.", "Node.js handles it."),
             ("Camel K. Appy base URL", "apiBaseUrl"),
             ("Camel-case user i'd", "userId"),
-            ("snake case user eye", "user_id"),
+            ("snake case user eye", "user_eye"),
+            // Repairs never touch a real word: these are what the user said.
+            (
+                "rename it to camel case happy path",
+                "rename it to happyPath",
+            ),
+            (
+                "add a test called snake case happy path works",
+                "add a test called happy_path_works",
+            ),
+            ("camel case left eye", "leftEye"),
+            ("snake case blue eyed", "blue_eyed"),
+            ("camel case as string", "asString"),
+            ("snake case default ide", "default_ide"),
+            ("camel case grand earl", "grandEarl"),
+            ("snake case base erl", "base_url"),
+            ("copy dot envy dot example", "copy .env.example"),
             ("package dot jason", "package.json"),
         ] {
             assert_eq!(before_cleanup(input, &config, false), expected, "{input}");

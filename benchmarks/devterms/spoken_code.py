@@ -112,7 +112,7 @@ def main():
         for attempt in range(8):
             with pace_lock:
                 time.sleep(max(0, next_attempt - time.monotonic()))
-                next_attempt = time.monotonic() + 3.2
+                next_attempt = time.monotonic() + 4.5  # ≤ 15 RPM on the shared key
             start = time.perf_counter()
             try:
                 with urllib.request.urlopen(request, timeout=90) as response:
