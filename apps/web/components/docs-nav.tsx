@@ -22,7 +22,11 @@ export function Sidebar({ tree }: { tree: Root }) {
             <ul className="mt-2">{render(n.children, depth + 1)}</ul>
           </li>
         );
-      return <Item key={i} url={n.url} name={n.name} active={path === n.url} group={depth === 0} />;
+      return (
+        <li key={i}>
+          <Item url={n.url} name={n.name} active={path === n.url} group={depth === 0} />
+        </li>
+      );
     });
   }
   return (

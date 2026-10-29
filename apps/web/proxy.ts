@@ -28,9 +28,7 @@ export default clerkMiddleware(async (auth, request) => {
 });
 
 export const config = {
-  matcher: [
-    // Skip Next.js internals and static files.
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-    "/(api|trpc)(.*)",
-  ],
+  // Only routes that use Clerk. Marketing and docs pages skip it: running Clerk there costs a
+  // handshake redirect round trip (~0.6 s on the dev instance) before first paint.
+  matcher: ["/dashboard/:path*", "/device/:path*", "/sign-in/:path*", "/sign-up/:path*", "/api/v1/:path*"],
 };
