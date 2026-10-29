@@ -41,6 +41,7 @@ MEMORY = "phys_footprint" if MAC else "pss"
 MIB = 1024
 BEGIN, END = "<!-- scoreboard:begin -->", "<!-- scoreboard:end -->"
 RATE_LIMIT_RETRIES = 3
+GIVE_UP_AFTER = 5
 PHRASE = ("Deploy the API with TypeScript, then run the Postgres migration "
           "and open a pull request on GitHub.")
 WISPR_APP = Path("/Applications/Wispr Flow.app")
@@ -386,28 +387,44 @@ def sessions(daemon, cli, clip, runs, pill, rate_limit_wait=30):
                 events = queue.Queue()
                 threading.Thread(target=pump, args=(sub.makefile(), events), daemon=True).start()
                 events.get(timeout=10)  # snapshot
-                # `runs` successful samples, at most 2 * runs attempts; every failure is kept.
-                while sum(r["state"] == "success" for r in results) < runs and len(results) < 2 * runs:
-                    result, limited = redo_rate_limited(
-                        lambda: dictate(sock, events, hold, root, helper), rate_limit_wait)
-                    rate_limited += limited
-                    results.append(result)
-                    print(f"attempt {len(results)}: {result['state']} {result.get('stop_to_text_ms')} ms "
-                          f"({rate_limited} rate-limited so far)", file=sys.stderr)
+                results, rate_limited = collect(lambda: dictate(sock, events, hold, root, helper),
+                                                runs, rate_limit_wait)
         finally:
             done.set()
             watcher.join()
             if helper:
                 helper.close()
             baseline.stop(child)
+    return summarize(results, rate_limited, rate_limit_wait, wav_seconds(clip), hold,
+                     {**peaks, "lifetime_kib": lifetime, "memory_metric": MEMORY,
+                      "pill": "harness-driven real overlay-pill" if pill else "none on this platform"})
+
+
+def collect(attempt, runs, rate_limit_wait):
+    """`runs` successful dictations within 2 * runs attempts; every failure is kept. Gives up
+    after GIVE_UP_AFTER attempts without one success: a bad key or a silent clip never recovers."""
+    results, rate_limited = [], 0
+    while sum(r["state"] == "success" for r in results) < runs and len(results) < 2 * runs:
+        if len(results) >= GIVE_UP_AFTER and not any(r["state"] == "success" for r in results):
+            break
+        result, limited = redo_rate_limited(attempt, rate_limit_wait)
+        rate_limited += limited
+        results.append(result)
+        print(f"attempt {len(results)}: {result['state']} {result.get('stop_to_text_ms')} ms "
+              f"({rate_limited} rate-limited so far) {result.get('message') or ''}", file=sys.stderr)
+    return results, rate_limited
+
+
+def summarize(results, rate_limited, rate_limit_wait, clip_seconds, hold, peak):
     ok = [r for r in results if r["state"] == "success"]
+    failed = [r.get("message") or r["state"] for r in results if r["state"] != "success"]
     reference = words(PHRASE)
     return {
-        "runs": results, "count": len(results), "failures": len(results) - len(ok),
+        "runs": results, "count": len(results), "successes": len(ok), "failures": len(failed),
+        "error": None if ok else "no successful dictations",
         "rate_limited_attempts": rate_limited, "rate_limit_wait_seconds": rate_limit_wait,
-        "failure_reasons": {m: sum(r.get("message") == m for r in results if r["state"] != "success")
-                            for m in {r.get("message") for r in results if r["state"] != "success"}},
-        "clip_seconds": wav_seconds(clip), "stop_after_seconds": hold,
+        "failure_reasons": {m: failed.count(m) for m in sorted(set(failed))},
+        "clip_seconds": clip_seconds, "stop_after_seconds": hold,
         "stop_to_text_ms": summary([r["stop_to_text_ms"] for r in ok], "ms"),
         "daemon_total_ms": summary([r["timings"]["total_ms"] for r in ok if r.get("timings")], "ms"),
         "stt_ms": summary([r["timings"]["stt_ms"] for r in ok if r.get("timings")], "ms"),
@@ -415,8 +432,7 @@ def sessions(daemon, cli, clip, runs, pill, rate_limit_wait=30):
                                         if (r.get("timings") or {}).get("hotkey_ms") is not None], "ms"),
         "word_similarity": summary([round(difflib.SequenceMatcher(None, reference, words(r["text"]),
                                                                   autojunk=False).ratio(), 4) for r in ok], "ratio"),
-        "peak": {**peaks, "lifetime_kib": lifetime, "memory_metric": MEMORY,
-                 "pill": "harness-driven real overlay-pill" if pill else "none on this platform"},
+        "peak": peak,
     }
 
 
@@ -670,11 +686,14 @@ def render(data):
         lines.append(f"| `{name}` binary | {env['binaries'][name]['bytes'] / 2**20:.2f} MiB | release, stripped |")
     if s and s.get("count"):
         p = s["peak"]
+        reasons = "; ".join(f"{m} ×{n}" for m, n in (s.get("failure_reasons") or {}).items())
         lines += [
-            f"| Stop → text p50 / p95 | {ms(s['stop_to_text_ms']['p50'])} / {ms(s['stop_to_text_ms']['p95'])} | "
+            f"| Stop → text p50 / p95 | {ms(s['stop_to_text_ms'].get('p50'))} / {ms(s['stop_to_text_ms'].get('p95'))} | "
             f"{s['stop_to_text_ms']['count']} successful live Groq dictations of {s['count']} attempts "
             f"({s['failures']} failed, plus {s.get('rate_limited_attempts', 0)} HTTP 429s redone), "
-            f"{s['clip_seconds']:.1f} s WAV, stop request → text in a file sink (real paste excluded) |",
+            f"{s['clip_seconds']:.1f} s WAV, stop request → text in a file sink (real paste excluded) |"
+            if s["stop_to_text_ms"]["count"] else
+            f"| Stop → text | **no successful dictations** | {s['count']} attempts failed: {reasons} |",
             f"| Start → capture running p50 / p95 | {ms(s['start_to_capture_ms'].get('p50'))} / "
             f"{ms(s['start_to_capture_ms'].get('p95'))} | daemon `hotkey_ms`; WAV source, so real mic open is excluded |",
             f"| Peak tree {mem} while dictating | {mib(p['tree_mem_kib'])} | 20 Hz, daemon + pill |",
@@ -731,6 +750,11 @@ def run(args):
     markdown = Path(args.output).with_suffix(".md")
     markdown.write_text(render(data))
     print(f"wrote {args.output} and {markdown}")
+    sessions_ = m.get("sessions") or {}
+    if sessions_.get("count") and not sessions_.get("successes"):
+        print(f"error: no successful dictations in {sessions_['count']} attempts: "
+              f"{sessions_['failure_reasons']}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -774,6 +798,10 @@ def main(argv=None):
     sub.add_argument("gates", nargs="+", help="scoreboard-gate artifacts")
     sub.add_argument("--output", default="docs/benchmarks/ci-baseline.json")
     args = parser.parse_args(argv)
+    if getattr(args, "clip", None) and not os.path.isfile(args.clip):
+        parser.error(f"--clip: not a file: {args.clip}")
+    if args.func is gate and not sys.platform.startswith("linux"):
+        parser.error("gate is the Linux CI check: its baseline is Linux PSS on a GitHub runner")
     for name in ("daemon", "cli", "session_daemon"):
         path = getattr(args, name, None)
         if path and not os.access(path, os.X_OK):

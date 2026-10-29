@@ -107,11 +107,12 @@ class Run(unittest.TestCase):
             args = scoreboard.argparse.Namespace(daemon="d", cli="c", session_daemon="s", runs=30, clip=None,
                                                  startup_samples=2, idle_seconds=30, warmup_seconds=5,
                                                  output=str(output))
-            scoreboard.run(args)
-            return json.loads(output.read_text()), output.with_suffix(".md").read_text()
+            code = scoreboard.run(args)
+            return json.loads(output.read_text()), output.with_suffix(".md").read_text(), code
 
     def test_sessions_are_skipped_without_a_key(self):
-        data, markdown = self.fake_run({})
+        data, markdown, code = self.fake_run({})
+        self.assertEqual(code, 0)
         self.assertEqual(data["measurements"]["sessions"], {"count": 0, "skipped": "GROQ_API_KEY not set"})
         self.assertNotIn("Stop → text", markdown)
         self.assertIn("| Idle tree PSS | 5.9 MiB |", markdown)
@@ -125,6 +126,35 @@ class Run(unittest.TestCase):
         self.assertEqual(scoreboard.redo_rate_limited(lambda: limited, 0, retries=3), (limited, 4))
         other = {"state": "error", "message": "provider returned HTTP 500"}
         self.assertEqual(scoreboard.redo_rate_limited(lambda: other, 0), (other, 0))
+
+    def no_successes(self, reply):
+        results, limited = scoreboard.collect(lambda: dict(reply), 30, 0)
+        self.assertEqual(len(results), scoreboard.GIVE_UP_AFTER)  # gives up instead of 60 attempts
+        sessions = scoreboard.summarize(results, limited, 0, 7.0, 6.5, {"tree_rss_kib": 0, "tree_mem_kib": 0})
+        with patch.object(scoreboard, "sessions", return_value=sessions), \
+                patch.object(scoreboard, "make_clip", return_value=Path("clip.wav")):
+            data, markdown, code = self.fake_run({"GROQ_API_KEY": "bad"})
+        self.assertEqual(code, 1)
+        s = data["measurements"]["sessions"]
+        self.assertEqual((s["successes"], s["failures"], s["error"]), (0, 5, "no successful dictations"))
+        self.assertIn("**no successful dictations**", markdown)
+        return s, markdown
+
+    def test_bad_key_reports_no_successes_without_crashing(self):
+        message = "provider returned HTTP 401; response body omitted"
+        s, markdown = self.no_successes({"state": "error", "message": message})
+        self.assertEqual(s["failure_reasons"], {message: 5})
+        self.assertIn(f"{message} ×5", markdown)
+
+    def test_silent_clip_reports_no_successes_without_crashing(self):
+        s, markdown = self.no_successes({"state": "idle", "message": "Didn't catch anything"})
+        self.assertEqual(s["failure_reasons"], {"Didn't catch anything": 5})
+
+    def test_early_failures_do_not_give_up_once_one_succeeds(self):
+        replies = iter([{"state": "error", "message": "timeout"}] * 4 + [{"state": "success"}] * 5)
+        results, _ = scoreboard.collect(lambda: next(replies), 5, 0)
+        self.assertEqual([r["state"] for r in results].count("success"), 5)
+        self.assertEqual(len(results), 9)
 
     def test_missing_say_is_reported(self):
         with patch.object(scoreboard.shutil, "which", return_value=None), \
