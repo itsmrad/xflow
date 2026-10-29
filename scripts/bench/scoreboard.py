@@ -4,15 +4,16 @@
   run     reference run (macOS or Linux): binary sizes, cold/warm startup, idle tree
           RSS/footprint/CPU/wakeups, and with GROQ_API_KEY N live dictations through a
           test-support xflowd fed a WAV (never the microphone or speakers)
-  gate    short Linux CI smoke: sizes, startup, idle PSS/CPU against a committed baseline
-  render  JSON results -> docs/benchmarks/scoreboard.md and the PERFORMANCE.md block
+  gate      short Linux CI smoke: sizes, startup, idle PSS/CPU against a committed baseline
+  baseline  gate artifacts -> docs/benchmarks/ci-baseline.json (result + measured noise)
+  render    a run or baseline JSON -> <json>.md and the marked block in the given docs
 
 Standard library only. Every daemon gets fresh XDG dirs, XFLOW_NO_KEYCHAIN=1, the
 hotkey tap off (a fresh binary's tap can raise the Input Monitoring prompt) and no
 notifications or sounds. See scripts/bench/README.md.
 """
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import difflib
 import hashlib
 import json
@@ -206,26 +207,30 @@ def sample_tree(root, extra=()):
 
 # ---- daemon lifecycle --------------------------------------------------------
 
-def stop(child):
-    baseline.stop(child)
-
-
 def launch(daemon, env, sock, timeout=15):
     """Spawn the daemon and poll status every 1 ms; returns (child, ms to first status)."""
-    log = tempfile.TemporaryFile(mode="w+t")
-    t0 = time.monotonic()
-    child = subprocess.Popen([str(daemon)], env=env, stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=log)
-    while True:
-        if child.poll() is not None or time.monotonic() - t0 > timeout:
-            stop(child)
-            log.seek(0)
-            raise RuntimeError("daemon startup failed: " + log.read(4096))
-        try:
-            baseline.headless.request_status(sock)
-            return child, (time.monotonic() - t0) * 1000
-        except OSError:
-            time.sleep(.001)
+    with tempfile.TemporaryFile(mode="w+t") as log:  # the child keeps its own descriptor
+        t0 = time.monotonic()
+        child = subprocess.Popen([str(daemon)], env=env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=log)
+        while True:
+            if child.poll() is not None or time.monotonic() - t0 > timeout:
+                baseline.stop(child)
+                log.seek(0)
+                raise RuntimeError("daemon startup failed: " + log.read(4096))
+            try:
+                baseline.headless.request_status(sock)
+                return child, (time.monotonic() - t0) * 1000
+            except OSError:
+                time.sleep(.001)
+
+
+def install(daemon, root):
+    """A private copy of the binary: a new inode nothing else maps."""
+    copy = root / "bin/xflowd"
+    copy.parent.mkdir()
+    shutil.copy2(daemon, copy)
+    return copy
 
 
 def startup(daemon, samples):
@@ -235,43 +240,45 @@ def startup(daemon, samples):
     cold, warm = [], []
     for _ in range(samples):
         with sandbox(config()) as (root, env, sock):
-            copy = root / "bin/xflowd"
-            copy.parent.mkdir()
-            shutil.copy2(daemon, copy)
+            copy = install(daemon, root)
             child, ms = launch(copy, env, sock)
-            stop(child)
+            baseline.stop(child)
             cold.append(ms)
             child, ms = launch(copy, env, sock)
-            stop(child)
+            baseline.stop(child)
             warm.append(ms)
     return {"cold_ms": summary(cold, "ms"), "warm_ms": summary(warm, "ms")}
 
 
 def idle(daemon, seconds, warmup, launches=1):
-    """Idle tree after `warmup`; 1 Hz samples. Per launch: median memory, CPU %, wakeups/s."""
-    runs = []
-    for _ in range(launches):
-        with sandbox(config()) as (_, env, sock):
-            child, _ = launch(daemon, env, sock)
-            try:
-                time.sleep(warmup)
-                first, first_samples = sample_tree(child.pid)
-                t0, observations = time.monotonic(), []
-                while time.monotonic() - t0 < seconds:
-                    time.sleep(min(1, max(0, seconds - (time.monotonic() - t0))))
-                    last, last_samples = sample_tree(child.pid)
-                    observations.append(last)
-                elapsed = time.monotonic() - t0
-                if child.poll() is not None:
-                    raise RuntimeError("daemon exited during idle observation")
-            finally:
-                stop(child)
-        runs.append({
-            "seconds": elapsed, "warmup_seconds": warmup, "processes": last["processes"],
-            "rss_kib": summary([o["rss_kib"] for o in observations], "KiB"),
-            "mem_kib": summary([o["mem_kib"] for o in observations], "KiB"),
-            "cpu_percent": (last["cpu_ns"] - first["cpu_ns"]) / 1e9 / elapsed * 100,
-            "wakeups_per_second": wakeup_delta(first_samples, last_samples) / elapsed})
+    """`launches` daemons idle side by side, sampled together at 1 Hz after `warmup`.
+    Each runs its own copy of the binary, so no two share text pages (which would split
+    their PSS). Per launch: median memory, CPU %, wakeups/s."""
+    with ExitStack() as stack:
+        children = []
+        for _ in range(launches):
+            root, env, sock = stack.enter_context(sandbox(config()))
+            child, _ = launch(install(daemon, root), env, sock)
+            stack.callback(baseline.stop, child)
+            children.append(child)
+        time.sleep(warmup)
+        first = [sample_tree(c.pid) for c in children]
+        t0, observations = time.monotonic(), [[] for _ in children]
+        while time.monotonic() - t0 < seconds:
+            time.sleep(min(1, max(0, seconds - (time.monotonic() - t0))))
+            last = [sample_tree(c.pid) for c in children]
+            for series, (total, _) in zip(observations, last):
+                series.append(total)
+        elapsed = time.monotonic() - t0
+        if any(c.poll() is not None for c in children):
+            raise RuntimeError("daemon exited during idle observation")
+    runs = [{"seconds": elapsed, "warmup_seconds": warmup, "concurrent": launches,
+             "processes": end[0]["processes"],
+             "rss_kib": summary([o["rss_kib"] for o in series], "KiB"),
+             "mem_kib": summary([o["mem_kib"] for o in series], "KiB"),
+             "cpu_percent": (end[0]["cpu_ns"] - start[0]["cpu_ns"]) / 1e9 / elapsed * 100,
+             "wakeups_per_second": wakeup_delta(start[1], end[1]) / elapsed}
+            for start, end, series in zip(first, last, observations)]
     return {"memory_metric": MEMORY, "runs": runs,
             "rss_kib": percentile([r["rss_kib"]["p50"] for r in runs], .5),
             "mem_kib": percentile([r["mem_kib"]["p50"] for r in runs], .5),
@@ -338,7 +345,7 @@ class Pill:
                 self.child.stdin.close()
                 self.child.wait(timeout=4)  # the daemon allows the exit animation up to 4 s
             except (OSError, subprocess.TimeoutExpired):
-                stop(self.child)
+                baseline.stop(self.child)
             self.child = None
 
     @property
@@ -392,7 +399,7 @@ def sessions(daemon, cli, clip, runs, pill, rate_limit_wait=30):
             watcher.join()
             if helper:
                 helper.close()
-            stop(child)
+            baseline.stop(child)
     ok = [r for r in results if r["state"] == "success"]
     reference = words(PHRASE)
     return {
@@ -472,15 +479,11 @@ def request(sock, payload):
 
 # ---- environment, Wispr ------------------------------------------------------
 
-def text_command(command):
-    return baseline.text_command(command)
-
-
 def environment(binaries):
     if MAC:
-        hw = {"model": text_command(["sysctl", "-n", "hw.model"]),
-              "cpu": text_command(["sysctl", "-n", "machdep.cpu.brand_string"]),
-              "ram_bytes": int(text_command(["sysctl", "-n", "hw.memsize"]) or 0),
+        hw = {"model": baseline.text_command(["sysctl", "-n", "hw.model"]),
+              "cpu": baseline.text_command(["sysctl", "-n", "machdep.cpu.brand_string"]),
+              "ram_bytes": int(baseline.text_command(["sysctl", "-n", "hw.memsize"]) or 0),
               "os": f"macOS {platform.mac_ver()[0]}"}
     else:
         os_release = platform.freedesktop_os_release()
@@ -493,9 +496,12 @@ def environment(binaries):
     return {**hw, "kernel": platform.release(), "architecture": platform.machine(),
             "logical_cpus": os.cpu_count(), "load_average": list(os.getloadavg()),
             "recorded_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "git_commit": text_command(["git", "rev-parse", "HEAD"]),
-            "git_dirty": bool(text_command(["git", "status", "--porcelain", "--", "apps/cli"])),
-            "rustc": text_command(["rustc", "--version"]), "python": platform.python_version(),
+            "git_commit": baseline.text_command(["git", "rev-parse", "HEAD"]),
+            "git_dirty": bool(baseline.text_command(["git", "status", "--porcelain", "--", "apps/cli"])),
+            "rustc": baseline.text_command(["rustc", "--version"]), "python": platform.python_version(),
+            "ci_run": (f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                       f"{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+                       if os.environ.get("GITHUB_RUN_ID") else None),
             "binaries": {name: {"bytes": Path(path).stat().st_size,
                                 "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
                          for name, path in binaries.items()}}
@@ -569,7 +575,60 @@ def gate(args):
     return 0 if all(c["ok"] for c in out["checks"]) else 1
 
 
+BASELINE_SCHEMA = "xflow-scoreboard-baseline/1"
+DEFAULT_LIMITS = {"binary_pct": 5, "pss_kib": 1024, "pss_pct": 10, "cpu_percent": 0.1, "startup_ms": 100}
+
+
+def make_baseline(gates, limits):
+    """Gate artifacts -> baseline: the median-PSS run is the reference, every run is noise evidence."""
+    runs = sorted(gates, key=lambda g: g["result"]["idle_pss_kib"])
+    return {"schema": BASELINE_SCHEMA, "limits": limits, "result": runs[(len(runs) - 1) // 2]["result"],
+            "about": "Linux CI gate baseline. Regenerate with `scoreboard.py baseline` from scoreboard-gate "
+                     "artifacts in the PR that intentionally changes it.",
+            "runs": [{"ci_run": g["environment"].get("ci_run"), "commit": g["environment"]["git_commit"],
+                      "rustc": g["environment"]["rustc"], "cpu": g["environment"]["cpu"],
+                      "logical_cpus": g["environment"]["logical_cpus"], "result": g["result"],
+                      "launch_pss_kib": [r["mem_kib"]["p50"] for r in g["idle"]["runs"]]} for g in gates]}
+
+
+def baseline_command(args):
+    output = Path(args.output)
+    limits = json.loads(output.read_text())["limits"] if output.exists() else DEFAULT_LIMITS
+    write_json(output, make_baseline([json.loads(Path(g).read_text()) for g in args.gates], limits))
+    print(f"wrote {output}")
+    return 0
+
+
 # ---- rendering ---------------------------------------------------------------
+
+def render_baseline(base):
+    runs, limits, result = base["runs"], base["limits"], base["result"]
+    medians = [r["result"]["idle_pss_kib"] for r in runs]
+    launches = [p for r in runs for p in r["launch_pss_kib"]]
+    allowed = next(c["limit"] for c in check(result, result, limits) if c["metric"] == "idle tree PSS") \
+        - result["idle_pss_kib"]
+    sizes = {name: sorted({r["result"]["binary_bytes"][name] for r in runs}) for name in result["binary_bytes"]}
+    startup = [r["result"]["startup_p50_ms"] for r in runs]
+
+    def spread(values):
+        return f"{min(values):,}–{max(values):,} KiB ({(max(values) - min(values)) / min(values) * 100:.0f} %)"
+
+    links = ", ".join(f"[{i + 1}]({r['ci_run']})" if r["ci_run"] else str(i + 1) for i, r in enumerate(runs))
+    return "\n".join([
+        f"Generated from [`ci-baseline.json`](../../docs/benchmarks/ci-baseline.json) by `scoreboard.py "
+        f"render`; do not edit by hand. {len(runs)} CI runs of `{runs[0]['commit'][:7]}` on {runs[0]['cpu']}, "
+        f"{runs[0]['logical_cpus']} CPUs ({links}):", "",
+        f"- Idle tree PSS: run medians {spread(medians)}, per-launch medians {spread(launches)}. The baseline "
+        f"is {result['idle_pss_kib']:,} KiB and the gate allows +{allowed:,} KiB, "
+        f"{allowed / max(1, max(launches) - min(launches)):.1f}× the per-launch spread.",
+        "- Binaries: " + "; ".join(
+            f"`{name}` {values[0]:,} B" + (" in every run" if len(values) == 1 else f"–{values[-1]:,} B")
+            for name, values in sizes.items()) + f". The gate allows +{limits['binary_pct']} %.",
+        f"- Warm startup p50: {min(startup):.1f}–{max(startup):.1f} ms against the absolute "
+        f"{limits['startup_ms']} ms budget; idle CPU at most "
+        f"{max(r['result']['idle_cpu_percent'] for r in runs):.4f} % against {limits['cpu_percent']} %.",
+    ]) + "\n"
+
 
 def mib(kib):
     return "—" if kib is None else f"{kib / MIB:.1f} MiB"
@@ -580,6 +639,8 @@ def ms(value):
 
 
 def render(data):
+    if data.get("schema") == BASELINE_SCHEMA:
+        return render_baseline(data)
     env, m = data["environment"], data["measurements"]
     s, i = m.get("sessions"), m["idle"]
     mem = "footprint" if i["memory_metric"] == "phys_footprint" else "PSS"
@@ -707,6 +768,10 @@ def main(argv=None):
     sub.set_defaults(func=render_command)
     sub.add_argument("result")
     sub.add_argument("--into", nargs="+", default=["PERFORMANCE.md"])
+    sub = commands.add_parser("baseline")
+    sub.set_defaults(func=baseline_command)
+    sub.add_argument("gates", nargs="+", help="scoreboard-gate artifacts")
+    sub.add_argument("--output", default="docs/benchmarks/ci-baseline.json")
     args = parser.parse_args(argv)
     for name in ("daemon", "cli", "session_daemon"):
         path = getattr(args, name, None)

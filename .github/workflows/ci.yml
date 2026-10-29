@@ -50,21 +50,37 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install Rust stable
+        id: rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          echo "version=$(rustc --version | tr -c 'A-Za-z0-9.\n' -)" >> "$GITHUB_OUTPUT"
+      # The gate needs only these two release binaries. The same sources and toolchain
+      # give byte-identical binaries, so a change outside apps/cli skips the build.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: binaries
+        with:
+          path: target/scoreboard-bin
+          key: scoreboard-bin-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('apps/cli/**') }}
       - name: Install system packages
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libdbus-1-dev dbus-daemon
-      - name: Install Rust stable
-        run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - if: steps.binaries.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: apps/cli -> target
           key: release
-      - run: cargo build --manifest-path apps/cli/Cargo.toml --release --locked -p xflow-app --bin xflowd --bin xflow
+      - if: steps.binaries.outputs.cache-hit != 'true'
+        run: |
+          cargo build --manifest-path apps/cli/Cargo.toml --release --locked -p xflow-app --bin xflowd --bin xflow
+          mkdir -p target/scoreboard-bin
+          cp apps/cli/target/release/xflowd apps/cli/target/release/xflow target/scoreboard-bin/
       # Sizes, idle PSS/CPU and startup budget against docs/benchmarks/ci-baseline.json.
-      - run: python3 -B scripts/bench/scoreboard.py gate --output target/scoreboard-gate.json
+      - run: >-
+          python3 -B scripts/bench/scoreboard.py gate --daemon target/scoreboard-bin/xflowd
+          --cli target/scoreboard-bin/xflow --output target/scoreboard-gate.json
       - if: always()
         run: python3 -B scripts/bench/test_scoreboard.py && python3 -B scripts/bench/test_baseline.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

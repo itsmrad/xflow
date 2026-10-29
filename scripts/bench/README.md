@@ -184,26 +184,34 @@ listed in the PR for #15.
 
 ### Linux CI gate
 
-The `scoreboard gate` job in `.github/workflows/ci.yml` builds the release
-binaries, then runs `scoreboard.py gate` against
-[`docs/benchmarks/ci-baseline.json`](../../docs/benchmarks/ci-baseline.json).
-The gate takes 20 startup launches and three 30 s idle observations (median of
-medians), and takes under two minutes after the build. It fails when:
+The `scoreboard gate` job in `.github/workflows/ci.yml` runs `scoreboard.py gate`
+against [`docs/benchmarks/ci-baseline.json`](../../docs/benchmarks/ci-baseline.json).
+It uses release `xflowd` and `xflow`, the only binaries the gate needs. They are
+cached under a key built from the `apps/cli` sources, `Cargo.lock` and the rustc
+version, so a change that doesn't touch the CLI skips the build. The gate takes
+20 startup launches, then idles three daemons side by side for 30 s and reports
+the median of their medians. Each daemon runs its own copy of the binary, so no
+two share text pages, which would split their PSS. It fails when:
 
-- a binary grows by more than 5 %. Sizes are byte-identical between runs, and
-  the margin absorbs stable-toolchain drift;
-- idle tree PSS grows by more than min(1 MiB, 10 %), which is about 935 KiB today.
-  Four runners measured medians of 9,072–9,520 KiB (5 % spread) and per-launch
-  medians of 8,987–9,644 KiB (7 %), so the limit sits about 2× above the noise;
-- idle tree CPU exceeds 0.1 % of one core;
-- warm startup p50 exceeds the 100 ms budget;
+- a binary grows by more than `limits.binary_pct`. Sizes are byte-identical
+  between runs; the margin absorbs drift in the stable toolchain;
+- idle tree PSS grows by more than min(`limits.pss_kib`, `limits.pss_pct`);
+- idle tree CPU exceeds `limits.cpu_percent` of one core;
+- warm startup p50 exceeds the absolute `limits.startup_ms` budget. No relative
+  timing is gated, so runner noise can't fail it;
 - any helper process is running at idle.
 
-Startup is gated only against the absolute budget, never a relative timing, so
-runner noise can't fail it. When a change grows a binary or memory on purpose,
-copy `result` from the job's `scoreboard-gate` artifact into the baseline in the
-same PR. A reviewer then sees the growth.
+Measured runner noise behind those limits:
+
+<!-- scoreboard:begin -->
+<!-- scoreboard:end -->
+
+When a change grows a binary or memory on purpose, download the job's
+`scoreboard-gate` artifacts and regenerate the baseline and this text in the
+same PR, so a reviewer sees the growth:
 
 ```sh
-python3 -B scripts/bench/test_scoreboard.py   # aggregation, gate, render; no daemon needed
+python3 -B scripts/bench/scoreboard.py baseline gate-1.json gate-2.json gate-3.json
+python3 -B scripts/bench/scoreboard.py render docs/benchmarks/ci-baseline.json --into scripts/bench/README.md
+python3 -B scripts/bench/test_scoreboard.py   # also fails if any generated text drifts from its JSON
 ```

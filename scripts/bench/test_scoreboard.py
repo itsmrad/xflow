@@ -147,10 +147,37 @@ class Run(unittest.TestCase):
         with self.assertRaises(ValueError):
             scoreboard.replace_block("no markers", "new\n")
 
-    def test_performance_md_has_the_block(self):
-        text = (scoreboard.ROOT / "PERFORMANCE.md").read_text()
-        self.assertIn(scoreboard.BEGIN, text)
-        self.assertIn(scoreboard.END, text)
+    def test_generated_docs_match_their_data(self):
+        """Every number in these docs comes from the JSON beside it; editing either alone fails."""
+        root = scoreboard.ROOT
+        for data, docs in (("docs/benchmarks/scoreboard-macos.json", ["PERFORMANCE.md"]),
+                           ("docs/benchmarks/ci-baseline.json", ["scripts/bench/README.md"])):
+            block = scoreboard.render(json.loads((root / data).read_text()))
+            self.assertEqual((root / data).with_suffix(".md").read_text(), block, data)
+            for doc in docs:
+                text = (root / doc).read_text()
+                self.assertEqual(scoreboard.replace_block(text, block), text, f"{doc} drifted from {data}")
+
+
+class Baseline(unittest.TestCase):
+    @staticmethod
+    def gate_artifact(pss, launches, run):
+        return {"environment": {"ci_run": f"https://ci/{run}", "git_commit": "abcdef0123", "rustc": "rustc 1",
+                                "cpu": "Fake CPU", "logical_cpus": 4},
+                "result": dict(result(idle_pss_kib=pss), startup_p50_ms=2.0),
+                "idle": {"runs": [{"mem_kib": {"p50": p}} for p in launches]}}
+
+    def test_median_run_becomes_the_reference_and_all_runs_are_noise(self):
+        gates = [self.gate_artifact(9500, [9400, 9500, 9600], 1), self.gate_artifact(9000, [8900, 9000, 9100], 2),
+                 self.gate_artifact(9200, [9200, 9200, 9300], 3)]
+        base = scoreboard.make_baseline(gates, LIMITS)
+        self.assertEqual(base["result"]["idle_pss_kib"], 9200)
+        self.assertEqual([r["ci_run"] for r in base["runs"]], ["https://ci/1", "https://ci/2", "https://ci/3"])
+        text = scoreboard.render(base)
+        self.assertIn("run medians 9,000–9,500 KiB (6 %)", text)
+        self.assertIn("per-launch medians 8,900–9,600 KiB (8 %)", text)
+        self.assertIn("allows +920 KiB, 1.3× the per-launch spread", text)
+        self.assertIn("`xflowd` 5,000,000 B in every run", text)
 
 
 if __name__ == "__main__":
