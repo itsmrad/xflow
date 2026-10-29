@@ -202,6 +202,9 @@ pub enum FieldEvent {
     /// Focus may have left the field; re-check after a short grace.
     Focus,
 }
+/// Fields longer than this (UTF-16 units) are not read for learning: each read
+/// copies the whole value across processes, on every edit.
+pub const MAX_FIELD_UTF16: usize = 20_000;
 pub struct FieldText {
     pub value: String,
     /// End of the selection in UTF-16 units, when the field reports one.

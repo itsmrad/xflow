@@ -8,7 +8,8 @@ const ANCHOR_CHARS: usize = 16;
 /// Wispr and VoiceInk both cap learned candidates per dictation at four.
 pub const MAX_CANDIDATES: usize = 4;
 const MAX_HUNK_WORDS: usize = 3;
-const MAX_DIFF_WORDS: usize = 400;
+/// Longer texts are never compared, so a longer dictation is not watched at all.
+pub const MAX_DIFF_WORDS: usize = 400;
 
 /// Where a dictation landed in a text field: the field's own text of the paste
 /// plus up to 16 characters on each side. Never the rest of the field.
@@ -25,6 +26,9 @@ impl Receipt {
     pub fn new(field: &str, inserted: &str, caret: Option<usize>) -> Option<Self> {
         let chars = folded(field);
         let keys: Vec<char> = chars.iter().map(|c| c.0).collect();
+        // The folded field as text, for a linear-time substring search.
+        let hay: String = keys.iter().collect();
+        let offsets: Vec<usize> = hay.char_indices().map(|(b, _)| b).collect();
         let (i, n) = [inserted, inserted.trim_end()]
             .into_iter()
             .filter(|s| !s.trim().is_empty())
@@ -38,12 +42,15 @@ impl Receipt {
                     let j = chars.partition_point(|c| c.1 < end);
                     (j >= n && keys[j - n..j] == needle[..]).then(|| j - n)
                 });
+                // The only occurrence; a second one, even overlapping, is ambiguous.
                 let unique = || {
-                    let mut hits = keys
-                        .windows(n)
-                        .enumerate()
-                        .filter(|(_, w)| *w == &needle[..]);
-                    hits.next().filter(|_| hits.next().is_none()).map(|h| h.0)
+                    let needle: String = needle.iter().collect();
+                    let first = hay.find(&needle)?;
+                    let next = first + hay[first..].chars().next()?.len_utf8();
+                    hay[next..]
+                        .find(&needle)
+                        .is_none()
+                        .then(|| offsets.partition_point(|&b| b < first))
                 };
                 at_caret.or_else(unique).map(|i| (i, n))
             })?;
@@ -750,6 +757,8 @@ mod tests {
             Some(field.encode_utf16().count()),
         );
         assert_eq!(receipt.unwrap().inserted(), "a\u{323}\u{301} y");
+        // An overlapping second occurrence is ambiguous too.
+        assert!(Receipt::new("x a a a y", "a a", None).is_none());
         // Text that folds away entirely is never searched for.
         assert!(Receipt::new("abc", "\u{200b} ", None).is_none());
         // The anchored span must still be the dictation, not the next message.
@@ -760,5 +769,69 @@ mod tests {
         );
         assert_eq!(receipt.corrected(""), None);
         assert_eq!(receipt.corrected("lunch at noon anyone"), None);
+    }
+
+    /// Time per call at typical, 20-minute (#85) and pathological sizes:
+    /// `cargo test --release -p xflow-core learn::tests::cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement; run explicitly in release"]
+    fn cost() {
+        fn time(label: &str, mut f: impl FnMut()) {
+            let mut runs: Vec<std::time::Duration> = (0..30)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    f();
+                    start.elapsed()
+                })
+                .collect();
+            runs.sort();
+            println!("{label}: p50 {:?} p95 {:?}", runs[15], runs[28]);
+        }
+        let dictionary = DictionaryConfig::default();
+        let words = |n: usize, salt: &str| -> String {
+            (0..n)
+                .map(|i| format!("word{} ", (i * 7919) % 997))
+                .collect::<String>()
+                + salt
+        };
+        let lines =
+            |n: usize, tag: &str| -> String { (0..n).map(|i| format!("{tag} {i}. ")).collect() };
+        // Typical: a 40-word dictation in a 2 KB message.
+        let dictation = words(40, "post gres ");
+        let field = format!("{}{dictation}{}", lines(70, "before"), lines(70, "after"));
+        let edited = field.replace("post gres", "Postgres");
+        let receipt = Receipt::new(&field, &dictation, None).unwrap();
+        time("typical receipt (no caret)", || {
+            Receipt::new(&field, &dictation, None).unwrap();
+        });
+        time("typical read", || {
+            receipt.corrected(&edited).unwrap();
+        });
+        let span = receipt.corrected(&edited).unwrap().to_owned();
+        time("typical corrections", || {
+            corrections(receipt.inserted(), &span, &dictionary).unwrap();
+        });
+        // 20-minute dictation (~3,000 words, 18 KB) at the end of a 64 KB field.
+        let dictation = words(3000, "post gres ");
+        let field = format!("{}{dictation}", lines(4_000, "line"));
+        assert!(field.encode_utf16().count() > 50_000);
+        let caret = field.encode_utf16().count();
+        time("20-min receipt (caret)", || {
+            Receipt::new(&field, &dictation, Some(caret)).unwrap();
+        });
+        time("20-min receipt (no caret)", || {
+            Receipt::new(&field, &dictation, None).unwrap();
+        });
+        let receipt = Receipt::new(&field, &dictation, Some(caret)).unwrap();
+        let edited = field.replace("post gres", "Postgres");
+        time("20-min read (over the diff bound)", || {
+            assert!(receipt.corrected(&edited).is_none());
+        });
+        // Pathological: a periodic 64 KB field and a near-match needle.
+        let field = "a ".repeat(32_000);
+        let needle = format!("{}b", "a ".repeat(9_000));
+        time("periodic 64 KB, 18 KB needle", || {
+            assert!(Receipt::new(&field, &needle, None).is_none());
+        });
     }
 }

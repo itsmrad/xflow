@@ -1392,6 +1392,10 @@ async fn watch_edit(
     mut finalize: oneshot::Receiver<()>,
 ) -> std::result::Result<(String, String), Option<&'static str>> {
     use tokio::time::{sleep_until, timeout, Instant};
+    // Too long to ever compare (see corrections): no reads at all.
+    if inserted.split_whitespace().count() > xflow_core::learn::MAX_DIFF_WORDS {
+        return Err(Some("too-long"));
+    }
     async fn read(field: &mut Box<dyn xflow_core::FieldWatch>) -> Option<xflow_core::FieldText> {
         timeout(Duration::from_millis(250), field.read())
             .await
@@ -3778,6 +3782,21 @@ mod tests {
             .await,
             Err(Some("unsettled"))
         );
+    }
+    /// A dictation too long to ever be compared is not watched or read.
+    #[tokio::test]
+    async fn a_dictation_too_long_to_compare_is_not_watched() {
+        let pasted = "word ".repeat(xflow_core::learn::MAX_DIFF_WORDS + 1);
+        let desktop = RecordingDesktop {
+            field: Arc::new(Mutex::new(Some(pasted.clone()))),
+            ..RecordingDesktop::default()
+        };
+        let (_finalize, finalize) = oneshot::channel();
+        assert_eq!(
+            watch_edit(&desktop, &AppContext::default(), &pasted, finalize).await,
+            Err(Some("too-long"))
+        );
+        assert_eq!(desktop.watches.load(Ordering::SeqCst), 0);
     }
     #[tokio::test]
     async fn fast_enter_learns_the_final_spelling_or_nothing() {

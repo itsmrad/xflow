@@ -168,12 +168,20 @@ unsafe extern "C" fn callback(_: Ref, _: Ref, notification: Ref, context: *mut c
     let _ = events.try_send(event);
 }
 /// A field that turned secure since it was pinned (a page swapping in a
-/// password input) is no longer read.
+/// password input) is no longer read. Fields over MAX_FIELD_UTF16 are skipped
+/// before their value is copied across processes.
 fn read(element: &Owned) -> Option<FieldText> {
-    if secure(element) {
+    let large = |n: usize| n > xflow_core::MAX_FIELD_UTF16;
+    if secure(element)
+        || element
+            .number("AXNumberOfCharacters")
+            .is_some_and(|n| large(n as usize))
+    {
         return None;
     }
-    let value = element.text("AXValue")?;
+    let value = element
+        .text("AXValue")
+        .filter(|v| !large(v.encode_utf16().count()))?;
     let caret = element.attribute("AXSelectedTextRange").and_then(|range| {
         let mut r = CFRange {
             location: 0,
