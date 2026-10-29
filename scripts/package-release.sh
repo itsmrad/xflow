@@ -25,8 +25,10 @@ cp -R packaging/gnome-extension "$stage/packaging/"
 install -m644 packaging/xflow.service "$stage/packaging/"
 install -m644 config/default.toml "$stage/config/"
 install -m644 LICENSE README.md "$stage/"
-# Third-party notice for the embedded SCOWL word lists (xflow-core/src/words.rs).
+# Third-party notices for embedded data: SCOWL word lists (xflow-core/src/words.rs)
+# and OpenAI's BPE merges (xflow-providers/src/stt.rs).
 install -m644 apps/cli/crates/xflow-core/src/SCOWL-LICENSE.txt "$stage/"
+install -m644 apps/cli/crates/xflow-providers/src/bpe/LICENSE "$stage/BPE-LICENSE.txt"
 
 # Deterministic archive: sorted entries, fixed owner, commit timestamp, no gzip name/time.
 mtime=$(git log -1 --format=%ct 2>/dev/null || date +%s)
