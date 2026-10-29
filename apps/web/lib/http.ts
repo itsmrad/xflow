@@ -11,6 +11,30 @@ export function error(status: number, message: string, headers: HeadersInit = {}
   return json({ error: { message } }, status, headers);
 }
 
+/**
+ * Answer an upload we won't process (no token, no Pro, too large). Answering mid-upload resets the
+ * client's connection, so read and drop the body first, up to `limit` bytes (the route's own cap; on
+ * Vercel the body is buffered before the function runs anyway). Past the cap, stop and close.
+ */
+export async function refuse(request: Request, res: Response, limit: number): Promise<Response> {
+  const reader = request.body?.getReader();
+  if (!reader) return res;
+  let read = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return res;
+      read += value.byteLength;
+      if (read > limit) break;
+    }
+  } catch {
+    // the client went away; nothing left to protect
+  }
+  reader.cancel().catch(() => {});
+  res.headers.set("connection", "close");
+  return res;
+}
+
 /** Rate-limit key for the caller: Vercel's x-real-ip (set by its edge, not the client), IPv6 by /64. */
 export function clientIp(request: Request): string {
   return ipKey(ipAddress(request) ?? "unknown");

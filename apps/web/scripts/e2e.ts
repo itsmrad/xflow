@@ -283,7 +283,8 @@ try {
   const bad = await fetch(`${BASE}/api/v1/cleanup`, { method: "POST", headers: { ...bearer, "content-type": "application/json" }, body: JSON.stringify({ ...cleanupBody, model: "gpt-5" }) });
   check("proxy: unknown model rejected", bad.status === 400, `${bad.status}`);
   const greedy = await fetch(`${BASE}/api/v1/cleanup`, { method: "POST", headers: { ...bearer, "content-type": "application/json" }, body: JSON.stringify({ ...cleanupBody, max_completion_tokens: 32768 }) });
-  check("proxy: output token cap enforced (M2)", greedy.status === 400, `${greedy.status}`);
+  // A larger request is clamped to the cap, not refused (the CLI sends 8192).
+  check("proxy: output token cap clamps (M2)", greedy.status === 200, `${greedy.status}`);
   const big = await fetch(`${BASE}/api/v1/cleanup`, { method: "POST", headers: { ...bearer, "content-type": "application/json" }, body: JSON.stringify({ ...cleanupBody, messages: [{ role: "user", content: "x".repeat(400_000) }] }) });
   check("proxy: oversized body rejected", big.status === 413, `${big.status}`);
   if (stub) {

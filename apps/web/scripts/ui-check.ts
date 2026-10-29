@@ -5,6 +5,8 @@
  * - Theme toggle with localStorage blocked: the choice still applies; the OS only matters on System.
  * - Docs TOC: the heading in view is marked, after scrolling, after a TOC click, after client navigation.
  * - Mobile menu: closes after a link in it is followed.
+ * - CLS ≤ 0.01 on /sign-in and /sign-up at 390 and 1440 (Clerk mounts client-side). Skipped, and said so,
+ *   when the server has no Clerk keys (CI).
  */
 import { chromium, type Page } from "@playwright/test";
 
@@ -92,6 +94,9 @@ async function fresh(init?: () => void, viewport = { width: 1280, height: 800 })
   const next = await page.$$eval('nav[aria-label="On this page"] a', (as) => as.map((a) => a.getAttribute("href")!));
   await page.evaluate((id) => document.getElementById(decodeURIComponent(id.slice(1)))!.scrollIntoView(), next.at(-1)!);
   await settle();
+  await page.evaluate(() => scrollTo(0, 1e6));
+  await settle();
+  check("toc: a jump to the bottom marks the last heading", (await current(page)) === next.at(-1), `${await current(page)}`);
   check("toc: tracking works after client navigation", (await current(page)) === next.at(-1) && !errors.length, `${await current(page)}, expected ${next.at(-1)} ${errors.join(" | ")}`);
   await page.close();
 }
@@ -107,6 +112,31 @@ async function fresh(init?: () => void, viewport = { width: 1280, height: 800 })
   await page.waitForURL("**/pricing");
   check("menu: opens, then closes after navigating", opened && !(await open()) && !errors.length, `opened=${opened} ${errors.join(" | ")}`);
   await page.close();
+}
+
+// CLS on the Clerk pages: its card must land in the space reserved for it
+for (const route of ["/sign-in", "/sign-up"]) {
+  const status = (await fetch(base + route)).status;
+  if (status !== 200) {
+    console.log(`skip cls ${route}: ${status} (no Clerk keys on this server)`);
+    continue;
+  }
+  for (const width of [390, 1440]) {
+    const { page } = await fresh(() => {
+      (window as unknown as { cls: number }).cls = 0;
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries() as unknown as { value: number; hadRecentInput: boolean }[]) {
+          if (!e.hadRecentInput) (window as unknown as { cls: number }).cls += e.value;
+        }
+      }).observe({ type: "layout-shift", buffered: true });
+    }, { width, height: 900 });
+    await page.goto(base + route, { waitUntil: "networkidle" });
+    await page.waitForSelector(".cl-rootBox", { timeout: 15000 });
+    await page.waitForTimeout(1000);
+    const cls = await page.evaluate(() => (window as unknown as { cls: number }).cls);
+    check(`cls: ${route} at ${width}`, cls <= 0.01, cls.toFixed(3));
+    await page.close();
+  }
 }
 
 await browser.close();

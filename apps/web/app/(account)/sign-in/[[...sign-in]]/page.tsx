@@ -7,7 +7,10 @@ export const metadata: Metadata = { title: "Sign in" };
 export default function Page() {
   return (
     <CenterPanel label="Account">
-      <SignIn />
+      {/* Clerk mounts client-side; reserving its card height (490 px at 390 and 1440) keeps CLS at 0 (§10.3). */}
+      <div className="min-h-[490px]">
+        <SignIn />
+      </div>
     </CenterPanel>
   );
 }

@@ -1,6 +1,6 @@
 import { BadRequest, chatUsage, cleanupRequest, MAX_CLEANUP_BODY_BYTES } from "@/lib/groq";
 import { estimateInputTokens, tokenCostMicros } from "@/lib/pricing";
-import { error } from "@/lib/http";
+import { error, refuse } from "@/lib/http";
 import { apiCaller, unauthorized } from "@/lib/server/api-auth";
 import { forward, gate } from "@/lib/server/upstream";
 
@@ -8,11 +8,11 @@ export const maxDuration = 60;
 
 /** Same JSON body as Groq `chat/completions` (non-streaming); answered with Groq's response. */
 export async function POST(request: Request) {
-  if (Number(request.headers.get("content-length") ?? 0) > MAX_CLEANUP_BODY_BYTES) return error(413, "body too large");
+  if (Number(request.headers.get("content-length") ?? 0) > MAX_CLEANUP_BODY_BYTES) return refuse(request, error(413, "body too large"), 0);
   const caller = await apiCaller(request);
-  if (!caller) return unauthorized();
+  if (!caller) return refuse(request, unauthorized(), MAX_CLEANUP_BODY_BYTES);
   const denied = gate(caller);
-  if (denied) return denied;
+  if (denied) return refuse(request, denied, MAX_CLEANUP_BODY_BYTES);
 
   const raw = await request.text();
   if (new TextEncoder().encode(raw).length > MAX_CLEANUP_BODY_BYTES) return error(413, "body too large");

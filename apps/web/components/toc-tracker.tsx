@@ -4,8 +4,8 @@ import { useEffect } from "react";
 
 /**
  * Marks the TOC link of the heading being read (§7.21) with aria-current, in ~20 lines instead of
- * Fumadocs' client bundle. The IntersectionObserver only signals that something crossed the top band;
- * the active heading is the last one whose top has scrolled above it (below the 64 px header).
+ * Fumadocs' client bundle: the last heading whose top has scrolled under the 64 px header. Driven by a
+ * passive, frame-throttled scroll listener, so jumps (PageDown, End, scrollTo) are caught too.
  */
 export function TocTracker() {
   useEffect(() => {
@@ -16,10 +16,17 @@ export function TocTracker() {
       heads.forEach((h, i) => h && h.getBoundingClientRect().top < 96 && (active = i));
       links.forEach((a, i) => a.toggleAttribute("aria-current", i === active) && a.setAttribute("aria-current", "location"));
     };
-    const io = new IntersectionObserver(mark, { rootMargin: "-64px 0px -60% 0px" });
-    heads.forEach((h) => h && io.observe(h));
+    let frame = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(mark);
+    };
+    addEventListener("scroll", onScroll, { passive: true });
     mark();
-    return () => io.disconnect();
+    return () => {
+      removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
+    };
   }, []);
   return null;
 }
