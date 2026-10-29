@@ -42,6 +42,38 @@ jobs:
       # Runs on a private session bus, including the ignored D-Bus bridge test.
       - run: scripts/check.sh test
 
+  scoreboard:
+    name: scoreboard gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libdbus-1-dev dbus-daemon
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/cli -> target
+          key: release
+      - run: cargo build --manifest-path apps/cli/Cargo.toml --release --locked -p xflow-app --bin xflowd --bin xflow
+      # Sizes, idle PSS/CPU and startup budget against docs/benchmarks/ci-baseline.json.
+      - run: python3 -B scripts/bench/scoreboard.py gate --output target/scoreboard-gate.json
+      - if: always()
+        run: python3 -B scripts/bench/test_scoreboard.py && python3 -B scripts/bench/test_baseline.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: scoreboard-gate
+          path: target/scoreboard-gate.json
+          if-no-files-found: ignore
+
   macos:
     defaults:
       run:
