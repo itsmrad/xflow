@@ -9,7 +9,7 @@ import { BILLING_FAQ } from "@/content/marketing";
 export const dynamic = "force-static";
 export const metadata: Metadata = {
   title: "Pricing",
-  description: "Free with your own provider key, unlimited. Pro is $5/month, unlimited, with nothing to set up.",
+  description: "Free with your own provider key, unlimited. Pro, coming soon, is $5/month, unlimited, with nothing to set up.",
   alternates: { canonical: "/pricing" },
 };
 
@@ -20,7 +20,7 @@ const product = {
   description: "Voice dictation for developers.",
   offers: [
     { "@type": "Offer", name: "Free", price: "0", priceCurrency: "USD" },
-    { "@type": "Offer", name: "Pro", price: "5", priceCurrency: "USD" },
+    { "@type": "Offer", name: "Pro", price: "5", priceCurrency: "USD", availability: "https://schema.org/PreOrder" },
   ],
 };
 
@@ -33,7 +33,7 @@ export default function Pricing() {
         label="Pricing"
         title="Free with your key."
         hl="$5 when you'd rather not."
-        lede="Both plans are unlimited. The only difference is whose provider key does the work."
+        lede="Both plans are unlimited. The only difference is whose provider key does the work. Free works today; Pro is coming soon."
       />
       <Section labelledBy="plans-title">
         <h2 id="plans-title" className="sr-only">
@@ -41,7 +41,7 @@ export default function Pricing() {
         </h2>
         <PricingCards headingLevel={3} />
         <p className="t-caption border-t border-line px-[var(--cell-p)] py-4 text-fg-subtle">
-          Prices in USD. Taxes calculated at checkout. Payments handled by Dodo Payments, our merchant of record.
+          Prices in USD. When Pro launches, Dodo Payments is the merchant of record and calculates taxes at checkout.
         </p>
       </Section>
       <Section label={{ title: "What you'd pay elsewhere" }} labelledBy="elsewhere-title">
@@ -63,7 +63,7 @@ export default function Pricing() {
                 <tr className="border-b border-line bg-volt-soft">
                   <th scope="row" className="py-4 pr-4 pl-2 font-medium text-fg">xflow Pro</th>
                   <td className="t-mono-sm py-4 pr-4 text-fg">$5/mo</td>
-                  <td className="py-4">Unlimited</td>
+                  <td className="py-4">Unlimited. Coming soon</td>
                 </tr>
                 <tr className="border-b border-line">
                   <th scope="row" className="py-4 pr-4 pl-2 font-normal">xflow Free</th>
@@ -82,8 +82,8 @@ export default function Pricing() {
             </table>
             <div className="mt-8">
               <Callout type="note" title="Fair use.">
-                Pro is unlimited for people. To keep it that way, we cap concurrent requests and per-minute bursts, so scripts can&apos;t
-                drain the shared key. You&apos;ll never hit the limit by talking.
+                Pro will be unlimited for people. To keep it that way, we cap concurrent requests and per-minute bursts, so scripts can&apos;t
+                drain the shared key. You won&apos;t hit the limit by talking.
               </Callout>
             </div>
           </div>

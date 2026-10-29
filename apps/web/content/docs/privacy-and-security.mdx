@@ -18,8 +18,10 @@ xflow is open source under the MIT license. Everything below can be checked in t
 | Audio | Memory only | Dropped after transcription. Never saved or logged by default. |
 | History | `~/.local/share/xflow/history.db` | **Plaintext** SQLite in a private directory. Off with `privacy.history = false`. |
 | Config | `~/.config/xflow/config.toml` | Saved atomically with mode 0600. Never holds keys. |
-| Provider keys | System keychain (macOS), Secret Service (Linux) | Or environment variables. Key commands never print them. |
+| Provider keys | `~/.config/xflow/credentials`, encrypted with `~/.local/share/xflow/keystore.key` | Both files 0600. Or environment variables. Key commands never print them. |
 | Logs | `~/Library/Logs/xflowd.log` on macOS | Secrets, audio, transcripts and selected text are never logged. |
+
+The keystore guards against casual disclosure: `cat`, screen sharing, a copied or synced `~/.config`. It doesn't protect against malware running as you, or a full backup that holds both files.
 
 ## Offline mode
 
@@ -46,7 +48,7 @@ Pasting goes through the clipboard, so a clipboard manager can see dictated text
 
 ## Pro
 
-Pro sends your audio to xflow's server instead of your own provider. Its data handling will be documented here before Pro launches.
+Pro (coming soon) sends your audio to xflow's server instead of your own provider. The server relays it to a speech provider and stores neither the audio nor the transcript, only a usage record. Details: [Privacy policy](/privacy).
 
 ## Reporting a vulnerability
 

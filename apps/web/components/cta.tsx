@@ -1,5 +1,4 @@
 import { Crossings } from "./frame";
-import { ProCta } from "./pro-cta";
 import { buttonClass } from "./ui";
 
 /**
@@ -32,9 +31,6 @@ export function CtaBand() {
         </h2>
         <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <OsButton id="os-cta-band" />
-          <span className="w-full sm:w-auto">
-            <ProCta label="Get Pro — $5" />
-          </span>
         </div>
       </div>
     </section>

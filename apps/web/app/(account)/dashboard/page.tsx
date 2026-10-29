@@ -10,6 +10,7 @@ import { LiveUsage } from "./live-usage";
 import { UserButton } from "@clerk/nextjs";
 import { Crossings } from "@/components/frame";
 import { Badge, buttonClass, Callout } from "@/components/ui";
+import { REPO } from "@/content/site";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -27,6 +28,8 @@ export default async function Dashboard({ searchParams }: PageProps<"/dashboard"
   ]);
   const pro = isEntitled(subs, new Date(), proProductIds());
   const current = subs[0];
+  // Pro is "coming soon" until Dodo is configured; the checkout route refuses until then too.
+  const billing = !!process.env.DODO_PAYMENTS_API_KEY;
   const realtimeUrl = process.env.NEXT_PUBLIC_NEON_REALTIME_URL;
 
   const email = clerk.primaryEmailAddress?.emailAddress ?? clerk.id;
@@ -94,22 +97,33 @@ export default async function Dashboard({ searchParams }: PageProps<"/dashboard"
                     ? `Pro until ${until}. You won't be charged again.`
                     : `Renews ${until}.`
                   : "Pro is active."
-                : "You're using your own key. Pro is $5/month for unlimited hosted transcription and cleanup."}
+                : billing
+                  ? "You're using your own key. Pro is $5/month for unlimited hosted transcription and cleanup."
+                  : "You're using your own key. Pro, $5/month for unlimited hosted transcription and cleanup, is coming soon."}
             </p>
-            <div className="mt-6 flex flex-wrap gap-3">
-              <form method="post" action={pro || current ? "/api/v1/billing/portal" : "/api/v1/billing/checkout"}>
-                <button type="submit" className={buttonClass(pro || current ? "secondary" : "primary", "md")}>
-                  {pro || current ? "Manage billing" : "Get Pro — $5/mo"}
-                </button>
-              </form>
-              {!pro && current && (
-                <form method="post" action="/api/v1/billing/checkout">
-                  <button type="submit" className={buttonClass("primary", "md")}>
-                    Subscribe again
+            {!billing ? (
+              <div className="mt-6 flex flex-wrap items-center gap-3">
+                <Badge tone="PRO">Coming soon</Badge>
+                <a href={`${REPO}/releases`} className={buttonClass("secondary", "md")}>
+                  Watch releases
+                </a>
+              </div>
+            ) : (
+              <div className="mt-6 flex flex-wrap gap-3">
+                <form method="post" action={pro || current ? "/api/v1/billing/portal" : "/api/v1/billing/checkout"}>
+                  <button type="submit" className={buttonClass(pro || current ? "secondary" : "primary", "md")}>
+                    {pro || current ? "Manage billing" : "Get Pro — $5/mo"}
                   </button>
                 </form>
-              )}
-            </div>
+                {!pro && current && (
+                  <form method="post" action="/api/v1/billing/checkout">
+                    <button type="submit" className={buttonClass("primary", "md")}>
+                      Subscribe again
+                    </button>
+                  </form>
+                )}
+              </div>
+            )}
           </section>
 
           <section id="usage" aria-labelledby="usage-title" className="border-b border-line p-[var(--cell-p)]">

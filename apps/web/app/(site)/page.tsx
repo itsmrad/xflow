@@ -98,7 +98,7 @@ export default function Home() {
               Read the docs →
             </Button>
           </div>
-          <p className="t-caption mt-4 text-fg-subtle">Free with your own key · Pro $5/month · MIT</p>
+          <p className="t-caption mt-4 text-fg-subtle">Free with your own key · Pro $5/month, coming soon · MIT</p>
           <div className="mt-14 md:mt-16">
             <HeroWindow />
           </div>
@@ -237,9 +237,9 @@ export default function Home() {
               </Callout>
             </div>
             <div className="mt-10 border-t border-line pt-6">
-              <Callout type="note" title="On Pro,">
-                audio goes through xflow&apos;s server to our speech provider. We keep a usage record (time, duration, size) for
-                billing and abuse limits.
+              <Callout type="note" title="On Pro (coming soon),">
+                audio goes through xflow&apos;s server to our speech provider and isn&apos;t stored. We keep a usage record (time, duration,
+                size) for billing and abuse limits.
               </Callout>
             </div>
           </div>
@@ -303,7 +303,7 @@ export default function Home() {
       <Section id="providers" label={{ n: 5, total: TOTAL, title: "Your key or ours" }} labelledBy="providers-title">
         <div className="section-y !pb-0">
           <div className="px-[var(--cell-p)]">
-            <Heading id="providers-title" title="Bring any key. Or none." lede="Free means your own provider key, unlimited, forever. Pro means ours, with nothing to set up." />
+            <Heading id="providers-title" title="Bring any key. Or none." lede="Free means your own provider key, unlimited, forever. Pro, coming soon, means ours, with nothing to set up." />
           </div>
           <ProviderGrid />
           <div className="grid items-center gap-6 border-t border-line p-[var(--cell-p)] md:grid-cols-2">

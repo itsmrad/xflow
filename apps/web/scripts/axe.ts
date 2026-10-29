@@ -6,7 +6,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { chromium } from "@playwright/test";
 
 const base = process.argv[2] ?? "http://localhost:3000";
-const ROUTES = ["/", "/pricing", "/download", "/compare/wispr-flow", "/docs", "/docs/getting-started/install", "/docs/reference/cli", "/changelog", "/privacy", "/sign-in", "/missing-page"];
+const ROUTES = ["/", "/pricing", "/download", "/compare/wispr-flow", "/docs", "/docs/getting-started/install", "/docs/reference/cli", "/changelog", "/privacy", "/terms", "/security", "/sign-in", "/missing-page"];
 
 const browser = await chromium.launch({ channel: "chrome" });
 let failed = 0;

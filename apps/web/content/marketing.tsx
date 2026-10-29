@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { WISPR } from "./site";
+import { SUPPORT_EMAIL, WISPR } from "./site";
 
 export const FAQ: { q: string; a: ReactNode; text: string }[] = [
   {
@@ -9,13 +9,13 @@ export const FAQ: { q: string; a: ReactNode; text: string }[] = [
   },
   {
     q: "What does Pro add?",
-    text: "Our provider key and AI cleanup, with nothing to configure. Sign in once from the CLI and dictate. $5/month, unlimited for real use. We rate-limit scripts, not people.",
-    a: "Our provider key and AI cleanup, with nothing to configure. Sign in once from the CLI and dictate. $5/month, unlimited for real use. We rate-limit scripts, not people.",
+    text: "Pro is coming soon: our provider key and AI cleanup, with nothing to configure. Sign in once from the CLI and dictate. $5/month, unlimited for real use. We rate-limit scripts, not people.",
+    a: "Pro is coming soon: our provider key and AI cleanup, with nothing to configure. Sign in once from the CLI and dictate. $5/month, unlimited for real use. We rate-limit scripts, not people.",
   },
   {
     q: "Does xflow send my audio anywhere?",
-    text: `Only to the speech provider you pick, or nowhere in offline mode. On Pro, audio goes through xflow's server to our speech provider.`,
-    a: `Only to the speech provider you pick, or nowhere in offline mode. On Pro, audio goes through xflow's server to our speech provider.`,
+    text: `Only to the speech provider you pick, or nowhere in offline mode. On Pro (coming soon), audio goes through xflow's server to our speech provider and isn't stored.`,
+    a: `Only to the speech provider you pick, or nowhere in offline mode. On Pro (coming soon), audio goes through xflow's server to our speech provider and isn't stored.`,
   },
   {
     q: "Which apps does it type into?",
@@ -35,12 +35,12 @@ export const FAQ: { q: string; a: ReactNode; text: string }[] = [
 ];
 
 export const BILLING_FAQ: { q: string; a: string; text: string }[] = [
-  { q: "Can I cancel?", a: "Yes, from the dashboard. Pro stays on until the end of the period you paid for." },
+  { q: "Can I buy Pro today?", a: "Not yet. Pro is coming soon; watch releases on GitHub for the launch. Free with your own key works today, unlimited." },
+  { q: "Will I be able to cancel?", a: "Yes, any time from the dashboard. Pro stays on until the end of the period you paid for." },
   { q: "What happens to my settings if I cancel?", a: "Nothing. xflow drops back to Free and uses your own key if you've set one." },
-  { q: "Do you offer refunds?", a: "Yes. Ask within 14 days of a charge and we refund it in full. Email [SUPPORT_EMAIL]." },
-  { q: "Annual plan?", a: "Not yet. $5/month is already the low price." },
-  { q: "Which payment methods?", a: "Whatever Dodo Payments supports in your country. Cards and local methods are shown at checkout." },
-  { q: "Team or company billing?", a: "Not yet. Email [SUPPORT_EMAIL] if you need it." },
+  { q: "Refunds?", a: `Ask within 14 days of a charge and we refund it in full. Email ${SUPPORT_EMAIL}.` },
+  { q: "Which payment methods?", a: "Dodo Payments, our merchant of record, will take cards and the local methods it supports in your country." },
+  { q: "Team or company billing?", a: `Not yet. Email ${SUPPORT_EMAIL} if you need it.` },
 ].map((x) => ({ ...x, text: x.a }));
 
 export type Row = { label: string; xflow: string; wispr: string; note?: 13 };
@@ -50,7 +50,7 @@ export type Row = { label: string; xflow: string; wispr: string; note?: 13 };
  * DESIGN.md §9.1.9 rows marked [verify] (BYOK, offline, telemetry, runtime, CLI, learning) stay out until checked.
  */
 export const COMPARE: Row[] = [
-  { label: "Unlimited plan", xflow: "$5/mo", wispr: "$15/mo ($12/mo billed yearly)", note: 13 },
+  { label: "Unlimited plan", xflow: "$5/mo (Pro, coming soon)", wispr: "$15/mo ($12/mo billed yearly)", note: 13 },
   { label: "Free plan", xflow: "Unlimited with your own key", wispr: "2,000 words/week", note: 13 },
   { label: "Open source", xflow: "Yes, MIT", wispr: "No" },
   { label: "Platforms", xflow: "macOS, Linux (beta)", wispr: "macOS, Windows, iOS, Android", note: 13 },

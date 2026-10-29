@@ -10,6 +10,8 @@ import { userIsPro } from "@/lib/server/account";
 
 /** Starts a Dodo checkout for Pro ($5/month) for the signed-in user. */
 export async function POST(request: Request) {
+  // Pro launches once Dodo is configured; until then refuse before touching Clerk or the database.
+  if (!process.env.DODO_PAYMENTS_API_KEY) return error(503, "Pro is coming soon");
   if (!sameOrigin(request)) return error(403, "cross-origin request refused");
   const clerk = await currentUser();
   if (!clerk) return error(401, "sign in first");

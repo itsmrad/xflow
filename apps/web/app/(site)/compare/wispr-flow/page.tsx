@@ -40,7 +40,7 @@ export default function Compare() {
       </Section>
       <Block id="price" title="Price">
         <p>
-          xflow Pro is $5/month and unlimited. Wispr Flow Pro is $15/month, or $12/month billed yearly.
+          xflow Pro, coming soon, will be $5/month and unlimited. Wispr Flow Pro is $15/month, or $12/month billed yearly.
           <Ref n={13} />
         </p>
         <p>

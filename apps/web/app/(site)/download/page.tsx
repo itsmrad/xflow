@@ -103,7 +103,7 @@ export default async function Download() {
             </div>
             <NumberedRows
               rows={[
-                { title: "Speech service", body: "Pick a provider, or Pro." },
+                { title: "Speech service", body: "Pick a provider, or a local server." },
                 { title: "Key", body: "Paste it once. Hidden input." },
                 { title: "Microphone", body: "Choose your input device." },
                 { title: "Shortcut", body: "Fn by default. On macOS we set the Globe key to Do Nothing so it stops opening emoji." },

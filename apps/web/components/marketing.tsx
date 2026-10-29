@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { COMPARE, COMPARE_CHECKED, FREE_FEATURES, PRO_FEATURES } from "@/content/marketing";
 import { CLAIMS, type ClaimId } from "@/content/claims";
+import { REPO } from "@/content/site";
 import { IconCheck } from "./icons";
-import { ProCta } from "./pro-cta";
 import { Abbr, Badge, Button, Ref } from "./ui";
 
 export function FeatureGrid({ children, cols = 2 }: { children: ReactNode; cols?: 2 | 3 }) {
@@ -134,7 +134,7 @@ export function PricingCards({ compact = false, headingLevel = 3 }: { compact?: 
         </p>
         <p className="t-body-sm mt-3 text-fg-muted">Your provider key. Unlimited.</p>
         <div className="mt-6">
-          <Button href="/download" variant="secondary" size="lg" className="w-full sm:w-[168px]">
+          <Button href="/download" variant="primary" size="lg" className="w-full sm:w-[168px]">
             Install
           </Button>
         </div>
@@ -149,7 +149,7 @@ export function PricingCards({ compact = false, headingLevel = 3 }: { compact?: 
         <div className="cell relative flex flex-1 flex-col">
           <div className="flex items-center justify-between">
             <H className="t-mono-label text-fg-muted">Pro</H>
-            <Badge tone="PRO">Pro</Badge>
+            <Badge tone="PRO">Coming soon</Badge>
           </div>
           <p className="mt-6 flex items-baseline gap-2">
             <span className="t-stat text-fg">$5</span>
@@ -157,7 +157,9 @@ export function PricingCards({ compact = false, headingLevel = 3 }: { compact?: 
           </p>
           <p className="t-body-sm mt-3 text-fg-muted">Our key. Nothing to set up. Unlimited.</p>
           <div className="mt-6">
-            <ProCta />
+            <Button href={`${REPO}/releases`} variant="secondary" size="lg" className="w-full sm:w-[168px]">
+              Watch releases
+            </Button>
           </div>
           <ul className="dash-t mt-8 space-y-3 pt-6">
             {pro.map((f) => (

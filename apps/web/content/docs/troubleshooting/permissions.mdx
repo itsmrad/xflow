@@ -39,11 +39,13 @@ The row that appears is the current build.
 
 ## Why rebuilds reset grants
 
-Grants and Keychain “Always Allow” follow the code signature's designated requirement. An ad-hoc build is identified by its hash, so every rebuild leaves a stale row. Signed with a certificate, the requirement is `identifier "com.xflow.xflowd" and certificate leaf = H"…"`, which is stable across builds. Check yours:
+Privacy grants follow the code signature's designated requirement. An ad-hoc build is identified by its hash, so every rebuild leaves a stale row. Signed with a certificate, the requirement is `identifier "com.xflow.xflowd" and certificate leaf = H"…"`, which is stable across builds. Check yours:
 
 ```sh
 codesign -dr - "$(command -v xflowd)"
 ```
+
+Provider keys don't depend on the signature: they live in xflow's own keystore, not the Keychain.
 
 `xflow service install` re-signs `xflowd` with identifier `com.xflow.xflowd`, using a code-signing certificate named `xflow-dev` when one exists. The repository README has the one-time commands to create it.
 

@@ -11,7 +11,7 @@ export function ProviderGrid() {
   const tiles: { key: string; name: string; badge: string; tone?: "PRO"; model: string; meta: string; href: string; pro?: boolean }[] = [
     ...cloud.map((p: P) => ({ key: p.id, name: p.name, badge: p.kinds.join(" · "), model: p.defaultModel ?? "", meta: "BYOK", href: p.href })),
     { key: "local", name: "Local / OpenAI-compatible", badge: "LOCAL", model: "whisper.cpp server, any endpoint", meta: "BYOK · offline", href: "/docs/providers/local-and-offline" },
-    { key: "pro", name: "xflow Pro", badge: "PRO", tone: "PRO", model: "Hosted, nothing to configure", meta: "$5/month", href: "/pricing", pro: true },
+    { key: "pro", name: "xflow Pro", badge: "PRO", tone: "PRO", model: "Hosted, nothing to configure", meta: "$5/month · coming soon", href: "/pricing", pro: true },
   ];
   return (
     <ul className="cells cells-4 border-t border-line">

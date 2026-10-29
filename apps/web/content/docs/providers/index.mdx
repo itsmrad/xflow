@@ -24,7 +24,7 @@ xflow key status
 xflow key remove groq
 ```
 
-Keys are kept in your system keychain on macOS and in Secret Service on Linux — never in `config.toml`. On macOS they're saved with an access list that trusts both `xflow` and `xflowd`, so the daemon never asks “Always Allow”.
+Keys are encrypted in xflow's own keystore (two 0600 files, see [Privacy and security](/docs/privacy-and-security#what-is-stored)) — never in `config.toml`, and never in the system Keychain, so storing or reading a key shows no OS prompt. Keys that older builds left in the Keychain or Secret Service move over once; `xflow key status` shows where each key comes from.
 
 Headless setups can use an environment variable instead (`GROQ_API_KEY`, `OPENAI_API_KEY`, …). A variable exported in your shell isn't visible to a launchd or systemd service, so prefer `xflow key set` there.
 

@@ -12,7 +12,7 @@ Run `xflow` in a terminal. Until setup is complete it opens the guided setup; af
 Pick a provider. Groq is the default. See [Providers](/docs/providers) for the full list, including a local server.
 </Step>
 <Step title="Key">
-Paste your provider key once. The input is hidden, and the key is stored in your system keychain (macOS) or Secret Service (Linux), never in the config file. An optional connection check makes a non-billable request and lets you try again if the key is rejected.
+Paste your provider key once. The input is hidden, and the key is stored encrypted in xflow's own keystore, never in the config file or the system Keychain, so no OS prompt appears. An optional connection check makes a non-billable request and lets you try again if the key is rejected.
 </Step>
 <Step title="Microphone">
 Choose your input device, or keep the system default.

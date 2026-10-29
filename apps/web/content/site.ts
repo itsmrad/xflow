@@ -1,4 +1,6 @@
 export const REPO = "https://github.com/itsmrad/xflow";
+/** Temporary until xflow has its own domain. Every page links support through this. */
+export const SUPPORT_EMAIL = "itsmrad+xflow@gmail.com";
 export const blob = (path: string) => `${REPO}/blob/main/${path}`;
 
 /** Never hard-code a domain (§3). Vercel sets VERCEL_PROJECT_PRODUCTION_URL on every build. */
