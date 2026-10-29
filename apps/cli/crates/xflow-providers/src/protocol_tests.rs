@@ -315,6 +315,65 @@ async fn warm_reuses_one_connection_for_real_upload() {
     assert!(upload.starts_with(b"POST /v1/audio/transcriptions "));
 }
 #[tokio::test]
+async fn cleanup_warm_opens_the_connection_the_edit_then_reuses() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let warm = read_request(&mut socket).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+            .await
+            .unwrap();
+        let edit = tokio::time::timeout(Duration::from_secs(2), read_request(&mut socket))
+            .await
+            .expect("warm-up socket was not reused");
+        let payload = br#"{"choices":[{"message":{"content":"Warm."}}]}"#;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    payload.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        socket.write_all(payload).await.unwrap();
+        (warm, edit)
+    });
+    let cfg = CleanupConfig {
+        mode: CleanupMode::Light,
+        endpoint: Some(url),
+        model: Some("test".into()),
+        api_key_env: String::new(),
+        ..Default::default()
+    };
+    let transformer = build_transformer(&cfg, true).unwrap().unwrap();
+    transformer.warm().await.unwrap();
+    let text = transformer
+        .transform(TransformRequest {
+            text: "warm",
+            mode: CleanupMode::Light,
+            instructions: None,
+            command: None,
+            app_id: None,
+            vocabulary: &[],
+        })
+        .await
+        .unwrap();
+    assert_eq!(text, "Warm.");
+    let (warm, edit) = task.await.unwrap();
+    assert!(
+        warm.starts_with(b"GET /v1/models "),
+        "a free model list, never text"
+    );
+    assert!(edit.starts_with(b"POST /v1/chat/completions "));
+}
+#[tokio::test]
 async fn check_is_authenticated_and_never_sends_audio() {
     let (url, task) = scripted(vec![("200 OK", json!({"data":[]}))], "/transcribe").await;
     let mut cfg = config("openrouter", url);
@@ -341,6 +400,7 @@ async fn cleanup_command_context_and_vocabulary() {
         endpoint: Some(url),
         model: Some("test".into()),
         api_key_env: String::new(),
+        app_context: true,
         ..Default::default()
     };
     let transformer = build_transformer(&cfg, true).unwrap().unwrap();
@@ -567,7 +627,7 @@ async fn cleanup_presets_and_context_opt_out() {
         endpoint: Some(url),
         model: Some("test".into()),
         api_key_env: String::new(),
-        app_context: false,
+        // The default never shares the app id (#38).
         ..Default::default()
     };
     build_transformer(&cfg, true)
@@ -627,6 +687,7 @@ async fn cleanup_reasoning_settings_only_for_verified_models() {
     for (id, model, effort) in [
         ("openai", None, Some("none")),
         ("groq", None, Some("none")),
+        ("groq", Some("openai/gpt-oss-120b"), Some("low")),
         ("fireworks", None, Some("none")),
         ("gemini", None, Some("minimal")),
         ("openai", Some("unknown-model"), None),
@@ -662,7 +723,12 @@ async fn cleanup_reasoning_settings_only_for_verified_models() {
         let bytes = rx.await.unwrap();
         let body: Value = serde_json::from_slice(body(&bytes)).unwrap();
         assert_eq!(body["reasoning_effort"].as_str(), effort);
-        // Only the verified Groq preset gets an explicit output budget.
+        // gpt-oss reasons anyway; its reasoning must stay out of the reply.
+        assert_eq!(
+            body["include_reasoning"].as_bool(),
+            (effort == Some("low")).then_some(false)
+        );
+        // Only the verified Groq presets get an explicit output budget.
         let budget = (id == "groq").then_some(8192);
         assert_eq!(body["max_completion_tokens"].as_u64(), budget);
     }

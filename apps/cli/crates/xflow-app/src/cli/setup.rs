@@ -149,6 +149,12 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
         current.recording.device = device;
     }
     current.validate().map_err(Error::config)?;
+    let smart = xflow_app::tui::smart_formatting(&current);
+    if let Some(smart) = &smart {
+        current.cleanup = smart.cleanup.clone();
+        file.set_typed("cleanup", &current.cleanup)
+            .map_err(Error::config)?;
+    }
     file.set_typed("stt", &current.stt).map_err(Error::config)?;
     file.set_typed("recording", &current.recording)
         .map_err(Error::config)?;
@@ -230,9 +236,15 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     } else {
         format!("Almost there: run xflow service install --enable, then {speak}.")
     };
+    let smart = smart.and(xflow_app::tui::smart_line(&current));
     if out.json {
-        out.data(&serde_json::json!({"ok":true,"config":path,"provider":id,"key_stored":store_key,"connection":report,"extension_installed":extension,"service_enabled":service,"tip":tip,"extension_tip":if extension { Some("On Wayland, log out and back in before xflow extension enable") } else { None }}), "")?;
+        out.data(&serde_json::json!({"ok":true,"config":path,"provider":id,"smart_formatting":smart.is_some(),"key_stored":store_key,"connection":report,"extension_installed":extension,"service_enabled":service,"tip":tip,"extension_tip":if extension { Some("On Wayland, log out and back in before xflow extension enable") } else { None }}), "")?;
     } else {
+        if let Some(line) = smart {
+            out.confirm(&format!(
+                "{line}. Turn it off with: xflow config set cleanup.mode raw"
+            ))?;
+        }
         out.confirm(&tip)?;
         if extension {
             out.confirm("On Wayland, log out and back in, then run xflow extension enable.")?;

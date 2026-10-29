@@ -12,7 +12,7 @@
 │                ││            Shortcut              On                     ││                                         │
 │                ││            Double-tap speed      500 ms                 ││                                         │
 │                ││            Hold delay            500 ms                 ││                                         │
-│                ││  Writing   Cleanup               Off — exact words      ││                                         │
+│                ││  Writing   Smart formatting      Off — exact words      ││                                         │
 │                ││            Service               None chosen            ││                                         │
 │                ││            Model                 Recommended            ││                                         │
 │                ││            API key               Choose a service first ││                                         │
@@ -28,7 +28,7 @@
 │                ││  Privacy   Save history          On                     ││                                         │
 │                ││            Keep last             500 dictations         ││                                         │
 │                ││            Local services only   Off                    ││                                         │
-│                ││            Share app name        On                     ││                                         │
+│                ││            Share app name        Off                    ││                                         │
 │                ││  Look      Theme                 Paper                  ││                                         │
 ╰────────────────╯╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────╯
 

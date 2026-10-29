@@ -1714,6 +1714,11 @@ impl App {
         intro.push_str("\nxflow keeps it encrypted on this computer, never in your settings file.");
         if setup {
             intro.push_str("\nAlready added one? Leave this empty and press Enter.");
+            if let Some(line) = integrations::smart_line(&self.config) {
+                intro.push_str(&format!(
+                    "\n\n{line}\nIt formats lists, numbers and corrections. Turn it off in Settings › Writing."
+                ));
+            }
         }
         let mut field = Field::new("API key", "");
         field.secret = true;
@@ -2206,6 +2211,10 @@ impl App {
             }
             EditTarget::Setup(Step::Provider) => {
                 self.choose_provider(value, false, None)?;
+                // Without a cleanup-capable key it stays off, silently.
+                if integrations::smart_formatting(&self.config).is_some() {
+                    let _ = self.set_choice("cleanup.mode", "light");
+                }
                 return Ok(self.open_setup(Step::Key));
             }
             EditTarget::Setup(Step::Microphone) => {

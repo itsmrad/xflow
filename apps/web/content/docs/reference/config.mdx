@@ -35,7 +35,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | `cleanup.api_key_env` | `"OPENAI_API_KEY"` |  |
 | `cleanup.prompt` | unset | e.g. `"Keep my British spelling."` |
 | `cleanup.timeout_secs` | `20` |  |
-| `cleanup.app_context` | `true` | tell the model the focused app id (never window contents) |
+| `cleanup.app_context` | `false` | opt in: tell the model the focused app id (never window contents) |
 
 ## [hotkey]
 
@@ -171,7 +171,7 @@ mode = "raw"                 # raw | light | polished | custom (custom requires 
 api_key_env = "OPENAI_API_KEY"
 # prompt = "Keep my British spelling."
 timeout_secs = 20
-app_context = true           # tell the model the focused app id (never window contents)
+app_context = false          # opt in: tell the model the focused app id (never window contents)
 
 [hotkey]
 key = "fn"                  # macOS Fn/Globe; see docs/hotkeys.md for allowed keys/chords

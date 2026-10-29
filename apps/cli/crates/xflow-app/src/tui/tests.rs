@@ -303,6 +303,39 @@ fn cleanup_reuses_the_speech_service_and_save_refuses_what_reload_would_reject()
     );
 }
 #[test]
+fn setup_turns_on_smart_formatting_with_the_speech_key_and_keeps_choices() {
+    use xflow_core::CleanupMode;
+    let (_dir, mut app) = app();
+    app.open_setup(Step::Provider);
+    key_enter(&mut app);
+    assert_eq!(app.config.cleanup.mode, CleanupMode::Light);
+    assert_eq!(app.config.cleanup.provider.as_deref(), Some("groq"));
+    assert!(editor(&app)
+        .intro
+        .contains("Smart formatting: on · uses your Groq key · ~+0.2 s"));
+    assert!(app
+        .settings()
+        .iter()
+        .any(|(k, v)| k == "cleanup.mode" && v.starts_with("On")));
+    // Turned off later: running setup again keeps it off.
+    app.set("cleanup.mode", "raw").unwrap();
+    app.open_setup(Step::Provider);
+    key_enter(&mut app);
+    assert_eq!(app.config.cleanup.mode, CleanupMode::Raw);
+    // A speech service without cleanup stays off, silently.
+    let (_dir, mut app) = self::app();
+    app.set("stt.provider", "deepgram").unwrap();
+    app.open_setup(Step::Provider);
+    key_enter(&mut app);
+    assert_eq!(app.config.cleanup.mode, CleanupMode::Raw);
+    assert!(!editor(&app).intro.contains("Smart formatting"));
+    // Loading an existing config never flips it (only setup does).
+    assert_eq!(
+        xflow_core::config::Config::default().cleanup.mode,
+        CleanupMode::Raw
+    );
+}
+#[test]
 fn save_conflicts_preserve_external_edits() {
     let (_dir, mut app) = app();
     let file = app.file.as_ref().unwrap();

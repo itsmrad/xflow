@@ -145,6 +145,11 @@ pub struct TransformRequest<'a> {
 
 #[async_trait]
 pub trait TextTransformer: Send + Sync {
+    /// Like `SpeechToText::warm`: called when recording starts so cleanup skips
+    /// connection setup. Must not incur billable usage; errors are ignored.
+    async fn warm(&self) -> Result<()> {
+        Ok(())
+    }
     async fn transform(&self, request: TransformRequest<'_>) -> Result<String>;
 }
 

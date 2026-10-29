@@ -158,6 +158,41 @@ pub struct HistoryEntry {
     pub latency_ms: Option<u64>,
     #[serde(default)]
     pub mode: Mode,
+    /// What cleanup did; unset when it was off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<CleanupOutcome>,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupOutcome {
+    /// The cleaned text was delivered.
+    Applied,
+    /// Too short, mostly code, or a terminal: not sent.
+    Skipped,
+    /// The model answered or rewrote; the local text was delivered.
+    Rejected,
+    /// Past the dictation deadline; the local text was delivered.
+    Slow,
+    /// The provider failed; the local text was delivered.
+    Failed,
+}
+impl CleanupOutcome {
+    pub const ALL: [Self; 5] = [
+        Self::Applied,
+        Self::Skipped,
+        Self::Rejected,
+        Self::Slow,
+        Self::Failed,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Skipped => "skipped",
+            Self::Rejected => "rejected",
+            Self::Slow => "slow",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 /// Aggregates over persisted history (local only).
@@ -190,6 +225,12 @@ pub struct Timings {
     pub stt_ms: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleanup_ms: Option<u32>,
+    /// Light cleanup wasn't called: too short to improve.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleanup_skipped: bool,
+    /// Cleanup output was discarded for changing too much; local text was kept.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleanup_rejected: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inject_ms: Option<u32>,
     /// Stop -> text delivered (or ready, when delivery failed).

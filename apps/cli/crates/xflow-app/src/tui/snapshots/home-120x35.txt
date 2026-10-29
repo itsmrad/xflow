@@ -10,7 +10,7 @@
 │ 8  Your stats  │╭ Your setup ────────────────────────────────────────────────────────────────────────────────────────╮
 │ 9  Check-up    ││ Shortcut    Fn (Globe) — hold to talk, double-tap for hands-free                                   │
 │                ││ Speech      Groq · Whisper Large v3 Turbo                                                          │
-│                ││ Cleanup     Off — exact words                                                                      │
+│                ││ Formatting  Off — exact words                                                                      │
 │                ││ Microphone  System default                                                                         │
 │                │╰────────────────────────────────────────────────────────────────────────────────────────────────────╯
 │                │╭ Last dictation ────────────────────────────────────────────────────────────────────────────────────╮

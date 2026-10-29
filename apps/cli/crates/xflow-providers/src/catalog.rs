@@ -113,6 +113,11 @@ static CLEANUP: &[ProviderInfo] = &[
                 "Fast public model; reasoning disabled"
             ),
             (
+                "openai/gpt-oss-120b",
+                "GPT-OSS 120B",
+                "Production model; slower, cheaper per word"
+            ),
+            (
                 "llama-3.1-8b-instant",
                 "Llama 3.1 8B Instant",
                 "Enterprise accounts only"

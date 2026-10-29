@@ -9,7 +9,10 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Sparkline, Wrap},
     Frame,
 };
-use xflow_core::{ipc::Grant, State};
+use xflow_core::{
+    ipc::{CleanupOutcome, Grant},
+    State,
+};
 
 #[derive(Default)]
 pub struct HitMap {
@@ -431,7 +434,7 @@ fn home(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
                 ),
             ),
             (
-                "Cleanup",
+                "Formatting",
                 value_text(
                     "cleanup.mode",
                     super::state::mode_label(app.config.cleanup.mode),
@@ -614,6 +617,15 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
                 }
                 if let Some(raw) = h.raw_text.as_deref().filter(|r| r.trim() != h.text.trim()) {
                     text.push_str(&format!("\n\nBefore cleanup:\n{raw}"));
+                }
+                let kept = match h.cleanup {
+                    Some(CleanupOutcome::Rejected) => Some("it changed too much"),
+                    Some(CleanupOutcome::Slow) => Some("it was too slow"),
+                    Some(CleanupOutcome::Failed) => Some("it failed"),
+                    _ => None,
+                };
+                if let Some(why) = kept {
+                    text.push_str(&format!("\n\nCleanup was not used: {why}. These are your words as transcribed."));
                 }
                 text
             });
