@@ -332,13 +332,14 @@ class Pill:
             self.close()
 
     def close(self):
-        child, self.child = self.child, None
-        if child:
+        """Ends the session; the pill stays sampled through its exit animation."""
+        if self.child:
             try:
-                child.stdin.close()
-                child.wait(timeout=4)  # the daemon allows the exit animation up to 4 s
+                self.child.stdin.close()
+                self.child.wait(timeout=4)  # the daemon allows the exit animation up to 4 s
             except (OSError, subprocess.TimeoutExpired):
-                stop(child)
+                stop(self.child)
+            self.child = None
 
     @property
     def pid(self):
@@ -360,12 +361,13 @@ def sessions(daemon, cli, clip, runs, pill, rate_limit_wait=30):
 
         def watch():  # 20 Hz: tree peak, and each process's own lifetime peak
             while not done.wait(.05):
-                total, samples = sample_tree(child.pid, [helper and helper.pid])
+                pill = helper and helper.pid  # read once: the main thread may close it meanwhile
+                total, samples = sample_tree(child.pid, [pill])
                 peaks["tree_rss_kib"] = max(peaks["tree_rss_kib"], total["rss_kib"])
                 peaks["tree_mem_kib"] = max(peaks["tree_mem_kib"], total["mem_kib"])
                 for pid, s in samples.items():
                     if s:
-                        name = "daemon" if pid == child.pid else "pill" if helper and pid == helper.pid else "other"
+                        name = "daemon" if pid == child.pid else "pill" if pid == pill else "other"
                         lifetime[name] = max(lifetime.get(name, 0), s["peak_kib"])
 
         watcher = threading.Thread(target=watch, daemon=True)
@@ -590,17 +592,21 @@ def render(data):
         "| Metric | xflow | How |", "| --- | ---: | --- |",
         f"| Idle tree {mem} | {mib(i['mem_kib'])} | median of 1 Hz samples, {i['runs'][0]['seconds']:.0f} s after "
         f"{i['runs'][0]['warmup_seconds']:.0f} s warmup; {i['runs'][0]['processes']} process(es) |",
-        f"| Idle tree RSS | {mib(i['rss_kib'])} | same samples |",
+        f"| Idle tree RSS | {mib(i['rss_kib'])} | same samples"
+        + ("; macOS compresses idle pages out of RSS under memory pressure, so footprint is the "
+           "comparable number |" if mem == "footprint" else " |"),
         f"| Idle CPU | {i['cpu_percent']:.4f} % | CPU time / wall time, 100 % = one core |",
         f"| Idle wakeups | {i['wakeups_per_second']:.2f} /s | {i['wakeup_metric']} |",
-        f"| Cold start → status p50 / p95 | {ms(m['startup']['cold_ms']['p50'])} / {ms(m['startup']['cold_ms']['p95'])}"
-        f" | {m['startup']['cold_ms']['count']} fresh binary copies and dirs; file cache not purged |",
-        f"| Warm start → status p50 / p95 | {ms(m['startup']['warm_ms']['p50'])} / {ms(m['startup']['warm_ms']['p95'])}"
-        f" | {m['startup']['warm_ms']['count']} relaunches |",
+        f"| Cold start → status p50 / p95 (min) | {ms(m['startup']['cold_ms']['p50'])} / "
+        f"{ms(m['startup']['cold_ms']['p95'])} ({ms(m['startup']['cold_ms']['min'])}) | "
+        f"{m['startup']['cold_ms']['count']} fresh binary copies and dirs: the first launch after an install "
+        "or update; file cache not purged; load-sensitive |",
+        f"| Warm start → status p50 / p95 (min) | {ms(m['startup']['warm_ms']['p50'])} / "
+        f"{ms(m['startup']['warm_ms']['p95'])} ({ms(m['startup']['warm_ms']['min'])}) | "
+        f"{m['startup']['warm_ms']['count']} relaunches; hotkey tap off (see method); load-sensitive |",
     ]
-    for name, b in env["binaries"].items():
-        if name != "session_daemon":
-            lines.append(f"| `{name}` binary | {b['bytes'] / 2**20:.2f} MiB | release, stripped |")
+    for name in ("xflowd", "xflow"):
+        lines.append(f"| `{name}` binary | {env['binaries'][name]['bytes'] / 2**20:.2f} MiB | release, stripped |")
     if s and s.get("count"):
         p = s["peak"]
         lines += [
@@ -611,7 +617,8 @@ def render(data):
             f"| Start → capture running p50 / p95 | {ms(s['start_to_capture_ms'].get('p50'))} / "
             f"{ms(s['start_to_capture_ms'].get('p95'))} | daemon `hotkey_ms`; WAV source, so real mic open is excluded |",
             f"| Peak tree {mem} while dictating | {mib(p['tree_mem_kib'])} | 20 Hz, daemon + pill |",
-            f"| Peak tree RSS while dictating | {mib(p['tree_rss_kib'])} | same |",
+            f"| Peak tree RSS while dictating | {mib(p['tree_rss_kib'])} | same; counts shared system "
+            "framework pages the pill maps |",
             f"| Transcript word similarity p50 | {s['word_similarity'].get('p50')} | vs the spoken phrase |",
         ]
     w = m.get("wispr") or {}
@@ -668,6 +675,7 @@ def run(args):
 
 def render_command(args):
     block = render(json.loads(Path(args.result).read_text()))
+    Path(args.result).with_suffix(".md").write_text(block)
     for target in args.into:
         path = Path(target)
         path.write_text(replace_block(path.read_text(), block))

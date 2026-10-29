@@ -193,8 +193,8 @@ medians), and takes under two minutes after the build. It fails when:
 - a binary grows by more than 5 %. Sizes are byte-identical between runs, and
   the margin absorbs stable-toolchain drift;
 - idle tree PSS grows by more than min(1 MiB, 10 %), which is about 935 KiB today.
-  Three runners measured medians of 9,237–9,520 KiB (3 % spread) and per-launch
-  medians of 9,160–9,644 KiB (5 %), so the limit sits about 3× above the noise;
+  Four runners measured medians of 9,072–9,520 KiB (5 % spread) and per-launch
+  medians of 8,987–9,644 KiB (7 %), so the limit sits about 2× above the noise;
 - idle tree CPU exceeds 0.1 % of one core;
 - warm startup p50 exceeds the 100 ms budget;
 - any helper process is running at idle.
