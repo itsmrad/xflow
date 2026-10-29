@@ -249,6 +249,8 @@ impl InjectionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct FormattingConfig {
+    /// Format explicit casing commands and recognized spoken filenames locally.
+    pub spoken_code: bool,
     /// Restore dictionary spellings locally, with common-word guards.
     pub snap_to_dictionary: bool,
     /// Drop standalone filler words locally, before any cleanup model.
@@ -263,6 +265,7 @@ pub struct FormattingConfig {
 impl Default for FormattingConfig {
     fn default() -> Self {
         Self {
+            spoken_code: true,
             snap_to_dictionary: true,
             remove_fillers: true,
             fillers: [

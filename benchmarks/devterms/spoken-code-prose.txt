@@ -1,0 +1,148 @@
+In that case we should leave before lunch.
+Just in case it rains, bring a coat.
+The case was closed after a long discussion.
+She packed the case and left for the station.
+We studied a camel case study in biology.
+They discussed snake case during the language lesson.
+We discussed camel case yesterday after the meeting.
+The teacher explained pascal case to the class.
+We read about constant case in the style guide.
+Our team prefers kebab case for readable names.
+The snake case was discussed by the zoo staff.
+She described a camel crossing the sand.
+The camel carried water through the desert.
+A camel can go a long time without a drink.
+We watched a camel rest beside a palm tree.
+The young camel followed its mother.
+A snake crossed the path near the pond.
+The snake hid beneath a warm stone.
+That snake is harmless if you leave it alone.
+We saw a snake in the garden yesterday.
+The snake shed its skin last week.
+Please dot the i's before signing the card.
+Dot the i's and cross the t's.
+She put a red dot on the map.
+The dot marks the place where we met.
+Each dot represents a different village.
+Connect the dots to finish the drawing.
+The small dot disappeared behind the cloud.
+There was a dot of ink on his sleeve.
+We arrived at six on the dot.
+The painting has a blue dot in each corner.
+She added a dot beside every completed task.
+That dot looks darker than the others.
+The children learned to draw a dotted line.
+A dot matrix printer sat on the old desk.
+The dot product measures how vectors align.
+Dot products are useful in geometry.
+We learned about the dot com boom in history.
+Please write dot org after the charity name.
+The word dot should remain a word here.
+A dash and a dot make different marks.
+I wrote dot unknown on the whiteboard.
+He drew a slash through the incorrect answer.
+The slash separates the two dates.
+The open parenthesis belongs before the date.
+I said open paren while explaining the keyboard.
+Close paren is a spoken description of a symbol.
+The backtick key sits near the top left corner.
+We discussed dash dash flag as a phrase.
+The court reviewed the evidence in the case.
+In either case we can finish tomorrow.
+The lower case letters are easier to recognize.
+Upper case headings stood out on the page.
+There is no reason to change the case now.
+A briefcase is different from a suitcase.
+The snake moved quietly through the grass.
+My pencil left a dot on the clean page.
+We should consider every case on its merits.
+I bought a phone case at the market.
+The violin case was lined with soft cloth.
+The lawyer made a strong case for waiting.
+It was a clear case of mistaken identity.
+The case study took an entire afternoon.
+Our case studies cover several different countries.
+I have a case of apples in the pantry.
+The report includes a camel case study from Egypt.
+The report includes a snake case study from India.
+The punctuation lesson covered dot and slash.
+Our discussion of camel case lasted an hour.
+The lesson about snake case ended early.
+Camel case is the convention here.
+Snake case is standard in Rust.
+Use snake case for this.
+Use camel case for variables.
+We use pascal case for types and snake case for functions.
+Rust uses snake case, JavaScript uses camel case.
+Switch this to camel case please.
+Constant case is reserved for globals.
+Camel case vs snake case is a style debate.
+Snake case is better.
+Camel case works best for JSON keys.
+For variables, camel case works best.
+Add snake case support to the linter.
+Convert the keys to snake case before saving.
+Kebab case URLs are easier to read.
+I prefer kebab case.
+Pascal case names are used for components.
+Make it camel case everywhere.
+The API returns snake case, so convert it.
+Use kebab case for readable names.
+Change the keys to snake case and push.
+Camel case makes long names easier to read.
+Snake case is fine here.
+Keep everything in camel case.
+It is called camel case by most people.
+Use pascal case for the type name.
+The tournament has an open bracket this year.
+We met at noon on the dot, then left.
+Please close the bracket on the shelf.
+Write a dot at the end of each line.
+Camel case is common in JavaScript.
+Snake case looks cleaner to me.
+Is this snake case or kebab case?
+I think pascal case reads better for classes.
+Kebab case is used in URLs and CSS classes.
+Write it in snake case.
+Name it in camel case.
+We should use constant case for environment variables.
+Use camel case naming throughout.
+Python prefers snake case for function names.
+Go uses camel case too.
+Rename the file to kebab case.
+Make sure the keys are camel case.
+The linter enforces snake case on all identifiers.
+Call it camel case or whatever you like.
+Then snake case, then kebab case.
+Snake case: everything lowercase with underscores.
+Constant case means all caps with underscores.
+Pascal case is like camel case but with a capital first letter.
+Camel case user stories are on the board.
+Set the font to open bracket style.
+Please open the bracket drawer and close the bracket drawer.
+He wanted to open parenthesis around the idea, then close parenthesis.
+Meet me at the dot com office.
+Add a dot to the end.
+I went to main dot street.
+Check the config dot file.
+Put a dot after the number.
+The variable should be named carefully.
+Using snake case everywhere is a choice.
+With camel case, names get long.
+It uses pascal case for every class.
+The default is constant case for globals.
+Apache Camel K runs on Kubernetes.
+Our team moved to Next.js last year.
+Node.js handles the requests.
+The lesson about snake case ended early again.
+We will discuss camel case user names tomorrow.
+The style should be snake case for Python.
+It should be snake case in Rust.
+The answer is camel case, obviously.
+It is snake case by convention.
+The output is kebab case lowercase.
+Mine is camel case mostly.
+Names should be snake case unless noted.
+It should be pascal case like the others.
+The tag is kebab case style.
+We went for snake case in the end.

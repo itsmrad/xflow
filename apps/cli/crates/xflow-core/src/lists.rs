@@ -199,6 +199,7 @@ fn capitalize(s: &str, dictionary: &DictionaryConfig) -> String {
         Some(c)
             if c.is_lowercase()
                 && !first_word.chars().skip(1).any(char::is_uppercase)
+                && !crate::code::literal(first_word)
                 && !term(&dictionary.words)
                 && !term(&dictionary.learned) =>
         {
@@ -208,7 +209,13 @@ fn capitalize(s: &str, dictionary: &DictionaryConfig) -> String {
     }
 }
 fn item(s: &str) -> Option<&str> {
-    let mut s = s.trim_start_matches(|c: char| c.is_whitespace() || ",.:;)-".contains(c));
+    let mut s = s.trim_start_matches(|c: char| c.is_whitespace() || ",:;)-".contains(c));
+    // A numeric marker's period is syntax; a hidden filename's dot is content.
+    if s.strip_prefix('.')
+        .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+    {
+        s = s[1..].trim_start();
+    }
     loop {
         s = s.trim_end_matches(|c: char| c.is_whitespace() || ",.:;".contains(c));
         let Some(rest) = ["and", "then"].iter().find_map(|conj| {
