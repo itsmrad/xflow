@@ -39,6 +39,7 @@ MAC = sys.platform == "darwin"
 MEMORY = "phys_footprint" if MAC else "pss"
 MIB = 1024
 BEGIN, END = "<!-- scoreboard:begin -->", "<!-- scoreboard:end -->"
+RATE_LIMIT_RETRIES = 3
 PHRASE = ("Deploy the API with TypeScript, then run the Postgres migration "
           "and open a pull request on GitHub.")
 WISPR_APP = Path("/Applications/Wispr Flow.app")
@@ -140,33 +141,38 @@ def sample(pid):
                    if line.startswith("Pss:"))
         _, ticks, _ = baseline.headless.proc_stats(pid)
         # Linux has no wakeup counter; voluntary switches over all threads approximate one.
-        switches = sum(int(line.split()[1]) for task in (proc / "task").iterdir()
-                       for line in (task / "status").read_text().splitlines()
-                       if line.startswith("voluntary_ctxt_switches:"))
+        threads = {task.name: int(line.split()[1]) for task in (proc / "task").iterdir()
+                   for line in (task / "status").read_text().splitlines()
+                   if line.startswith("voluntary_ctxt_switches:")}
         return {"rss_kib": int(status["VmRSS"].split()[0]), "mem_kib": pss,
                 "peak_kib": int(status["VmHWM"].split()[0]),
-                "cpu_ns": ticks * 10**9 // os.sysconf("SC_CLK_TCK"), "wakeups": switches}
+                "cpu_ns": ticks * 10**9 // os.sysconf("SC_CLK_TCK"),
+                "wakeups": sum(threads.values()), "threads": threads}
     except (OSError, StopIteration, KeyError, ValueError):
         return None
 
 
-def descendants(root, pairs):
-    """`root` and every descendant, from (pid, ppid) pairs."""
-    children = {}
-    for pid, ppid in pairs:
-        children.setdefault(ppid, []).append(pid)
+def children(pid):
+    if MAC:
+        pids = (ctypes.c_int * 1024)()
+        count = _libproc.proc_listchildpids(pid, pids, ctypes.sizeof(pids))
+        return list(pids[:max(0, count)])
+    try:
+        return [int(child) for task in Path(f"/proc/{pid}/task").iterdir()
+                for child in (task / "children").read_text().split()]
+    except OSError:
+        return []
+
+
+def descendants(root, children_of=children):
+    """`root` and every descendant."""
     found, stack = [], [root]
     while stack:
         pid = stack.pop()
         if pid not in found:
             found.append(pid)
-            stack.extend(children.get(pid, ()))
+            stack.extend(children_of(pid))
     return found
-
-
-def process_pairs():
-    out = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=5).stdout
-    return [tuple(map(int, line.split())) for line in out.splitlines() if line.strip()]
 
 
 def tree_total(samples):
@@ -177,8 +183,23 @@ def tree_total(samples):
     return total
 
 
+def wakeup_delta(before, after):
+    """Wakeups between two per-process sample sets. Linux counts per thread, so a thread
+    that exits in between drops out instead of making the total go backwards."""
+    total = 0
+    for pid, s in after.items():
+        if not s:
+            continue
+        b = before.get(pid) or {}
+        if "threads" in s:
+            total += sum(n - b.get("threads", {}).get(tid, 0) for tid, n in s["threads"].items())
+        else:
+            total += s["wakeups"] - b.get("wakeups", 0)
+    return total
+
+
 def sample_tree(root, extra=()):
-    pids = descendants(root, process_pairs()) + [p for p in extra if p]
+    pids = descendants(root) + [p for p in extra if p]
     samples = {pid: sample(pid) for pid in pids}
     return tree_total(samples), samples
 
@@ -234,12 +255,13 @@ def idle(daemon, seconds, warmup, launches=1):
             child, _ = launch(daemon, env, sock)
             try:
                 time.sleep(warmup)
-                first, _ = sample_tree(child.pid)
+                first, first_samples = sample_tree(child.pid)
                 t0, observations = time.monotonic(), []
                 while time.monotonic() - t0 < seconds:
                     time.sleep(min(1, max(0, seconds - (time.monotonic() - t0))))
-                    observations.append(sample_tree(child.pid)[0])
-                elapsed, last = time.monotonic() - t0, observations[-1]
+                    last, last_samples = sample_tree(child.pid)
+                    observations.append(last)
+                elapsed = time.monotonic() - t0
                 if child.poll() is not None:
                     raise RuntimeError("daemon exited during idle observation")
             finally:
@@ -249,7 +271,7 @@ def idle(daemon, seconds, warmup, launches=1):
             "rss_kib": summary([o["rss_kib"] for o in observations], "KiB"),
             "mem_kib": summary([o["mem_kib"] for o in observations], "KiB"),
             "cpu_percent": (last["cpu_ns"] - first["cpu_ns"]) / 1e9 / elapsed * 100,
-            "wakeups_per_second": (last["wakeups"] - first["wakeups"]) / elapsed})
+            "wakeups_per_second": wakeup_delta(first_samples, last_samples) / elapsed})
     return {"memory_metric": MEMORY, "runs": runs,
             "rss_kib": percentile([r["rss_kib"]["p50"] for r in runs], .5),
             "mem_kib": percentile([r["mem_kib"]["p50"] for r in runs], .5),
@@ -323,7 +345,7 @@ class Pill:
         return self.child.pid if self.child else None
 
 
-def sessions(daemon, cli, clip, runs, pill):
+def sessions(daemon, cli, clip, runs, pill, rate_limit_wait=30):
     """`runs` live dictations on one daemon. Stop is sent 0.5 s into the trailing silence,
     like a key release; stop->text is client-observed, stop request -> delivery event."""
     hold = wav_seconds(clip) - 0.5
@@ -333,7 +355,7 @@ def sessions(daemon, cli, clip, runs, pill):
                    XFLOW_TEST_AUDIO="wav", XFLOW_TEST_SINK=str(root / "delivered.txt"))
         child, _ = launch(daemon, env, sock)
         helper = Pill(cli, root / "config/xflow/config.toml") if pill else None
-        peaks, done, results = {"tree_rss_kib": 0, "tree_mem_kib": 0}, threading.Event(), []
+        peaks, done, results, rate_limited = {"tree_rss_kib": 0, "tree_mem_kib": 0}, threading.Event(), [], 0
         lifetime = {}
 
         def watch():  # 20 Hz: tree peak, and each process's own lifetime peak
@@ -355,10 +377,14 @@ def sessions(daemon, cli, clip, runs, pill):
                 events = queue.Queue()
                 threading.Thread(target=pump, args=(sub.makefile(), events), daemon=True).start()
                 events.get(timeout=10)  # snapshot
-                for run in range(runs):
-                    results.append(dictate(sock, events, hold, root, helper))
-                    print(f"run {run + 1}/{runs}: {results[-1]['state']} "
-                          f"{results[-1].get('stop_to_text_ms')} ms", file=sys.stderr)
+                # `runs` successful samples, at most 2 * runs attempts; every failure is kept.
+                while sum(r["state"] == "success" for r in results) < runs and len(results) < 2 * runs:
+                    result, limited = redo_rate_limited(
+                        lambda: dictate(sock, events, hold, root, helper), rate_limit_wait)
+                    rate_limited += limited
+                    results.append(result)
+                    print(f"attempt {len(results)}: {result['state']} {result.get('stop_to_text_ms')} ms "
+                          f"({rate_limited} rate-limited so far)", file=sys.stderr)
         finally:
             done.set()
             watcher.join()
@@ -369,6 +395,9 @@ def sessions(daemon, cli, clip, runs, pill):
     reference = words(PHRASE)
     return {
         "runs": results, "count": len(results), "failures": len(results) - len(ok),
+        "rate_limited_attempts": rate_limited, "rate_limit_wait_seconds": rate_limit_wait,
+        "failure_reasons": {m: sum(r.get("message") == m for r in results if r["state"] != "success")
+                            for m in {r.get("message") for r in results if r["state"] != "success"}},
         "clip_seconds": wav_seconds(clip), "stop_after_seconds": hold,
         "stop_to_text_ms": summary([r["stop_to_text_ms"] for r in ok], "ms"),
         "daemon_total_ms": summary([r["timings"]["total_ms"] for r in ok if r.get("timings")], "ms"),
@@ -380,6 +409,16 @@ def sessions(daemon, cli, clip, runs, pill):
         "peak": {**peaks, "lifetime_kib": lifetime, "memory_metric": MEMORY,
                  "pill": "harness-driven real overlay-pill" if pill else "none on this platform"},
     }
+
+
+def redo_rate_limited(attempt, wait, retries=RATE_LIMIT_RETRIES):
+    """HTTP 429 is the shared dev key's quota, not latency: wait and redo, at most `retries`
+    times. Returns the last result and how many attempts were rate-limited."""
+    for limited in range(retries + 1):
+        result = attempt()
+        if "HTTP 429" not in (result.get("message") or "") or limited == retries:
+            return result, limited + ("HTTP 429" in (result.get("message") or ""))
+        time.sleep(wait)
 
 
 def pump(lines, events):
@@ -409,12 +448,14 @@ def dictate(sock, events, hold, root, helper):
             continue
         if event is None:
             raise RuntimeError("daemon closed the event stream")
+        received = time.monotonic()  # before the pill, whose exit can take seconds
         if helper:
             helper.forward(event)
         if stopped and event["state"] in ("success", "error", "idle"):
             return {"state": event["state"], "message": event.get("message"),
-                    "stop_to_text_ms": round((time.monotonic() - stopped) * 1000, 1),
-                    "timings": event.get("timings"),
+                    "stop_to_text_ms": round((received - stopped) * 1000, 1),
+                    # Error events repeat the previous session's timings; keep only real ones.
+                    "timings": event.get("timings") if event["state"] == "success" else None,
                     "text": sink.read_text() if sink.exists() else ""}
     return {"state": "timeout"}
 
@@ -533,7 +574,7 @@ def mib(kib):
 
 
 def ms(value):
-    return "—" if value is None else f"{value:,.0f} ms" if value >= 100 else f"{value:.1f} ms"
+    return "—" if value is None else "< 1 ms" if value == 0 else f"{value:,.0f} ms" if value >= 100 else f"{value:.1f} ms"
 
 
 def render(data):
@@ -543,7 +584,8 @@ def render(data):
     lines = [
         f"Measured {env['recorded_utc'][:10]} at `{(env['git_commit'] or '')[:7]}`"
         f"{' (dirty)' if env['git_dirty'] else ''} on {env['model'] + ', ' if env['model'] else ''}{env['cpu']}, "
-        f"{env['ram_bytes'] / 2**30:.0f} GB, {env['os']}, {env['rustc']}. "
+        f"{env['ram_bytes'] / 2**30:.0f} GB, {env['os']}, {env['rustc']}, load average "
+        f"{env['load_average'][0]:.1f} at start. "
         "Generated by `scripts/bench/scoreboard.py`; do not edit by hand.", "",
         "| Metric | xflow | How |", "| --- | ---: | --- |",
         f"| Idle tree {mem} | {mib(i['mem_kib'])} | median of 1 Hz samples, {i['runs'][0]['seconds']:.0f} s after "
@@ -563,8 +605,9 @@ def render(data):
         p = s["peak"]
         lines += [
             f"| Stop → text p50 / p95 | {ms(s['stop_to_text_ms']['p50'])} / {ms(s['stop_to_text_ms']['p95'])} | "
-            f"{s['stop_to_text_ms']['count']} live Groq dictations ({s['failures']} failed), "
-            f"{s['clip_seconds']:.1f} s WAV, stop request → text delivered |",
+            f"{s['stop_to_text_ms']['count']} successful live Groq dictations of {s['count']} attempts "
+            f"({s['failures']} failed, plus {s.get('rate_limited_attempts', 0)} HTTP 429s redone), "
+            f"{s['clip_seconds']:.1f} s WAV, stop request → text in a file sink (real paste excluded) |",
             f"| Start → capture running p50 / p95 | {ms(s['start_to_capture_ms'].get('p50'))} / "
             f"{ms(s['start_to_capture_ms'].get('p95'))} | daemon `hotkey_ms`; WAV source, so real mic open is excluded |",
             f"| Peak tree {mem} while dictating | {mib(p['tree_mem_kib'])} | 20 Hz, daemon + pill |",
@@ -599,13 +642,14 @@ def run(args):
     binaries = {"xflowd": args.daemon, "xflow": args.cli}
     if args.session_daemon:
         binaries["session_daemon"] = args.session_daemon
-    data = {"schema": "xflow-scoreboard/1", "parameters": {k: str(v) for k, v in vars(args).items()
-                                                            if k != "func"},
+    data = {"schema": "xflow-scoreboard/1",
+            "parameters": {k: os.path.relpath(v, ROOT) if isinstance(v, Path) else v
+                           for k, v in vars(args).items() if k != "func"},
             "environment": environment(binaries), "measurements": {}}
     m = data["measurements"]
     m["startup"] = startup(args.daemon, args.startup_samples)
     m["idle"] = idle(args.daemon, args.idle_seconds, args.warmup_seconds)
-    m["wispr"] = wispr() if MAC else {"measured": False, "reason": "macOS only"}
+    m["wispr"] = wispr()
     if args.runs and not os.environ.get("GROQ_API_KEY"):
         m["sessions"] = {"count": 0, "skipped": "GROQ_API_KEY not set"}
     elif args.runs and not args.session_daemon:
@@ -614,6 +658,7 @@ def run(args):
         with tempfile.TemporaryDirectory(prefix="xfclip") as directory:
             clip = Path(args.clip) if args.clip else make_clip(Path(directory))
             m["sessions"] = sessions(args.session_daemon, args.cli, clip, args.runs, MAC)
+    data["environment"]["load_average_end"] = list(os.getloadavg())
     write_json(args.output, data)
     markdown = Path(args.output).with_suffix(".md")
     markdown.write_text(render(data))
@@ -642,7 +687,7 @@ def main(argv=None):
         sub.add_argument("--warmup-seconds", type=float, default=5)
     run_args, gate_args = commands.choices["run"], commands.choices["gate"]
     run_args.add_argument("--session-daemon", help="test-support xflowd for live dictations")
-    run_args.add_argument("--runs", type=int, default=30)
+    run_args.add_argument("--runs", type=int, default=30, help="successful dictations wanted")
     run_args.add_argument("--clip", help="WAV to dictate (default: generated with macOS `say`)")
     run_args.add_argument("--idle-seconds", type=float, default=300)
     run_args.add_argument("--startup-samples", type=int, default=30)

@@ -1,0 +1,46 @@
+{
+  "about": "Linux CI gate baseline for scripts/bench/scoreboard.py gate. Update `result` from the scoreboard-gate artifact in the PR that intentionally changes it.",
+  "runner": "GitHub ubuntu-24.04, AMD EPYC 7763 64-Core Processor, 4 CPUs",
+  "measured_at": {
+    "commit": "5fd76eb51c6160eea1c7993a683bb7d276eecba8",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "ci_run": "https://github.com/itsmrad/xflow/actions/runs/40877324215 (attempts 1-3)"
+  },
+  "noise": {
+    "idle_pss_kib_run_medians": [
+      9237,
+      9347,
+      9520
+    ],
+    "idle_pss_kib_launch_medians": [
+      9160,
+      9165,
+      9177,
+      9237,
+      9347,
+      9379,
+      9520,
+      9540,
+      9644
+    ],
+    "binary_bytes": "identical in all three runs"
+  },
+  "limits": {
+    "binary_pct": 5,
+    "pss_kib": 1024,
+    "pss_pct": 10,
+    "cpu_percent": 0.1,
+    "startup_ms": 100
+  },
+  "result": {
+    "binary_bytes": {
+      "xflow": 7975512,
+      "xflowd": 11560584
+    },
+    "idle_cpu_percent": 0.0,
+    "idle_processes": 1,
+    "idle_pss_kib": 9347,
+    "idle_rss_kib": 11420,
+    "startup_p50_ms": 1.9895910000116146
+  }
+}

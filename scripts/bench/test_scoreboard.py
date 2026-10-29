@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -27,15 +28,28 @@ def failed(rows):
 
 class Aggregation(unittest.TestCase):
     def test_descendants_follow_the_tree_only(self):
-        pairs = [(10, 1), (11, 10), (12, 11), (13, 10), (20, 1), (21, 20)]
-        self.assertEqual(sorted(scoreboard.descendants(10, pairs)), [10, 11, 12, 13])
-        self.assertEqual(scoreboard.descendants(99, pairs), [99])
+        tree = {1: [10, 20], 10: [11, 13], 11: [12], 20: [21]}
+        self.assertEqual(sorted(scoreboard.descendants(10, lambda p: tree.get(p, []))), [10, 11, 12, 13])
+        self.assertEqual(scoreboard.descendants(99, lambda p: tree.get(p, [])), [99])
+
+    def test_children_of_this_process(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+        try:
+            self.assertIn(child.pid, scoreboard.descendants(os.getpid()))
+        finally:
+            child.kill()
+            child.wait()
 
     def test_tree_total_sums_live_processes(self):
         a = {"rss_kib": 100, "mem_kib": 60, "cpu_ns": 5, "wakeups": 2, "peak_kib": 70}
         b = {"rss_kib": 40, "mem_kib": 30, "cpu_ns": 1, "wakeups": 1, "peak_kib": 35}
         self.assertEqual(scoreboard.tree_total({1: a, 2: b, 3: None}),
                          {"rss_kib": 140, "mem_kib": 90, "cpu_ns": 6, "wakeups": 3, "processes": 2})
+
+    def test_wakeups_never_go_backwards_when_a_thread_exits(self):
+        before = {1: {"wakeups": 15, "threads": {"1": 10, "2": 5}}, 2: {"wakeups": 7}}
+        after = {1: {"wakeups": 12, "threads": {"1": 12}}, 2: {"wakeups": 9}, 3: {"wakeups": 4}, 4: None}
+        self.assertEqual(scoreboard.wakeup_delta(before, after), 2 + 2 + 4)
 
     def test_percentiles_are_nearest_rank(self):
         s = scoreboard.summary(list(range(30, 0, -1)), "ms")
@@ -81,7 +95,7 @@ class Run(unittest.TestCase):
                 "wakeup_metric": "fake"}
         startup = {"cold_ms": scoreboard.summary([3.0, 4.0], "ms"), "warm_ms": scoreboard.summary([2.0], "ms")}
         environment = {"recorded_utc": "2026-10-29T00:00:00Z", "git_commit": "abcdef0123", "git_dirty": False,
-                       "model": None, "cpu": "Fake CPU", "ram_bytes": 8 * 2**30, "os": "FakeOS", "rustc": "rustc 1",
+                       "model": None, "cpu": "Fake CPU", "load_average": [1.0, 1.0, 1.0], "ram_bytes": 8 * 2**30, "os": "FakeOS", "rustc": "rustc 1",
                        "binaries": {"xflowd": {"bytes": 5 * 2**20}, "xflow": {"bytes": 6 * 2**20}}}
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, env, clear=True), \
                 patch.object(scoreboard, "startup", return_value=startup), \
@@ -103,6 +117,14 @@ class Run(unittest.TestCase):
         self.assertIn("| Idle tree PSS | 5.9 MiB |", markdown)
         self.assertIn("not measured: installed but not running", markdown)
         self.assertIn("https://tldv.io/", markdown)
+
+    def test_rate_limits_are_redone_a_bounded_number_of_times(self):
+        limited, ok = {"state": "error", "message": "provider returned HTTP 429"}, {"state": "success"}
+        replies = iter([limited, limited, ok])
+        self.assertEqual(scoreboard.redo_rate_limited(lambda: next(replies), 0), (ok, 2))
+        self.assertEqual(scoreboard.redo_rate_limited(lambda: limited, 0, retries=3), (limited, 4))
+        other = {"state": "error", "message": "provider returned HTTP 500"}
+        self.assertEqual(scoreboard.redo_rate_limited(lambda: other, 0), (other, 0))
 
     def test_missing_say_is_reported(self):
         with patch.object(scoreboard.shutil, "which", return_value=None), \
