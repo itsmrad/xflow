@@ -2913,7 +2913,8 @@ mod tests {
         clips: Mutex<Vec<AudioClip>>,
         hints: Mutex<Vec<Vec<String>>>,
         words: Option<fn(usize) -> &'static str>,
-        failures: AtomicUsize,
+        failures: usize,
+        calls: AtomicUsize,
         /// Segments (by start, ms) that fail on every attempt.
         broken: Option<fn(usize) -> bool>,
         hang: bool,
@@ -2943,10 +2944,7 @@ mod tests {
                 std::future::pending::<()>().await;
             }
             if self.broken.is_some_and(|broken| broken(start))
-                || self
-                    .failures
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-                    .is_ok()
+                || self.calls.fetch_add(1, Ordering::SeqCst) < self.failures
             {
                 bail!("provider returned HTTP 500");
             }
@@ -2994,7 +2992,7 @@ mod tests {
         let audio = Arc::new(StreamAudio::ramp(300, 290, false));
         let stt = Arc::new(SegmentStt {
             audio: Some(audio.clone()),
-            failures: AtomicUsize::new(1),
+            failures: 1,
             ..SegmentStt::default()
         });
         let (engine, tx, rx, mut events, desktop) = segment_fixture(audio.clone(), stt.clone());
