@@ -9,7 +9,9 @@ export async function POST(request: Request) {
     return error(429, "too many sign-in attempts; try again in a few minutes", { "retry-after": "600" });
   }
   const body = await fields(request);
-  const { deviceCode, userCode } = await createDeviceCode(cleanClientName(body.client_name));
+  const created = await createDeviceCode(cleanClientName(body.client_name));
+  if (!created) return error(429, "too many sign-ins in progress; try again in a few minutes", { "retry-after": "60" });
+  const { deviceCode, userCode } = created;
   const verificationUri = `${appUrl()}/device`;
   return json({
     device_code: deviceCode,

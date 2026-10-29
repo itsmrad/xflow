@@ -1,0 +1,55 @@
+---
+title: Guided setup
+description: The setup flow, what each step does, and the scripted equivalent.
+---
+
+Run `xflow` in a terminal. Until setup is complete it opens the guided setup; after that it opens the control centre. `xflow setup` reopens setup on a configured install, and starts the background service if `xflowd` isn't running.
+
+## The steps
+
+<Steps>
+<Step title="Speech service">
+Pick a provider. Groq is the default. See [Providers](/docs/providers) for the full list, including a local server.
+</Step>
+<Step title="Key">
+Paste your provider key once. The input is hidden, and the key is stored encrypted in xflow's own keystore, never in the config file or the system Keychain, so no OS prompt appears. An optional connection check makes a non-billable request and lets you try again if the key is rejected.
+</Step>
+<Step title="Microphone">
+Choose your input device, or keep the system default.
+</Step>
+<Step title="Shortcut">
+<Kbd>Fn</Kbd> by default on macOS. If System Settings › Keyboard › “Press 🌐 key to” isn't set to Do Nothing, setup adds a step for it — otherwise every press also opens the emoji picker or switches input source.
+</Step>
+<Step title="Permissions (macOS)">
+Accessibility and Microphone, plus Input Monitoring only if the shortcut still isn't heard. Setup opens the exact System Settings pane; you find `xflowd` in the list and switch it on. It moves on once the switch flips.
+</Step>
+<Step title="Test">
+Setup ends by asking you to hold <Kbd>Fn</Kbd> and say something.
+</Step>
+</Steps>
+
+A reinstall shows only what is missing. Nothing is asked at your first dictation.
+
+## Scripted setup
+
+`--yes` accepts the config defaults without prompts. Desktop actions still need their explicit flags.
+
+```sh
+xflow setup --yes --provider groq --model whisper-large-v3-turbo
+xflow key set groq --stdin < /path/to/private-key-file
+xflow service install --enable
+xflow doctor
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--provider`, `--model` | Select the speech provider and model |
+| `--endpoint` | Full transcription URL for custom or local providers |
+| `--language` | ISO-639-1 code; unset means automatic detection |
+| `--device` | Microphone name from `xflow devices` |
+| `--key-stdin` | Read the key from stdin instead of prompting |
+| `--test` | Make a non-billable provider connection check |
+| `--install-extension` | Install the GNOME Shell extension (Linux) |
+| `--enable-service` | Install and start the user service |
+
+Keys read from stdin or hidden input are zeroized after use. Key commands never print secrets.

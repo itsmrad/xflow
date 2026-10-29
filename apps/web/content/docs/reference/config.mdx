@@ -1,0 +1,243 @@
+---
+title: Config reference
+description: Every setting in config.toml, its default and what it does.
+---
+
+Generated from `config/default.toml`. Do not edit by hand: run `bun scripts/gen-docs.ts` in `apps/web`.
+
+The file lives at `~/.config/xflow/config.toml`. `xflow config path` prints the exact location. Change a value with `xflow config set <key> <value>`; the daemon reloads it.
+
+xflow configuration. Edit here, with `xflow config set <key> <value>`, or in the TUI.
+Secrets are read from OS credential storage or environment variables, never this file.
+Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings.
+
+## [stt]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `stt.provider` | `"groq"` | `xflow providers` lists every provider |
+| `stt.model` | unset | `xflow models` lists models; unset = provider default; e.g. `"whisper-large-v3-turbo"` |
+| `stt.endpoint` | unset | full URL override; e.g. `"https://api.groq.com/openai/v1/audio/transcriptions"` |
+| `stt.protocol` | unset | wire protocol for provider = "custom"; e.g. `"openai"` |
+| `stt.api_key_env` | unset | e.g. `"GROQ_API_KEY"` |
+| `stt.language` | unset | ISO-639-1; unset = automatic detection; e.g. `"en"` |
+| `stt.vocabulary` | `[]` | extra recognition hints (dictionary.words are added too) |
+| `stt.timeout_secs` | `30` |  |
+
+## [cleanup]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `cleanup.mode` | `"raw"` | raw \| light \| polished \| custom (custom requires prompt) |
+| `cleanup.provider` | unset | preset that fills endpoint/model/key defaults; e.g. `"groq"` |
+| `cleanup.endpoint` | unset | e.g. `"https://api.groq.com/openai/v1/chat/completions"` |
+| `cleanup.model` | unset | e.g. `"llama-3.1-8b-instant"` |
+| `cleanup.api_key_env` | `"OPENAI_API_KEY"` |  |
+| `cleanup.prompt` | unset | e.g. `"Keep my British spelling."` |
+| `cleanup.timeout_secs` | `20` |  |
+| `cleanup.app_context` | `true` | tell the model the focused app id (never window contents) |
+
+## [hotkey]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `hotkey.key` | `"fn"` | macOS Fn/Globe; see docs/hotkeys.md for allowed keys/chords |
+| `hotkey.double_tap_ms` | `500` | second press within this long after a quick tap's release latches hands-free |
+| `hotkey.hold_threshold_ms` | `500` | releases sooner than this are taps (Wispr Flow's defaults) |
+| `hotkey.enabled` | `true` |  |
+
+## [recording]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `recording.max_seconds` | `1200` | hard stop in seconds (at most 20 minutes) |
+| `recording.silence_threshold` | `0.005` | minimum 20 ms frame RMS; speech must last at least 80 ms |
+| `recording.device` | unset | `xflow devices`; unset = system default input; e.g. `"USB Microphone"` |
+| `recording.min_ms` | `300` | shorter taps are discarded without upload |
+| `recording.auto_stop_secs` | `0` | stop after N s of silence (0 = off) |
+| `recording.keep_warm_secs` | `0` | keep the mic open N s after a recording (0 = off) |
+| `recording.ignore_speakers` | `false` | opt in to cancelling speaker sound (macOS, system default mic) |
+
+## [injection]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `injection.method` | `"paste"` | paste \| type \| clipboard |
+| `injection.clipboard_only` | `false` | deprecated: use method = "clipboard" |
+| `injection.restore_clipboard` | `true` | put your previous clipboard text back after pasting |
+| `injection.restore_delay_ms` | `300` |  |
+| `injection.trailing_space` | `true` |  |
+
+## [formatting]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `formatting.snap_to_dictionary` | `true` | Snapping runs before dictionary.replacements, so a replacement's `from` must match the snapped spelling ("xflow", not "x flow", when xflow is saved). restore dictionary/vocabulary spellings locally; false disables snapping |
+| `formatting.remove_fillers` | `true` |  |
+| `formatting.fillers` | `["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]` |  |
+| `formatting.spoken_punctuation` | `false` | "comma", "period", "new line", ... become punctuation |
+| `formatting.lists` | `true` | "one ..., two ..., three ..." / "bullet ..." become a list (never in terminals) |
+
+## [dictionary]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `dictionary.words` | `[]` | e.g. ["Postgres", "Kubernetes", "xflow"] |
+| `dictionary.replacements` | `[]` | e.g. [\{ from = "postgress", to = "Postgres" \}] |
+| `dictionary.auto_learn` | `true` | learn words you correct after dictating (macOS) or in history |
+| `dictionary.learned` | `[]` | learned words; `xflow dictionary remove <word>` undoes one |
+| `dictionary.never_learn` | `[]` | removed learned words, never learned again |
+
+## [sounds]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `sounds.enabled` | `true` |  |
+| `sounds.volume` | `0.5` |  |
+| `sounds.start` | unset | e.g. `"/path/to/start.wav"` |
+| `sounds.stop` | unset | e.g. `"/path/to/stop.wav"` |
+| `sounds.error` | unset | e.g. `"/path/to/error.wav"` |
+
+## [notifications]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `notifications.enabled` | `false` | desktop notifications for errors and clipboard-only results |
+
+## [privacy]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `privacy.history` | `true` |  |
+| `privacy.history_limit` | `500` |  |
+| `privacy.offline` | `false` | reject remote endpoints (local engines only) |
+
+## [ui]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `ui.theme` | `"paper"` | TUI theme; see `xflow tui` → Settings |
+| `ui.mouse` | `true` |  |
+
+## [[snippets]]
+
+Voice snippets: say the trigger, get the text.
+
+Not set by default. Example:
+
+```toml
+[[snippets]]
+trigger = "my email"
+text = "me@example.com"
+```
+
+## [[styles]]
+
+Per-app styles: the first style whose apps match the focused app id wins.
+
+Not set by default. Example:
+
+```toml
+[[styles]]
+name = "chat"
+apps = ["slack", "discord", "telegram"]
+mode = "light"
+prompt = "Casual tone. Lowercase is fine."
+```
+
+## Full default file
+
+```toml title="config.toml"
+# xflow configuration. Edit here, with `xflow config set <key> <value>`, or in the TUI.
+# Secrets are read from OS credential storage or environment variables, never this file.
+# Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings.
+
+[stt]
+provider = "groq"            # `xflow providers` lists every provider
+# model = "whisper-large-v3-turbo"   # `xflow models` lists models; unset = provider default
+# endpoint = "https://api.groq.com/openai/v1/audio/transcriptions"   # full URL override
+# protocol = "openai"        # wire protocol for provider = "custom"
+# api_key_env = "GROQ_API_KEY"
+# language = "en"            # ISO-639-1; unset = automatic detection
+vocabulary = []              # extra recognition hints (dictionary.words are added too)
+timeout_secs = 30
+
+[cleanup]
+mode = "raw"                 # raw | light | polished | custom (custom requires prompt)
+# provider = "groq"          # preset that fills endpoint/model/key defaults
+# endpoint = "https://api.groq.com/openai/v1/chat/completions"
+# model = "llama-3.1-8b-instant"
+api_key_env = "OPENAI_API_KEY"
+# prompt = "Keep my British spelling."
+timeout_secs = 20
+app_context = true           # tell the model the focused app id (never window contents)
+
+[hotkey]
+key = "fn"                  # macOS Fn/Globe; see docs/hotkeys.md for allowed keys/chords
+double_tap_ms = 500          # second press within this long after a quick tap's release latches hands-free
+hold_threshold_ms = 500      # releases sooner than this are taps (Wispr Flow's defaults)
+enabled = true
+
+[recording]
+max_seconds = 1200           # hard stop in seconds (at most 20 minutes)
+silence_threshold = 0.005    # minimum 20 ms frame RMS; speech must last at least 80 ms
+# device = "USB Microphone"  # `xflow devices`; unset = system default input
+min_ms = 300                 # shorter taps are discarded without upload
+auto_stop_secs = 0           # stop after N s of silence (0 = off)
+keep_warm_secs = 0           # keep the mic open N s after a recording (0 = off)
+ignore_speakers = false      # opt in to cancelling speaker sound (macOS, system default mic)
+
+[injection]
+method = "paste"             # paste | type | clipboard
+clipboard_only = false       # deprecated: use method = "clipboard"
+restore_clipboard = true     # put your previous clipboard text back after pasting
+restore_delay_ms = 300
+trailing_space = true
+
+[formatting]
+# Snapping runs before dictionary.replacements, so a replacement's `from` must
+# match the snapped spelling ("xflow", not "x flow", when xflow is saved).
+snap_to_dictionary = true    # restore dictionary/vocabulary spellings locally; false disables snapping
+remove_fillers = true
+fillers = ["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]
+spoken_punctuation = false   # "comma", "period", "new line", ... become punctuation
+lists = true                 # "one ..., two ..., three ..." / "bullet ..." become a list (never in terminals)
+
+[dictionary]
+words = []                   # e.g. ["Postgres", "Kubernetes", "xflow"]
+replacements = []            # e.g. [{ from = "postgress", to = "Postgres" }]
+auto_learn = true            # learn words you correct after dictating (macOS) or in history
+learned = []                 # learned words; `xflow dictionary remove <word>` undoes one
+never_learn = []             # removed learned words, never learned again
+
+[sounds]
+enabled = true
+volume = 0.5
+# start = "/path/to/start.wav"
+# stop = "/path/to/stop.wav"
+# error = "/path/to/error.wav"
+
+[notifications]
+enabled = false              # desktop notifications for errors and clipboard-only results
+
+[privacy]
+history = true
+history_limit = 500
+offline = false              # reject remote endpoints (local engines only)
+
+[ui]
+theme = "paper"              # TUI theme; see `xflow tui` → Settings
+mouse = true
+
+# Voice snippets: say the trigger, get the text.
+# [[snippets]]
+# trigger = "my email"
+# text = "me@example.com"
+
+# Per-app styles: the first style whose apps match the focused app id wins.
+# [[styles]]
+# name = "chat"
+# apps = ["slack", "discord", "telegram"]
+# mode = "light"
+# prompt = "Casual tone. Lowercase is fine."
+```

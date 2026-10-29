@@ -1,0 +1,65 @@
+---
+title: Dictionary
+description: Teach xflow your vocabulary, fix phrases that always come out wrong, and let it learn from your corrections.
+---
+
+General speech models guess at the words developers say most: library names, acronyms, your colleagues' names. The dictionary fixes that in three ways.
+
+## Words
+
+```sh
+xflow dictionary add Kubernetes Postgres tRPC
+xflow dictionary list
+xflow dictionary remove tRPC
+```
+
+Dictionary words are sent as recognition hints with every recording, together with `stt.vocabulary`. Most providers accept hints; the [provider pages](/docs/providers) say which don't. If your list outgrows a provider's hint limit, `xflow doctor` tells you.
+
+## Replacements
+
+When a phrase always comes out wrong, map it once:
+
+```sh
+xflow dictionary replace 'post grass' Postgres
+xflow dictionary unreplace 'post grass'
+```
+
+Replacements run locally on every transcript, after filler words are removed and before optional AI cleanup. The replacement text is inserted literally.
+
+```toml title="config.toml"
+[dictionary]
+words = ["Postgres", "Kubernetes", "xflow"]
+replacements = [{ from = "postgress", to = "Postgres" }]
+```
+
+## Learning from corrections
+
+With `dictionary.auto_learn = true` (the default), when you fix a word right after dictating, xflow adds it to your dictionary. `xflow watch` — and a notification, when they're on — says so:
+
+```text
+Added 'Kubernetes' to your dictionary
+```
+
+- A learned word becomes a recognition hint. It never becomes an automatic replacement.
+- Only close spellings are learned, at most four per dictation. Case or punctuation changes, grammar fixes, homophones between everyday words (their/there), numbers, URLs, code and secure fields are skipped.
+- On macOS, `xflowd` reads the field it pasted into twice through Accessibility: about 120 ms after the paste, and again when you start the next dictation or after 60 s — only while focus is still on that field. It keeps just the pasted text and 16 characters either side in memory, never the whole field.
+- Correcting a transcript with `xflow history edit` uses the same rules, on every platform.
+
+`xflow dictionary list` marks learned entries. `xflow dictionary remove <word>` removes one for good: it moves to `never_learn` and isn't learned again.
+
+## Import and export
+
+```sh
+xflow dictionary import words.txt     # one word per line
+xflow dictionary export > words.txt
+xflow dictionary export --json        # also includes replacements
+```
+
+## Filler words and spoken punctuation
+
+```toml title="config.toml"
+[formatting]
+remove_fillers = true
+fillers = ["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]
+spoken_punctuation = false   # "comma", "period", "new line", ... become punctuation
+```

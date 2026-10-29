@@ -1,0 +1,50 @@
+---
+title: Snippets and styles
+description: Spoken shortcuts that expand to saved text, and cleanup that changes with the app you're in.
+---
+
+## Snippets
+
+Say the trigger, get the text.
+
+```sh
+xflow snippets add 'my signature' 'Regards, Alex'
+xflow snippets add 'my email' 'me@example.com'
+xflow snippets list
+xflow snippets remove 'my email'
+```
+
+The trigger is replaced wherever it appears in a dictation, as a whole phrase. Snippets run last — after AI cleanup — so the saved text is inserted exactly as you wrote it.
+
+```toml title="config.toml"
+[[snippets]]
+trigger = "my email"
+text = "me@example.com"
+```
+
+## Styles
+
+Casual in Slack, exact in your editor. A style picks the cleanup mode, and optionally a prompt, for the apps it matches.
+
+```sh
+xflow styles add chat --apps slack,discord --mode light
+xflow styles add docs --apps notion --mode polished --prompt 'Keep my British spelling.'
+xflow styles list
+xflow styles remove chat
+```
+
+```toml title="config.toml"
+[[styles]]
+name = "chat"
+apps = ["slack", "discord", "telegram"]
+mode = "light"
+prompt = "Casual tone. Lowercase is fine."
+```
+
+- `apps` match the focused app's id, case-insensitively, as a substring. The first matching style wins.
+- `mode` is one of `raw`, `light`, `polished` or `custom`. `custom` requires a prompt.
+- Styles need a cleanup provider for any mode other than `raw`. See [command mode](/docs/using/command-mode#set-up-cleanup) for setting one up.
+
+<Callout type="note">
+If cleanup fails, you get the original transcript — never nothing.
+</Callout>

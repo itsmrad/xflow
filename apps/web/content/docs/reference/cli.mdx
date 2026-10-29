@@ -1,0 +1,1489 @@
+---
+title: CLI reference
+description: Every xflow command and flag, from the binary's own help.
+---
+
+Generated from `xflow --help` (xflow 0.2.0-beta). Do not edit by hand: run `bun scripts/gen-docs.ts` in `apps/web`.
+
+`--json`, `--quiet`, `--color auto|always|never` and `--config PATH` work on every command. JSON goes to stdout; errors are JSON objects on stderr with `error`, `hint` and `exit_code`.
+
+## xflow
+
+```text
+Fast dictation for developers, from your terminal
+
+Usage: xflow [OPTIONS] <COMMAND>
+
+Commands:
+  setup        Set up a provider, microphone and optional desktop integration
+  start        Begin recording (bind to shortcut press for push-to-talk)
+  stop         Stop recording and begin transcription
+  toggle       Start or stop hands-free recording
+  cancel       Discard the active recording or pending transcription
+  status       Show daemon state, provider, model, version and timings
+  watch        Subscribe to daemon events until interrupted
+  listen       Print dictation to stdout without changing the desktop
+  transcribe   Transcribe an audio file without a running daemon
+  last         Print the last transcript
+  copy         Copy the last transcript [alias: copy-last]
+  paste        Insert the last transcript into the focused app [alias: paste-last]
+  history      Browse, search and export local dictation history
+  config       Inspect or edit validated, comment-preserving TOML configuration
+  providers    List providers, inspect capabilities and select a default
+  models       List a provider's models, marking the selected and default model
+  key          Manage provider credentials in OS credential storage; a custom cleanup endpoint uses the `cleanup` entry
+  dictionary   Manage vocabulary and text replacements
+  snippets     Manage spoken shortcuts that expand to saved text
+  styles       Manage cleanup styles selected by focused application
+  overlay      Inspect and change native overlay settings
+  devices      List available microphone input devices
+  stats        Show local dictation statistics
+  doctor       Diagnose configuration and desktop dependencies without recording
+  daemon       Control the systemd/launchd user daemon or view its logs
+  service      Install or uninstall the graphical-session user service
+  extension    Install or manage the bundled GNOME Shell extension
+  completions  Generate shell completion scripts
+  version      Show CLI and, when available, daemon versions
+  tui          Open the terminal control centre (also plain `xflow` in a terminal)
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+  -V, --version        Print version
+
+Start here: xflow (in a terminal: setup, then the control centre)
+Explore: xflow <command> --help
+Pipe text: xflow listen --seconds 5
+Exit codes: 0 success, 1 operation failed, 2 usage, 3 daemon unavailable, 4 config, 5 provider, 6 doctor.
+```
+
+## xflow setup
+
+Set up a provider, microphone and optional desktop integration
+
+```text
+Set up a provider, microphone and optional desktop integration
+
+Usage: xflow setup [OPTIONS]
+
+Options:
+      --json                 Emit machine-readable JSON (watch emits one object per event)
+      --yes                  Accept defaults without prompts (desktop actions still require flags)
+      --provider <PROVIDER>
+  -q, --quiet                Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>        Control colour in human output [default: auto] [possible values: auto, always, never]
+      --model <MODEL>
+      --config <PATH>        Read/write an alternate configuration file
+      --endpoint <ENDPOINT>  Full transcription URL for custom/local providers
+      --language <LANGUAGE>
+      --device <DEVICE>
+      --key-stdin            Read a key from stdin instead of prompting
+      --test                 Make a non-billable provider connection check
+      --install-extension
+      --enable-service
+  -h, --help                 Print help
+```
+
+## xflow start
+
+Begin recording (bind to shortcut press for push-to-talk)
+
+```text
+Begin recording (bind to shortcut press for push-to-talk)
+
+Usage: xflow start [OPTIONS]
+
+Options:
+      --command
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow stop
+
+Stop recording and begin transcription
+
+```text
+Stop recording and begin transcription
+
+Usage: xflow stop [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow toggle
+
+Start or stop hands-free recording
+
+```text
+Start or stop hands-free recording
+
+Usage: xflow toggle [OPTIONS]
+
+Options:
+      --command
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow cancel
+
+Discard the active recording or pending transcription
+
+```text
+Discard the active recording or pending transcription
+
+Usage: xflow cancel [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow status
+
+Show daemon state, provider, model, version and timings
+
+```text
+Show daemon state, provider, model, version and timings
+
+Usage: xflow status [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow watch
+
+Subscribe to daemon events until interrupted
+
+```text
+Subscribe to daemon events until interrupted
+
+Usage: xflow watch [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow listen
+
+Print dictation to stdout without changing the desktop
+
+```text
+Print dictation to stdout without changing the desktop
+
+Usage: xflow listen [OPTIONS]
+
+Options:
+      --json               Emit machine-readable JSON (watch emits one object per event)
+      --once               Finish after one dictation; otherwise repeat in an interactive terminal
+  -q, --quiet              Suppress confirmations; requested data and errors remain visible
+      --seconds <SECONDS>  Stop after N seconds; otherwise Enter stops recording
+      --color <COLOR>      Control colour in human output [default: auto] [possible values: auto, always, never]
+      --command
+      --config <PATH>      Read/write an alternate configuration file
+  -h, --help               Print help
+```
+
+## xflow transcribe
+
+Transcribe an audio file without a running daemon
+
+```text
+Transcribe an audio file without a running daemon
+
+Usage: xflow transcribe [OPTIONS] <FILE>
+
+Arguments:
+  <FILE>
+
+Options:
+      --json                 Emit machine-readable JSON (watch emits one object per event)
+      --provider <PROVIDER>
+      --model <MODEL>
+  -q, --quiet                Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>        Control colour in human output [default: auto] [possible values: auto, always, never]
+      --language <LANGUAGE>
+      --config <PATH>        Read/write an alternate configuration file
+  -h, --help                 Print help
+```
+
+## xflow last
+
+Print the last transcript
+
+```text
+Print the last transcript
+
+Usage: xflow last [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow copy
+
+Copy the last transcript
+
+```text
+Copy the last transcript
+
+Usage: xflow copy [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow paste
+
+Insert the last transcript into the focused app
+
+```text
+Insert the last transcript into the focused app
+
+Usage: xflow paste [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow history
+
+Browse, search and export local dictation history
+
+```text
+Browse, search and export local dictation history
+
+Usage: xflow history [OPTIONS] [COMMAND]
+
+Commands:
+  list
+  search
+  show
+  copy
+  paste
+  delete
+  edit    Correct a transcript (in $EDITOR, or with --text) and learn the corrected words
+  export
+  clear
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json             Emit machine-readable JSON (watch emits one object per event)
+  -n, --limit <LIMIT>    [default: 20]
+      --offset <OFFSET>  [default: 0]
+  -q, --quiet            Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>    Control colour in human output [default: auto] [possible values: auto, always, never]
+      --query <QUERY>
+      --config <PATH>    Read/write an alternate configuration file
+  -h, --help             Print help
+```
+
+### xflow history list
+
+```text
+Usage: xflow history list [OPTIONS]
+
+Options:
+      --json             Emit machine-readable JSON (watch emits one object per event)
+  -n, --limit <LIMIT>    [default: 20]
+      --offset <OFFSET>  [default: 0]
+  -q, --quiet            Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>    Control colour in human output [default: auto] [possible values: auto, always, never]
+      --query <QUERY>
+      --config <PATH>    Read/write an alternate configuration file
+  -h, --help             Print help
+```
+
+### xflow history search
+
+```text
+Usage: xflow history search [OPTIONS] <QUERY>
+
+Arguments:
+  <QUERY>
+
+Options:
+      --json             Emit machine-readable JSON (watch emits one object per event)
+  -n, --limit <LIMIT>    [default: 20]
+      --offset <OFFSET>  [default: 0]
+  -q, --quiet            Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>    Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>    Read/write an alternate configuration file
+  -h, --help             Print help
+```
+
+### xflow history show
+
+```text
+Usage: xflow history show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow history copy
+
+```text
+Usage: xflow history copy [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow history paste
+
+```text
+Usage: xflow history paste [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow history delete
+
+```text
+Usage: xflow history delete [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow history edit
+
+Correct a transcript (in $EDITOR, or with --text) and learn the corrected words
+
+```text
+Correct a transcript (in $EDITOR, or with --text) and learn the corrected words
+
+Usage: xflow history edit [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+      --text <TEXT>    The corrected transcript; omit to edit it in $VISUAL or $EDITOR
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow history export
+
+```text
+Usage: xflow history export [OPTIONS]
+
+Options:
+      --format <FORMAT>  [default: json] [possible values: json, csv, md]
+      --json             Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet            Suppress confirmations; requested data and errors remain visible
+      --query <QUERY>
+      --color <COLOR>    Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>    Read/write an alternate configuration file
+  -h, --help             Print help
+```
+
+### xflow history clear
+
+```text
+Usage: xflow history clear [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+      --yes
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow config
+
+Inspect or edit validated, comment-preserving TOML configuration
+
+```text
+Inspect or edit validated, comment-preserving TOML configuration
+
+Usage: xflow config [OPTIONS] [COMMAND]
+
+Commands:
+  path
+  show
+  get
+  set
+  unset
+  edit
+  validate
+  reset
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow config path
+
+```text
+Usage: xflow config path [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow config show
+
+```text
+Usage: xflow config show [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow config get
+
+```text
+Usage: xflow config get [OPTIONS] <KEY>
+
+Arguments:
+  <KEY>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow config set
+
+```text
+Usage: xflow config set [OPTIONS] <KEY> <VALUE>
+
+Arguments:
+  <KEY>
+  <VALUE>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow config unset
+
+```text
+Usage: xflow config unset [OPTIONS] <KEY>
+
+Arguments:
+  <KEY>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow config edit
+
+```text
+Usage: xflow config edit [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow config validate
+
+```text
+Usage: xflow config validate [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow config reset
+
+```text
+Usage: xflow config reset [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+      --yes
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow providers
+
+List providers, inspect capabilities and select a default
+
+```text
+List providers, inspect capabilities and select a default
+
+Usage: xflow providers [OPTIONS] [COMMAND]
+
+Commands:
+  list
+  info
+  test
+  use
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow providers list
+
+```text
+Usage: xflow providers list [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow providers info
+
+```text
+Usage: xflow providers info [OPTIONS] <PROVIDER>
+
+Arguments:
+  <PROVIDER>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow providers test
+
+```text
+Usage: xflow providers test [OPTIONS] [PROVIDER]
+
+Arguments:
+  [PROVIDER]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow providers use
+
+```text
+Usage: xflow providers use [OPTIONS] <PROVIDER>
+
+Arguments:
+  <PROVIDER>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+      --model <MODEL>
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow models
+
+List a provider's models, marking the selected and default model
+
+```text
+List a provider's models, marking the selected and default model
+
+Usage: xflow models [OPTIONS] [PROVIDER]
+
+Arguments:
+  [PROVIDER]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow key
+
+Manage provider credentials in OS credential storage; a custom cleanup endpoint uses the `cleanup` entry
+
+```text
+Manage provider credentials in OS credential storage; a custom cleanup endpoint uses the `cleanup` entry
+
+Usage: xflow key [OPTIONS] [PROVIDER] [COMMAND]
+
+Commands:
+  set
+  remove
+  status
+  help    Print this message or the help of the given subcommand(s)
+
+Arguments:
+  [PROVIDER]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+      --stdin
+  -h, --help           Print help
+```
+
+### xflow key set
+
+```text
+Usage: xflow key set [OPTIONS] <PROVIDER>
+
+Arguments:
+  <PROVIDER>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+      --stdin
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow key remove
+
+```text
+Usage: xflow key remove [OPTIONS] <PROVIDER>
+
+Arguments:
+  <PROVIDER>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow key status
+
+```text
+Usage: xflow key status [OPTIONS] [PROVIDER]
+
+Arguments:
+  [PROVIDER]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow dictionary
+
+Manage vocabulary and text replacements
+
+```text
+Manage vocabulary and text replacements
+
+Usage: xflow dictionary [OPTIONS] [COMMAND]
+
+Commands:
+  list
+  add
+  remove
+  replace
+  unreplace
+  import
+  export
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow dictionary list
+
+```text
+Usage: xflow dictionary list [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow dictionary add
+
+```text
+Usage: xflow dictionary add [OPTIONS] <WORDS>...
+
+Arguments:
+  <WORDS>...
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow dictionary remove
+
+```text
+Usage: xflow dictionary remove [OPTIONS] <WORDS>...
+
+Arguments:
+  <WORDS>...
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow dictionary replace
+
+```text
+Usage: xflow dictionary replace [OPTIONS] <FROM> <TO>
+
+Arguments:
+  <FROM>
+  <TO>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow dictionary unreplace
+
+```text
+Usage: xflow dictionary unreplace [OPTIONS] <FROM>
+
+Arguments:
+  <FROM>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow dictionary import
+
+```text
+Usage: xflow dictionary import [OPTIONS] <FILE>
+
+Arguments:
+  <FILE>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow dictionary export
+
+```text
+Usage: xflow dictionary export [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow snippets
+
+Manage spoken shortcuts that expand to saved text
+
+```text
+Manage spoken shortcuts that expand to saved text
+
+Usage: xflow snippets [OPTIONS] [COMMAND]
+
+Commands:
+  list
+  add
+  remove
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow snippets list
+
+```text
+Usage: xflow snippets list [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow snippets add
+
+```text
+Usage: xflow snippets add [OPTIONS] <TRIGGER> <TEXT>
+
+Arguments:
+  <TRIGGER>
+  <TEXT>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow snippets remove
+
+```text
+Usage: xflow snippets remove [OPTIONS] <TRIGGER>
+
+Arguments:
+  <TRIGGER>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow styles
+
+Manage cleanup styles selected by focused application
+
+```text
+Manage cleanup styles selected by focused application
+
+Usage: xflow styles [OPTIONS] [COMMAND]
+
+Commands:
+  list
+  add
+  remove
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow styles list
+
+```text
+Usage: xflow styles list [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow styles add
+
+```text
+Usage: xflow styles add [OPTIONS] --apps <APPS> <NAME>
+
+Arguments:
+  <NAME>
+
+Options:
+      --apps <APPS>
+      --json             Emit machine-readable JSON (watch emits one object per event)
+      --mode <MODE>      [possible values: raw, light, polished, custom]
+  -q, --quiet            Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>    Control colour in human output [default: auto] [possible values: auto, always, never]
+      --prompt <PROMPT>
+      --config <PATH>    Read/write an alternate configuration file
+  -h, --help             Print help
+```
+
+### xflow styles remove
+
+```text
+Usage: xflow styles remove [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow overlay
+
+Inspect and change native overlay settings
+
+```text
+Inspect and change native overlay settings
+
+Usage: xflow overlay [OPTIONS] [COMMAND]
+
+Commands:
+  list
+  get
+  set
+  reset
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow overlay list
+
+```text
+Usage: xflow overlay list [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow overlay get
+
+```text
+Usage: xflow overlay get [OPTIONS] <KEY>
+
+Arguments:
+  <KEY>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow overlay set
+
+```text
+Usage: xflow overlay set [OPTIONS] <KEY> <VALUE>
+
+Arguments:
+  <KEY>
+  <VALUE>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow overlay reset
+
+```text
+Usage: xflow overlay reset [OPTIONS] [KEY]
+
+Arguments:
+  [KEY]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow devices
+
+List available microphone input devices
+
+```text
+List available microphone input devices
+
+Usage: xflow devices [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow stats
+
+Show local dictation statistics
+
+```text
+Show local dictation statistics
+
+Usage: xflow stats [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow doctor
+
+Diagnose configuration and desktop dependencies without recording
+
+```text
+Diagnose configuration and desktop dependencies without recording
+
+Usage: xflow doctor [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow daemon
+
+Control the systemd/launchd user daemon or view its logs
+
+```text
+Control the systemd/launchd user daemon or view its logs
+
+Usage: xflow daemon [OPTIONS] <COMMAND>
+
+Commands:
+  start
+  stop
+  restart
+  status
+  logs
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow daemon start
+
+```text
+Usage: xflow daemon start [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow daemon stop
+
+```text
+Usage: xflow daemon stop [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow daemon restart
+
+```text
+Usage: xflow daemon restart [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow daemon status
+
+```text
+Usage: xflow daemon status [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow daemon logs
+
+```text
+Usage: xflow daemon logs [OPTIONS]
+
+Options:
+  -f, --follow
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -n, --lines <LINES>  [default: 50]
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow service
+
+Install or uninstall the graphical-session user service
+
+```text
+Install or uninstall the graphical-session user service
+
+Usage: xflow service [OPTIONS] <COMMAND>
+
+Commands:
+  install
+  uninstall
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow service install
+
+```text
+Usage: xflow service install [OPTIONS]
+
+Options:
+      --enable
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow service uninstall
+
+```text
+Usage: xflow service uninstall [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow extension
+
+Install or manage the bundled GNOME Shell extension
+
+```text
+Install or manage the bundled GNOME Shell extension
+
+Usage: xflow extension [OPTIONS] <COMMAND>
+
+Commands:
+  install
+  uninstall
+  enable
+  disable
+  status
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow extension install
+
+```text
+Usage: xflow extension install [OPTIONS]
+
+Options:
+      --enable
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow extension uninstall
+
+```text
+Usage: xflow extension uninstall [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow extension enable
+
+```text
+Usage: xflow extension enable [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow extension disable
+
+```text
+Usage: xflow extension disable [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow extension status
+
+```text
+Usage: xflow extension status [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow completions
+
+Generate shell completion scripts
+
+```text
+Generate shell completion scripts
+
+Usage: xflow completions [OPTIONS] <SHELL>
+
+Arguments:
+  <SHELL>  [possible values: bash, elvish, fish, powershell, zsh]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow version
+
+Show CLI and, when available, daemon versions
+
+```text
+Show CLI and, when available, daemon versions
+
+Usage: xflow version [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow tui
+
+Open the terminal control centre (also plain `xflow` in a terminal)
+
+```text
+Open the terminal control centre (also plain `xflow` in a terminal)
+
+Usage: xflow tui [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```

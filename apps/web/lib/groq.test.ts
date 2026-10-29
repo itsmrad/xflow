@@ -164,10 +164,19 @@ describe("cleanup request", () => {
     expect(cleanupRequest({ ...withText(30), max_completion_tokens: 4000 }).maxCompletionTokens).toBe(MIN_COMPLETION_TOKENS);
   });
 
+  // research-hosted #2: the CLI sends max_completion_tokens 8192 (xflow-providers); it must be clamped, not a 400.
+  test("an over-limit output request is clamped to the cap, never refused", () => {
+    const long = { ...rust, messages: [rust.messages[0]!, { role: "user", content: "x".repeat(60_000) }], max_completion_tokens: 8192 };
+    expect(cleanupRequest(long).maxCompletionTokens).toBe(MAX_COMPLETION_TOKENS);
+    expect(cleanupRequest(long).body.max_completion_tokens).toBe(MAX_COMPLETION_TOKENS);
+    expect(cleanupRequest({ ...rust, max_completion_tokens: 8192 }).maxCompletionTokens).toBe(MIN_COMPLETION_TOKENS);
+    for (const bad of [0, -1, 1.5, "8192", null]) expect(() => cleanupRequest({ ...rust, max_completion_tokens: bad })).toThrow(BadRequest);
+  });
+
   // Review M2: a 310 KB prompt with max_completion_tokens 32768 on a 70B model was forwarded.
   test("bounds cost per request: models, text size, output tokens", () => {
     expect(() => cleanupRequest({ ...rust, model: "llama-3.3-70b-versatile" })).toThrow(BadRequest);
-    expect(() => cleanupRequest({ ...rust, max_completion_tokens: 32768 })).toThrow(BadRequest);
+    expect(cleanupRequest({ ...rust, max_completion_tokens: 32768 }).body.max_completion_tokens).toBe(MIN_COMPLETION_TOKENS);
     expect(cleanupRequest({ ...rust, max_completion_tokens: 256 }).body.max_completion_tokens).toBe(256);
     const big = { ...rust, messages: [rust.messages[0]!, { role: "user", content: "x".repeat(70_000) }] };
     const err = (() => {

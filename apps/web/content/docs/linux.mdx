@@ -1,0 +1,96 @@
+---
+title: Linux
+description: GNOME setup, shortcuts, the pill, and what works on other desktops.
+---
+
+<Callout type="warn" title="Beta">
+Linux support targets Ubuntu GNOME. Syntax, schemas and runtime states were checked in a headless GNOME 50.1 session; physical shortcuts and delivery into real apps still need acceptance on your machine.
+</Callout>
+
+On Linux, xflow records with ALSA (through PipeWire or PulseAudio) and uses a bundled GNOME Shell extension for the global shortcut, the recording pill and focused-window identity. The daemon doesn't depend on GTK, Electron, a WebView or a local model runtime.
+
+## Install
+
+```sh
+sudo apt install build-essential pkg-config libasound2-dev libdbus-1-dev wl-clipboard
+cargo build --manifest-path apps/cli/Cargo.toml --release --locked
+scripts/install.sh
+xflow setup
+```
+
+## The GNOME extension
+
+```sh
+xflow extension install
+```
+
+On Wayland, log out and back in so GNOME discovers the new extension, then:
+
+```sh
+xflow extension enable
+xflow extension status
+```
+
+The extension talks to the daemon over the session bus. If the daemon isn't running it shows “xflow daemon not running — run: xflow daemon start”. Its metadata targets GNOME 45–50. After updating it, log out and back in to reload cached modules.
+
+Run the daemon as a systemd user service so it starts with your session:
+
+```sh
+xflow service install --enable
+```
+
+A variable exported in your shell isn't visible to the service. Store provider keys with `xflow key set` instead.
+
+## Shortcuts
+
+| Action | Default |
+| --- | --- |
+| Dictate | <Kbd>Super</Kbd>+<Kbd>Alt</Kbd>+<Kbd>Space</Kbd> |
+| Voice command | <Kbd>Super</Kbd>+<Kbd>Alt</Kbd>+<Kbd>R</Kbd> |
+| Cancel | <Kbd>Esc</Kbd> while listening or processing; <Kbd>Super</Kbd>+<Kbd>Alt</Kbd>+<Kbd>Esc</Kbd> |
+| Copy / paste last | <Kbd>Super</Kbd>+<Kbd>Alt</Kbd>+<Kbd>C</Kbd> / <Kbd>Super</Kbd>+<Kbd>Alt</Kbd>+<Kbd>V</Kbd> |
+
+Change them in the extension's preferences. The shortcut mode decides the gestures:
+
+| Mode | Behaviour |
+| --- | --- |
+| `smart` | Hold to talk, double-tap for hands-free, third press cancels — the same gestures as macOS |
+| `hold` | Always push-to-talk |
+| `toggle` | Tap to start, tap to stop |
+
+```sh
+xflow overlay set hotkey-mode smart
+xflow overlay set ptt-threshold-ms 500
+xflow overlay set double-tap-ms 500
+```
+
+## The pill
+
+GNOME draws its own pill inside the Shell: an off-white capsule with dark bars by default. Listening shows a waveform, processing contracts to shimmer dots, success shows a check and errors show a short message. It is hidden while idle, and follows the desktop's animation setting.
+
+Appearance lives in the extension's preferences: theme (light, dark, auto), position, monitor, scale, opacity, waveform style and more.
+
+## Delivery
+
+The extension pastes natively and checks that the window you dictated into is still focused. If focus changed or is unknown, the text is copied instead and `xflow last` keeps it. Multi-line text is never pasted into a terminal. The screen lock refuses delivery.
+
+Without the extension, xflow falls back to `wl-copy` and, if a ydotool daemon socket exists, `ydotool` for the paste key. xflow never starts a privileged daemon or changes device permissions — follow your distribution's ydotool instructions.
+
+## Other desktops
+
+| Session | Clipboard | Automatic paste | Shortcuts and pill |
+| --- | --- | --- | --- |
+| Ubuntu GNOME Wayland | Native; `wl-copy` fallback | Native; guarded `ydotool` fallback | Bundled extension |
+| Fedora GNOME Wayland | Native; `wl-copy` fallback | Same; fallback needs uinput setup | Same extension; validation pending |
+| GNOME X11 | Native; `xclip` fallback | Native; guarded `xdotool` fallback | Bundled extension |
+| Other X11 desktops | `xclip` | `xdotool`, original-window guard | Bind CLI commands yourself; no pill yet |
+| wlroots (Sway, …) | `wl-copy` | Clipboard only | Bind CLI commands yourself; no pill yet |
+| KDE Plasma Wayland | `wl-copy` | Clipboard only | Bind CLI commands yourself; no pill yet |
+
+Elsewhere, bind `xflow start` and `xflow stop` to press and release, or `xflow toggle` to a single key, in your compositor's settings.
+
+## Ignore sound from the speakers
+
+The PipeWire or PulseAudio echo-cancel module removes music and calls playing on the computer from your dictation. Make its source your default input; with `recording.ignore_speakers` on, `xflow doctor` shows how.
+
+Run `xflow doctor` to see which of these helpers are installed.

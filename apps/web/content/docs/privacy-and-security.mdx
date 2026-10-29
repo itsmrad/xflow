@@ -1,0 +1,55 @@
+---
+title: Privacy and security
+description: What leaves your machine, what is stored, and what xflow refuses to do.
+---
+
+xflow is open source under the MIT license. Everything below can be checked in the code.
+
+## What leaves your machine
+
+- **Audio goes only to the speech provider you chose** — or nowhere, with a [local server and offline mode](/docs/providers/local-and-offline).
+- **Text goes to your cleanup provider** only if you turned cleanup on. With `cleanup.app_context` (the default), it also gets the focused app's id. Never window contents.
+- **No telemetry.** The daemon makes no network calls except to your providers.
+
+## What is stored
+
+| What | Where | Notes |
+| --- | --- | --- |
+| Audio | Memory only | Dropped after transcription. Never saved or logged by default. |
+| History | `~/.local/share/xflow/history.db` | **Plaintext** SQLite in a private directory. Off with `privacy.history = false`. |
+| Config | `~/.config/xflow/config.toml` | Saved atomically with mode 0600. Never holds keys. |
+| Provider keys | `~/.config/xflow/credentials`, encrypted with `~/.local/share/xflow/keystore.key` | Both files 0600. Or environment variables. Key commands never print them. |
+| Logs | `~/Library/Logs/xflowd.log` on macOS | Secrets, audio, transcripts and selected text are never logged. |
+
+The keystore guards against casual disclosure: `cat`, screen sharing, a copied or synced `~/.config`. It doesn't protect against malware running as you, or a full backup that holds both files.
+
+## Offline mode
+
+`privacy.offline = true` refuses every non-loopback endpoint, for transcription and cleanup alike. The guard covers xflow's own requests, not what a local server does.
+
+## Where xflow won't type
+
+- **Password fields** refuse dictation (macOS).
+- **Terminals** never get multi-line text pasted automatically, so a dictated newline can't run a command. It stays on the clipboard.
+- If the app or window changed since you started, or the field isn't editable, the text is **copied** instead of pasted.
+
+## Reading your screen
+
+- **Command mode** reads the selected text, only when you start a command.
+- **Learning from corrections** reads the field xflow just pasted into, twice, only while focus is still on it, and keeps just the pasted text and 16 characters either side in memory. It skips secure fields and terminals. Turn it off with `dictionary.auto_learn = false`.
+
+## The microphone
+
+The microphone opens when a recording starts and closes when it ends, unless you set `recording.keep_warm_secs`. Recordings are capped at 20 minutes by default (`recording.max_seconds`).
+
+## The clipboard
+
+Pasting goes through the clipboard, so a clipboard manager can see dictated text. xflow puts your previous clipboard text back afterwards (`injection.restore_clipboard`), but only if the clipboard still holds what it pasted. Other clipboard formats aren't restored.
+
+## Pro
+
+Pro (coming soon) sends your audio to xflow's server instead of your own provider. The server relays it to a speech provider and stores neither the audio nor the transcript, only a usage record. Details: [Privacy policy](/privacy).
+
+## Reporting a vulnerability
+
+Please don't open a public issue. See [Security](/security) for how to report it privately.

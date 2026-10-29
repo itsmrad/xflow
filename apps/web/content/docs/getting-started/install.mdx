@@ -1,0 +1,92 @@
+---
+title: Install
+description: Build xflow from source on macOS or Linux, or package it as a macOS installer.
+---
+
+xflow is two binaries: `xflow` (the CLI and TUI) and `xflowd` (the daemon). Install them next to each other — the daemon finds helpers such as the recording pill through the `xflow` beside it.
+
+<Callout type="note">
+There is no published release yet. Until there is, build from source. The steps below are the same ones the repository README uses.
+</Callout>
+
+## Requirements
+
+- **Rust 1.88** or newer. The locked dependency set declares 1.88 as its minimum.
+- **macOS:** Xcode Command Line Tools.
+- **Linux:** a C toolchain and the ALSA and D-Bus development headers (below).
+
+## macOS
+
+```sh
+git clone https://github.com/itsmrad/xflow.git
+cd xflow
+cargo build --manifest-path apps/cli/Cargo.toml --release --locked
+scripts/install.sh
+```
+
+`scripts/install.sh` copies `xflow` and `xflowd` into `~/.local/bin` atomically and prints the next step. Pass `--prefix PATH` or `--bin-dir PATH` to change where they go. Add `~/.local/bin` to your `PATH` if it isn't already.
+
+Then open a terminal and run:
+
+```sh
+xflow
+```
+
+On a first run that is the [guided setup](/docs/getting-started/setup). It also installs and starts the background service.
+
+### Build a macOS installer package
+
+`scripts/package-macos-pkg.sh` builds release binaries and writes `dist/xflow-<version>.pkg`.
+
+```sh
+scripts/package-macos-pkg.sh
+```
+
+- The package installs `xflow` and `xflowd` into `/usr/local/bin`, signed as `com.xflow.xflow` and `com.xflow.xflowd`.
+- It signs with a code-signing certificate named `xflow-dev`. Set `SIGN=<identity>` to use another; without one it warns and signs ad hoc.
+- Pass a directory holding prebuilt `xflow`/`xflowd` to skip the build. `OUT=<dir>` changes the output directory.
+- Its postinstall moves older `~/.local/bin` copies to `~/.local/share/xflow-backup/`, then installs and starts the LaunchAgent for the logged-in user.
+
+The installer opens no window. Its last page says “Open Terminal and type: xflow”, which runs setup and ends with a “hold Fn and say something” test.
+
+<Callout type="warn" title="Why signing matters">
+macOS ties permission grants to the code signature. An ad-hoc build is identified by its hash, so every rebuild leaves a stale, switched-on `xflowd` row in System Settings. A certificate keeps grants stable across builds. See [Permissions](/docs/troubleshooting/permissions).
+</Callout>
+
+## Linux (beta)
+
+Ubuntu:
+
+```sh
+sudo apt install build-essential pkg-config libasound2-dev libdbus-1-dev wl-clipboard
+cargo build --manifest-path apps/cli/Cargo.toml --release --locked
+scripts/install.sh
+xflow setup
+```
+
+Fedora (build recipe; desktop validation is still pending):
+
+```sh
+sudo dnf install gcc gcc-c++ pkgconf-pkg-config alsa-lib-devel dbus-devel wl-clipboard
+```
+
+GNOME on Wayland needs the bundled Shell extension for the shortcut, focus detection and the pill. Run `xflow extension install`, then log out and back in. See [Linux](/docs/linux) for the full setup.
+
+## Run the daemon as a service
+
+On macOS, setup and the installer package handle this. To do it yourself:
+
+```sh
+xflow service install --enable   # LaunchAgent on macOS, systemd user unit on Linux
+xflow daemon status
+xflow daemon logs --follow
+```
+
+On macOS the LaunchAgent is `~/Library/LaunchAgents/com.xflow.daemon.plist` and logs go to `~/Library/Logs/xflowd.log`. `xflow service uninstall` removes the service and keeps the logs.
+
+## Check the install
+
+```sh
+xflow version   # CLI and, when running, daemon versions
+xflow doctor    # configuration and desktop dependencies; never records
+```

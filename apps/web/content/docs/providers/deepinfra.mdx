@@ -1,0 +1,35 @@
+---
+title: DeepInfra
+description: Use DeepInfra for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [DeepInfra console](https://deepinfra.com/dash/api_keys), then store it:
+
+```sh
+xflow key set deepinfra        # hidden input
+xflow providers use deepinfra
+xflow providers test deepinfra # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `DEEPINFRA_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "deepinfra"
+model = "openai/whisper-large-v3-turbo"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `openai/whisper-large-v3-turbo` (default) | Whisper Large v3 Turbo | Fast OpenAI-compatible transcription |
+| `openai/whisper-large-v3` | Whisper Large v3 | Higher accuracy |
+
+Your dictionary words are sent as recognition hints with every recording.
+
+Provider documentation: [docs.deepinfra.com/apis/speech](https://docs.deepinfra.com/apis/speech)

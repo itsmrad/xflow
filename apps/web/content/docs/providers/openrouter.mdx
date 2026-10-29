@@ -1,0 +1,36 @@
+---
+title: OpenRouter
+description: Use OpenRouter for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [OpenRouter console](https://openrouter.ai/settings/keys), then store it:
+
+```sh
+xflow key set openrouter        # hidden input
+xflow providers use openrouter
+xflow providers test openrouter # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `OPENROUTER_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "openrouter"
+model = "openai/whisper-large-v3"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `openai/whisper-large-v3` (default) | Whisper Large v3 | Multilingual routed transcription |
+| `openai/whisper-large-v3-turbo` | Whisper Large v3 Turbo | Fast routed transcription |
+| `openai/gpt-transcribe` | GPT Transcribe | Current OpenAI transcription |
+
+OpenRouter takes no vocabulary hints, so dictionary words only apply through replacements after transcription.
+
+Provider documentation: [openrouter.ai/docs/api/api-reference/stt/create-transcription](https://openrouter.ai/docs/api/api-reference/stt/create-transcription)

@@ -1,0 +1,35 @@
+---
+title: Deepgram
+description: Use Deepgram for speech-to-text with your own key.
+---
+
+Generated from `xflow providers list --json`. Do not edit by hand.
+
+## Set it up
+
+Create a key in the [Deepgram console](https://console.deepgram.com/), then store it:
+
+```sh
+xflow key set deepgram        # hidden input
+xflow providers use deepgram
+xflow providers test deepgram # checks the key; uploads no audio
+```
+
+Without a stored key, xflow reads `DEEPGRAM_API_KEY` from the daemon's environment.
+
+```toml title="config.toml"
+[stt]
+provider = "deepgram"
+model = "nova-3"   # the default; omit to follow it
+```
+
+## Models
+
+| Model | Name | Note |
+| --- | --- | --- |
+| `nova-3` (default) | Nova 3 | Multilingual batch transcription |
+| `nova-2` | Nova 2 | Legacy batch model; keyword hints |
+
+Your dictionary words are sent as recognition hints with every recording.
+
+Provider documentation: [developers.deepgram.com/docs/pre-recorded-audio](https://developers.deepgram.com/docs/pre-recorded-audio)

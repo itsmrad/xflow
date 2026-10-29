@@ -1,6 +1,274 @@
 @import "tailwindcss";
 
-@theme {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Tokens: docs/web/DESIGN.md §5. Contrast pairs are checked there; add new pairs to that table first. */
+:root {
+  color-scheme: light;
+  --bg: #FAFAF9; --bg-raised: #FFFFFF; --bg-sunken: #F3F3F1;
+  --fg: #111110; --fg-muted: #5C5C57; --fg-subtle: #6F6F6A;
+  --line: #E4E4E0; --line-strong: #C9C9C4; --line-input: #8C8C86;
+  --volt: #C6F135; --volt-ink: #0A0A0A; --volt-text: #3F6212; --volt-soft: #C6F13529;
+  --focus: #4D7C0F; --rec: #C62A2F; --ok: #2B7A3D; --warn: #8A5A00;
+  --syn-fg: #111110; --syn-muted: #6F6F6A; --syn-keyword: #6B3FD4; --syn-string: #3F6212;
+  --syn-number: #9A4A00; --syn-key: #1F5FBF; --syn-punct: #6F6F6A;
+  --frame: 1200px; --gutter: 16px; --nav-h: 64px;
+  --section-y: clamp(64px, 8vw, 112px);
+  --cell-p: 20px;
+  --ink-a4: color-mix(in oklab, var(--fg) 4%, transparent);
+  --ink-a8: color-mix(in oklab, var(--fg) 8%, transparent);
+  --ink-a12: color-mix(in oklab, var(--fg) 12%, transparent);
+  --ink-a16: color-mix(in oklab, var(--fg) 16%, transparent);
+  --elev-1: 0 1px 0 var(--ink-a4), 0 1px 2px var(--ink-a8);
+  --elev-2: 0 12px 32px -12px var(--ink-a16), 0 1px 2px var(--ink-a8);
+  --highlight: linear-gradient(transparent 58%, var(--volt-soft) 58%);
+  --dur-1: 120ms; --dur-2: 200ms; --dur-3: 320ms;
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  /* Shiki css-variables theme → syntax tokens */
+  --shiki-foreground: var(--syn-fg); --shiki-background: transparent;
+  --shiki-token-constant: var(--syn-number); --shiki-token-string: var(--syn-string);
+  --shiki-token-string-expression: var(--syn-string); --shiki-token-comment: var(--syn-muted);
+  --shiki-token-keyword: var(--syn-keyword); --shiki-token-parameter: var(--syn-key);
+  --shiki-token-function: var(--syn-keyword); --shiki-token-punctuation: var(--syn-punct);
+  --shiki-token-link: var(--syn-key);
 }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0A0A0A; --bg-raised: #141414; --bg-sunken: #070707;
+  --fg: #EDEDEC; --fg-muted: #A1A19B; --fg-subtle: #85857F;
+  --line: #262625; --line-strong: #3A3A38; --line-input: #6A6A66;
+  --volt-text: #C6F135; --volt-soft: #C6F1351F;
+  --focus: #C6F135; --rec: #FF6369; --ok: #5BD47A; --warn: #F0C550;
+  --syn-fg: #EDEDEC; --syn-muted: #85857F; --syn-keyword: #B49CFF; --syn-string: #C6F135;
+  --syn-number: #FFB86B; --syn-key: #8DB8FF; --syn-punct: #85857F;
+  /* §5.5: shadows don't read on #0A0A0A, objects get an outline instead */
+  --elev-1: 0 0 0 1px var(--line-strong);
+  --elev-2: 0 0 0 1px var(--line-strong), 0 16px 40px -12px #000;
+  --highlight: linear-gradient(transparent 58%, color-mix(in oklab, var(--volt) 22%, transparent) 58%);
+}
+@media (min-width: 768px) { :root { --cell-p: 24px; } }
+@media (min-width: 1024px) { :root { --cell-p: 32px; } }
+@media (max-width: 640px) { :root { --gutter: 12px; } }
+
+@theme inline {
+  --color-bg: var(--bg); --color-bg-raised: var(--bg-raised); --color-bg-sunken: var(--bg-sunken);
+  --color-fg: var(--fg); --color-fg-muted: var(--fg-muted); --color-fg-subtle: var(--fg-subtle);
+  --color-line: var(--line); --color-line-strong: var(--line-strong); --color-line-input: var(--line-input);
+  --color-volt: var(--volt); --color-volt-ink: var(--volt-ink); --color-volt-text: var(--volt-text);
+  --color-volt-soft: var(--volt-soft); --color-focus: var(--focus); --color-rec: var(--rec);
+  --color-ok: var(--ok); --color-warn: var(--warn);
+  --color-ink-a4: var(--ink-a4); --color-ink-a8: var(--ink-a8);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius-xs: 4px; --radius-sm: 6px; --radius-md: 10px;
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --shadow-1: var(--elev-1); --shadow-2: var(--elev-2);
+  --color-syn-fg: var(--syn-fg); --color-syn-muted: var(--syn-muted); --color-syn-keyword: var(--syn-keyword);
+  --color-syn-string: var(--syn-string); --color-syn-number: var(--syn-number); --color-syn-key: var(--syn-key);
+}
+
+/* Type roles (§5.2). Only these sizes exist. */
+@utility t-display { font-size: clamp(44px, 6.2vw, 76px); line-height: 1; font-weight: 560; letter-spacing: -0.035em; text-wrap: balance; }
+@utility t-h1 { font-size: clamp(36px, 4.6vw, 56px); line-height: 1.05; font-weight: 560; letter-spacing: -0.03em; text-wrap: balance; }
+@utility t-h2 { font-size: clamp(28px, 3.4vw, 40px); line-height: 1.1; font-weight: 540; letter-spacing: -0.025em; text-wrap: balance; }
+@utility t-h3 { font-size: 20px; line-height: 28px; font-weight: 520; letter-spacing: -0.01em; }
+@utility t-h4 { font-size: 16px; line-height: 24px; font-weight: 520; }
+@utility t-lede { font-size: 17px; line-height: 26px; letter-spacing: -0.005em; text-wrap: pretty; @media (min-width: 768px) { font-size: 18px; line-height: 28px; } }
+@utility t-body { font-size: 16px; line-height: 26px; text-wrap: pretty; }
+@utility t-body-sm { font-size: 14px; line-height: 22px; text-wrap: pretty; }
+@utility t-label { font-size: 14px; line-height: 20px; font-weight: 450; }
+@utility t-caption { font-size: 13px; line-height: 20px; }
+@utility t-mono { font-family: var(--font-mono); font-size: 14px; line-height: 22px; }
+@utility t-mono-sm { font-family: var(--font-mono); font-size: 13px; line-height: 20px; font-variant-numeric: tabular-nums; }
+@utility t-mono-label { font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
+@utility t-stat { font-family: var(--font-mono); font-size: clamp(32px, 4vw, 48px); line-height: 1; font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+
+html { background: var(--bg); color: var(--fg); scroll-padding-top: calc(var(--nav-h) + 16px); }
+body { overflow-x: clip; font-family: var(--font-sans); -webkit-font-smoothing: antialiased; background: var(--bg); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-xs); }
+::selection { background: var(--volt); color: var(--volt-ink); }
+abbr[title] { text-decoration: none; cursor: help; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+.skip-link { position: absolute; left: 12px; top: -64px; z-index: 70; }
+.skip-link:focus { top: 12px; }
+
+/* ---------- Frame (§4.1) ---------- */
+.frame { width: min(var(--frame), calc(100% - 2 * var(--gutter))); margin-inline: auto; border-inline: 1px solid var(--line); }
+/* A full-bleed rule at a section boundary, with + crossings where it meets the rails. */
+.rule { position: relative; border-top: 1px solid var(--line); }
+.rule::before { content: ""; position: absolute; top: -1px; height: 1px; inset-inline: calc(50% - 50vw); background: var(--line); pointer-events: none; }
+.rule > .x { position: absolute; top: -5px; width: 9px; height: 9px; pointer-events: none; z-index: 1;
+  background: linear-gradient(var(--line-strong), var(--line-strong)) center / 9px 1px no-repeat,
+              linear-gradient(var(--line-strong), var(--line-strong)) center / 1px 9px no-repeat; }
+.rule > .x-l { left: -5px; }
+.rule > .x-r { right: -5px; }
+.rule > .spark { position: absolute; top: -8px; width: 16px; height: 16px; color: var(--volt); z-index: 1; }
+.rule > .spark-l { left: -8px; }
+.rule > .spark-r { right: -8px; }
+
+.label-row { height: 48px; display: flex; align-items: center; padding-inline: var(--cell-p); }
+/* Grid items default to min-width: auto and grow to their widest <pre>; 0 lets code blocks scroll instead. */
+.cell, .cells > *, .grid > * { min-width: 0; }
+.cell { padding: var(--cell-p); }
+.section-y { padding-block: var(--section-y); }
+
+/* Dashed inner dividers between cells: 4px dash / 4px gap, pixel exact (§4.1). Stacked cells get a
+   horizontal dash; side-by-side cells a vertical one. Layout columns are set per breakpoint below. */
+:root {
+  --dash-h: linear-gradient(to right, var(--line-strong) 50%, transparent 0);
+  --dash-v: linear-gradient(to bottom, var(--line-strong) 50%, transparent 0);
+}
+.dash-t { background: var(--dash-h) top left / 8px 1px repeat-x; }
+.cells { display: grid; }
+.cells > * { background-image: var(--dt, none), var(--dl, none); background-size: 8px 1px, 1px 8px; background-repeat: repeat-x, repeat-y; background-position: top left, top left; }
+.cells > * + * { --dt: var(--dash-h); }
+/* Stats and provider tiles are 2-up even on phones. */
+.cells-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cells-4 > * { --dt: initial; --dl: initial; }
+.cells-4 > :nth-child(n+3) { --dt: var(--dash-h); }
+.cells-4 > :nth-child(2n) { --dl: var(--dash-v); }
+@media (min-width: 768px) {
+  .cells-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cells-2 > * { --dt: initial; --dl: initial; }
+  .cells-2 > :nth-child(n+3) { --dt: var(--dash-h); }
+  .cells-2 > :nth-child(2n) { --dl: var(--dash-v); }
+}
+@media (min-width: 1024px) {
+  .cells-3, .cells-4 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cells-3 > *, .cells-4 > * { --dt: initial; --dl: initial; }
+  .cells-3 > :nth-child(n+4), .cells-4 > :nth-child(n+4) { --dt: var(--dash-h); }
+  .cells-3 > :not(:nth-child(3n+1)), .cells-4 > :not(:nth-child(3n+1)) { --dl: var(--dash-v); }
+}
+@media (min-width: 1280px) {
+  .cells-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .cells-4 > * { --dt: initial; --dl: initial; }
+  .cells-4 > :nth-child(n+5) { --dt: var(--dash-h); }
+  .cells-4 > :not(:nth-child(4n+1)) { --dl: var(--dash-v); }
+}
+
+/* Textures (§4.4), decorative only */
+.bg-cells { background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 96px 96px; background-position: center top;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 40%, transparent 100%); }
+.bg-dots { background: radial-gradient(color-mix(in oklab, var(--line-strong) 60%, transparent) 1px, transparent 1px) 0 0 / 16px 16px; }
+.bg-dots-faint { background: radial-gradient(color-mix(in oklab, var(--line-strong) 30%, transparent) 1px, transparent 1px) 0 0 / 16px 16px; }
+
+.art { mask-size: 100% 100%; mask-repeat: no-repeat; -webkit-mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; }
+
+/* Highlighter (§9.1 hero H1 line 2) */
+.hl { background: var(--highlight); box-decoration-break: clone; -webkit-box-decoration-break: clone; padding-inline: .06em; }
+
+/* Hairline that stretches a single link over its cell (§7.11) */
+.stretch::after { content: ""; position: absolute; inset: 0; }
+
+/* ---------- Motion (§5.6) ---------- */
+.cursor { display: inline-block; width: .5em; height: 1em; background: var(--volt); vertical-align: -0.12em; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+[data-loop]:not([data-playing]) *, [data-loop]:not([data-playing]) { animation-play-state: paused !important; }
+
+/* Pill (§7.9): OS overlay, dark in both themes */
+.pill { display: inline-flex; align-items: center; gap: 12px; height: 40px; padding: 0 16px; border-radius: 999px; background: #1F1F1F;
+  box-shadow: inset 0 0 0 1px #FFFFFF1A, 0 12px 32px -12px #0006; color: #EDEDEC; font-family: var(--font-mono); font-size: 13px; line-height: 20px; font-variant-numeric: tabular-nums; }
+.pill[data-state="hands-free"] { box-shadow: inset 0 0 0 1px #FFFFFF1A, 0 0 0 2px #C6F135; }
+.pill .bars { display: inline-flex; align-items: center; gap: 2px; height: 16px; }
+.pill .bars i { width: 3px; height: 16px; border-radius: 1px; background: #EDEDEC; transform: scaleY(.35); animation: bar 900ms steps(6) infinite alternate; }
+.pill .bars i:nth-child(1) { animation-delay: -100ms; } .pill .bars i:nth-child(2) { animation-delay: -500ms; }
+.pill .bars i:nth-child(3) { animation-delay: -250ms; } .pill .bars i:nth-child(4) { animation-delay: -700ms; }
+.pill .bars i:nth-child(5) { animation-delay: -50ms; }  .pill .bars i:nth-child(6) { animation-delay: -600ms; }
+.pill .bars i:nth-child(7) { animation-delay: -350ms; } .pill .bars i:nth-child(8) { animation-delay: -800ms; }
+.pill .bars i:nth-child(9) { animation-delay: -150ms; }
+@keyframes bar { from { transform: scaleY(.25); } to { transform: scaleY(1); } }
+.pill .dots { display: inline-flex; gap: 4px; }
+.pill .dots i { width: 4px; height: 4px; border-radius: 50%; background: #EDEDEC; animation: pulse 900ms var(--ease-in-out) infinite; }
+.pill .dots i:nth-child(2) { animation-delay: 150ms; } .pill .dots i:nth-child(3) { animation-delay: 300ms; }
+@keyframes pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .pill .bars i { animation: none; }
+  .pill .bars i:nth-child(odd) { transform: scaleY(.6); } .pill .bars i:nth-child(3n) { transform: scaleY(1); }
+  .cursor { animation: none; }
+}
+
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--rec); animation: pulse 1.2s var(--ease-in-out) infinite; }
+
+/* Hero loop: listening 2.5s → processing 1s → success 2s → idle 1s = 6.5s (§9.1). Static final frame under reduced motion. */
+.hero-loop { --loop: 6.5s; }
+/* xflow is batch STT: the whole transcript lands at once when processing finishes, so it is pasted, not typed. */
+.hero-loop .typed { clip-path: inset(0 100% 0 0); animation: paste var(--loop) steps(1, end) infinite; }
+@keyframes paste { 0%, 53% { clip-path: inset(0 100% 0 0); } 54%, 100% { clip-path: inset(0 0 0 0); } }
+.hero-loop .ph { opacity: 0; animation: var(--loop) infinite; }
+.hero-loop .ph-listen { animation-name: ph-listen; }
+.hero-loop .ph-proc { animation-name: ph-proc; }
+.hero-loop .ph-ok { animation-name: ph-ok; }
+@keyframes ph-listen { 0%, 37% { opacity: 1; } 38%, 100% { opacity: 0; } }
+@keyframes ph-proc { 0%, 37% { opacity: 0; } 38%, 53% { opacity: 1; } 54%, 100% { opacity: 0; } }
+@keyframes ph-ok { 0%, 53% { opacity: 0; } 54%, 84% { opacity: 1; } 85%, 100% { opacity: 0; } }
+.hero-loop .tl { opacity: 0; transform: translateY(4px); animation: var(--loop) var(--ease-out) infinite; }
+.hero-loop .tl-0 { opacity: 1; transform: none; animation: none; }
+.hero-loop .tl-1 { animation-name: tl-1; } .hero-loop .tl-2 { animation-name: tl-2; } .hero-loop .tl-3 { animation-name: tl-3; }
+@keyframes tl-1 { 0%, 2% { opacity: 0; transform: translateY(4px); } 5%, 95% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@keyframes tl-2 { 0%, 38% { opacity: 0; transform: translateY(4px); } 41%, 95% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@keyframes tl-3 { 0%, 54% { opacity: 0; transform: translateY(4px); } 57%, 95% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .hero-loop .typed { clip-path: none; animation: none; }
+  .hero-loop .ph, .hero-loop .tl { animation: none; opacity: 1; transform: none; }
+  .hero-loop .ph-listen, .hero-loop .ph-proc { display: none; }
+  .hero-loop .live { display: none; }
+}
+
+/* FAQ (§7.16) */
+details.faq > summary { list-style: none; cursor: pointer; }
+details.faq > summary::-webkit-details-marker { display: none; }
+details.faq .plus { transition: transform var(--dur-2) var(--ease-out); }
+details.faq[open] .plus { transform: rotate(45deg); }
+@supports (interpolate-size: allow-keywords) {
+  details.faq { interpolate-size: allow-keywords; }
+  details.faq::details-content { block-size: 0; overflow: clip; transition: block-size var(--dur-2) var(--ease-out), content-visibility var(--dur-2) allow-discrete; }
+  details.faq[open]::details-content { block-size: auto; }
+}
+
+/* Code (Shiki css-variables theme) */
+.code pre { overflow-x: auto; padding: 16px 20px; font-family: var(--font-mono); font-size: 14px; line-height: 22px; tab-size: 2; }
+.code pre code { display: grid; min-width: max-content; }
+.code .line { min-height: 22px; }
+.code .line.hl { background: var(--volt-soft); box-shadow: inset 2px 0 0 var(--volt); }
+.code.numbered code { counter-reset: ln; }
+.code.numbered .line::before { counter-increment: ln; content: counter(ln); display: inline-block; width: 2ch; margin-right: 16px; text-align: right; color: var(--syn-muted); user-select: none; }
+
+/* Prose (docs, changelog, legal) §7.21 */
+.prose { font-size: 16px; line-height: 26px; color: var(--fg-muted); max-width: 72ch; }
+.prose > * + * { margin-top: 16px; }
+.prose :where(h2) { color: var(--fg); font-size: 24px; line-height: 32px; font-weight: 540; letter-spacing: -0.02em; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--line); }
+.prose :where(h3) { color: var(--fg); font-size: 18px; line-height: 28px; font-weight: 520; margin-top: 32px; }
+.prose :where(h2, h3) + * { margin-top: 12px; }
+.prose :where(strong) { color: var(--fg); font-weight: 560; }
+.prose :where(a) { color: var(--fg); text-decoration: underline; text-decoration-color: var(--line-input); text-underline-offset: 3px; }
+.prose :where(a:hover) { text-decoration-color: var(--fg); }
+.prose :where(:not(pre) > code) { font-family: var(--font-mono); font-size: 13px; color: var(--fg); background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+.prose :where(ul) { list-style: none; padding-left: 0; }
+.prose :where(ul > li) { position: relative; padding-left: 20px; }
+.prose :where(ul > li)::before { content: "–"; position: absolute; left: 2px; color: var(--fg-subtle); font-family: var(--font-mono); }
+.prose :where(ol) { list-style: decimal-leading-zero; padding-left: 32px; }
+.prose :where(ol > li)::marker { color: var(--fg-subtle); font-family: var(--font-mono); font-size: 13px; }
+.prose :where(li + li) { margin-top: 6px; }
+.prose :where(.table-scroll) { overflow-x: auto; }
+.prose :where(table) { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 22px; }
+.prose :where(th) { text-align: left; font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-subtle); background: var(--bg-sunken); padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.prose :where(td) { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+/* Long paths and URLs wrap instead of widening the page on phones. */
+.prose :where(a, :not(pre) > code) { overflow-wrap: anywhere; }
+.prose :where(td code) { white-space: nowrap; }
+.prose :where(hr) { border: 0; border-top: 1px solid var(--line); margin-block: 32px; }
+.prose :where(blockquote) { border-left: 2px solid var(--line-strong); padding-left: 16px; }
+.prose :where(h2, h3) a { text-decoration: none; color: inherit; }
+.prose > figure.code, .prose > .not-prose { color: var(--fg); }
+
+/* Docs search (components/docs-search.tsx). In CSS rather than className strings: it ships on every docs page. */
+.search-button { @apply t-body-sm flex h-9 w-full items-center gap-2 rounded-sm border border-line bg-bg-raised px-3 text-fg-subtle hover:border-line-strong; }
+.search-button > span { @apply flex-1 text-left; }
+.search-button > kbd { @apply t-mono-sm hidden rounded-xs border border-line px-1.5 text-[12px] pointer-fine:inline; }
+.search-dialog { @apply mx-auto mt-[12vh] w-[min(640px,calc(100%-24px))] rounded-md border border-line bg-bg-raised p-0 text-fg shadow-2 backdrop:bg-[color-mix(in_oklab,var(--bg)_70%,transparent)] backdrop:backdrop-blur-sm; }

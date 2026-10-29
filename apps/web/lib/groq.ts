@@ -140,9 +140,9 @@ export function cleanupRequest(input: unknown): CleanupRequest {
   let maxCompletionTokens = Math.min(MAX_COMPLETION_TOKENS, Math.max(MIN_COMPLETION_TOKENS, 2 * userTokens));
   if (raw.max_completion_tokens !== undefined) {
     const n = raw.max_completion_tokens;
-    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > MAX_COMPLETION_TOKENS) {
-      throw new BadRequest(`max_completion_tokens must be 1–${MAX_COMPLETION_TOKENS}`);
-    }
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1) throw new BadRequest("max_completion_tokens must be a positive integer");
+    // A larger request is clamped, not refused: the CLI asks for 8192 (enough for its own provider
+    // presets) and the cap above already bounds what we reserve and pay.
     maxCompletionTokens = Math.min(n, maxCompletionTokens);
   }
   // Always sent, so the reservation charged up front is a true upper bound.

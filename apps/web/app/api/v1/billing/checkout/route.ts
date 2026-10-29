@@ -2,7 +2,7 @@ import { currentUser } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
-import { proProductIds, USER_ID_METADATA_KEY } from "@/lib/billing";
+import { proLaunched, proProductIds, USER_ID_METADATA_KEY } from "@/lib/billing";
 import { appUrl, error, json, sameOrigin, seeOther, wantsHtml } from "@/lib/http";
 import { dodo } from "@/lib/server/billing";
 import { ensureUser } from "@/lib/server/users";
@@ -10,6 +10,8 @@ import { userIsPro } from "@/lib/server/account";
 
 /** Starts a Dodo checkout for Pro ($5/month) for the signed-in user. */
 export async function POST(request: Request) {
+  // Until launch, refuse before touching Clerk or the database.
+  if (!proLaunched()) return error(503, "Pro is coming soon");
   if (!sameOrigin(request)) return error(403, "cross-origin request refused");
   const clerk = await currentUser();
   if (!clerk) return error(401, "sign in first");

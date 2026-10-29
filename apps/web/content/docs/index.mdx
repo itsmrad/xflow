@@ -1,0 +1,49 @@
+---
+title: Introduction
+description: What xflow is, and a 60-second tour.
+---
+
+xflow is voice dictation for developers. A small Rust daemon, `xflowd`, records while you hold a key, sends the audio to the speech provider you chose, cleans up the text and types it where your cursor is. There is no app window to switch to.
+
+It runs on macOS and on Linux (GNOME, beta). It has a full CLI and a terminal UI, keeps your history in a local file, and sends no telemetry.
+
+<Callout type="note">
+xflow 0.1.0 is a development build. Desktop delivery and provider quality still need real-world acceptance on your machine. Run `xflow doctor` if something looks off.
+</Callout>
+
+## The 60-second tour
+
+<Steps>
+<Step title="Hold Fn and talk">
+Hold <Kbd>Fn</Kbd> in any app — editor, terminal, browser, Slack. A small pill shows you are recording. Double-tap <Kbd>Fn</Kbd> to keep recording without holding the key.
+</Step>
+<Step title="Let go">
+xflow transcribes, removes filler words, applies your dictionary and pastes the text at your cursor. If the field can't take it, the text stays on your clipboard and `xflow last` prints it.
+</Step>
+<Step title="Script it">
+Everything the daemon does is a command. Pipe a dictation into another program, transcribe a file, or follow events as JSON.
+</Step>
+</Steps>
+
+```sh
+xflow listen --once --seconds 5   # print text, don't type it
+xflow transcribe interview.wav    # files work too
+xflow history search postgres --json
+xflow watch --json | jq .state    # live events
+```
+
+## How it fits together
+
+| Piece | What it does |
+| --- | --- |
+| `xflowd` | The background daemon. Owns the microphone, the shortcut, provider calls and text delivery. |
+| `xflow` | The CLI. Plain `xflow` in a terminal opens setup until it is done, then the control centre (`xflow tui`). |
+| Speech provider | Groq, OpenAI, Deepgram and seven more, or a local server. You bring the key. |
+| Cleanup (optional) | A chat model that fixes punctuation and filler words. If it fails, you get the original transcript. |
+
+## Next
+
+- [Install xflow](/docs/getting-started/install)
+- [Run the guided setup](/docs/getting-started/setup)
+- [Choose a provider](/docs/providers)
+- [CLI reference](/docs/reference/cli)

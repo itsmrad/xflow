@@ -13,7 +13,7 @@ This is the build spec for the production site. Match it closely. Where this doc
 - **Accent:** **Volt** `#C6F135`, an acid lime. It is used as a *fill* (primary button, highlighter, active states) and never as text on a light background. A red **Rec** dot is the only other colour and appears only while something is recording. This keeps xflow clear of firecrawl's orange and exa's blue.
 - **Type:** Geist Sans for headings and body, Geist Mono for labels, numbers, code and anything a machine says. Both are variable woff2, self-hosted through `next/font`.
 - **Stack:** Next.js App Router (current stable, ≥ 16) (RSC, static by default) · Tailwind CSS v4 (CSS-first `@theme`) · `geist` font package · Fumadocs (MDX docs and search) · Shiki at build time · Clerk · Dodo Payments · Vercel. No component library, no animation library, no CSS-in-JS.
-- **Budgets:** Lighthouse ≥ 95 in all four categories on every public route (mobile profile). CLS = 0.00 by construction. LCP ≤ 1.8 s, INP ≤ 200 ms, ≤ 90 KB gzipped first-load JS on marketing routes.
+- **Budgets:** Lighthouse ≥ 95 in all four categories on every public route (mobile profile), checked by hand before each release. CLS = 0.00 by construction. LCP ≤ 1.8 s, INP ≤ 200 ms. First-load JS ≤ 140 KB gzipped on marketing and docs routes; on marketing this is a ratchet that must not grow (§10.2). CI enforces the size budgets only.
 
 ---
 
@@ -99,7 +99,7 @@ xflow Free is BYOK and unlimited. xflow Pro is **$5/mo** and unlimited. That mak
 | Billing | Dodo Payments hosted checkout and customer portal (redirects) | No card fields on our domain. Dodo is the merchant of record and handles tax. |
 | Analytics | **None** at launch. If ever added: Vercel Web Analytics only (cookieless). Never session replay. | "No telemetry" is a product claim, and the site has to live up to it. |
 | Hosting | Vercel (`*.vercel.app` until a domain exists, **TBD**) | `SITE_URL` env var everywhere. Never hard-code a domain. |
-| Testing | Playwright smoke test per route plus axe-core. Lighthouse CI (`@lhci/cli`) with the budgets from §10 as assertions. | Run through `.tools/heavy-locked`. |
+| Testing | Playwright smoke test per route plus axe-core. Size budgets from §10.2 asserted on the `next build` output (`scripts/budget.ts`). Lighthouse is a manual pre-release check. | Run through `.tools/heavy-locked`. |
 
 Explicitly **not** used: framer-motion, GSAP, shadcn/Radix (native `<details>`, `<dialog>` and popover cover our needs), next-themes (a 6-line inline script does it, §5.9), any CSS-in-JS, and any carousel library.
 
@@ -1201,20 +1201,22 @@ The `Terminal` component, static. The missing path is printed from the request.
 - **Language:** `<html lang="en">`. Expanded abbreviations: first use of BYOK on a page is `<abbr title="bring your own key">BYOK</abbr>`.
 - **Testing:** `@axe-core/playwright` on every route in light and dark, with zero violations. Manual VoiceOver pass on `/`, `/pricing`, `/device` and `/dashboard` before launch.
 
-### 10.2 Performance budgets (CI-enforced with Lighthouse CI, mobile, simulated throttling)
+### 10.2 Performance budgets
+
+**How they are enforced (contract change, 2026-10-29, PR #90):** CI asserts only the deterministic **size** budgets, measured from the `next build` output by `apps/web/scripts/budget.ts`: first-load JS per route, CSS, preloaded fonts and HTML. Lighthouse (scores, LCP, TBT, CLS) is a **manual pre-release check**: mobile profile, simulated throttling, against `next start`, with the numbers written into the PR. It is not a CI gate, because timing on shared runners is too noisy to assert.
 
 | Metric | Budget | Applies to |
 |---|---|---|
-| Lighthouse Performance / A11y / Best Practices / SEO | **≥ 95 each** | all public routes |
-| CLS | **0.00** (assert `≤ 0.01`) | all routes |
-| LCP | ≤ 1.8 s | marketing, docs |
-| TBT | ≤ 100 ms | marketing, docs |
+| Lighthouse Performance / A11y / Best Practices / SEO | **≥ 95 each** (manual, pre-release) | all public routes |
+| CLS | **0.00** (assert `≤ 0.01`) (manual, pre-release) | all routes |
+| LCP | ≤ 1.8 s (manual, pre-release) | marketing, docs |
+| TBT | ≤ 100 ms (manual, pre-release) | marketing, docs |
 | INP (field, Vercel Speed Insights *only if* analytics are approved, else lab proxy) | ≤ 200 ms | all |
-| First-load JS (gzip) | ≤ 90 KB marketing; ≤ 140 KB docs (search); ≤ 220 KB dashboard (Clerk) | per route, `next build` output |
-| CSS (gzip) | ≤ 30 KB total | — |
-| Fonts | 2 files (Geist Sans var and Geist Mono var, latin subset), ≤ 110 KB total, both preloaded by `next/font` | — |
+| First-load JS (gzip) | ≤ 140 KB marketing, a **ratchet that must not grow** (was 90 KB; React 19 plus the Next 16 App Router runtime alone are ~136.5 KB on every page, so 90 KB can't be met on this stack; lower it whenever JS comes off); ≤ 140 KB docs (search loads on first open); ≤ 220 KB dashboard (Clerk) | per route, `next build` output (CI) |
+| CSS (gzip) | ≤ 30 KB total | per route (CI) |
+| Fonts | 2 files (Geist Sans var and Geist Mono var, latin subset), ≤ 110 KB total, both preloaded by `next/font` | preloaded files (CI) |
 | Images | Above the fold: none. Below the fold: AVIF, ≤ 120 KB each, `loading="lazy"`, explicit `width`/`height` | — |
-| HTML (gzip) | ≤ 60 KB for `/` | — |
+| HTML (gzip) | ≤ 60 KB for `/` | CI |
 | Third-party requests | 0 on marketing and docs; Clerk and Dodo only on auth and billing routes | — |
 
 ### 10.3 Zero-layout-shift rules (how CLS = 0 is guaranteed, not hoped for)
@@ -1274,7 +1276,7 @@ Every number or competitor fact on the site must appear here with a source. A ro
 4. Landing → Pricing → Download → Docs (port content and the generators) → Changelog → 404.
 5. Auth, Device, Dashboard and Checkout pages, wired to the #69 APIs.
 6. SEO, OG images, sitemap and headers.
-7. Lighthouse CI and axe in CI, with §10 budgets as hard assertions.
+7. axe and the §10.2 size budgets in CI as hard assertions; Lighthouse by hand before each release (§10.2).
 
 **Definition of done:**
 - Every route matches its section spec and copy.

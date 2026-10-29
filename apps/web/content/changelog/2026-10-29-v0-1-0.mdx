@@ -1,0 +1,38 @@
+---
+title: First development build
+version: "0.1.0"
+date: "2026-10-29"
+tags: [macos, linux, cli, tui]
+---
+
+The first build of xflow: a Rust daemon, a CLI and a terminal UI for voice dictation on macOS and Linux. It is a development build — real desktop and provider acceptance is still in progress.
+
+## Dictation
+
+- Hold Fn to talk on macOS, double-tap for hands-free, a third press or Esc to cancel. Another key or a chord can replace Fn, rebound live.
+- A recording pill above the Dock: waveform while listening, dots while processing, red on error. It never takes focus.
+- Delivery into the focused app through Accessibility and a paste at the cursor, with the clipboard restored afterwards. Password fields are refused on macOS, multi-line text is never auto-pasted into a terminal, and a failed delivery leaves the text on the clipboard and in `xflow last`.
+- Silence and clicks end with “Didn't catch anything” instead of a guessed sentence.
+- Optional: ignore sound playing from the speakers while dictating.
+
+## Words
+
+- Ten cloud speech providers — Groq, OpenAI, Deepgram, AssemblyAI, ElevenLabs, Gemini, Mistral, OpenRouter, Together, DeepInfra — plus custom and local servers, including whisper.cpp.
+- Dictionary words sent as recognition hints, exact replacements, and learning from the words you correct right after dictating.
+- Optional AI cleanup, per-app styles, spoken snippets and command mode.
+
+## CLI and TUI
+
+- A full command tree with `--json` everywhere: `listen`, `transcribe`, `watch`, `history`, `dictionary`, `config` and more.
+- A keyboard-first control centre: plain `xflow` in a terminal runs guided setup until it is done — speech service, key, microphone, shortcut, permissions, then a test dictation.
+- `xflow doctor` checks configuration, permissions and desktop helpers without recording.
+
+## Platforms
+
+- **macOS:** LaunchAgent service, a signed installer package script, and a guided permissions flow that asks for one grant at a time.
+- **Linux (beta):** Ubuntu GNOME with a bundled Shell extension for the shortcut, pill and native paste; systemd user service.
+
+## Privacy
+
+- Audio stays in memory. History is a local SQLite file you can turn off. No telemetry.
+- Offline mode refuses every non-loopback endpoint.

@@ -1,19 +1,20 @@
 import { BadRequest, billedAudioMs, MAX_AUDIO_BYTES, transcribeRequest, transcriptionReply } from "@/lib/groq";
-import { error } from "@/lib/http";
+import { error, refuse } from "@/lib/http";
 import { audioCostMicros } from "@/lib/pricing";
 import { apiCaller, unauthorized } from "@/lib/server/api-auth";
 import { forward, gate } from "@/lib/server/upstream";
 
 export const maxDuration = 60;
+const UPLOAD_LIMIT = MAX_AUDIO_BYTES + 64 * 1024;
 
 /** Same multipart body as Groq `audio/transcriptions`; answered with Groq's response. */
 export async function POST(request: Request) {
   const length = Number(request.headers.get("content-length") ?? 0);
-  if (length > MAX_AUDIO_BYTES + 64 * 1024) return error(413, `audio exceeds ${MAX_AUDIO_BYTES} bytes`);
+  if (length > UPLOAD_LIMIT) return refuse(request, error(413, `audio exceeds ${MAX_AUDIO_BYTES} bytes`), 0);
   const caller = await apiCaller(request);
-  if (!caller) return unauthorized();
+  if (!caller) return refuse(request, unauthorized(), UPLOAD_LIMIT);
   const denied = gate(caller);
-  if (denied) return denied;
+  if (denied) return refuse(request, denied, UPLOAD_LIMIT);
 
   let parsed;
   try {

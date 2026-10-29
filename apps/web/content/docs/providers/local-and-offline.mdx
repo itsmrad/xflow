@@ -1,0 +1,59 @@
+---
+title: Local and offline
+description: Point xflow at a speech server on your own machine, and refuse every remote endpoint.
+---
+
+xflow can send audio to a server you run yourself instead of a cloud provider. No model is bundled or silently downloaded — you install and run the server.
+
+## A local OpenAI-compatible server
+
+The `local` entry is preconfigured for a server on `http://127.0.0.1:8000`, such as [speaches](https://speaches.ai/):
+
+```toml title="config.toml"
+[stt]
+provider = "local"
+model = "Systran/faster-whisper-small"   # preinstall it on your server
+```
+
+## Any other endpoint
+
+```toml title="config.toml"
+[stt]
+provider = "custom"
+endpoint = "http://127.0.0.1:8080/v1/audio/transcriptions"
+model = "your-model"
+protocol = "openai"
+```
+
+`custom` needs a full endpoint URL and an explicit model. `protocol` picks the wire format:
+
+| `stt.protocol` | Server |
+| --- | --- |
+| `openai` | OpenAI-compatible multipart upload (most self-hosted servers) |
+| `whisper-cpp` | The whisper.cpp HTTP server |
+| `openai-keywords`, `openrouter`, `deepgram`, `assemblyai`, `assemblyai-sync`, `elevenlabs`, `gemini`, `mistral` | Servers that speak those providers' formats |
+
+For a whisper.cpp server:
+
+```toml title="config.toml"
+[stt]
+provider = "custom"
+endpoint = "http://127.0.0.1:8080/inference"
+protocol = "whisper-cpp"
+model = "base.en"
+```
+
+If the endpoint needs a key, store it with `xflow key set custom` or set `stt.api_key_env`.
+
+## Offline mode
+
+```toml title="config.toml"
+[privacy]
+offline = true
+```
+
+With `privacy.offline = true`, xflow refuses any non-loopback endpoint — for transcription and for cleanup. Pair it with a local server and an [Ollama](https://ollama.com) cleanup preset to keep everything on your machine.
+
+<Callout type="privacy">
+The guard covers xflow's own requests. What your local server does on the network is outside it.
+</Callout>

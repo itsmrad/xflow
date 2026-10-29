@@ -1,0 +1,68 @@
+---
+title: First dictation
+description: Hold the key, talk, let go — and what happens when the text can't be typed.
+---
+
+<Steps>
+<Step title="Put your cursor somewhere">
+Any text field: your editor, a terminal prompt, a browser, a chat box.
+</Step>
+<Step title="Hold Fn and talk">
+Capture starts the moment you press. After 150 ms the start sound plays and the pill appears above the Dock.
+
+<Pill state="listening" />
+</Step>
+<Step title="Let go">
+The pill switches to processing while the provider transcribes.
+
+<Pill state="processing" />
+
+The text lands at your cursor, with a trailing space so you can keep going.
+</Step>
+</Steps>
+
+## Watch it happen
+
+In another terminal, follow the daemon's events:
+
+```sh
+xflow watch --json
+```
+
+A normal dictation moves through `listening`, `processing` and `success`. The final event carries the text, how it was delivered and the timings. See [Events](/docs/reference/events) for the fields.
+
+## When the text doesn't appear
+
+xflow keeps the transcript before it tries to deliver it, so a failed paste never loses your words.
+
+- If the app or window changed, or the field isn't editable, the text is copied instead. The pill says “Copied — press ⌘V to paste”.
+- On macOS, password fields refuse dictation.
+- Multi-line text is never pasted into a terminal automatically; it stays on the clipboard.
+
+```sh
+xflow last        # print the last transcript
+xflow copy        # copy it again
+xflow paste       # insert it into the focused app
+```
+
+## When nothing was heard
+
+Recordings shorter than 300 ms are discarded without uploading. A recording that is silent, or only a click, ends with “Didn't catch anything” instead of a guessed sentence.
+
+## Music or a call in the background
+
+Turn on `recording.ignore_speakers` (off by default) to keep sound playing on the computer out of your dictation:
+
+```sh
+xflow config set recording.ignore_speakers true
+```
+
+On macOS this records through Apple's voice processing, the echo canceller FaceTime uses, and falls back to the plain microphone if that can't start or `recording.device` names a specific microphone. It can take a moment longer to start. On Linux, make the PipeWire or PulseAudio echo-cancel source your default input; `xflow doctor` shows how.
+
+## Dictate into a pipe instead
+
+`xflow listen` prints the final text to stdout and doesn't touch the desktop:
+
+```sh
+xflow listen --once --seconds 5 | pbcopy
+```

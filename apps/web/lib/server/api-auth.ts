@@ -42,5 +42,5 @@ export async function apiCaller(request: Request): Promise<ApiCaller | null> {
 }
 
 export function unauthorized(): Response {
-  return error(401, "missing, malformed or revoked xflow token; run `xflow login`");
+  return error(401, "missing, malformed or revoked xflow token");
 }

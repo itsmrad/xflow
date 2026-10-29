@@ -1,0 +1,60 @@
+---
+title: Hotkeys
+description: The dictation key, its gestures, allowed keys and chords, and live rebinding.
+---
+
+On macOS, `xflowd` listens for <Kbd>Fn</Kbd> (the 🌐 Globe key) by default. On Linux, shortcuts belong to the GNOME extension — see [Linux](/docs/linux#shortcuts).
+
+<Callout type="note" title="Set the Globe key to Do Nothing">
+System Settings › Keyboard › Press 🌐 key to › **Do Nothing**. Otherwise macOS opens its own emoji picker or dictation on every press. Setup offers this step when it's needed.
+</Callout>
+
+## Gestures
+
+Defaults follow Wispr Flow's published gestures: 500 ms tap and double-tap windows.
+
+| Gesture | What happens |
+| --- | --- |
+| Press and hold | Capture starts immediately. Release after `hold_threshold_ms` to transcribe and deliver. The start sound and the pill wait until the key has been held for 150 ms. |
+| Double-tap | A quick tap followed by a second press within `double_tap_ms` latches [hands-free](/docs/using/hands-free) recording. |
+| Single short tap | Waits out the double-tap window, then discards the capture. No upload, no history, no error. |
+| <Kbd>Esc</Kbd> | Cancels a hotkey recording. The tap is listen-only, so Esc and the key itself still reach the focused app. |
+| Fn + another key within 1 s | Treated as a modifier shortcut (Fn+arrow, say). The recording is cancelled. |
+
+A press arriving more than 10 s into a hold is taken as a lost key-up and stops the session. Repeated key-down events never start extra sessions.
+
+```toml title="config.toml"
+[hotkey]
+key = "fn"
+double_tap_ms = 500
+hold_threshold_ms = 500
+enabled = true
+```
+
+`double_tap_ms` and `hold_threshold_ms` accept 1–2000.
+
+## Allowed keys
+
+Single keys: `fn`, `right_option`, `left_option`, `right_command`, `right_control`, `right_shift`, `caps_lock`, and `f13` through `f19`.
+
+Chords: one or more of `ctrl`, `alt`, `shift`, `cmd`, then `a`–`z`, `0`–`9`, `space`, `tab`, `enter`, `escape`, `backspace` or `f1`–`f20`. For example `ctrl+alt+space`. Names are lowercase. Letter and digit chords use physical ANSI positions; named keys don't depend on the keyboard layout.
+
+<Callout type="warn">
+Caps Lock's lock behaviour is not suppressed, and its press/release behaviour varies by hardware.
+</Callout>
+
+## Rebind live
+
+While idle:
+
+```sh
+xflow config set hotkey.key right_option
+xflow config set hotkey.key ctrl+alt+space
+xflow config set hotkey.enabled false
+```
+
+The config is validated and the daemon reloads it. An invalid value leaves the running config alone. If a new event tap can't be created, the old binding keeps working and `xflow status` reports the error. Each reload retries a missing tap — after you grant Input Monitoring, for example.
+
+## Permissions
+
+The shortcut uses a listen-only event tap. It hears keys once `xflowd` has **Accessibility**; **Input Monitoring** is a fallback asked for only when the shortcut still isn't heard. A tap that has received no keyboard events is reported as *unverified* — press the shortcut, then refresh the check. See [Permissions](/docs/troubleshooting/permissions).

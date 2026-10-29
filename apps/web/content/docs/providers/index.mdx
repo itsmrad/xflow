@@ -1,0 +1,49 @@
+---
+title: Providers
+description: Ten speech providers plus your own server. Bring a key, or run it locally.
+---
+
+xflow doesn't run a speech model on your machine. It sends each recording to the provider you choose, using your key. You pay the provider directly; xflow never meters you.
+
+<ProviderTable />
+
+## Pick one
+
+```sh
+xflow providers list
+xflow providers info groq
+xflow models groq            # marks the selected and default model
+xflow providers use deepgram
+```
+
+## Store the key
+
+```sh
+xflow key set groq           # hidden input
+xflow key status
+xflow key remove groq
+```
+
+Keys are encrypted in xflow's own keystore (two 0600 files, see [Privacy and security](/docs/privacy-and-security#what-is-stored)) — never in `config.toml`, and never in the system Keychain, so storing or reading a key shows no OS prompt. Keys that older builds left in the Keychain or Secret Service move over once; `xflow key status` shows where each key comes from.
+
+Headless setups can use an environment variable instead (`GROQ_API_KEY`, `OPENAI_API_KEY`, …). A variable exported in your shell isn't visible to a launchd or systemd service, so prefer `xflow key set` there.
+
+## Check it
+
+```sh
+xflow providers test groq
+```
+
+A non-billable credential and reachability check. It uploads no audio.
+
+## Vocabulary hints
+
+Your [dictionary](/docs/using/dictionary) words are sent as recognition hints. Each provider has its own limit, and xflow checks it before upload rather than letting the provider fail. `xflow doctor` reports when your list doesn't fit.
+
+## Cleanup is separate
+
+AI cleanup (punctuation, filler words, per-app styles, command mode) uses a chat model, configured under `[cleanup]` with its own provider. It's off by default (`mode = "raw"`). If cleanup fails, you get the original transcript.
+
+## Pro
+
+Don't want to manage a provider account? [Pro](/docs/pro) uses xflow's key instead.

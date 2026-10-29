@@ -1,0 +1,60 @@
+---
+title: History
+description: Search, correct and export past dictations. Stored locally, in plaintext.
+---
+
+Every successful dictation is saved to a local SQLite file, `~/.local/share/xflow/history.db`, in a private directory.
+
+<Callout type="privacy">
+History is **plaintext**. Anyone who can read your home directory can read it. Turn it off with `privacy.history = false`; the last transcript then stays only in the daemon's memory so `xflow last` still works.
+</Callout>
+
+## Browse and search
+
+```sh
+xflow history                         # the 20 most recent
+xflow history list -n 50 --offset 50  # page through
+xflow history search postgres --json
+xflow history show 42
+xflow history copy 42
+xflow history paste 42                # insert into the focused app
+xflow history delete 42
+```
+
+The TUI's History screen (<Kbd>2</Kbd>) does the same, with <Kbd>/</Kbd> to search.
+
+## Correct a transcript
+
+```sh
+xflow history edit 42 --text 'Deploy it on Kubernetes'
+xflow history edit 42                 # opens $VISUAL or $EDITOR
+```
+
+Corrections teach xflow new words — see [learning from corrections](/docs/using/dictionary#learning-from-corrections).
+
+## Export
+
+```sh
+xflow history export --format csv > dictations.csv
+xflow history export --format md --query standup > standups.md
+```
+
+Formats are `json` (the default), `csv` and `md`. Exports are complete, not just the first page.
+
+## Retention
+
+```toml title="config.toml"
+[privacy]
+history = true
+history_limit = 500   # up to 100,000
+```
+
+`xflow history clear` asks for confirmation, or takes `--yes`. It cancels any active recording first and also clears the in-memory last transcript.
+
+## Stats
+
+```sh
+xflow stats
+```
+
+Sessions, words, audio time, today's counts, your streak, words per minute and p50/p95 latency — computed from local history only.

@@ -1,0 +1,73 @@
+---
+title: Events
+description: The JSON stream from `xflow watch --json`.
+---
+
+`xflow watch --json` subscribes to the daemon and prints one JSON object per line until you press Ctrl-C. The first object is a snapshot of the current state; every later one is an event.
+
+```sh
+xflow watch --json | jq -r .state
+```
+
+Without `--json`, `watch` prints each event as a small `FIELD / VALUE` table, or just the text when an event carries one.
+
+## States
+
+`state` is one of the daemon's five states:
+
+| State | Meaning |
+| --- | --- |
+| `idle` | Nothing in progress |
+| `listening` | Recording. `message` is `Hands-free recording` while latched |
+| `processing` | Transcribing, cleaning up and delivering |
+| `success` | Done. Kept until the next recording or cancel |
+| `error` | Failed. `message` says why. Kept until the next recording or cancel |
+
+## Fields
+
+Fields that don't apply are left out.
+
+| Field | Type | Present |
+| --- | --- | --- |
+| `ok` | boolean | Always |
+| `state` | string | Always |
+| `level` | number | Always. Input level while listening |
+| `message` | string | Status or error text, such as `Didn't catch anything` |
+| `text` | string | The final transcript |
+| `injection` | `"pasted"` \| `"typed"` \| `"clipboard_only"` | How the text was delivered |
+| `mode` | `"dictation"` \| `"command"` | While listening or processing |
+| `provider`, `model` | string | The speech provider and model |
+| `version`, `protocol` | string, number | On the snapshot: daemon version and IPC protocol (currently 2) |
+| `permissions` | object | macOS: `accessibility`, `input_monitoring`, `keyboard_events` |
+| `entry` | object | The saved history entry, on the final event of a successful session |
+| `timings` | object | On the final event of a session |
+
+### `timings`
+
+All values are milliseconds.
+
+| Field | Meaning |
+| --- | --- |
+| `hotkey_ms` | Hotkey press to capture running, when known |
+| `open_ms` | Start request to microphone stream running |
+| `audio_ms` | Recorded audio length |
+| `stt_ms` | Stop to transcript received |
+| `cleanup_ms` | Time spent in AI cleanup, when it ran |
+| `inject_ms` | Time spent delivering the text |
+| `total_ms` | Stop to text delivered (or ready, when delivery failed) |
+
+### `entry`
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `created_at` | History id and Unix time |
+| `text` | Final text |
+| `raw_text` | Provider output before local formatting and cleanup, when different |
+| `provider`, `model`, `language` | What transcribed it |
+| `app_id` | The focused app |
+| `duration_ms`, `latency_ms` | Audio length; stop to delivery |
+| `mode` | `dictation` or `command` |
+
+## Errors
+
+Errors from any command go to stderr as a JSON object with `error`, `hint` and `exit_code`. See the exit codes in the [CLI reference](/docs/reference/cli#xflow).

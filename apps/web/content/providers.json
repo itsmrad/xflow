@@ -1,0 +1,313 @@
+[
+  {
+    "id": "groq",
+    "name": "Groq",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "whisper-large-v3-turbo",
+    "local": false,
+    "vocabulary": true,
+    "envVar": "GROQ_API_KEY",
+    "docs": "https://console.groq.com/docs/speech-to-text",
+    "keyUrl": "https://console.groq.com/keys",
+    "href": "/docs/providers/groq",
+    "models": [
+      {
+        "id": "whisper-large-v3-turbo",
+        "label": "Whisper Large v3 Turbo",
+        "note": "Fast multilingual dictation"
+      },
+      {
+        "id": "whisper-large-v3",
+        "label": "Whisper Large v3",
+        "note": "Higher accuracy"
+      }
+    ]
+  },
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "gpt-transcribe",
+    "local": false,
+    "vocabulary": true,
+    "envVar": "OPENAI_API_KEY",
+    "docs": "https://platform.openai.com/docs/guides/speech-to-text",
+    "keyUrl": "https://platform.openai.com/api-keys",
+    "href": "/docs/providers/openai",
+    "models": [
+      {
+        "id": "gpt-transcribe",
+        "label": "GPT Transcribe",
+        "note": "Current file transcription; language and keyword arrays"
+      },
+      {
+        "id": "gpt-4o-mini-transcribe",
+        "label": "GPT-4o Mini Transcribe",
+        "note": "Legacy; scheduled retirement February 2027"
+      },
+      {
+        "id": "gpt-4o-transcribe",
+        "label": "GPT-4o Transcribe",
+        "note": "Legacy; scheduled retirement February 2027"
+      },
+      {
+        "id": "whisper-1",
+        "label": "Whisper 1",
+        "note": "Legacy; scheduled retirement February 2027"
+      }
+    ]
+  },
+  {
+    "id": "deepgram",
+    "name": "Deepgram",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "nova-3",
+    "local": false,
+    "vocabulary": true,
+    "envVar": "DEEPGRAM_API_KEY",
+    "docs": "https://developers.deepgram.com/docs/pre-recorded-audio",
+    "keyUrl": "https://console.deepgram.com/",
+    "href": "/docs/providers/deepgram",
+    "models": [
+      {
+        "id": "nova-3",
+        "label": "Nova 3",
+        "note": "Multilingual batch transcription"
+      },
+      {
+        "id": "nova-2",
+        "label": "Nova 2",
+        "note": "Legacy batch model; keyword hints"
+      }
+    ]
+  },
+  {
+    "id": "assemblyai",
+    "name": "AssemblyAI",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "universal-3-5-pro",
+    "local": false,
+    "vocabulary": true,
+    "envVar": "ASSEMBLYAI_API_KEY",
+    "docs": "https://www.assemblyai.com/docs/api-reference/transcripts/submit",
+    "keyUrl": "https://www.assemblyai.com/dashboard/",
+    "href": "/docs/providers/assemblyai",
+    "models": [
+      {
+        "id": "universal-3-5-pro",
+        "label": "Universal 3.5 Pro",
+        "note": "Async, auto language detection; sync protocol available"
+      },
+      {
+        "id": "universal-2",
+        "label": "Universal 2",
+        "note": "Broad language coverage; async"
+      }
+    ]
+  },
+  {
+    "id": "elevenlabs",
+    "name": "ElevenLabs",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "scribe_v2",
+    "local": false,
+    "vocabulary": true,
+    "envVar": "ELEVENLABS_API_KEY",
+    "docs": "https://elevenlabs.io/docs/api-reference/speech-to-text/convert",
+    "keyUrl": "https://elevenlabs.io/app/settings/api-keys",
+    "href": "/docs/providers/elevenlabs",
+    "models": [
+      {
+        "id": "scribe_v2",
+        "label": "Scribe v2",
+        "note": "Multilingual file transcription; keyterms cost extra"
+      }
+    ]
+  },
+  {
+    "id": "gemini",
+    "name": "Google Gemini",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "gemini-3.5-transcribe",
+    "local": false,
+    "vocabulary": true,
+    "envVar": "GEMINI_API_KEY",
+    "docs": "https://ai.google.dev/gemini-api/docs/generate-content/transcribe",
+    "keyUrl": "https://aistudio.google.com/apikey",
+    "href": "/docs/providers/gemini",
+    "models": [
+      {
+        "id": "gemini-3.5-transcribe",
+        "label": "Gemini 3.5 Transcribe",
+        "note": "Dedicated verbatim ASR; inline path not live-tested"
+      },
+      {
+        "id": "gemini-3.5-flash-lite",
+        "label": "Gemini 3.5 Flash Lite",
+        "note": "Prompted transcription; may hallucinate on silence"
+      }
+    ]
+  },
+  {
+    "id": "mistral",
+    "name": "Mistral",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "voxtral-mini-latest",
+    "local": false,
+    "vocabulary": true,
+    "envVar": "MISTRAL_API_KEY",
+    "docs": "https://docs.mistral.ai/studio/audio/speech_to_text/offline_transcription",
+    "keyUrl": "https://console.mistral.ai/api-keys/",
+    "href": "/docs/providers/mistral",
+    "models": [
+      {
+        "id": "voxtral-mini-latest",
+        "label": "Voxtral Mini Transcribe",
+        "note": "Fast current transcription alias"
+      },
+      {
+        "id": "voxtral-mini-2602",
+        "label": "Voxtral Mini Transcribe 2",
+        "note": "Pinned February 2026 release"
+      }
+    ]
+  },
+  {
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "openai/whisper-large-v3",
+    "local": false,
+    "vocabulary": false,
+    "envVar": "OPENROUTER_API_KEY",
+    "docs": "https://openrouter.ai/docs/api/api-reference/stt/create-transcription",
+    "keyUrl": "https://openrouter.ai/settings/keys",
+    "href": "/docs/providers/openrouter",
+    "models": [
+      {
+        "id": "openai/whisper-large-v3",
+        "label": "Whisper Large v3",
+        "note": "Multilingual routed transcription"
+      },
+      {
+        "id": "openai/whisper-large-v3-turbo",
+        "label": "Whisper Large v3 Turbo",
+        "note": "Fast routed transcription"
+      },
+      {
+        "id": "openai/gpt-transcribe",
+        "label": "GPT Transcribe",
+        "note": "Current OpenAI transcription"
+      }
+    ]
+  },
+  {
+    "id": "together",
+    "name": "Together AI",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "openai/whisper-large-v3",
+    "local": false,
+    "vocabulary": true,
+    "envVar": "TOGETHER_API_KEY",
+    "docs": "https://docs.together.ai/docs/speech-to-text",
+    "keyUrl": "https://api.together.ai/settings/api-keys",
+    "href": "/docs/providers/together",
+    "models": [
+      {
+        "id": "openai/whisper-large-v3",
+        "label": "Whisper Large v3",
+        "note": "Multilingual transcription"
+      },
+      {
+        "id": "nvidia/parakeet-tdt-0.6b-v3",
+        "label": "Parakeet TDT v3",
+        "note": "No vocabulary prompts"
+      }
+    ]
+  },
+  {
+    "id": "deepinfra",
+    "name": "DeepInfra",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "openai/whisper-large-v3-turbo",
+    "local": false,
+    "vocabulary": true,
+    "envVar": "DEEPINFRA_API_KEY",
+    "docs": "https://docs.deepinfra.com/apis/speech",
+    "keyUrl": "https://deepinfra.com/dash/api_keys",
+    "href": "/docs/providers/deepinfra",
+    "models": [
+      {
+        "id": "openai/whisper-large-v3-turbo",
+        "label": "Whisper Large v3 Turbo",
+        "note": "Fast OpenAI-compatible transcription"
+      },
+      {
+        "id": "openai/whisper-large-v3",
+        "label": "Whisper Large v3",
+        "note": "Higher accuracy"
+      }
+    ]
+  },
+  {
+    "id": "custom",
+    "name": "Custom",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": null,
+    "local": false,
+    "vocabulary": true,
+    "envVar": null,
+    "docs": "https://platform.openai.com/docs/api-reference/audio",
+    "keyUrl": null,
+    "href": "/docs/providers/local-and-offline",
+    "models": []
+  },
+  {
+    "id": "local",
+    "name": "Local server",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "Systran/faster-whisper-small",
+    "local": true,
+    "vocabulary": true,
+    "envVar": null,
+    "docs": "https://speaches.ai/",
+    "keyUrl": null,
+    "href": "/docs/providers/local-and-offline",
+    "models": [
+      {
+        "id": "Systran/faster-whisper-small",
+        "label": "Whisper Small",
+        "note": "Preinstall model on your server; XFlow does not download it"
+      },
+      {
+        "id": "Systran/faster-whisper-large-v3",
+        "label": "Whisper Large v3",
+        "note": "Higher accuracy, more memory"
+      }
+    ]
+  }
+]
