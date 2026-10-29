@@ -538,6 +538,8 @@ impl Engine {
             bail!("no recording is active");
         }
         let stopped = Instant::now();
+        // Before the final drain, so sends above this line started while recording.
+        trace_segment("stop");
         self.started = None;
         self.silent_since = None;
         // Whatever the capture holds, even if its stream just failed.
@@ -636,6 +638,7 @@ impl Engine {
             return;
         }
         segments.heard = true;
+        trace_segment("send");
         let (stt, config) = (self.services.stt.clone(), self.config.clone());
         segments.sent.spawn(async move {
             // Every upload is 16 kHz mono anyway; holding that copy for a retry instead
@@ -1810,6 +1813,32 @@ fn vocabulary(config: &Config) -> Vec<String> {
     }
     words
 }
+/// Test-support builds record segment sends against capture stop. The e2e
+/// test compares that order; production builds never write it.
+#[cfg(feature = "test-support")]
+fn trace_segment(event: &str) {
+    if std::env::var("XFLOW_TEST_AUDIO").ok().as_deref() != Some("wav") {
+        return;
+    }
+    let Ok(root) = std::env::var("XFLOW_TEST_ROOT") else {
+        return;
+    };
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::path::Path::new(&root).join("segments.trace"))
+    {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+    let _ = std::io::Write::write_all(
+        &mut file,
+        format!("{event} {}\n", monotonic_us()).as_bytes(),
+    );
+}
+#[cfg(not(feature = "test-support"))]
+fn trace_segment(_: &str) {}
+
 fn ms(d: Duration) -> u32 {
     d.as_millis().min(u32::MAX as u128) as u32
 }
