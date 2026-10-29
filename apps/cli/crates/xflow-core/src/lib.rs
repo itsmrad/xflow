@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub mod config;
 pub mod ipc;
 pub mod learn;
+pub mod lists;
 pub mod snap;
 pub mod text;
 pub mod words;

@@ -18,6 +18,7 @@
 │                ││            API key               Choose a service first ││                                         │
 │                ││            Remove um and uh      On                     ││                                         │
 │                ││            Spoken punctuation    Off                    ││                                         │
+│                ││            Spoken lists          On                     ││                                         │
 │                ││  Delivery  Text arrives by       Paste                  ││                                         │
 │                ││            Space after text      On                     ││                                         │
 │                ││            Restore clipboard     On                     ││                                         │
@@ -29,7 +30,6 @@
 │                ││            Local services only   Off                    ││                                         │
 │                ││            Share app name        On                     ││                                         │
 │                ││  Look      Theme                 Paper                  ││                                         │
-│                ││            Mouse                 On                     ││                                         │
 ╰────────────────╯╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────╯
 
  ↑↓ move · Enter change · Esc back · Tab next page · ? help · q quit

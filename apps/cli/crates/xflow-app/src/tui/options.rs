@@ -26,6 +26,7 @@ pub const SETTINGS: &[Row] = &[
     ("action.cleanup_key", "Writing", "API key", "Your key for the writing service, stored encrypted by xflow."),
     ("formatting.remove_fillers", "Writing", "Remove um and uh", "Leave out filler words such as um and uh."),
     ("formatting.spoken_punctuation", "Writing", "Spoken punctuation", "Say \"comma\", \"period\" or \"new line\" to type them."),
+    ("formatting.lists", "Writing", "Spoken lists", "Say \"one …, two …, three …\" or \"bullet …\" to get a list. Never in terminals."),
     ("injection.method", "Delivery", "Text arrives by", "Paste is fastest. Typing works where pasting is blocked. Copy only leaves the text ready for you to paste."),
     ("injection.trailing_space", "Delivery", "Space after text", "Add a space after each dictation so the next one doesn't run into it."),
     ("injection.restore_clipboard", "Delivery", "Restore clipboard", "Put back what you had copied before xflow pasted."),

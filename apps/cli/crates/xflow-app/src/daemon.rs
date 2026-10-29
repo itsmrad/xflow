@@ -584,7 +584,8 @@ impl Engine {
                 if selection.len() > MAX_MESSAGE_BYTES {
                     bail!("selected text exceeds safety limit");
                 }
-                let local = xflow_core::text::before_cleanup(&raw, &config);
+                let terminal = xflow_platform::is_terminal(target.app_id.as_deref());
+                let local = xflow_core::text::before_cleanup(&raw, &config, terminal);
                 let style = xflow_core::text::style(&config, target.app_id.as_deref());
                 let mode = style.and_then(|s| s.mode).unwrap_or(config.cleanup.mode);
                 let instructions = style
