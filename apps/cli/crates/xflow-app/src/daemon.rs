@@ -2905,11 +2905,14 @@ mod tests {
         }
     }
     /// Answers with the segment's start (ms); earlier segments answer later, the
-    /// first `failures` calls fail and `hang` never answers.
+    /// first `failures` calls fail and `hang` never answers; `words` replaces the
+    /// answer. `hints` records each call's vocabulary.
     #[derive(Default)]
     struct SegmentStt {
         audio: Option<Arc<StreamAudio>>,
         clips: Mutex<Vec<AudioClip>>,
+        hints: Mutex<Vec<Vec<String>>>,
+        words: Option<fn(usize) -> &'static str>,
         failures: AtomicUsize,
         /// Segments (by start, ms) that fail on every attempt.
         broken: Option<fn(usize) -> bool>,
@@ -2927,10 +2930,15 @@ mod tests {
         fn name(&self) -> &str {
             "fixture"
         }
-        async fn transcribe(&self, clip: AudioClip, _: TranscriptionOptions) -> Result<Transcript> {
+        async fn transcribe(
+            &self,
+            clip: AudioClip,
+            options: TranscriptionOptions,
+        ) -> Result<Transcript> {
             let _guard = DropCount(self.dropped.clone());
             let start = self.audio.as_ref().unwrap().position(&clip);
             self.clips.lock().unwrap().push(clip);
+            self.hints.lock().unwrap().push(options.vocabulary);
             if self.hang {
                 std::future::pending::<()>().await;
             }
@@ -2947,7 +2955,9 @@ mod tests {
             ))
             .await;
             Ok(Transcript {
-                text: format!("at{start}"),
+                text: self
+                    .words
+                    .map_or_else(|| format!("at{start}"), |words| words(start).into()),
                 language: Some("en".into()),
             })
         }
@@ -3102,6 +3112,42 @@ mod tests {
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }
+    }
+    #[tokio::test]
+    async fn every_segment_gets_dictionary_hints_and_the_joined_text_snaps_once() {
+        // 70 s: one segment cut while recording, the tail sent at stop. The term is
+        // split across the boundary, so only the joined text can snap it.
+        let audio = Arc::new(StreamAudio::ramp(70, 60, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            words: Some(|start| {
+                if start == 0 {
+                    "We deploy on next"
+                } else {
+                    "js today."
+                }
+            }),
+            ..SegmentStt::default()
+        });
+        let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio, stt.clone());
+        engine.config.dictionary.words = vec!["Next.js".into()];
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        wait_for(|| !stt.clips.lock().unwrap().is_empty()).await;
+        ask(&tx, Request::Stop).await;
+        success(&mut events).await;
+        let hints = stt.hints.lock().unwrap().clone();
+        assert_eq!(hints.len(), 2, "two segments, no retries");
+        assert!(
+            hints.iter().all(|h| h == &["Next.js".to_string()]),
+            "{hints:?}"
+        );
+        assert_eq!(
+            desktop.injections.lock().unwrap()[0].trim(),
+            "We deploy on Next.js today."
+        );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
     }
     #[tokio::test]
     async fn a_lost_segment_warning_survives_a_cleanup_failure() {
