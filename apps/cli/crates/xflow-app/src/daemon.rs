@@ -925,6 +925,8 @@ impl Engine {
                         // Event only: the state and status message stay with the current session.
                         if self.reloading { self.learned_during_reload = Some(dictionary.clone()); }
                         self.config.dictionary = dictionary;
+                        // Rebuild the snap index now, not on the next dictation.
+                        xflow_core::snap::prepare(&self.config);
                         let mut r = self.status(); r.message = Some(message.clone()); let _ = self.events.send(r);
                         self.notify("XFlow dictionary", &message);
                     }

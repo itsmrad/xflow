@@ -201,7 +201,7 @@ fn candidate(from: &[&str], to: &[&str]) -> Option<Replacement> {
         && !to.split(' ').all(common))
     .then_some(Replacement { from, to })
 }
-fn distance(a: &[char], b: &[char]) -> usize {
+pub(crate) fn distance(a: &[char], b: &[char]) -> usize {
     let mut row: Vec<usize> = (0..=b.len()).collect();
     for (i, ca) in a.iter().enumerate() {
         let mut diagonal = row[0];
@@ -218,7 +218,7 @@ fn distance(a: &[char], b: &[char]) -> usize {
 }
 /// Consonant skeleton with Soundex classes, vowels dropped and repeats merged:
 /// "coopernetties" and "kubernetes" agree.
-fn sounds(letters: &[char]) -> Vec<u8> {
+pub(crate) fn sounds(letters: &[char]) -> Vec<u8> {
     let mut out = Vec::new();
     for c in letters {
         let class = match c {

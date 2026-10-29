@@ -17,9 +17,11 @@ fi
 out=${OUT:-dist}
 work=$out/pkg-work
 rm -rf "$work"
-mkdir -p "$work/root/usr/local/bin" "$work/component"
+mkdir -p "$work/root/usr/local/bin" "$work/root/usr/local/share/doc/xflow" "$work/component"
 cp -R packaging/macos/scripts "$work/scripts"
 install -m755 "$bin/xflow" "$bin/xflowd" "$work/root/usr/local/bin/"
+# Third-party notice for the embedded SCOWL word lists (xflow-core/src/words.rs).
+install -m644 apps/cli/crates/xflow-core/src/SCOWL-LICENSE.txt "$work/root/usr/local/share/doc/xflow/"
 # Grants follow the designated requirement: with a certificate it is identifier +
 # certificate, stable across builds; ad-hoc it is the build's hash, so every new
 # build leaves a stale, switched-on row behind. An untrusted self-signed cert is fine.
