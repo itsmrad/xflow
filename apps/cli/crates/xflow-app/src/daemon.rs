@@ -31,8 +31,7 @@ use xflow_core::{
     },
     AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, FieldEvent,
     GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
-    Transcript,
-    TranscriptionOptions, TransformRequest,
+    Transcript, TranscriptionOptions, TransformRequest,
 };
 
 #[cfg(debug_assertions)]
@@ -2616,6 +2615,8 @@ mod tests {
         field_events: Mutex<Option<mpsc::UnboundedReceiver<FieldEvent>>>,
         /// Focus has left the watched field.
         field_left: Arc<AtomicBool>,
+        /// Field watches started (one per observed paste).
+        watches: AtomicUsize,
     }
     struct ScriptedField {
         field: Arc<Mutex<Option<String>>>,
@@ -2667,6 +2668,7 @@ mod tests {
         }
         async fn watch_field(&self, _: &AppContext) -> Option<Box<dyn xflow_core::FieldWatch>> {
             self.field.lock().unwrap().as_ref()?;
+            self.watches.fetch_add(1, Ordering::SeqCst);
             Some(Box::new(ScriptedField {
                 field: self.field.clone(),
                 events: self.field_events.lock().unwrap().take(),
@@ -3208,6 +3210,35 @@ mod tests {
             expected.join(" ")
         );
         assert_eq!(done.timings.unwrap().audio_ms, 300_000);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// Segments are joined before delivery: one paste of the joined text, and
+    /// auto-learn watches that paste once rather than each segment.
+    #[tokio::test]
+    async fn a_segmented_dictation_is_pasted_and_observed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = Arc::new(StreamAudio::ramp(150, 140, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            ..SegmentStt::default()
+        });
+        let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio.clone(), stt.clone());
+        *desktop.field.lock().unwrap() = Some(String::new());
+        engine.config_path = Some(dir.path().join("config.toml"));
+        let task = tokio::spawn(engine.run(rx));
+        assert!(ask(&tx, Request::start()).await.ok);
+        wait_for(|| stt.clips.lock().unwrap().len() >= 2).await;
+        ask(&tx, Request::Stop).await;
+        let text = success(&mut events).await.text.unwrap();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(stt.clips.lock().unwrap().len() >= 3, "segmented");
+        assert_eq!(*desktop.injections.lock().unwrap(), [text.as_str()]);
+        assert_eq!(
+            desktop.field.lock().unwrap().as_deref(),
+            Some(text.as_str())
+        );
+        assert_eq!(desktop.watches.load(Ordering::SeqCst), 1);
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
