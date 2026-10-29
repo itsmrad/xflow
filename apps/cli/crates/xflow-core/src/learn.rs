@@ -160,12 +160,6 @@ fn utf16_to_byte(s: &str, units: usize) -> Option<usize> {
     }
     (seen == units).then_some(s.len())
 }
-/// Words compared case-insensitively, without the punctuation around them.
-fn words(s: &str) -> Vec<String> {
-    s.split_whitespace()
-        .map(|w| key(w).to_lowercase())
-        .collect()
-}
 /// Suffix LCS lengths of two word lists.
 fn lcs(a: &[String], b: &[String]) -> Vec<Vec<u16>> {
     let mut lcs = vec![vec![0u16; b.len() + 1]; a.len() + 1];
@@ -218,18 +212,27 @@ pub fn corrections(
     corrected: &str,
     dictionary: &DictionaryConfig,
 ) -> Result<Vec<Replacement>, &'static str> {
-    let a: Vec<&str> = original.split_whitespace().map(key).collect();
-    let b: Vec<&str> = corrected.split_whitespace().map(key).collect();
-    // Bounds the LCS matrix below; punctuation-only tokens count here even
-    // though `similar` skips them.
-    if a.len() > MAX_DIFF_WORDS || b.len() > MAX_DIFF_WORDS {
+    // Bounds the work below, punctuation-only tokens included.
+    if original.split_whitespace().count() > MAX_DIFF_WORDS
+        || corrected.split_whitespace().count() > MAX_DIFF_WORDS
+    {
         return Err("too-long");
     }
-    // Case-insensitive, so recapitalizing the next word is not part of a fix.
+    // Punctuation-only tokens ("->", "=") are not words: they take no part in
+    // the alignment and never end up inside a learned term.
+    let tokens = |s| -> Vec<&str> {
+        str::split_whitespace(s)
+            .map(key)
+            .filter(|w| !w.is_empty())
+            .collect()
+    };
+    let (a, b) = (tokens(original), tokens(corrected));
     if !similar(original, corrected) {
         return Err("dissimilar");
     }
-    let (la, lb) = (words(original), words(corrected));
+    // Case-insensitive, so recapitalizing the next word is not part of a fix.
+    let lower = |w: &[&str]| -> Vec<String> { w.iter().map(|w| w.to_lowercase()).collect() };
+    let (la, lb) = (lower(&a), lower(&b));
     // Edits are the unmatched runs between matched words.
     let lcs = lcs(&la, &lb);
     let known = |word: &str| {
@@ -285,9 +288,18 @@ pub fn corrections(
     }
 }
 /// An edit hunk, or its aligned start or end when the user also typed or
-/// deleted words right next to the correction.
+/// deleted words right next to the correction. Words typed right after or
+/// before the fix ("DevTerms 2", "DevTerms done") are not part of it: a
+/// shorter start or end of the new text that already matches wins.
 fn hunk(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
     let (n, m) = (from.len(), to.len());
+    for len in 1..m.min(MAX_HUNK_WORDS + 1) {
+        for part in [&to[..len], &to[m - len..]] {
+            if let Ok(c) = candidate(from, part) {
+                return Ok(c);
+            }
+        }
+    }
     let k = n.min(m);
     candidate(from, to)
         .or_else(|e| candidate(&from[..k], &to[..k]).map_err(|_| e))
@@ -307,6 +319,15 @@ fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
     if from.is_empty() || to.is_empty() || from.len() > MAX_HUNK_WORDS || to.len() > MAX_HUNK_WORDS
     {
         return Err("shape");
+    }
+    // Each word of a multi-word term is a real word: "DevTerms 2", "DevTerms v2"
+    // or "Postgres 1" adds a counter or version, not a spelling.
+    if to.len() > 1
+        && to
+            .iter()
+            .any(|w| w.chars().filter(|c| c.is_alphabetic()).count() < 2)
+    {
+        return Err("counter");
     }
     let (from, to) = (from.join(" "), to.join(" "));
     let plain = from
@@ -585,6 +606,38 @@ mod tests {
                 "shadcn/ui",
             ),
             ("we like re act", "we like React", "re act", "React"),
+            // Punctuation, counters and words typed next to a fix are not part
+            // of the term (independent test B1).
+            (
+                "set dev terms",
+                "set DevTerms -> 2",
+                "dev terms",
+                "DevTerms",
+            ),
+            (
+                "rename it to dev terms",
+                "rename it to DevTerms = v2",
+                "dev terms",
+                "DevTerms",
+            ),
+            (
+                "we use dev terms",
+                "we use \"DevTerms\" = 1",
+                "dev terms",
+                "DevTerms",
+            ),
+            (
+                "we use dev terms",
+                "we use DevTerms 2",
+                "dev terms",
+                "DevTerms",
+            ),
+            (
+                "set dev terms",
+                "set DevTerms done",
+                "dev terms",
+                "DevTerms",
+            ),
             // pr47 rejected camelCase over 6 chars; vocabulary-only learning allows it.
             (
                 "call get user name",
@@ -648,6 +701,39 @@ mod tests {
         assert!(learn("use a very long name", &format!("use {long}")).is_empty());
     }
 
+    #[test]
+    fn learned_terms_are_well_formed_words() {
+        // Never a counter, version or punctuation debris inside a term.
+        assert_eq!(
+            candidate(&["dev", "terms"], &["DevTerms", "2"]).unwrap_err(),
+            "counter"
+        );
+        assert_eq!(
+            candidate(&["dev", "terms"], &["DevTerms", "v2"]).unwrap_err(),
+            "counter"
+        );
+        for (original, corrected) in [
+            ("set dev terms", "set DevTerms -> 2"),
+            ("we use dev terms", "we use \"DevTerms\" = 1"),
+            ("rename to dev terms", "rename to DevTerms = v2 !!"),
+            ("we use dev terms", "we use Dev  Terms -- x"),
+        ] {
+            for r in
+                corrections(original, corrected, &DictionaryConfig::default()).unwrap_or_default()
+            {
+                assert!(
+                    !r.to.contains("  ")
+                        && r.to
+                            .split(' ')
+                            .all(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 2)
+                        && r.to.chars().next().is_some_and(char::is_alphanumeric)
+                        && r.to.chars().last().is_some_and(char::is_alphanumeric),
+                    "{corrected:?} learned {:?}",
+                    r.to
+                );
+            }
+        }
+    }
     #[test]
     fn learning_adds_vocabulary_only_and_removed_words_stay_removed() {
         let mut dictionary = DictionaryConfig::default();

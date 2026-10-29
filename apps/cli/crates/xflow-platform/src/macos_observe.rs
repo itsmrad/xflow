@@ -15,7 +15,7 @@ use std::{
         Arc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
 use xflow_core::{AppContext, FieldEvent, FieldText, FieldWatch};
@@ -110,7 +110,10 @@ fn observe(pid: i32, element: Owned) -> Option<Watch> {
                 return;
             };
             // Freed on this thread after the run loop stops, so no callback outlives it.
-            let context = Box::into_raw(Box::new(tx));
+            let context = Box::into_raw(Box::new(Context {
+                events: tx,
+                edit: std::cell::Cell::new(None),
+            }));
             let add = |element: Ref, name: &str| {
                 let name = Owned::string(name);
                 AXObserverAddNotification(observer.0, element, name.0, context.cast()) == 0
@@ -157,15 +160,33 @@ fn observe(pid: i32, element: Owned) -> Option<Watch> {
         runloop,
     })
 }
+/// Owned by the run-loop thread; callbacks run only there.
+struct Context {
+    events: mpsc::Sender<FieldEvent>,
+    /// When the last value change that was passed on arrived.
+    edit: std::cell::Cell<Option<Instant>>,
+}
+/// Value changes this close to the last one passed on are the same edit: some
+/// apps post AXValueChanged twice per edit, and nobody edits twice in 5 ms.
+const SAME_EDIT: Duration = Duration::from_millis(5);
+fn new_edit(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|t| now.duration_since(t) >= SAME_EDIT)
+}
 unsafe extern "C" fn callback(_: Ref, _: Ref, notification: Ref, context: *mut c_void) {
-    let events = &*(context as *const mpsc::Sender<FieldEvent>);
+    let context = &*(context as *const Context);
     let event = if cf_text(notification).as_deref() == Some("AXValueChanged") {
+        let now = Instant::now();
+        if !new_edit(context.edit.get(), now) {
+            return;
+        }
+        context.edit.set(Some(now));
         FieldEvent::Changed
     } else {
         FieldEvent::Focus
     };
-    // A full queue already holds a pending change for the reader.
-    let _ = events.try_send(event);
+    // A full queue already holds several pending changes, which the reader
+    // treats as unknown history (nothing is learned), never as one.
+    let _ = context.events.try_send(event);
 }
 /// A field that turned secure since it was pinned (a page swapping in a
 /// password input) is no longer read. Fields over MAX_FIELD_UTF16 are skipped
@@ -252,6 +273,15 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    #[test]
+    fn duplicate_value_changes_within_5_ms_are_one_edit() {
+        let t = Instant::now();
+        assert!(new_edit(None, t));
+        assert!(!new_edit(Some(t), t + Duration::from_millis(1)));
+        assert!(!new_edit(Some(t), t + Duration::from_micros(4_999)));
+        assert!(new_edit(Some(t), t + SAME_EDIT));
+        assert!(new_edit(Some(t), t + Duration::from_millis(80)));
+    }
     fn threads() -> usize {
         let out = std::process::Command::new("/bin/ps")
             .args(["-M", "-p", &std::process::id().to_string()])
@@ -298,14 +328,16 @@ mod tests {
         let name = Owned::string("AXSelectedText");
         let edited = Instant::now();
         let set = unsafe { super::super::AXUIElementSetAttributeValue(editor.0, name.0, text.0) };
-        // Wait for a value change specifically; focus notifications are counted apart.
-        let (mut changed_ms, mut focus_events) = (None, 0);
+        // Every notification for this one edit over a full second: more than
+        // one value change (after SAME_EDIT coalescing) means this app would
+        // never learn, since several unread changes end a watch as unsettled.
+        let (mut changed_ms, mut changes, mut focus_events) = (None, 0, 0);
         let _ = tokio::time::timeout(Duration::from_secs(1), async {
             while let Some(event) = watch.next().await {
                 match event {
                     FieldEvent::Changed => {
-                        changed_ms = Some(edited.elapsed().as_millis());
-                        break;
+                        changed_ms.get_or_insert(edited.elapsed().as_millis());
+                        changes += 1;
                     }
                     FieldEvent::Focus => focus_events += 1,
                 }
@@ -315,7 +347,7 @@ mod tests {
         let read_at = Instant::now();
         let after = watch.read().await.expect("unreadable");
         println!(
-            "set={set} changed_ms={changed_ms:?} focus_events={focus_events} read_ms={} len {}->{} caret {:?}->{:?} marker={}",
+            "set={set} changed_ms={changed_ms:?} value_changes={changes} focus_events={focus_events} read_ms={} len {}->{} caret {:?}->{:?} marker={}",
             read_at.elapsed().as_millis(),
             before.value.encode_utf16().count(),
             after.value.encode_utf16().count(),

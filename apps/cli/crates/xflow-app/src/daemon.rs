@@ -1362,7 +1362,9 @@ const FIELD_READ_GAP: Duration = Duration::from_millis(20);
 /// if the clear was the only change since that read, so a word still being
 /// typed is never learned. Notifications carry no text: when more than one
 /// change happened between two reads, the states in between are unknown (a
-/// clear, then a new message) and nothing is learned from that field.
+/// clear, then a new message) and nothing is learned from that field. A change
+/// with no notification at all (an app that doesn't report edits, or a missed
+/// one) is unknown in the same way: only announced edits are ever learned.
 const FIELD_SETTLE: Duration = Duration::from_millis(60);
 /// The span to trust when the dictation has left the field: the last one read,
 /// if the clear was the only change after it. With no unread change the clear's
@@ -1414,6 +1416,8 @@ async fn watch_edit(
     // The last span read, and the last one read twice in a row.
     let (mut good, mut settled) = (String::new(), String::new());
     let (mut dirty, mut left, mut lost) = (true, false, false);
+    // Whether the field has announced any change since the paste.
+    let mut notified = false;
     // Change notifications handled since the last read; events that queued
     // during a read count too, which only errs towards not learning.
     let mut changes = 0;
@@ -1439,6 +1443,7 @@ async fn watch_edit(
             // Queued notifications are counted before any read (see `changes`).
             event = field.next() => match event {
                 Some(FieldEvent::Changed) => {
+                    notified = true;
                     changes += 1;
                     dirty = true;
                     next_read = last_read + FIELD_READ_GAP;
@@ -1478,6 +1483,8 @@ async fn watch_edit(
                 }
                 match anchored.corrected(&text.value) {
                     Some(span) if span == good => settled = good.clone(),
+                    // The span changed without a notification for it.
+                    Some(_) if unread == 0 => return Err(Some("unsettled")),
                     Some(span) => {
                         good = span.to_owned();
                         dirty = true;
@@ -1493,15 +1500,19 @@ async fn watch_edit(
         }
     }
     let receipt = receipt.ok_or(Some("no-receipt"))?;
-    if !lost {
-        // The user moved on: what the field shows now is final, under the same
-        // rule for changes it has not read yet.
+    // The user moved on: what the field shows now is final, under the same
+    // rules. A field that never announced a change is not read again: in an
+    // app that doesn't report edits, the dictation may already be sent and
+    // the field may hold the next message.
+    if !lost && notified {
         let unread = changes;
         if unread > 1 {
             return Err(Some("unsettled"));
         }
         match read(&mut field).await {
             Some(text) => match receipt.corrected(&text.value) {
+                Some(span) if span == good => settled = good.clone(),
+                Some(_) if unread == 0 => return Err(Some("unsettled")),
                 Some(span) => {
                     good = span.to_owned();
                     settled = good.clone();
@@ -3547,8 +3558,10 @@ mod tests {
     async fn corrected_paste_and_history_edit_learn_dictionary_words() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
+        let (notify, field_events) = mpsc::unbounded_channel();
         let desktop = Arc::new(RecordingDesktop {
             field: Arc::new(Mutex::new(Some("Notes: ".into()))),
+            field_events: Mutex::new(Some(field_events)),
             ..RecordingDesktop::default()
         });
         let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
@@ -3589,6 +3602,8 @@ mod tests {
         // After the baseline read, the user fixes a word and edits elsewhere.
         tokio::time::sleep(Duration::from_millis(400)).await;
         *desktop.field.lock().unwrap() = Some("My Notes: Postgres is ready ".into());
+        notify.send(FieldEvent::Changed).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
         ask(&tx, Request::start()).await;
         assert_eq!(
             learned_message(&mut events).await,
@@ -3838,7 +3853,7 @@ mod tests {
             Ok(("post gres is ready ".into(), "Postgres is ready ".into()))
         );
     }
-    /// An app without value notifications: the edit is read when focus leaves
+    /// An app that announces its edits: the edit is read when focus leaves
     /// the field, not after 60 s or at the next dictation.
     #[tokio::test]
     async fn correction_is_learned_when_focus_leaves_the_field() {
@@ -3860,6 +3875,7 @@ mod tests {
         success(&mut events).await;
         tokio::time::sleep(Duration::from_millis(400)).await;
         *desktop.field.lock().unwrap() = Some("Notes: Postgres is ready".into());
+        notify.send(FieldEvent::Changed).unwrap();
         // A focus blip that comes back within the grace keeps watching.
         notify.send(FieldEvent::Focus).unwrap();
         tokio::time::sleep(Duration::from_millis(400)).await;
@@ -3869,6 +3885,105 @@ mod tests {
             learned_message(&mut events).await,
             "Added 'Postgres' to your dictionary"
         );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// Asserts that nothing is learned within 1.5 s and the config has no word.
+    async fn learns_nothing(events: &mut broadcast::Receiver<Response>, path: &std::path::Path) {
+        let _ = tokio::time::timeout(Duration::from_millis(1500), async {
+            loop {
+                if let Some(message) = events.recv().await.unwrap().message {
+                    assert!(!message.starts_with("Added"), "{message}");
+                }
+            }
+        })
+        .await;
+        let config = std::fs::read_to_string(path).unwrap_or_default();
+        assert!(
+            !config.contains("Postgres") && !config.contains("Posters"),
+            "{config}"
+        );
+    }
+    /// An app that never announces edits (or whose observer could not start):
+    /// a dictation sent with Enter is followed by the next message, which must
+    /// never be read as a correction, whatever ends the watch (independent
+    /// test B2). Only announced edits are learned.
+    #[tokio::test]
+    async fn unannounced_edits_are_never_learned() {
+        for (prefix, edits, finish) in [
+            ("", &["", "Posters is ready now"][..], "next-dictation"),
+            ("", &["", "Postgres is ready for staging"][..], "focus"),
+            ("Notes: ", &["Notes: Postgres is ready "][..], "focus"),
+            (
+                "Notes: ",
+                &["Notes: Postgres is ready "][..],
+                "next-dictation",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            // Focus notifications only, as from an app without value changes.
+            let (notify, field_events) = mpsc::unbounded_channel();
+            let desktop = Arc::new(RecordingDesktop {
+                field: Arc::new(Mutex::new(Some(prefix.into()))),
+                field_events: Mutex::new(Some(field_events)),
+                ..RecordingDesktop::default()
+            });
+            let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+            let (mut engine, tx, rx, mut events, _) =
+                fixture(Config::default(), desktop.clone(), store);
+            engine.config_path = Some(path.clone());
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+            success(&mut events).await;
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            for edit in edits {
+                *desktop.field.lock().unwrap() = Some((*edit).into());
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            if finish == "focus" {
+                desktop.field_left.store(true, Ordering::SeqCst);
+                notify.send(FieldEvent::Focus).unwrap();
+            } else {
+                *desktop.field.lock().unwrap() = None;
+                ask(&tx, Request::start()).await;
+            }
+            learns_nothing(&mut events, &path).await;
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    /// A history edit with punctuation and a counter next to the fix learns the
+    /// word alone, never "Postgres  2" (independent test B1).
+    #[tokio::test]
+    async fn history_edit_learns_only_the_well_formed_word() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let desktop = Arc::new(RecordingDesktop::default());
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop.clone(), store);
+        engine.config_path = Some(path.clone());
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        let id = success(&mut events).await.entry.unwrap().id;
+        let edited = ask(
+            &tx,
+            Request::HistoryUpdate {
+                id,
+                text: "Postgres -> 2 is ready".into(),
+            },
+        )
+        .await;
+        assert_eq!(
+            edited.message.as_deref(),
+            Some("Added 'Postgres' to your dictionary")
+        );
+        let dictionary = Config::load(&path).unwrap().dictionary;
+        assert_eq!(dictionary.words, ["Postgres"]);
+        assert!(dictionary.replacements.is_empty());
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
