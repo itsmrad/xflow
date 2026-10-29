@@ -665,12 +665,13 @@ fn bracket(
     w: &[Word<'_>],
     i: usize,
     depth: &mut [usize; 3],
+    last_close: &[Option<usize>; 3],
 ) -> Option<(usize, char, bool)> {
     let (open, kind) = pair(text, w, i)?;
     let ok = if w.len() == 2 {
         true
     } else if open {
-        (i + 2..w.len()).any(|j| pair(text, w, j) == Some((false, kind)))
+        last_close[kind].is_some_and(|j| j > i)
     } else {
         depth[kind] > 0
     };
@@ -712,6 +713,13 @@ pub fn apply(text: &str, config: &Config, mut prose: impl FnMut(&str) -> String)
     let w = words(text);
     let mut out = String::with_capacity(text.len());
     let (mut cursor, mut i, mut last, mut depth) = (0, 0, None, [0; 3]);
+    // One pass, so "open paren" never rescans the rest of a long dictation.
+    let mut last_close = [None; 3];
+    for j in 0..w.len() {
+        if let Some((false, kind)) = pair(text, &w, j) {
+            last_close[kind] = Some(j);
+        }
+    }
     while i < w.len() {
         let (end, code, glue_before, glue_after) = if let Some((end, id)) =
             identifier(text, &w, i, last)
@@ -719,7 +727,7 @@ pub fn apply(text: &str, config: &Config, mut prose: impl FnMut(&str) -> String)
                 .or_else(|| filename(text, &w, i))
         {
             (end, id, false, false)
-        } else if let Some((end, c, open)) = bracket(text, &w, i, &mut depth) {
+        } else if let Some((end, c, open)) = bracket(text, &w, i, &mut depth, &last_close) {
             (end, c.to_string(), !open, open)
         } else {
             i += 1;
@@ -1009,6 +1017,11 @@ mod tests {
             samples[100],
             samples[190]
         );
+        // Worst case stays linear: 60k chars of unbalanced "open paren".
+        let long = "open paren x ".repeat(5_000);
+        let start = std::time::Instant::now();
+        assert_eq!(code(&long, &config), long);
+        assert!(start.elapsed().as_millis() < if cfg!(debug_assertions) { 500 } else { 50 });
         // The whole pre-cleanup pipeline with the pass off (before) and on (after).
         let mut off = config.clone();
         off.formatting.spoken_code = false;
