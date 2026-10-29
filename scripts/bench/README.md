@@ -119,3 +119,104 @@ device/backend traces; no generic millisecond estimate is substituted for them.
 through a `test-support` xflowd as a live microphone and reports checkpoint
 coverage, stop→text latency and daemon RSS. It needs `GROQ_API_KEY` in the
 environment and never reads the Keychain; see its `--help`.
+
+## Scoreboard
+
+`scoreboard.py` measures the whole process tree (xflowd and its descendants, plus
+the recording pill), not just the daemon. It uses only the standard library. On
+macOS it reads `proc_pid_rusage`, which gives RSS, physical footprint, lifetime
+peak footprint, CPU time and interrupt and package-idle wakeups. On Linux it reads
+`/proc`: VmRSS, VmHWM, PSS from `smaps_rollup`, and CPU ticks. Linux has no
+wakeup counter, so voluntary context switches over all threads stand in for one.
+
+```sh
+# macOS reference run: about 12 minutes (5 min idle, 30 dictations at real time).
+cd apps/cli
+cargo build --release --locked -p xflow-app --bin xflowd --bin xflow
+cp target/release/xflowd target/release/xflow ../../target/scoreboard/
+cargo build --release --locked -p xflow-app --features test-support --bin xflowd
+cp target/release/xflowd ../../target/scoreboard/xflowd-test-support
+cd ../..
+set -a; . /path/to/groq.env; set +a          # GROQ_API_KEY; the Keychain is never read
+python3 -B scripts/bench/scoreboard.py run --daemon target/scoreboard/xflowd \
+  --cli target/scoreboard/xflow --session-daemon target/scoreboard/xflowd-test-support \
+  --output docs/benchmarks/scoreboard-macos.json
+python3 -B scripts/bench/scoreboard.py render docs/benchmarks/scoreboard-macos.json
+```
+
+`run` writes the JSON (raw samples, commit, OS, hardware, rustc and binary hashes)
+and a Markdown table beside it. `render` puts that table between the
+`scoreboard` markers in PERFORMANCE.md. Pass `--into README.md` once the README
+carries the same markers. Never edit the numbers by hand.
+
+What each part measures:
+
+- **Startup.** *Cold* runs a fresh copy of the binary (a new inode, so macOS
+  revalidates its code signature) with fresh XDG dirs. *Warm* relaunches that
+  same copy on its existing dirs. Each is timed from spawn to the first
+  successful status reply, polling every 1 ms. The OS file cache is never purged,
+  because that needs root.
+- **Idle.** One daemon, 5 s warmup, then 1 Hz tree samples for 300 s. Reports the
+  median memory, CPU time over wall time, and wakeups per second.
+- **Dictation.** A `test-support` xflowd plays a `say` phrase (48 kHz mono, the
+  built-in mic's format, plus 1 s of silence) as its microphone (`XFLOW_TEST_AUDIO=wav`),
+  calls Groq with `GROQ_API_KEY`, and writes the text to a private sink file. The
+  harness sends `start` with the caller's monotonic `t0_us` and sends `stop` 0.5 s
+  into the silence, the way a key release would. *Stop → text* runs from that stop
+  request to the delivered event, as the client sees it. The daemon's own
+  `timings` are kept too. Thirty runs share one daemon, so the connection pool is
+  warm after the first.
+- **Pill.** In test-support mode, xflowd never spawns the pill. The harness runs the
+  real `xflow overlay-pill` itself and feeds it the daemon's event stream, the way
+  xflowd does natively, so peak tree memory includes it. The pill appears on
+  screen during the run. Nothing else does: no mic, no speakers, no clipboard,
+  no keystrokes and no Keychain.
+- **Wispr Flow.** `run` sums every running `/Applications/Wispr Flow.app` process
+  and records the app version. It never launches the app. If Wispr isn't running,
+  the table lists published third-party figures with sources and dates, labelled
+  as not comparable.
+
+Disclosed bypasses: every daemon runs with `[hotkey] enabled = false`, because
+creating a keyboard event tap from a freshly built binary can raise the Input
+Monitoring prompt. Real microphone open, key-down → first real sample and
+pill-visible time need native probes. Those are queued for the runtime lane and
+listed in the PR for #15.
+
+### Linux CI gate
+
+The `scoreboard gate` job in `.github/workflows/ci.yml` runs `scoreboard.py gate`
+against [`docs/benchmarks/ci-baseline.json`](../../docs/benchmarks/ci-baseline.json).
+It uses release `xflowd` and `xflow`, the only binaries the gate needs. They are
+cached under a key built from the `apps/cli` sources, `Cargo.lock` and the rustc
+version, so a change that doesn't touch the CLI skips the build. The gate takes
+10 startup launches, then idles three daemons side by side for 20 s and reports
+the median of their medians. Each daemon runs its own copy of the binary, so no
+two share text pages, which would split their PSS. It fails when:
+
+- a binary grows by more than `limits.binary_pct`. Sizes are byte-identical
+  between runs; the margin absorbs drift in the stable toolchain;
+- idle tree PSS grows by more than min(`limits.pss_kib`, `limits.pss_pct`);
+- idle tree CPU exceeds `limits.cpu_percent` of one core;
+- warm startup p50 exceeds the absolute `limits.startup_ms` budget. No relative
+  timing is gated, so runner noise can't fail it;
+- any helper process is running at idle.
+
+Measured runner noise behind those limits:
+
+<!-- scoreboard:begin -->
+Generated from [`ci-baseline.json`](../../docs/benchmarks/ci-baseline.json) by `scoreboard.py render`; do not edit by hand. 3 CI runs of `8c44fe2` on AMD EPYC 7763 64-Core Processor, 4 CPUs ([1](https://github.com/itsmrad/xflow/actions/runs/40911629185/attempts/1), [2](https://github.com/itsmrad/xflow/actions/runs/40911629185/attempts/2), [3](https://github.com/itsmrad/xflow/actions/runs/40911629185/attempts/3)):
+
+- Idle tree PSS: run medians 9,385–9,478 KiB (1 %), per-launch medians 9,221–9,653 KiB (5 %). The baseline is 9,398 KiB and the gate allows +939 KiB, 2.2× the per-launch spread.
+- Binaries: `xflow` 7,975,512 B in every run; `xflowd` 11,560,584 B in every run. The gate allows +5 %.
+- Warm startup p50: 2.2–2.7 ms against the absolute 100 ms budget; idle CPU at most 0.0000 % against 0.1 %.
+<!-- scoreboard:end -->
+
+When a change grows a binary or memory on purpose, download the job's
+`scoreboard-gate` artifacts and regenerate the baseline and this text in the
+same PR, so a reviewer sees the growth:
+
+```sh
+python3 -B scripts/bench/scoreboard.py baseline gate-1.json gate-2.json gate-3.json
+python3 -B scripts/bench/scoreboard.py render docs/benchmarks/ci-baseline.json --into scripts/bench/README.md
+python3 -B scripts/bench/test_scoreboard.py   # also fails if any generated text drifts from its JSON
+```

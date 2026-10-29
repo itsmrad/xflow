@@ -1,0 +1,93 @@
+{
+  "about": "Linux CI gate baseline. Regenerate with `scoreboard.py baseline` from scoreboard-gate artifacts in the PR that intentionally changes it.",
+  "limits": {
+    "binary_pct": 5,
+    "cpu_percent": 0.1,
+    "pss_kib": 1024,
+    "pss_pct": 10,
+    "startup_ms": 100
+  },
+  "result": {
+    "binary_bytes": {
+      "xflow": 7975512,
+      "xflowd": 11560584
+    },
+    "idle_cpu_percent": 0.0,
+    "idle_processes": 1,
+    "idle_pss_kib": 9398,
+    "idle_rss_kib": 11660,
+    "startup_p50_ms": 2.2124980000057803
+  },
+  "runs": [
+    {
+      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/40911629185/attempts/1",
+      "commit": "8c44fe20fb99b34998ca1706d5cd90c0943e62bf",
+      "cpu": "AMD EPYC 7763 64-Core Processor",
+      "launch_pss_kib": [
+        9398,
+        9653,
+        9221
+      ],
+      "logical_cpus": 4,
+      "result": {
+        "binary_bytes": {
+          "xflow": 7975512,
+          "xflowd": 11560584
+        },
+        "idle_cpu_percent": 0.0,
+        "idle_processes": 1,
+        "idle_pss_kib": 9398,
+        "idle_rss_kib": 11660,
+        "startup_p50_ms": 2.2124980000057803
+      },
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    },
+    {
+      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/40911629185/attempts/2",
+      "commit": "8c44fe20fb99b34998ca1706d5cd90c0943e62bf",
+      "cpu": "AMD EPYC 7763 64-Core Processor",
+      "launch_pss_kib": [
+        9527,
+        9333,
+        9385
+      ],
+      "logical_cpus": 4,
+      "result": {
+        "binary_bytes": {
+          "xflow": 7975512,
+          "xflowd": 11560584
+        },
+        "idle_cpu_percent": 0.0,
+        "idle_processes": 1,
+        "idle_pss_kib": 9385,
+        "idle_rss_kib": 11648,
+        "startup_p50_ms": 2.7486459999863655
+      },
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    },
+    {
+      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/40911629185/attempts/3",
+      "commit": "8c44fe20fb99b34998ca1706d5cd90c0943e62bf",
+      "cpu": "AMD EPYC 7763 64-Core Processor",
+      "launch_pss_kib": [
+        9458,
+        9478,
+        9527
+      ],
+      "logical_cpus": 4,
+      "result": {
+        "binary_bytes": {
+          "xflow": 7975512,
+          "xflowd": 11560584
+        },
+        "idle_cpu_percent": 0.0,
+        "idle_processes": 1,
+        "idle_pss_kib": 9478,
+        "idle_rss_kib": 11740,
+        "startup_p50_ms": 2.7413850000073126
+      },
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    }
+  ],
+  "schema": "xflow-scoreboard-baseline/1"
+}
