@@ -189,7 +189,7 @@ against [`docs/benchmarks/ci-baseline.json`](../../docs/benchmarks/ci-baseline.j
 It uses release `xflowd` and `xflow`, the only binaries the gate needs. They are
 cached under a key built from the `apps/cli` sources, `Cargo.lock` and the rustc
 version, so a change that doesn't touch the CLI skips the build. The gate takes
-20 startup launches, then idles three daemons side by side for 30 s and reports
+10 startup launches, then idles three daemons side by side for 20 s and reports
 the median of their medians. Each daemon runs its own copy of the binary, so no
 two share text pages, which would split their PSS. It fails when:
 

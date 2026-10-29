@@ -761,8 +761,9 @@ def main(argv=None):
     run_args.add_argument("--idle-seconds", type=float, default=300)
     run_args.add_argument("--startup-samples", type=int, default=30)
     gate_args.add_argument("--baseline", default="docs/benchmarks/ci-baseline.json")
-    gate_args.add_argument("--idle-seconds", type=float, default=30)
-    gate_args.add_argument("--startup-samples", type=int, default=20)
+    # PSS is flat within a launch; 20 s still resolves 0.05 % CPU per daemon.
+    gate_args.add_argument("--idle-seconds", type=float, default=20)
+    gate_args.add_argument("--startup-samples", type=int, default=10)
     gate_args.add_argument("--launches", type=int, default=3)
     sub = commands.add_parser("render")
     sub.set_defaults(func=render_command)
