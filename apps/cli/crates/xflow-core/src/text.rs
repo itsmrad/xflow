@@ -152,7 +152,7 @@ pub fn before_cleanup(text: &str, config: &Config, terminal: bool) -> String {
         text = replace(&text, &pairs, false);
     }
     text = tidy(&text);
-    text = crate::snap::apply(&text, config);
+    text = crate::snap::apply(&text, config, terminal);
     let pairs: Vec<_> = config
         .dictionary
         .replacements

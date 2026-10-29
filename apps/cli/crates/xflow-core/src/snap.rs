@@ -196,8 +196,9 @@ impl Index {
 }
 
 /// Apply fold-equal windows before sound-alikes, longest first within each.
-/// Never rescan inserted text.
-pub fn apply(text: &str, config: &Config) -> String {
+/// Never rescan inserted text. In a `terminal`, case-only snaps are skipped:
+/// commands and arguments are case-sensitive (`docker` must stay `docker`).
+pub fn apply(text: &str, config: &Config, terminal: bool) -> String {
     if !config.formatting.snap_to_dictionary
         || (config.dictionary.words.is_empty() && config.stt.vocabulary.is_empty())
     {
@@ -236,6 +237,11 @@ pub fn apply(text: &str, config: &Config) -> String {
                 }
                 let input = &text[window[0].0..window[count - 1].1];
                 if let Some(target) = index.find(input, count, folded_only) {
+                    let lower =
+                        |s: &str| s.chars().flat_map(char::to_lowercase).collect::<String>();
+                    if terminal && lower(input) == lower(target) {
+                        continue;
+                    }
                     matched = Some((count, target));
                     break 'search;
                 }
@@ -390,7 +396,7 @@ mod tests {
         let prose = include_str!("snap-prose.txt");
         let snapped: Vec<_> = REVIEW_FALSE_SNAPS
             .iter()
-            .map(|input| apply(input, &c))
+            .map(|input| apply(input, &c, false))
             .filter(|output| !REVIEW_FALSE_SNAPS.contains(&output.as_str()))
             .collect();
         assert!(snapped.is_empty(), "{snapped:#?}");
@@ -417,7 +423,7 @@ mod tests {
             ("super base is up", "Supabase is up"),
             ("redis is down", "Redis is down"),
         ] {
-            assert_eq!(apply(input, &c), expected, "{input}");
+            assert_eq!(apply(input, &c, false), expected, "{input}");
         }
     }
 
@@ -425,6 +431,19 @@ mod tests {
         let mut config = Config::default();
         config.dictionary.words = terms.iter().map(|s| (*s).into()).collect();
         config
+    }
+
+    #[test]
+    fn terminals_skip_case_only_snaps() {
+        // PR #82 review S3: commands and arguments are case-sensitive.
+        let c = config(&["Docker", "Claude", "Groq", "GitHub"]);
+        for input in ["docker ps", "claude -p hi", "xflow key set groq"] {
+            assert_eq!(apply(input, &c, true), input, "{input}");
+            assert_eq!(before_cleanup(input, &c, true), input, "{input}");
+        }
+        assert_eq!(apply("docker ps", &c, false), "Docker ps");
+        // Spelling fixes still apply in terminals.
+        assert_eq!(apply("open git hub", &c, true), "open GitHub");
     }
 
     #[test]
@@ -452,7 +471,7 @@ mod tests {
                 ("Next.js and useEffect", "Next.js and useEffect"),
             ] {
                 assert_eq!(
-                    apply(input, &c),
+                    apply(input, &c, false),
                     expected,
                     "{input}, vocabulary={vocabulary}"
                 );
@@ -534,27 +553,30 @@ mod tests {
         ];
         assert!(inputs.len() >= 40);
         for input in inputs {
-            assert_eq!(apply(input, &c), input, "{input}");
+            assert_eq!(apply(input, &c, false), input, "{input}");
         }
         let c = config(&["dploy"]);
-        assert_eq!(apply("deploy kubernetis now", &c), "deploy kubernetis now");
+        assert_eq!(
+            apply("deploy kubernetis now", &c, false),
+            "deploy kubernetis now"
+        );
     }
 
     #[test]
     fn longest_match_nonrecursive_and_cache_invalidation() {
         let mut c = config(&["Dev", "DevTerms", "DevTermsGuide", "Visual Studio Code"]);
         assert_eq!(
-            apply("dev terms guide, visual studio code.", &c),
+            apply("dev terms guide, visual studio code.", &c, false),
             "DevTermsGuide, Visual Studio Code."
         );
         c.dictionary.words = vec!["Next.js".into()];
-        assert_eq!(apply("dev terms next js", &c), "dev terms Next.js");
+        assert_eq!(apply("dev terms next js", &c, false), "dev terms Next.js");
         c.stt.vocabulary.push("useEffect".into());
-        assert_eq!(apply("use effect", &c), "useEffect");
+        assert_eq!(apply("use effect", &c, false), "useEffect");
         let other = c.clone();
         c.dictionary.words.clear();
-        assert_eq!(apply("next js", &c), "next js");
-        assert_eq!(apply("next js", &other), "Next.js");
+        assert_eq!(apply("next js", &c, false), "next js");
+        assert_eq!(apply("next js", &other, false), "Next.js");
     }
 
     #[test]
@@ -576,13 +598,16 @@ mod tests {
     #[test]
     fn ambiguity_is_safe_and_explicit_replacements_follow_snapping() {
         let c = config(&["Postgres", "Postgrus"]);
-        assert_eq!(apply("postgras", &c), "postgras");
+        assert_eq!(apply("postgras", &c, false), "postgras");
         let mut c = config(&["DevTerms"]);
         c.dictionary.replacements.push(crate::config::Replacement {
             from: "DevTerms".into(),
             to: "literal  replacement".into(),
         });
-        assert_eq!(before_cleanup("dev terms", &c, false), "literal  replacement");
+        assert_eq!(
+            before_cleanup("dev terms", &c, false),
+            "literal  replacement"
+        );
     }
 
     #[test]
@@ -596,9 +621,15 @@ mod tests {
             "  next js\n x flow!  ",
             "https://example.com/next.js",
         ]) {
-            assert_eq!(before_cleanup(input, &c, false), before_cleanup(input, &baseline, false));
+            assert_eq!(
+                before_cleanup(input, &c, false),
+                before_cleanup(input, &baseline, false)
+            );
         }
-        assert_eq!(apply("  next js\n x flow!  ", &c), "  next js\n x flow!  ");
+        assert_eq!(
+            apply("  next js\n x flow!  ", &c, false),
+            "  next js\n x flow!  "
+        );
     }
 
     #[test]
@@ -609,7 +640,7 @@ mod tests {
             .lines()
             .filter(|s| !s.is_empty())
         {
-            let output = apply(input, &c);
+            let output = apply(input, &c, false);
             let a: Vec<_> = input.split_whitespace().collect();
             let b: Vec<_> = output.split_whitespace().collect();
             // Word-level Levenshtein counts substitutions, joins and deletions.
@@ -666,7 +697,7 @@ mod tests {
                 .collect();
             let c = config(&terms);
             let text = record["text"].as_str().unwrap();
-            let output = apply(text, &c);
+            let output = apply(text, &c, false);
             let before = cases[i].iter().filter(|t| hit(text, t)).count();
             let after = cases[i].iter().filter(|t| hit(&output, t)).count();
             let key = (
@@ -714,7 +745,7 @@ mod tests {
         eprintln!("index build: {:?}", start.elapsed());
         let start = Instant::now();
         for _ in 0..200 {
-            black_box(apply(black_box(text), black_box(&c)));
+            black_box(apply(black_box(text), black_box(&c), false));
         }
         let mean = start.elapsed() / 200;
         eprintln!("snap 2000 chars x 2000 terms mean: {mean:?}");

@@ -83,7 +83,12 @@ fn markers(text: &str) -> Vec<Marker<'_>> {
     let w = words(text);
     // Without any punctuation (raw engines) boundaries are unknowable; the
     // sequence and item guards still apply.
-    let unpunctuated = !text.contains(['.', ',', ':', ';', '?', '!', '\n']);
+    // Only punctuation that ends a token counts: "Next.js" (a snapped term) and
+    // "v1.2" don't make a transcript punctuated.
+    let unpunctuated = !text.char_indices().any(|(i, c)| {
+        c == '\n'
+            || ".,:;?!".contains(c) && text[i + 1..].chars().next().is_none_or(char::is_whitespace)
+    });
     // "the first time", "our number one priority": noun modifiers, not markers.
     let modifier = |i: usize| i > 0 && DETERMINERS.iter().any(|d| is(&w[i - 1], d));
     let before = |i: usize| text[..w[i].start].trim_end_matches([' ', '\t']);
@@ -606,6 +611,31 @@ mod tests {
                 false
             ),
             "1. Postgres\n2. Redis\n3. Kafka"
+        );
+    }
+
+    #[test]
+    fn spoken_list_items_are_snapped_to_dictionary_terms() {
+        // Snapping runs first, so items carry the saved spelling and case.
+        // Three items: two markers never make a list.
+        let mut c = Config::default();
+        c.dictionary.words = vec!["Next.js".into(), "useEffect".into(), "Postgres".into()];
+        assert_eq!(
+            before_cleanup("one next js two use effect three post gres", &c, false),
+            "1. Next.js\n2. useEffect\n3. Postgres"
+        );
+        assert_eq!(
+            before_cleanup(
+                "Our stack: one, next js, two, use effect, three, post gres.",
+                &c,
+                false
+            ),
+            "Our stack:\n1. Next.js\n2. useEffect\n3. Postgres"
+        );
+        // Two items stay a line, still snapped.
+        assert_eq!(
+            before_cleanup("one next js two use effect", &c, false),
+            "one Next.js two useEffect"
         );
     }
 
