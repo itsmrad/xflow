@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { mono, sans } from "@/lib/fonts";
 import { SITE_URL } from "@/content/site";
+import { SiteFooter } from "@/components/site-footer";
+import { SiteHeader } from "@/components/site-header";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -33,7 +35,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <a href="#content" className="skip-link t-label rounded-sm bg-volt px-3 py-2 text-volt-ink">
           Skip to content
         </a>
+        {/* Header and footer live here once, so every route group (and the 404) shares one client chunk for them. */}
+        <SiteHeader />
         {children}
+        <SiteFooter />
       </body>
     </html>
   );

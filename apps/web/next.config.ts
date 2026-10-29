@@ -1,16 +1,9 @@
 import type { NextConfig } from "next";
 import { createMDX } from "fumadocs-mdx/next";
+import { missingProductionEnv } from "./lib/env";
 
-// A production deploy without these builds green and then answers 500 on every account route and
-// /api/v1 (Clerk: "Missing secretKey"). Fail the build instead. Pro adds its own set once launched.
-if (process.env.VERCEL_ENV === "production") {
-  const required = ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY", "DATABASE_URL"];
-  if (process.env.PRO_LAUNCHED === "1") {
-    required.push("DODO_PAYMENTS_API_KEY", "DODO_PAYMENTS_WEBHOOK_SECRET", "DODO_PRO_PRODUCT_ID", "GROQ_API_KEY");
-  }
-  const missing = required.filter((name) => !process.env[name]);
-  if (missing.length) throw new Error(`production build is missing env: ${missing.join(", ")}`);
-}
+const missing = missingProductionEnv(process.env);
+if (missing.length) throw new Error(`production build is missing env: ${missing.join(", ")}`);
 
 const origin = (url?: string) => {
   try {

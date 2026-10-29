@@ -255,7 +255,8 @@ details.faq[open] .plus { transform: rotate(45deg); }
 .prose :where(ol) { list-style: decimal-leading-zero; padding-left: 32px; }
 .prose :where(ol > li)::marker { color: var(--fg-subtle); font-family: var(--font-mono); font-size: 13px; }
 .prose :where(li + li) { margin-top: 6px; }
-.prose :where(table) { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 22px; display: block; overflow-x: auto; }
+.prose :where(.table-scroll) { overflow-x: auto; }
+.prose :where(table) { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 22px; }
 .prose :where(th) { text-align: left; font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-subtle); background: var(--bg-sunken); padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .prose :where(td) { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
 /* Long paths and URLs wrap instead of widening the page on phones. */

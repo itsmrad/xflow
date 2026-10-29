@@ -1,19 +1,14 @@
-import localFont from "next/font/local";
+import { Geist, Geist_Mono } from "next/font/google";
 
-/** Geist via next/font (self-hosted, size-adjusted fallback). The LCP heading is sans, so only sans is preloaded. */
-export const sans = localFont({
-  src: "../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2",
-  variable: "--font-geist-sans",
-  weight: "100 900",
-  display: "swap",
-});
+/**
+ * Geist via next/font: the latin subset (§10.2: two variable files, ≤ 110 KB), downloaded at build
+ * time and served from our origin, with a size-adjusted fallback. The LCP heading is sans.
+ */
+export const sans = Geist({ subsets: ["latin"], variable: "--font-geist-sans", display: "swap" });
 
-export const mono = localFont({
-  src: "../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2",
+export const mono = Geist_Mono({
+  subsets: ["latin"],
   variable: "--font-geist-mono",
-  weight: "100 900",
   display: "swap",
-  preload: false,
-  adjustFontFallback: false,
   fallback: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
 });

@@ -6,29 +6,32 @@ import { pruneIpLimits } from "@/lib/server/limits";
 import { newApiToken, newDeviceCode, newUserCode } from "@/lib/tokens";
 
 // Per-IP limits can't stop an attacker with many addresses; this bounds the table and the user-code space.
-const MAX_LIVE_CODES = 1000;
+export const MAX_LIVE_CODES = 1000;
 
 /** A new code pair, or null while MAX_LIVE_CODES unexpired codes exist. */
 export async function createDeviceCode(clientName: string) {
   // Old rows only matter until they expire; drop them so user codes can be reused.
-  const [, , live] = await Promise.all([
-    db.execute(sql`DELETE FROM device_codes WHERE expires_at < now() - interval '1 day'`),
-    pruneIpLimits(),
-    db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM device_codes WHERE expires_at > now() AND consumed_at IS NULL`),
-  ]);
-  if ((live.rows[0]?.n ?? 0) >= MAX_LIVE_CODES) return null;
-  for (let attempt = 0; ; attempt++) {
-    const { deviceCode, hash } = newDeviceCode();
-    const userCode = newUserCode();
-    const { rows } = await db.execute(sql`
-      INSERT INTO device_codes (device_code_hash, user_code, client_name, interval_seconds, expires_at)
-      VALUES (${hash}, ${userCode}, ${clientName}, ${DEFAULT_POLL_INTERVAL_SECONDS},
-              now() + make_interval(secs => ${DEVICE_CODE_TTL_SECONDS}))
-      ON CONFLICT (user_code) DO NOTHING
-      RETURNING id`);
-    if (rows.length === 1) return { deviceCode, userCode };
-    if (attempt >= 3) throw new Error("could not allocate a user code");
-  }
+  await Promise.all([db.execute(sql`DELETE FROM device_codes WHERE expires_at < now() - interval '1 day'`), pruneIpLimits()]);
+  // Count and insert under one transaction-scoped lock, so concurrent creators can't both take the last slot.
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('xflow:device-codes'))`);
+    const live = await tx.execute<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM device_codes WHERE expires_at > now() AND consumed_at IS NULL`,
+    );
+    if ((live.rows[0]?.n ?? 0) >= MAX_LIVE_CODES) return null;
+    for (let attempt = 0; ; attempt++) {
+      const { deviceCode, hash } = newDeviceCode();
+      const userCode = newUserCode();
+      const { rows } = await tx.execute(sql`
+        INSERT INTO device_codes (device_code_hash, user_code, client_name, interval_seconds, expires_at)
+        VALUES (${hash}, ${userCode}, ${clientName}, ${DEFAULT_POLL_INTERVAL_SECONDS},
+                now() + make_interval(secs => ${DEVICE_CODE_TTL_SECONDS}))
+        ON CONFLICT (user_code) DO NOTHING
+        RETURNING id`);
+      if (rows.length === 1) return { deviceCode, userCode };
+      if (attempt >= 3) throw new Error("could not allocate a user code");
+    }
+  });
 }
 
 export type PendingDevice = { userCode: string; clientName: string; createdAt: Date };

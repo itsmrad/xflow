@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { ClerkProvider } from "@clerk/nextjs";
-import { SiteFooter } from "@/components/site-footer";
-import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
@@ -39,9 +37,7 @@ const appearance = {
 export default function AccountLayout({ children }: { children: ReactNode }) {
   return (
     <ClerkProvider appearance={appearance}>
-      <SiteHeader />
       <main id="content">{children}</main>
-      <SiteFooter />
     </ClerkProvider>
   );
 }

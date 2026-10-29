@@ -7,6 +7,7 @@ import { userSubscriptions, userTokens } from "@/lib/server/account";
 import { initialUsage, sealUsage, usageWindowStart } from "@/lib/server/realtime";
 import { ensureUser } from "@/lib/server/users";
 import { LiveUsage } from "./live-usage";
+import { UsageTotals } from "./usage-totals";
 import { UserButton } from "@clerk/nextjs";
 import { Crossings } from "@/components/frame";
 import { Badge, buttonClass, Callout } from "@/components/ui";
@@ -133,10 +134,10 @@ export default async function Dashboard({ searchParams }: PageProps<"/dashboard"
             {sealed && realtimeUrl ? (
               <LiveUsage url={realtimeUrl} sealed={sealed} initialData={usage} userId={userId} since={since.toISOString()} />
             ) : (
-              <p className="t-body-sm mt-4 text-fg-muted">
-                No hosted usage yet. Free (BYOK) dictation isn&apos;t counted; it never touches our servers.
-              </p>
+              // Without realtime the totals are still real: fetched once, at page load.
+              <UsageTotals rows={usage} note="as of page load; live updates unavailable" />
             )}
+            <p className="t-caption mt-3 text-fg-subtle">Free (BYOK) dictation isn&apos;t counted; it never touches our servers.</p>
           </section>
 
           <section id="tokens" aria-labelledby="tokens-title" className="p-[var(--cell-p)]">

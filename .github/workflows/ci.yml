@@ -113,6 +113,20 @@ jobs:
           workspaces: apps/cli -> target
       - run: cargo clippy --workspace --all-targets --locked --features xflow-app/test-support -- -D warnings
       - run: cargo test --workspace --locked --features xflow-app/test-support
+      # The CLI, config and provider references are generated from this binary (macOS, like the docs).
+      # A CLI or default-config change that isn't regenerated into the docs fails here.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+      - name: Generated docs are up to date
+        run: |
+          cargo build --locked -p xflow-app --bin xflow
+          scratch=$(mktemp -d)
+          cd ../web
+          XDG_CONFIG_HOME=$scratch/config XDG_DATA_HOME=$scratch/data XDG_STATE_HOME=$scratch/state \
+            XFLOW_BIN=../cli/target/debug/xflow bun scripts/gen-docs.ts
+          git status --porcelain -- content
+          test -z "$(git status --porcelain -- content)" || { git diff -- content; echo "::error::run gen:docs (see apps/web/scripts/gen-docs.ts)"; exit 1; }
 
   extension:
     name: GNOME extension
@@ -182,10 +196,18 @@ jobs:
     needs: web-changes
     if: needs.web-changes.outputs.web == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: apps/web
+    services:
+      # A throwaway database for the migration and concurrency tests.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -197,10 +219,29 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run test
+      - name: Schema and migrations agree (db:generate must produce nothing)
+        run: |
+          bun run db:generate
+          test -z "$(git status --porcelain -- db/migrations)" || { git status --porcelain -- db/migrations; echo "::error::run bun run db:generate and commit the migration"; exit 1; }
+      - name: Migrations apply to an empty database, twice
+        env:
+          DATABASE_URL_UNPOOLED: postgres://postgres:postgres@localhost:5432/postgres
+        run: |
+          bun db/migrate.ts
+          bun db/migrate.ts
+      # Only here: the plain `bun run test` above would otherwise pick these up without react-server.
+      - name: Database tests (admission, billing, device-code cap race)
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: bun run test:db
       - run: bun run build
-      # Public routes only: the account pages need Clerk secrets that CI doesn't have.
-      - name: axe (light and dark)
+      - name: Size budgets (first-load JS, CSS, fonts, HTML)
+        run: bun scripts/budget.ts
+      # Public routes only (the sitemap): the account pages need Clerk secrets that CI doesn't have.
+      - name: axe, overflow and copy fallback against next start
         run: |
           bun run start -p 3000 > /tmp/next.log 2>&1 &
           for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:3000/ && break; sleep 1; done
-          bun scripts/axe.ts http://localhost:3000 / /pricing /download /compare/wispr-flow /docs /docs/getting-started/install /docs/reference/cli /changelog /privacy /terms /security /missing-page
+          bun scripts/axe.ts http://localhost:3000
+          bun scripts/overflow.ts http://localhost:3000
+          bun scripts/copy-check.ts http://localhost:3000

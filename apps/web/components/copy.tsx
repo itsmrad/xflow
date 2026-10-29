@@ -3,14 +3,19 @@
 import { useState } from "react";
 import { IconCheck, IconCopy } from "./icons";
 
-/** 32×32 icon button; ✓ for 1.5 s and an aria-live "Copied" (§7.7). Falls back to selecting text. */
-export function CopyButton({ text, label = "Copy command" }: { text: string; label?: string }) {
+/**
+ * 32×32 icon button; ✓ for 1.5 s and an aria-live "Copied" (§7.7). Copies `text`, or the code block's
+ * visible <pre>. If the clipboard refuses, it selects that <pre> so ⌘C still works.
+ */
+export function CopyButton({ text, label = "Copy code" }: { text?: string; label?: string }) {
   const [done, setDone] = useState(false);
   async function copy(e: React.MouseEvent<HTMLButtonElement>) {
+    // Resolve the target now: React clears currentTarget once the handler awaits.
+    const figure = e.currentTarget.closest("figure");
+    const pre = figure?.querySelector<HTMLElement>("[role=tabpanel]:not([hidden]) pre") ?? figure?.querySelector<HTMLElement>("pre");
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(text ?? pre?.innerText.replace(/\n$/, "") ?? "");
     } catch {
-      const pre = e.currentTarget.closest("figure")?.querySelector("pre");
       if (pre) getSelection()?.selectAllChildren(pre);
       return;
     }

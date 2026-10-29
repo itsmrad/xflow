@@ -1,6 +1,6 @@
 import Link from "next/link";
 import providers from "@/content/providers.json";
-import { Badge } from "./ui";
+import { Badge, TableScroll } from "./ui";
 
 type P = (typeof providers)[number];
 
@@ -33,7 +33,7 @@ export function ProviderGrid() {
 
 export function ProviderTable() {
   return (
-    <table>
+    <TableScroll>
       <thead>
         <tr>
           <th>Provider</th>
@@ -54,6 +54,6 @@ export function ProviderTable() {
           </tr>
         ))}
       </tbody>
-    </table>
+    </TableScroll>
   );
 }

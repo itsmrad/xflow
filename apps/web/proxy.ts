@@ -4,12 +4,14 @@ import { NextResponse } from "next/server";
 const signedInPages = createRouteMatcher(["/dashboard(.*)", "/device(.*)"]);
 // Browser-session APIs. The rest of /api/v1 authenticates itself (xflow token, webhook signature) or
 // is public, and an unknown path falls through to a 404.
-const sessionApi = createRouteMatcher([
-  "/api/v1/billing/(.*)",
+export const SESSION_API = [
+  "/api/v1/billing/checkout",
+  "/api/v1/billing/portal",
   "/api/v1/device/decide",
-  "/api/v1/tokens/(.*)",
-  "/api/v1/usage/(.*)",
-]);
+  "/api/v1/tokens/:id/revoke",
+  "/api/v1/usage/live",
+];
+export const sessionApi = createRouteMatcher(SESSION_API);
 
 export default clerkMiddleware(async (auth, request) => {
   if (signedInPages(request)) {

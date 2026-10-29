@@ -4,8 +4,8 @@ import Link from "next/link";
 import { Pill } from "./pill";
 import { ProviderTable } from "./providers";
 import { Terminal, type Line } from "./terminal";
-import { Callout, Kbd } from "./ui";
-import { CopyText } from "./copy-text";
+import { Callout, Kbd, TableScroll } from "./ui";
+import { CopyButton } from "./copy";
 
 function Steps({ children }: { children: ReactNode }) {
   return <ol className="not-prose my-6 border-y border-line [counter-reset:step]">{children}</ol>;
@@ -28,7 +28,7 @@ function Pre({ title, children, ...props }: ComponentProps<"pre"> & { title?: st
     <figure className="code not-prose relative min-w-0 overflow-hidden rounded-md border border-line bg-bg-sunken">
       <div className="flex h-9 items-center justify-between border-b border-line pl-4 pr-1">
         <figcaption className="t-mono-label text-fg-subtle">[ {title ?? "code"} ]</figcaption>
-        <CopyText />
+        <CopyButton />
       </div>
       <pre {...props} tabIndex={0} style={undefined}>
         {children}
@@ -45,6 +45,7 @@ function A({ href = "", ...props }: ComponentProps<"a">) {
 export const mdxComponents: MDXComponents = {
   pre: Pre,
   a: A,
+  table: ({ children }: ComponentProps<"table">) => <TableScroll>{children}</TableScroll>,
   Callout,
   Kbd,
   Steps,

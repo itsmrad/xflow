@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Children, isValidElement, type ReactNode } from "react";
 import { CLAIMS, type ClaimId } from "@/content/claims";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
@@ -116,4 +116,36 @@ export function Ref({ n }: { n: ClaimId }) {
 
 export function Abbr() {
   return <abbr title="bring your own key">BYOK</abbr>;
+}
+
+const textOf = (node: ReactNode): string =>
+  typeof node === "string" || typeof node === "number"
+    ? String(node)
+    : Array.isArray(node)
+      ? node.map(textOf).join("")
+      : isValidElement<{ children?: ReactNode }>(node)
+        ? textOf(node.props.children)
+        : "";
+
+/** The header cells of a table's first row, for its region label: "Model, Name, Note". */
+function headerLabel(table: ReactNode): string {
+  const kids = (el: ReactNode) => Children.toArray(isValidElement<{ children?: ReactNode }>(el) ? el.props.children : null);
+  const thead = Children.toArray(table).find((c) => isValidElement(c) && c.type === "thead");
+  return kids(kids(thead)[0])
+    .map(textOf)
+    .filter(Boolean)
+    .join(", ");
+}
+
+/**
+ * Wide tables scroll inside this region on phones. It takes focus (with the global focus ring) so
+ * keyboard users can scroll it, and its label names the columns (WCAG scrollable-region-focusable).
+ */
+export function TableScroll({ children }: { children: ReactNode }) {
+  const columns = headerLabel(children);
+  return (
+    <div role="region" tabIndex={0} aria-label={columns ? `Table: ${columns}` : "Table"} className="table-scroll">
+      <table>{children}</table>
+    </div>
+  );
 }
