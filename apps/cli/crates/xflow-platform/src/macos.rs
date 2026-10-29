@@ -9,10 +9,13 @@ use std::{
 };
 use xflow_core::{
     config::{InjectionConfig, InjectionMethod},
-    AppContext, Desktop, InjectionOutcome,
+    AppContext, Desktop, FieldWatch, InjectionOutcome,
 };
 
 const MAX_TEXT: usize = 64 * 1024;
+// A child module so the observer reuses this file's private AX helpers.
+#[path = "macos_observe.rs"]
+mod observe;
 type Ref = *const c_void;
 #[link(name = "IOKit", kind = "framework")]
 extern "C" {
@@ -416,9 +419,7 @@ fn focus() -> Focus {
         return focus;
     };
     let role = role.unwrap_or_default();
-    focus.secure = role == "AXSecureTextField"
-        || element.text("AXSubrole").as_deref() == Some("AXSecureTextField")
-        || element.flag("AXProtectedContent") == Some(true);
+    focus.secure = secure(&element);
     focus.editable = if focus.secure
         || element.flag("AXEnabled") == Some(false)
         || element.flag("AXEditable") == Some(false)
@@ -441,6 +442,19 @@ fn focus() -> Focus {
     };
     focus.element = Some(element);
     focus
+}
+/// A password or otherwise protected field, whose text xflow never reads or pastes into.
+fn secure(element: &Owned) -> bool {
+    is_secure(
+        element.text("AXRole").as_deref(),
+        element.text("AXSubrole").as_deref(),
+        element.flag("AXProtectedContent"),
+    )
+}
+fn is_secure(role: Option<&str>, subrole: Option<&str>, protected: Option<bool>) -> bool {
+    role == Some("AXSecureTextField")
+        || subrole == Some("AXSecureTextField")
+        || protected == Some(true)
 }
 fn is_container(role: &str) -> bool {
     matches!(
@@ -711,18 +725,12 @@ impl Desktop for MacDesktop {
         })
         .await?
     }
-    async fn focused_text(&self) -> Result<(AppContext, Option<String>)> {
-        tokio::task::spawn_blocking(|| {
-            let focus = focus();
-            let text =
-                if focus.editable != Some(true) || is_terminal(focus.context.app_id.as_deref()) {
-                    None
-                } else {
-                    focus.element.and_then(|e| e.text("AXValue"))
-                };
-            Ok((focus.context, text))
-        })
-        .await?
+    async fn watch_field(&self, target: &AppContext) -> Option<Box<dyn FieldWatch>> {
+        let target = target.clone();
+        let watch = tokio::task::spawn_blocking(move || observe::watch(&target))
+            .await
+            .ok()??;
+        Some(Box::new(watch))
     }
     async fn copy(&self, text: &str) -> Result<()> {
         let _delivery = self.delivery.lock().await;
@@ -989,10 +997,10 @@ mod tests {
             Some("com.apple.TextEdit"),
             "focus a scratch TextEdit document first"
         );
-        assert!(
-            desktop.focused_text().await.unwrap().1.is_some(),
-            "focused element must be editable"
-        );
+        let mut field = desktop
+            .watch_field(&context)
+            .await
+            .expect("focused element must be editable");
         assert_eq!(
             desktop
                 .inject("xflow macOS delivery check", &context)
@@ -1001,12 +1009,11 @@ mod tests {
             InjectionOutcome::Pasted
         );
         tokio::time::sleep(Duration::from_millis(500)).await;
-        assert!(desktop
-            .focused_text()
+        assert!(field
+            .read()
             .await
             .unwrap()
-            .1
-            .unwrap()
+            .value
             .contains("xflow macOS delivery check"));
         assert_eq!(read_previous(CLIPBOARD.into()).await.unwrap(), previous);
     }
@@ -1150,6 +1157,18 @@ mod tests {
         // Let the abandoned read return before the next test touches HIServices.
         std::thread::sleep(Duration::from_millis(300));
         let _ = pasteboard.write("");
+    }
+    #[test]
+    fn secure_role_subrole_or_protected_content_is_never_read() {
+        assert!(is_secure(Some("AXSecureTextField"), None, None));
+        assert!(is_secure(
+            Some("AXTextField"),
+            Some("AXSecureTextField"),
+            None
+        ));
+        assert!(is_secure(Some("AXTextArea"), None, Some(true)));
+        assert!(!is_secure(Some("AXTextArea"), None, Some(false)));
+        assert!(!is_secure(Some("AXTextField"), None, None));
     }
     #[test]
     fn editability_selects_paste_copy_or_both() {

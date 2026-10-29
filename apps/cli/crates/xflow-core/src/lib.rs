@@ -176,12 +176,41 @@ pub trait Desktop: Send + Sync {
     async fn selection(&self) -> Result<Option<String>> {
         Ok(None)
     }
-    /// The focus context and the full value of the focused editable text element,
-    /// from one lookup, for learning user corrections; the text is None when
-    /// unavailable or secure.
-    async fn focused_text(&self) -> Result<(AppContext, Option<String>)> {
-        Ok((self.context().await?, None))
+    /// Pin the focused editable field, if it is still in `target`, and watch it
+    /// while the user may correct a dictation. None when unsupported, secure, a
+    /// terminal, or focus moved. Dropping the watch releases everything.
+    async fn watch_field(&self, _target: &AppContext) -> Option<Box<dyn FieldWatch>> {
+        None
     }
+}
+
+/// A pinned text field, for learning user corrections.
+#[async_trait]
+pub trait FieldWatch: Send {
+    /// The next change or focus notification; pending forever when the desktop
+    /// cannot notify, None once the field is gone.
+    async fn next(&mut self) -> Option<FieldEvent>;
+    /// A notification already queued, without waiting.
+    fn try_next(&mut self) -> Option<FieldEvent>;
+    /// The field's value and caret now, read from the pinned element even when
+    /// focus has moved on.
+    async fn read(&mut self) -> Option<FieldText>;
+    /// Whether the pinned field still has keyboard focus.
+    async fn focused(&mut self) -> bool;
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldEvent {
+    Changed,
+    /// Focus may have left the field; re-check after a short grace.
+    Focus,
+}
+/// Fields longer than this (UTF-16 units) are not read for learning: each read
+/// copies the whole value across processes, on every edit.
+pub const MAX_FIELD_UTF16: usize = 20_000;
+pub struct FieldText {
+    pub value: String,
+    /// End of the selection in UTF-16 units, when the field reports one.
+    pub caret: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
