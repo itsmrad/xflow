@@ -132,7 +132,7 @@ export default async function DocsPage({ params }: { params: Promise<{ slug?: st
           </article>
           <aside className="hidden border-l border-line xl:block">
             <div className="sticky top-16 max-h-[calc(100dvh-64px)] overflow-y-auto p-6">
-              <Toc toc={page.data.toc} />
+              <Toc toc={page.data.toc} path={page.url} />
             </div>
           </aside>
         </div>

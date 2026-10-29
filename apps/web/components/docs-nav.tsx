@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Root, Node } from "fumadocs-core/page-tree";
 import type { TOCItemType } from "fumadocs-core/toc";
+import { TocTracker } from "./toc-tracker";
 
 /**
  * Sidebar from the page tree (§7.21): groups as mono labels, active item with a 2px Volt bar.
@@ -55,8 +56,8 @@ function Item({ url, name, active, group = false }: { url: string; name: React.R
   );
 }
 
-/** "On this page" as plain anchor links: no scroll-spy client code on read-only pages. */
-export function Toc({ toc }: { toc: TOCItemType[] }) {
+/** "On this page": server-rendered anchors; TocTracker (a few hundred bytes) marks the heading in view. */
+export function Toc({ toc, path }: { toc: TOCItemType[]; path: string }) {
   if (toc.length === 0) return null;
   return (
     <nav aria-label="On this page">
@@ -66,7 +67,7 @@ export function Toc({ toc }: { toc: TOCItemType[] }) {
           <li key={t.url}>
             <a
               href={t.url}
-              className="t-caption -ml-px block border-l border-transparent py-1 text-fg-muted transition-colors duration-[120ms] hover:border-line-strong hover:text-fg"
+              className="t-caption -ml-px block border-l border-transparent py-1 text-fg-muted transition-colors duration-[120ms] hover:border-line-strong hover:text-fg aria-[current=location]:border-volt aria-[current=location]:text-fg"
               style={{ paddingLeft: 12 + (t.depth - 2) * 12 }}
             >
               {t.title}
@@ -74,6 +75,8 @@ export function Toc({ toc }: { toc: TOCItemType[] }) {
           </li>
         ))}
       </ul>
+      {/* Keyed by page: provider pages share heading ids, and the tracker must re-run per page. */}
+      <TocTracker key={path} />
     </nav>
   );
 }

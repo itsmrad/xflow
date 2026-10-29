@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef } from "react";
 
 /** Nav links with aria-current; client only because the active route is known after navigation. */
 export function NavLinks({ links, className = "", vertical = false }: { links: readonly { href: string; label: string }[]; className?: string; vertical?: boolean }) {
@@ -16,11 +15,11 @@ export function NavLinks({ links, className = "", vertical = false }: { links: r
             <Link
               href={l.href}
               aria-current={current ? "page" : undefined}
-              className={
+              className={`t-label text-fg-muted aria-[current=page]:text-fg ${
                 vertical
-                  ? `t-label flex h-12 items-center border-b border-line px-[var(--gutter)] ${current ? "text-fg" : "text-fg-muted"}`
-                  : `t-label relative inline-flex h-16 items-center px-3 transition-colors duration-[120ms] hover:text-fg ${current ? "text-fg after:absolute after:inset-x-3 after:bottom-[13px] after:h-0.5 after:bg-volt" : "text-fg-muted"}`
-              }
+                  ? "flex h-12 items-center border-b border-line px-[var(--gutter)]"
+                  : "relative inline-flex h-16 items-center px-3 transition-colors duration-[120ms] hover:text-fg aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3 aria-[current=page]:after:bottom-[13px] aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-volt"
+              }`}
             >
               {l.label}
             </Link>
@@ -29,18 +28,4 @@ export function NavLinks({ links, className = "", vertical = false }: { links: r
       })}
     </ul>
   );
-}
-
-/** Closes the native popover menu after navigation (§7.1). */
-export function CloseMenuOnNavigate({ id }: { id: string }) {
-  const path = usePathname();
-  const first = useRef(true);
-  useEffect(() => {
-    if (first.current) {
-      first.current = false;
-      return;
-    }
-    document.getElementById(id)?.hidePopover?.();
-  }, [path, id]);
-  return null;
 }

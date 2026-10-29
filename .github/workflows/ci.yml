@@ -238,10 +238,10 @@ jobs:
       - name: Size budgets (first-load JS, CSS, fonts, HTML)
         run: bun scripts/budget.ts
       # Public routes only (the sitemap): the account pages need Clerk secrets that CI doesn't have.
-      - name: axe, overflow and copy fallback against next start
+      - name: axe, overflow and UI checks against next start
         run: |
           bun run start -p 3000 > /tmp/next.log 2>&1 &
           for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:3000/ && break; sleep 1; done
           bun scripts/axe.ts http://localhost:3000
           bun scripts/overflow.ts http://localhost:3000
-          bun scripts/copy-check.ts http://localhost:3000
+          bun scripts/ui-check.ts http://localhost:3000

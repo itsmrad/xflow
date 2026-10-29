@@ -1,9 +1,11 @@
 import { NAV, REPO } from "@/content/site";
 import { getStars } from "@/lib/github";
-import { CloseMenuOnNavigate, NavLinks } from "./header-client";
+import { NavLinks } from "./header-client";
 import { IconGitHub, IconMenu } from "./icons";
 import { Button } from "./ui";
 import { Wordmark } from "./wordmark";
+
+const CLOSE_MENU = `document.currentScript.parentElement.addEventListener("click",e=>{if(e.target.closest("a"))e.currentTarget.hidePopover?.()})`;
 
 export async function SiteHeader() {
   const stars = await getStars();
@@ -44,7 +46,8 @@ export async function SiteHeader() {
         <nav aria-label="Mobile">
           <NavLinks links={[...NAV, { href: "/sign-in", label: "Sign in" }]} vertical />
         </nav>
-        <CloseMenuOnNavigate id="site-menu" />
+        {/* Close the menu when a link in it is followed. The header lives in the root layout, so this runs once. */}
+        <script dangerouslySetInnerHTML={{ __html: CLOSE_MENU }} />
       </div>
     </header>
   );

@@ -266,3 +266,9 @@ details.faq[open] .plus { transform: rotate(45deg); }
 .prose :where(blockquote) { border-left: 2px solid var(--line-strong); padding-left: 16px; }
 .prose :where(h2, h3) a { text-decoration: none; color: inherit; }
 .prose > figure.code, .prose > .not-prose { color: var(--fg); }
+
+/* Docs search (components/docs-search.tsx). In CSS rather than className strings: it ships on every docs page. */
+.search-button { @apply t-body-sm flex h-9 w-full items-center gap-2 rounded-sm border border-line bg-bg-raised px-3 text-fg-subtle hover:border-line-strong; }
+.search-button > span { @apply flex-1 text-left; }
+.search-button > kbd { @apply t-mono-sm hidden rounded-xs border border-line px-1.5 text-[12px] pointer-fine:inline; }
+.search-dialog { @apply mx-auto mt-[12vh] w-[min(640px,calc(100%-24px))] rounded-md border border-line bg-bg-raised p-0 text-fg shadow-2 backdrop:bg-[color-mix(in_oklab,var(--bg)_70%,transparent)] backdrop:backdrop-blur-sm; }

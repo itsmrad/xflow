@@ -16,7 +16,7 @@ Checks (CI runs the same ones in the `web` job):
 bun run lint && bun run typecheck && bun run test && bun run build
 bun run start & bun scripts/axe.ts http://localhost:3000 /sign-in   # every sitemap route, both themes, 375 px and desktop
 bun scripts/overflow.ts http://localhost:3000 /sign-in              # no page wider than 390/768/1440
-bun scripts/copy-check.ts http://localhost:3000                     # copy buttons with the clipboard refused
+bun scripts/ui-check.ts http://localhost:3000                     # copy fallback, blocked-storage theme, TOC tracking
 bun scripts/budget.ts                                               # first-load JS and font bytes, after a build
 TEST_DATABASE_URL=postgres://… bun run test:db                      # throwaway database only
 ```
