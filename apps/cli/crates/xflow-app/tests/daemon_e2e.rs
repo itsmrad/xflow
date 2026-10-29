@@ -1014,11 +1014,24 @@ async fn long_dictation_streams_segments_through_the_real_daemon() {
     state(&mut events, State::Listening).await;
     // The capture finishes at the end of the file, which stops the dictation.
     state(&mut events, State::Processing).await;
+    // The Processing event is sent after stop() queues the tail. Under load the
+    // bodies of segments already handed to the provider are still in
+    // spawn_blocking, so try_recv at this instant races. The daemon records each
+    // send before the stop line; that order is the "while recording" proof.
+    let trace = fs::read_to_string(daemon.root.path().join("segments.trace")).unwrap();
+    let while_recording = trace
+        .lines()
+        .take_while(|line| !line.starts_with("stop"))
+        .filter(|line| line.starts_with("send"))
+        .count();
+    assert!(
+        while_recording >= 2,
+        "segments upload while recording ({while_recording} before stop)\n{trace}"
+    );
     let mut uploads = Vec::new();
     while let Ok(upload) = mock.uploads.try_recv() {
         uploads.push(upload);
     }
-    assert!(uploads.len() >= 2, "segments upload while recording");
     let done = state(&mut events, State::Success).await;
     while let Ok(upload) = timeout(Duration::from_millis(200), mock.upload()).await {
         uploads.push(upload);
