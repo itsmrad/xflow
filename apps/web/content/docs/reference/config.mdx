@@ -50,7 +50,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `recording.max_seconds` | `120` |  |
+| `recording.max_seconds` | `1200` | hard stop in seconds (at most 20 minutes) |
 | `recording.silence_threshold` | `0.005` | minimum 20 ms frame RMS; speech must last at least 80 ms |
 | `recording.device` | unset | `xflow devices`; unset = system default input; e.g. `"USB Microphone"` |
 | `recording.min_ms` | `300` | shorter taps are discarded without upload |
@@ -179,7 +179,7 @@ hold_threshold_ms = 500      # releases sooner than this are taps (Wispr Flow's 
 enabled = true
 
 [recording]
-max_seconds = 120
+max_seconds = 1200           # hard stop in seconds (at most 20 minutes)
 silence_threshold = 0.005    # minimum 20 ms frame RMS; speech must last at least 80 ms
 # device = "USB Microphone"  # `xflow devices`; unset = system default input
 min_ms = 300                 # shorter taps are discarded without upload
