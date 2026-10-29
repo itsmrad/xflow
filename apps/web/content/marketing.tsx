@@ -29,8 +29,8 @@ export const FAQ: { q: string; a: ReactNode; text: string }[] = [
   },
   {
     q: "Why should I trust a dictation tool with my keyboard?",
-    text: "You can read every line. xflow is MIT-licensed, logs no text, refuses password fields, and on macOS needs only Microphone and Accessibility. Input Monitoring is asked for only if the shortcut still isn't heard.",
-    a: "You can read every line. xflow is MIT-licensed, logs no text, refuses password fields, and on macOS needs only Microphone and Accessibility. Input Monitoring is asked for only if the shortcut still isn't heard.",
+    text: "You can read every line. xflow is MIT-licensed, logs no text, refuses password fields on macOS, and there needs only Microphone and Accessibility. Input Monitoring is asked for only if the shortcut still isn't heard.",
+    a: "You can read every line. xflow is MIT-licensed, logs no text, refuses password fields on macOS, and there needs only Microphone and Accessibility. Input Monitoring is asked for only if the shortcut still isn't heard.",
   },
 ];
 

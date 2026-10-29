@@ -31,6 +31,8 @@ const appearance = {
     footerActionLink: { color: "var(--volt-text)", fontWeight: 500 },
     formFieldAction: { color: "var(--volt-text)" },
     identityPreviewEditButton: { color: "var(--volt-text)" },
+    // Clerk draws this border with a shadow that disappears on dark backgrounds.
+    socialButtonsBlockButton: { border: "1px solid var(--line-input)", boxShadow: "none" },
   },
 };
 

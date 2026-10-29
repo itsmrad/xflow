@@ -1,13 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalPage, Mail } from "@/components/legal";
-import { REPO } from "@/content/site";
+import { LEGAL_UPDATED, REPO } from "@/content/site";
 
-export const metadata: Metadata = { title: "Security", alternates: { canonical: "/security" } };
+export const metadata: Metadata = {
+  title: "Security",
+  description: "Report a vulnerability in xflow, and what xflow can touch on your machine.",
+  alternates: { canonical: "/security" },
+};
 
 export default function Security() {
   return (
-    <LegalPage title="Security" lede="How to report a vulnerability, and what xflow can touch on your machine." updated="2026-10-29">
+    <LegalPage title="Security" lede="How to report a vulnerability, and what xflow can touch on your machine." updated={LEGAL_UPDATED}>
       <h2>Report a vulnerability</h2>
       <p>
         Email <Mail />, or use <a href={`${REPO}/security/advisories/new`}>GitHub private vulnerability reporting</a>. Please don&apos;t open a public

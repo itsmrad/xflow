@@ -27,10 +27,10 @@ export default async function DevicePage({ searchParams }: PageProps<"/device">)
       <CenterPanel label="CLI sign-in">
         <Panel>
           <h1 className="t-h2 text-fg">Connect the xflow CLI</h1>
-          <p className="t-body mt-3 text-fg-muted">Enter the code shown in your terminal after <code className="t-mono-sm text-fg">xflow login</code>.</p>
+          <p className="t-body mt-3 text-fg-muted">Enter the code your terminal shows when the CLI signs in. CLI sign-in arrives with Pro.</p>
           {expired && (
             <p role="alert" className="t-body-sm mt-4 text-rec">
-              That code has expired or was already used. Run <code className="t-mono-sm">xflow login</code> again to get a new one.
+              That code has expired or was already used. Start the sign-in again from your terminal to get a new one.
             </p>
           )}
           {limited && (
@@ -75,7 +75,7 @@ export default async function DevicePage({ searchParams }: PageProps<"/device">)
         <p className="t-body mt-3 text-fg-muted">Check that this code matches the one in your terminal.</p>
         <p className="mt-6 rounded-sm border border-line bg-bg-sunken px-4 py-3 text-center font-mono text-[28px] leading-9 tracking-[0.3em] text-fg">{device.userCode}</p>
         <p className="t-caption mt-3 text-fg-subtle">
-          From <span className="text-fg">{device.clientName}</span>, requested {minutesAgo(device.createdAt)}.
+          Device name (reported by the CLI): <span className="text-fg">{device.clientName}</span>. Requested {minutesAgo(device.createdAt)}.
         </p>
         <form method="post" action="/api/v1/device/decide" className="mt-6 grid grid-cols-2 gap-3">
           <input type="hidden" name="user_code" value={device.userCode} />
@@ -113,7 +113,7 @@ function Notice({ text, ok = false }: { text: string; ok?: boolean }) {
           {ok && <span className="mr-2 text-ok">✓</span>}
           {text}
         </h1>
-        <p className="t-body mt-3 text-fg-muted">{ok ? "You can close this tab." : "Run xflow login again if this was a mistake."}</p>
+        <p className="t-body mt-3 text-fg-muted">{ok ? "You can close this tab." : "Start the sign-in again from your terminal if this was a mistake."}</p>
       </Panel>
     </CenterPanel>
   );

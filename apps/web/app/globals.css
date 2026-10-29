@@ -112,6 +112,8 @@ abbr[title] { text-decoration: none; cursor: help; }
 .rule > .spark-r { right: -8px; }
 
 .label-row { height: 48px; display: flex; align-items: center; padding-inline: var(--cell-p); }
+/* Grid items default to min-width: auto and grow to their widest <pre>; 0 lets code blocks scroll instead. */
+.cell, .cells > *, .grid > * { min-width: 0; }
 .cell { padding: var(--cell-p); }
 .section-y { padding-block: var(--section-y); }
 
@@ -256,6 +258,8 @@ details.faq[open] .plus { transform: rotate(45deg); }
 .prose :where(table) { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 22px; display: block; overflow-x: auto; }
 .prose :where(th) { text-align: left; font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-subtle); background: var(--bg-sunken); padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .prose :where(td) { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+/* Long paths and URLs wrap instead of widening the page on phones. */
+.prose :where(a, :not(pre) > code) { overflow-wrap: anywhere; }
 .prose :where(td code) { white-space: nowrap; }
 .prose :where(hr) { border: 0; border-top: 1px solid var(--line); margin-block: 32px; }
 .prose :where(blockquote) { border-left: 2px solid var(--line-strong); padding-left: 16px; }

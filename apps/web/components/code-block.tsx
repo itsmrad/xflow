@@ -19,7 +19,7 @@ export async function CodeBlock({
 }) {
   const html = await highlight(code, lang, hl);
   return (
-    <figure className={`code not-prose relative overflow-hidden rounded-md border border-line bg-bg-sunken ${numbered ? "numbered" : ""} ${className}`}>
+    <figure className={`code not-prose relative min-w-0 overflow-hidden rounded-md border border-line bg-bg-sunken ${numbered ? "numbered" : ""} ${className}`}>
       <div className="flex h-9 items-center justify-between border-b border-line pl-4 pr-1">
         <figcaption className="t-mono-label text-fg-subtle">[ {filename ?? lang} ]</figcaption>
         <CopyButton text={code.trim()} label="Copy code" />

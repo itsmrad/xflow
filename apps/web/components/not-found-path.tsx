@@ -1,12 +1,17 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { useSyncExternalStore } from "react";
 
-/** Prints the missing path (§9.11). The page stays static; only the path is client-side. */
+const noop = () => () => {};
+
+/**
+ * Prints the missing path (§9.11). The 404 is prerendered once for every path, so the server
+ * snapshot is a placeholder and the real path appears after hydration (no #418 mismatch).
+ */
 export function NotFoundPath() {
-  const path = usePathname() || "/";
+  const path = useSyncExternalStore(noop, () => location.pathname, () => "…");
   return (
-    <code className="grid">
+    <code className="grid whitespace-pre-wrap break-all">
       <span>
         <span aria-hidden className="select-none text-syn-muted">$ </span>open {path}
       </span>

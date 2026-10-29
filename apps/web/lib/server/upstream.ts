@@ -5,6 +5,7 @@ import { usageEvents } from "@/db/schema";
 import { GROQ_BASE_URL, provablyNotSent, publicBody, publicMessage } from "@/lib/groq";
 import { json } from "@/lib/http";
 import { FAIR_USE } from "@/lib/pricing";
+import { proLaunched } from "@/lib/billing";
 import { admit, releaseSlot, settle, type Admission } from "@/lib/server/limits";
 import type { ApiCaller } from "@/lib/server/api-auth";
 
@@ -32,7 +33,10 @@ function fail(status: number, message: string, code?: string, headers: HeadersIn
 
 /** Gate shared by both proxy routes. Returns an error response, or null to proceed. */
 export function gate(caller: ApiCaller): Response | null {
-  if (!caller.pro) return fail(402, "hosted transcription needs xflow Pro; subscribe at /dashboard", "pro_required");
+  if (!caller.pro) {
+    const how = proLaunched() ? "subscribe at /dashboard" : "Pro is coming soon";
+    return fail(402, `hosted transcription needs xflow Pro; ${how}`, "pro_required");
+  }
   if (!groqKey()) return fail(503, "hosted transcription is not configured");
   return null;
 }

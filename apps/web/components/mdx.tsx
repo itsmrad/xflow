@@ -25,7 +25,7 @@ function Step({ title, children }: { title: string; children: ReactNode }) {
 /** Fenced code: Shiki output from rehype-code, wrapped in our CodeBlock chrome with a copy button. */
 function Pre({ title, children, ...props }: ComponentProps<"pre"> & { title?: string }) {
   return (
-    <figure className="code not-prose relative overflow-hidden rounded-md border border-line bg-bg-sunken">
+    <figure className="code not-prose relative min-w-0 overflow-hidden rounded-md border border-line bg-bg-sunken">
       <div className="flex h-9 items-center justify-between border-b border-line pl-4 pr-1">
         <figcaption className="t-mono-label text-fg-subtle">[ {title ?? "code"} ]</figcaption>
         <CopyText />

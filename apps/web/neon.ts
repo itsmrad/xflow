@@ -4,8 +4,10 @@ import { defineConfig } from "@neon/config/v1";
 // Object storage: CLI release binaries, served through presigned URLs.
 // No Neon Functions: every server path runs in the Next.js app on Vercel.
 export default defineConfig({
+  // Realtime ("preview" is Neon's name for the service tier, not an environment): the origins whose
+  // browsers may open the dashboard's live usage socket.
   preview: {
-    realtime: { allowedOrigins: ["http://localhost:3000"] },
+    realtime: { allowedOrigins: ["https://xflowcli.vercel.app", "http://localhost:3000"] },
   },
   auth: false,
   buckets: {

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(
     name = "xflow",
     version,
-    about = "Fast Linux dictation, from your terminal",
+    about = "Fast dictation for developers, from your terminal",
     after_help = "Start here: xflow (in a terminal: setup, then the control centre)\nExplore: xflow <command> --help\nPipe text: xflow listen --seconds 5\nExit codes: 0 success, 1 operation failed, 2 usage, 3 daemon unavailable, 4 config, 5 provider, 6 doctor."
 )]
 pub struct Cli {

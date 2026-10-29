@@ -16,7 +16,7 @@ export function AuthSlot() {
   const on = useSyncExternalStore(() => () => {}, signedIn, () => false);
   return (
     <span className="inline-flex w-[96px] justify-end">
-      <Link href={on ? "/dashboard" : "/sign-in"} className="t-label inline-flex h-8 items-center rounded-sm px-3 text-fg-muted transition-colors duration-[120ms] hover:bg-ink-a4 hover:text-fg">
+      <Link href={on ? "/dashboard" : "/sign-in"} prefetch={false} className="t-label inline-flex h-8 items-center rounded-sm px-3 text-fg-muted transition-colors duration-[120ms] hover:bg-ink-a4 hover:text-fg">
         {on ? "Dashboard" : "Sign in"}
       </Link>
     </span>

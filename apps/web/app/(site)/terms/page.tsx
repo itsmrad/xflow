@@ -1,13 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalPage, Mail } from "@/components/legal";
-import { REPO } from "@/content/site";
+import { LEGAL_UPDATED, REPO } from "@/content/site";
 
-export const metadata: Metadata = { title: "Terms", alternates: { canonical: "/terms" } };
+export const metadata: Metadata = {
+  title: "Terms",
+  description: "The terms for using xflow, its hosted plans and this website.",
+  alternates: { canonical: "/terms" },
+};
 
 export default function Terms() {
   return (
-    <LegalPage title="Terms" lede="The terms for using xflow, its hosted plans and this website." updated="2026-10-29">
+    <LegalPage title="Terms" lede="The terms for using xflow, its hosted plans and this website." updated={LEGAL_UPDATED}>
       <h2>Who we are</h2>
       <p>
         xflow and this website are run by an individual developer based in India (&ldquo;we&rdquo;, &ldquo;us&rdquo;). Contact: <Mail />. By using

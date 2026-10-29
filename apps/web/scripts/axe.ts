@@ -1,12 +1,12 @@
 /**
  * Accessibility check: axe-core on every public route, light and dark (§10.1).
- * `bun scripts/axe.ts [baseUrl]` against `next start`; exits 1 on any violation.
+ * `bun scripts/axe.ts [baseUrl] [routes...]` against `next start`; exits 1 on any violation.
  */
 import AxeBuilder from "@axe-core/playwright";
 import { chromium } from "@playwright/test";
 
-const base = process.argv[2] ?? "http://localhost:3000";
-const ROUTES = ["/", "/pricing", "/download", "/compare/wispr-flow", "/docs", "/docs/getting-started/install", "/docs/reference/cli", "/changelog", "/privacy", "/terms", "/security", "/sign-in", "/missing-page"];
+const [base = "http://localhost:3000", ...only] = process.argv.slice(2);
+const ROUTES = only.length ? only : ["/", "/pricing", "/download", "/compare/wispr-flow", "/docs", "/docs/getting-started/install", "/docs/reference/cli", "/changelog", "/privacy", "/terms", "/security", "/sign-in", "/missing-page"];
 
 const browser = await chromium.launch({ channel: "chrome" });
 let failed = 0;

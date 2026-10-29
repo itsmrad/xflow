@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { CodeBlock } from "@/components/code-block";
 import { Crossings, Heading, Section } from "@/components/frame";
@@ -11,6 +12,8 @@ import { Terminal } from "@/components/terminal";
 import { Button, Callout, Kbd, LinkMono, Ref } from "@/components/ui";
 import { Wave } from "@/components/wordmark";
 import { FAQ } from "@/content/marketing";
+
+export const metadata: Metadata = { alternates: { canonical: "/" } };
 
 export const dynamic = "force-static";
 
@@ -49,6 +52,8 @@ const DOCTOR = [
   ["Input Monitoring", "ok", "xflowd keyboard access"],
   ["Shortcut events", "ok", "xflowd has received keyboard events"],
   ["provider", "ok", "groq"],
+  ["key", "ok", "groq: xflow keystore (encrypted file)"],
+  ["keystore", "ok", "Provider keys are encrypted in xflow's own store, not config.toml"],
   ["Globe key", "ok", "AppleFnUsageType=0"],
 ] as const;
 
@@ -163,7 +168,7 @@ export default function Home() {
             <Heading
               id="dev-title"
               title="It knows Postgres isn't “post grass”."
-              lede="General dictation guesses at the words you use most. xflow learns your vocabulary and fixes it the same way every time."
+              lede="General dictation guesses at the words you use most. xflow learns your vocabulary and hints it to the provider on every dictation."
             />
           </div>
           <div className="border-t border-line">
@@ -216,7 +221,7 @@ export default function Home() {
                 <Ref n={5} />
               </Callout>
               <Callout type="privacy" title="No telemetry. None.">
-                The daemon makes no network calls except to the speech provider you chose.
+                The daemon makes no network calls except to the speech and cleanup providers you chose.
                 <Ref n={3} />
               </Callout>
               <Callout type="privacy" title="Offline mode.">
@@ -228,7 +233,7 @@ export default function Home() {
                 <Ref n={7} />
               </Callout>
               <Callout type="privacy" title="Secure fields are off-limits.">
-                Password fields refuse dictation. Multi-line text is never auto-pasted into a terminal.
+                On macOS, password fields refuse dictation. Multi-line text is never auto-pasted into a terminal.
                 <Ref n={8} />
               </Callout>
               <Callout type="privacy" title="MIT licensed.">
@@ -260,7 +265,7 @@ export default function Home() {
             <div className="flex flex-col">
               <div className="cells cells-4 lg:!grid-cols-2">
                 <Fig n={1} value="11 MB" caption="Idle RSS" claim={1} visual={<Bars seed={1} filled={9} />} />
-                <Fig n={2} value="~3 ms" caption="Cold start, p50" claim={2} visual={<Bars seed={2} filled={3} />} />
+                <Fig n={2} value="~3 ms" caption="Daemon start, p50 (warm)" claim={2} visual={<Bars seed={2} filled={3} />} />
               </div>
               <p className="t-caption border-t border-line px-[var(--cell-p)] py-4 text-fg-subtle">
                 Measured on Linux (release build). macOS figures come with the signed release.
@@ -289,7 +294,7 @@ export default function Home() {
           <ul className="cells cells-3 border-t border-line">
             <li className="cell t-body-sm text-fg-muted">The mic opens only while you record.</li>
             <li className="cell t-body-sm text-fg-muted">
-              Stops on silence: “Didn&apos;t catch anything” instead of a hallucination.
+              A silent recording gets “Didn&apos;t catch anything”, not a hallucination.
               <Ref n={11} />
             </li>
             <li className="cell t-body-sm text-fg-muted">

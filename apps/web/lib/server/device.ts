@@ -5,9 +5,18 @@ import { DEFAULT_POLL_INTERVAL_SECONDS, DEVICE_CODE_TTL_SECONDS, nextInterval, p
 import { pruneIpLimits } from "@/lib/server/limits";
 import { newApiToken, newDeviceCode, newUserCode } from "@/lib/tokens";
 
+// Per-IP limits can't stop an attacker with many addresses; this bounds the table and the user-code space.
+const MAX_LIVE_CODES = 1000;
+
+/** A new code pair, or null while MAX_LIVE_CODES unexpired codes exist. */
 export async function createDeviceCode(clientName: string) {
   // Old rows only matter until they expire; drop them so user codes can be reused.
-  await Promise.all([db.execute(sql`DELETE FROM device_codes WHERE expires_at < now() - interval '1 day'`), pruneIpLimits()]);
+  const [, , live] = await Promise.all([
+    db.execute(sql`DELETE FROM device_codes WHERE expires_at < now() - interval '1 day'`),
+    pruneIpLimits(),
+    db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM device_codes WHERE expires_at > now() AND consumed_at IS NULL`),
+  ]);
+  if ((live.rows[0]?.n ?? 0) >= MAX_LIVE_CODES) return null;
   for (let attempt = 0; ; attempt++) {
     const { deviceCode, hash } = newDeviceCode();
     const userCode = newUserCode();

@@ -1,12 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalPage, Mail } from "@/components/legal";
+import { LEGAL_UPDATED } from "@/content/site";
 
-export const metadata: Metadata = { title: "Privacy", alternates: { canonical: "/privacy" } };
+export const metadata: Metadata = {
+  title: "Privacy",
+  description: "What xflow and its website collect, why, and for how long. Free audio never touches our servers.",
+  alternates: { canonical: "/privacy" },
+};
 
 export default function Privacy() {
   return (
-    <LegalPage title="Privacy" lede="What xflow and this website collect, and why, in plain words." updated="2026-10-29">
+    <LegalPage title="Privacy" lede="What xflow and this website collect, and why, in plain words." updated={LEGAL_UPDATED}>
       <h2>Who we are</h2>
       <p>
         xflow is run by an individual developer based in India, the data fiduciary under India&apos;s Digital Personal Data Protection Act, 2023.

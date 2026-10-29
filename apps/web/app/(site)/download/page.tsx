@@ -70,7 +70,12 @@ export default async function Download() {
                 Get the source
               </Button>
             )}
-            <p className="t-caption text-fg-subtle">{pkg ? `${release?.prerelease ? "Pre-release · " : ""}macOS, Apple silicon and Intel` : "No packaged release yet"}</p>
+            <p className="t-caption text-fg-subtle">
+              {pkg ? `${release?.prerelease ? "Pre-release · " : ""}macOS, Apple silicon and Intel` : "No macOS package yet"}
+            </p>
+            {!pkg && release && (
+              <LinkMono href={release.url}>Linux binaries, {release.tag} →</LinkMono>
+            )}
           </div>
         </div>
         <dl className="grid grid-cols-2 gap-px border-t border-line bg-line sm:grid-cols-3 xl:grid-cols-6">
@@ -106,7 +111,7 @@ export default async function Download() {
                 { title: "Speech service", body: "Pick a provider, or a local server." },
                 { title: "Key", body: "Paste it once. Hidden input." },
                 { title: "Microphone", body: "Choose your input device." },
-                { title: "Shortcut", body: "Fn by default. On macOS we set the Globe key to Do Nothing so it stops opening emoji." },
+                { title: "Shortcut", body: "Fn by default. On macOS, setup opens the Globe key setting so you can set it to Do Nothing and stop it opening emoji." },
                 { title: "Permissions", body: "Microphone and Accessibility. We open the exact System Settings pane; you flip one switch each." },
               ]}
             />
@@ -123,7 +128,12 @@ export default async function Download() {
       <Section id="verify" label={{ n: 3, total: 3, title: "Verify" }} labelledBy="verify-title">
         <div className="section-y grid gap-8 px-[var(--cell-p)] lg:grid-cols-2">
           <div>
-            <Heading id="verify-title" title="Check what you run." lede="Every line is on GitHub. Packaged releases list a SHA-256 per file and are signed as com.xflow.xflowd." />
+            <Heading id="verify-title" title="Check what you run." lede={
+                pkg
+                  ? "Every line is on GitHub. Packaged releases list a SHA-256 per file and are signed as com.xflow.xflowd."
+                  : "Every line is on GitHub, and a source build runs exactly the code you read. Release binaries come with a SHA256SUMS file."
+              }
+            />
             {pkg?.sha256 && (
               <p className="t-mono-sm break-all text-fg-muted">
                 {pkg.name}: <span className="text-fg">{pkg.sha256}</span>
@@ -133,11 +143,20 @@ export default async function Download() {
           </div>
           <Terminal
             title="verify"
-            lines={[
-              { kind: "cmd", text: `shasum -a 256 xflow-${version}.pkg` },
-              { kind: "cmd", text: "codesign -dv --verbose=2 /usr/local/bin/xflowd" },
-              { kind: "muted", text: "# look for Identifier=com.xflow.xflowd" },
-            ]}
+            lines={
+              pkg
+                ? [
+                    { kind: "cmd", text: `shasum -a 256 xflow-${version}.pkg` },
+                    { kind: "cmd", text: "codesign -dv --verbose=2 /usr/local/bin/xflowd" },
+                    { kind: "muted", text: "# look for Identifier=com.xflow.xflowd" },
+                  ]
+                : [
+                    { kind: "cmd", text: "git rev-parse HEAD", note: "the commit you built" },
+                    { kind: "cmd", text: "sha256sum -c SHA256SUMS", note: "release binaries" },
+                    { kind: "cmd", text: "codesign -dv --verbose=2 ~/.local/bin/xflowd" },
+                    { kind: "muted", text: "# Identifier=com.xflow.xflowd after xflow service install" },
+                  ]
+            }
           />
         </div>
       </Section>

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { proProductIds } from "@/lib/billing";
+import { proLaunched, proProductIds } from "@/lib/billing";
 import { isEntitled } from "@/lib/entitlement";
 import { userSubscriptions, userTokens } from "@/lib/server/account";
 import { initialUsage, sealUsage, usageWindowStart } from "@/lib/server/realtime";
@@ -28,8 +28,8 @@ export default async function Dashboard({ searchParams }: PageProps<"/dashboard"
   ]);
   const pro = isEntitled(subs, new Date(), proProductIds());
   const current = subs[0];
-  // Pro is "coming soon" until Dodo is configured; the checkout route refuses until then too.
-  const billing = !!process.env.DODO_PAYMENTS_API_KEY;
+  // Pro is "coming soon" until launch; the checkout route refuses until then too.
+  const billing = proLaunched();
   const realtimeUrl = process.env.NEXT_PUBLIC_NEON_REALTIME_URL;
 
   const email = clerk.primaryEmailAddress?.emailAddress ?? clerk.id;
@@ -145,7 +145,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/dashboard"
             </h2>
             {tokens.length === 0 ? (
               <p className="t-body-sm mt-4 text-fg-muted">
-                No CLI sign-ins. Run <code className="t-mono-sm text-fg">xflow login</code> in your terminal.
+                No CLI sign-ins yet. Signing in from the CLI arrives with Pro.
               </p>
             ) : (
               <div className="mt-4 overflow-x-auto rounded-md border border-line">

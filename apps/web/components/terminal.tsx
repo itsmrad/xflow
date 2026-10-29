@@ -45,7 +45,7 @@ export function Terminal({
   lineClass?: (i: number) => string;
 }) {
   return (
-    <figure className={`not-prose overflow-hidden rounded-md border border-line bg-bg-raised shadow-1 ${className}`}>
+    <figure className={`not-prose min-w-0 overflow-hidden rounded-md border border-line bg-bg-raised shadow-1 ${className}`}>
       <WindowChrome
         title={title}
         right={

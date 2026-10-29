@@ -2,6 +2,11 @@ import { Webhook, WebhookVerificationError } from "standardwebhooks";
 
 export const USER_ID_METADATA_KEY = "xflow_user_id";
 
+/** Pro is sold only once PRO_LAUNCHED=1. Having Dodo keys (say, to test billing) never opens checkout. */
+export function proLaunched(value = process.env.PRO_LAUNCHED): boolean {
+  return value === "1";
+}
+
 /** Dodo product ids that grant Pro (comma-separated, so an annual plan can be added later). */
 export function proProductIds(value = process.env.DODO_PRO_PRODUCT_ID): string[] {
   return (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);

@@ -1,3 +1,6 @@
+import { ipAddress } from "@vercel/functions/headers";
+import { PRODUCTION_URL } from "@/content/site";
+
 const NO_STORE = { "cache-control": "no-store" };
 
 export function json(body: unknown, status = 200, headers: HeadersInit = {}): Response {
@@ -8,16 +11,35 @@ export function error(status: number, message: string, headers: HeadersInit = {}
   return json({ error: { message } }, status, headers);
 }
 
-/** First hop of x-forwarded-for (set by Vercel), for per-IP limits. */
+/** Rate-limit key for the caller: Vercel's x-real-ip (set by its edge, not the client), IPv6 by /64. */
 export function clientIp(request: Request): string {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  return ipKey(ipAddress(request) ?? "unknown");
 }
 
-/** Public origin: NEXT_PUBLIC_APP_URL, else the Vercel deployment's own URL, else local dev. */
+/** One key per IPv4 address or IPv6 /64 (one host usually owns a whole /64). */
+export function ipKey(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  const last = ip.split(":").at(-1)!;
+  if (last.includes(".")) return last; // IPv4-mapped (::ffff:1.2.3.4)
+  const [head = "", tail = ""] = ip.toLowerCase().split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const groups = [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t];
+  return `${groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":")}::/64`;
+}
+
+/**
+ * Public origin for links the server hands out (device verification, checkout return):
+ * NEXT_PUBLIC_APP_URL, else production's URL, else a preview's own URL, else local dev.
+ */
 export function appUrl(): string {
-  const vercelHost =
-    process.env.VERCEL_ENV === "production" ? process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.VERCEL_URL;
-  const url = process.env.NEXT_PUBLIC_APP_URL || (vercelHost ? `https://${vercelHost}` : "http://localhost:3000");
+  const url =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (process.env.VERCEL_ENV === "production"
+      ? PRODUCTION_URL
+      : process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : "http://localhost:3000");
   return url.replace(/\/+$/, "");
 }
 

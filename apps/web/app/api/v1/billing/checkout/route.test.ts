@@ -8,8 +8,9 @@ mock.module("server-only", () => ({}));
 mock.module("@clerk/nextjs/server", () => ({ auth: untouched, currentUser: untouched }));
 mock.module("@/db", () => ({ db: new Proxy({}, { get: untouched }) }));
 
-test("checkout answers 503 'Pro is coming soon' while Dodo is not configured", async () => {
-  delete process.env.DODO_PAYMENTS_API_KEY;
+test("checkout answers 503 'Pro is coming soon' until PRO_LAUNCHED=1, even with Dodo keys set", async () => {
+  delete process.env.PRO_LAUNCHED;
+  process.env.DODO_PAYMENTS_API_KEY = "test-key";
   const { POST } = await import("./route");
   const res = await POST(new Request("http://localhost/api/v1/billing/checkout", { method: "POST" }));
   expect(res.status).toBe(503);

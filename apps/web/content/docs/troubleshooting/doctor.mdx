@@ -26,6 +26,8 @@ It exits with code `6` when a required check fails, so scripts can gate on it.
 | `daemon` — `xflowd` is reachable | All |
 | `session` — a graphical login is available | All |
 | `provider` — the configured speech provider exists | All |
+| `key` — where the provider key comes from: environment or xflow's keystore | All |
+| `keystore` — the encrypted key store is intact and private to you; the detail is the fix | All |
 | `privacy` — offline guard on, or a note that cloud transcription uploads audio | All |
 | Dictionary words fit the provider's hint limit | All |
 | `launchd` / `systemd` — service management | macOS / Linux |
