@@ -72,6 +72,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 
 | Key | Default | Description |
 | --- | --- | --- |
+| `formatting.spoken_code` | `true` | "camel case user id" -\> userId; "main dot rs" -\> main.rs |
 | `formatting.snap_to_dictionary` | `true` | Snapping runs before dictionary.replacements, so a replacement's `from` must match the snapped spelling ("xflow", not "x flow", when xflow is saved). restore dictionary/vocabulary spellings locally; false disables snapping |
 | `formatting.remove_fillers` | `true` |  |
 | `formatting.fillers` | `["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]` |  |
@@ -195,6 +196,7 @@ restore_delay_ms = 300
 trailing_space = true
 
 [formatting]
+spoken_code = true           # "camel case user id" -> userId; "main dot rs" -> main.rs
 # Snapping runs before dictionary.replacements, so a replacement's `from` must
 # match the snapped spelling ("xflow", not "x flow", when xflow is saved).
 snap_to_dictionary = true    # restore dictionary/vocabulary spellings locally; false disables snapping
