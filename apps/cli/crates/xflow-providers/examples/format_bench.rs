@@ -185,6 +185,8 @@ async fn main() -> Result<()> {
             (Some(t), _) => match clean(&**t, &local, &config.dictionary.words).await {
                 Ok((s, took)) => {
                     ms.push(took);
+                    // The shared free-tier key allows ~15 requests a minute.
+                    tokio::time::sleep(Duration::from_secs(4)).await;
                     (s, Some(took))
                 }
                 // Like the daemon: a failed call delivers the local text.

@@ -58,7 +58,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | `allow` | `grant` ("input_monitoring" / "accessibility" / "microphone") | macOS: xflowd asks the system, which lists xflowd in System Settings and prompts while undecided; replies with status. A microphone reply adds `permissions.microphone` (null while undecided), read by a short-lived `xflowd --microphone` child so AVFoundation never loads in the daemon |
 | `shutdown` | — | unchanged |
 
-`HistoryEntry` adds model, raw_text, app_id, language, duration_ms, latency_ms, mode. `Timings` carries
+`HistoryEntry` adds model, raw_text, app_id, language, duration_ms, latency_ms, mode, and `cleanup` (`applied`, `skipped`, `rejected`, `slow` or `failed`; absent when cleanup was off; history schema v3). `Timings` carries
 hotkey_ms, open_ms, audio_ms, stt_ms, cleanup_ms, inject_ms, total_ms. All new response fields are
 optional on the wire. macOS permission checks run in xflowd and refresh on explicit
 status/subscribe/start/allow requests; a tap created before Input Monitoring was granted

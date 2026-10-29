@@ -26,8 +26,8 @@ pub use xflow_core::ipc::Command;
 use xflow_core::{
     config::{Config, DictionaryConfig, HotkeyConfig},
     ipc::{
-        Delivery, Grant, HistoryEntry, Permissions, Request, Response, Timings, MAX_MESSAGE_BYTES,
-        PROTOCOL_VERSION,
+        CleanupOutcome, Delivery, Grant, HistoryEntry, Permissions, Request, Response, Timings,
+        MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     },
     AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, FieldEvent,
     GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
@@ -754,6 +754,7 @@ impl Engine {
                     && dictation
                     && (terminal && style.and_then(|s| s.mode).is_none()
                         || mode == CleanupMode::Light && !xflow_providers::cleanup_can_help(&local));
+                let mut outcome = timings.cleanup_skipped.then_some(CleanupOutcome::Skipped);
                 let text = if let Some(transformer) = cleanup.filter(|_| !timings.cleanup_skipped) {
                     let cleanup_start = Instant::now();
                     let transformed = transformer
@@ -790,18 +791,24 @@ impl Engine {
                         // The model answered or rewrote instead of formatting.
                         Some(Some(s)) if dictation && xflow_providers::cleanup_rewrote(&local, &s, mode, &config.dictionary.words) => {
                             timings.cleanup_rejected = true;
+                            outcome = Some(CleanupOutcome::Rejected);
                             add_warning(&mut warning, "Cleanup changed too much; original transcript retained");
                             local
                         }
-                        Some(Some(s)) => s,
+                        Some(Some(s)) => {
+                            outcome = Some(CleanupOutcome::Applied);
+                            s
+                        }
                         _ if !dictation => {
                             bail!("command transformation failed; selection left untouched")
                         }
                         None => {
+                            outcome = Some(CleanupOutcome::Slow);
                             add_warning(&mut warning, "Cleanup was too slow; original transcript retained");
                             local
                         }
                         Some(None) => {
+                            outcome = Some(CleanupOutcome::Failed);
                             add_warning(&mut warning, "Cleanup failed; original transcript retained");
                             local
                         }
@@ -823,6 +830,7 @@ impl Engine {
                     language: language.or(config.stt.language),
                     duration_ms: Some(timings.audio_ms as u64),
                     mode: session_mode,
+                    cleanup: outcome,
                     ..HistoryEntry::default()
                 };
                 // A generation check under the SQLite lock prevents a canceled save from
@@ -4400,8 +4408,17 @@ mod tests {
     async fn light_cleanup_skips_short_dictations_and_rejects_answers() {
         let question = "can you tell me what the capital of France is";
         let answer = "The capital of France is Paris, which is also its largest city and home to about two million people.";
-        for (said, reply, calls, delivered, skipped, rejected) in [
-            ("ok sounds good", "Okay.", 0, "ok sounds good", true, false),
+        use CleanupOutcome::{Applied, Rejected, Skipped};
+        for (said, reply, calls, delivered, skipped, rejected, outcome) in [
+            (
+                "ok sounds good",
+                "Okay.",
+                0,
+                "ok sounds good",
+                true,
+                false,
+                Skipped,
+            ),
             (
                 "um actually make it five",
                 "Make it 5.",
@@ -4409,13 +4426,15 @@ mod tests {
                 "Make it 5.",
                 false,
                 false,
+                Applied,
             ),
-            (question, answer, 1, question, false, true),
+            (question, answer, 1, question, false, true, Rejected),
         ] {
+            let dir = tempfile::tempdir().unwrap();
             let (mut engine, tx, rx, mut events, _) = fixture(
                 Config::default(),
                 Arc::new(RecordingDesktop::default()),
-                Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+                Store::open(&dir.path().join("h.db"), true, 10).unwrap(),
             );
             engine.config.cleanup.mode = CleanupMode::Light;
             engine.services.stt = Arc::new(ImmediateStt {
@@ -4432,6 +4451,8 @@ mod tests {
             // Recording start warms the cleanup connection, even when it's skipped.
             assert_eq!(transformer.2.load(Ordering::SeqCst), 1, "{said}");
             assert_eq!(r.text.as_deref().map(str::trim_end), Some(delivered));
+            // History keeps what cleanup did (#67).
+            assert_eq!(r.entry.as_ref().unwrap().cleanup, Some(outcome), "{said}");
             let timings = r.timings.unwrap();
             assert_eq!(timings.cleanup_skipped, skipped, "{said}");
             assert_eq!(timings.cleanup_ms.is_none(), skipped, "{said}");

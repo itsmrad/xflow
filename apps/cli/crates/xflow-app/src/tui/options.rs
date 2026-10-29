@@ -20,7 +20,7 @@ pub const SETTINGS: &[Row] = &[
     ("hotkey.enabled", "Shortcut", "Shortcut", "Turn the global shortcut on or off."),
     ("hotkey.double_tap_ms", "Shortcut", "Double-tap speed", "How quickly two taps must follow each other to start hands-free mode."),
     ("hotkey.hold_threshold_ms", "Shortcut", "Hold delay", "How long to hold the key before listening starts."),
-    ("cleanup.mode", "Writing", "Smart formatting", "On formats lists, numbers and corrections and spells your dictionary terms right, with the writing service below (about +0.2 s on Groq; six words or fewer skip it). Off keeps your exact words. Polished also smooths phrasing."),
+    ("cleanup.mode", "Writing", "Smart formatting", "On formats lists, numbers and corrections and spells your dictionary terms right, with the writing service below. Six words or fewer skip it. Off keeps your exact words. Polished also smooths phrasing."),
     ("cleanup.provider", "Writing", "Service", "The AI service that tidies your text when cleanup is on."),
     ("cleanup.model", "Writing", "Model", "Models offered by the writing service you chose."),
     ("action.cleanup_key", "Writing", "API key", "Your key for the writing service, stored encrypted by xflow."),

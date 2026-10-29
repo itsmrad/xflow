@@ -134,7 +134,7 @@ fn core(token: &str) -> &str {
 /// `camelCase`, `Next.js`, `v0.2.0`. Plain numbers, `a.m.` and `e.g.` aren't.
 fn identifier(token: &str) -> bool {
     let chars: Vec<char> = token.chars().collect();
-    let letter = chars.iter().any(|c| c.is_alphabetic());
+    let letter = chars.iter().any(|c| c.is_alphabetic()) && !quantity(token);
     let dotted = token
         .split('.')
         .filter(|part| part.chars().filter(|c| c.is_alphanumeric()).count() >= 2)
@@ -149,6 +149,26 @@ fn identifier(token: &str) -> bool {
                 .windows(2)
                 .any(|w| w[0].is_lowercase() && w[1].is_uppercase()))
 }
+/// "5pm", "10:30am", "2nd", "90s", "4K", "64GB", "COVID-19": numbers a model
+/// may respace or recase ("5 PM") as prompt rule 4 asks, not code.
+fn quantity(token: &str) -> bool {
+    const UNITS: [&str; 25] = [
+        "am", "pm", "st", "nd", "rd", "th", "s", "k", "d", "x", "p", "gb", "mb", "kb", "tb", "ms",
+        "hz", "khz", "mhz", "ghz", "km", "kg", "cm", "mm", "fps",
+    ];
+    let lower = token.to_lowercase();
+    let unit =
+        lower.trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, ':' | '.' | ','));
+    if lower.starts_with(|c: char| c.is_ascii_digit()) {
+        return UNITS.contains(&unit);
+    }
+    lower.split_once('-').is_some_and(|(name, number)| {
+        !name.is_empty()
+            && name.chars().all(char::is_alphabetic)
+            && !number.is_empty()
+            && number.chars().all(|c| c.is_ascii_digit())
+    })
+}
 /// Light cleanup can't improve six words or fewer, which the speech model
 /// already punctuated, unless the speaker corrects themselves. Mostly-code text
 /// is left alone too.
@@ -158,9 +178,10 @@ pub fn cleanup_can_help(text: &str) -> bool {
     (words.len() > 6 || corrects(text)) && code * 2 < words.len()
 }
 /// Lowercase words without punctuation; anything with a digit is a number.
+/// Contractions keep their apostrophe ("it's").
 fn plain_words(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|c: char| !c.is_alphanumeric() && !matches!(c, '\'' | '’'))
-        .map(|w| w.replace(['\'', '’'], "").to_lowercase())
+        .map(|w| w.trim_matches(['\'', '’']).replace('’', "'").to_lowercase())
         .filter(|w| !w.is_empty() && !w.chars().any(|c| c.is_ascii_digit()))
 }
 /// The model answered or rewrote instead of formatting. Light and polished
@@ -209,8 +230,10 @@ pub fn cleanup_rewrote(input: &str, output: &str, mode: CleanupMode, terms: &[St
                 .iter()
                 .flat_map(|t| plain_words(t).collect::<Vec<_>>()),
         )
+        .flat_map(|w| [w.replace('\'', ""), w])
         .collect();
-    let words: Vec<String> = plain_words(output).collect();
+    // "I am" -> "I'm" and "lets" -> "let's" are edits, not new words.
+    let words: Vec<String> = plain_words(output).filter(|w| !w.contains('\'')).collect();
     let novel = words.iter().filter(|w| !known.contains(*w)).count();
     novel >= 2 && novel * 4 > words.len()
 }
@@ -1689,6 +1712,29 @@ mod tests {
             "I set up the Auth0 integration for the admin page.",
             Light,
             &["Auth0".into()]
+        ));
+        // Times, ordinals and units the prompt asks to respace aren't code (#101 review).
+        assert!(!rewrote(
+            "Lets meet at 5pm tomorrow to review the 2nd draft of the plan",
+            "Let's meet at 5 PM tomorrow to review the 2nd draft of the plan."
+        ));
+        assert!(!rewrote(
+            "The meeting moved to 10am on the 5th so book the room early",
+            "The meeting moved to 10 AM on the 5th, so book the room early."
+        ));
+        assert!(!rewrote(
+            "the covid-19 rules changed in the 90s and we export 4k video at 60fps",
+            "The COVID-19 rules changed in the '90s, and we export 4K video at 60 fps."
+        ));
+        // ...while versions, camelCase and flags stay locked.
+        assert!(rewrote(
+            "ship v0.2.0 with the 4K export after the useEffect fix lands",
+            "Ship version 0.2 with the 4K export after the useEffect fix lands."
+        ));
+        // Contractions aren't new words.
+        assert!(!rewrote(
+            "I am not sure it is done",
+            "I'm not sure it's done."
         ));
         // Times, abbreviations and a retracted number aren't identifiers.
         assert!(!rewrote(

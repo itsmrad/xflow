@@ -80,3 +80,6 @@
 {"id":"gloss-04","cat":"dev","text":"Our team uses next for the website and redis for caching.","dict":["Next.js","Redis"],"has":["Redis"],"not":[]}
 {"id":"q-11","cat":"question","text":"What is the time in UTC right now?","has":["What is the time in UTC right now?"],"not":["It is","It's"]}
 {"id":"dev-15","cat":"dev","text":"Run git rebase -i HEAD~3 and squash the fixup commits before review.","has":["git rebase -i HEAD~3"],"not":[]}
+{"id":"num-09","cat":"numbers","text":"Lets meet at 5pm tomorrow to review the 2nd draft of the proposal.","has":[["5 PM","5 p.m.","5pm"],"2nd draft"],"not":[]}
+{"id":"num-10","cat":"numbers","text":"The meeting moved to 10am on the 5th, so book the room for 90 minutes.","has":[["10 AM","10 a.m.","10am"],"5th","90 minutes"],"not":[]}
+{"id":"num-11","cat":"numbers","text":"The covid-19 rules changed in the 90s and we now export 4k video at 60fps.","has":[["4K","4k"],["60fps","60 fps","60 FPS"]],"not":[]}

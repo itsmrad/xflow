@@ -8,15 +8,15 @@ use std::{
     },
 };
 use xflow_core::{
-    ipc::{HistoryEntry, Stats},
+    ipc::{CleanupOutcome, HistoryEntry, Stats},
     Mode,
 };
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 /// Largest history page; the daemon additionally trims pages to one IPC frame.
 pub const MAX_PAGE: usize = 200;
 const COLUMNS: &str =
-    "id, created_at, text, provider, model, raw_text, app_id, language, duration_ms, latency_ms, mode";
+    "id, created_at, text, provider, model, raw_text, app_id, language, duration_ms, latency_ms, mode, cleanup";
 
 #[derive(Clone)]
 pub struct Store {
@@ -128,8 +128,8 @@ impl Store {
             if guard.is_some_and(|(epoch, generation)| epoch.load(Ordering::SeqCst) != generation) { return Ok(None); }
             let tx = conn.transaction()?;
             tx.execute(
-                "INSERT INTO history (text, provider, model, raw_text, app_id, language, duration_ms, latency_ms, mode, words) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO history (text, provider, model, raw_text, app_id, language, duration_ms, latency_ms, mode, words, cleanup) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     entry.text,
                     entry.provider,
@@ -141,6 +141,7 @@ impl Store {
                     entry.latency_ms.map(clamp_i64),
                     mode_name(entry.mode),
                     words(&entry.text),
+                    entry.cleanup.map(CleanupOutcome::name),
                 ],
             )?;
             let id = tx.last_insert_rowid();
@@ -360,7 +361,7 @@ fn clear_database(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-/// Schema v1 (MVP) → v2 in one transaction. Unknown newer schemas are refused
+/// Schema v1 (MVP) → v2 → v3 in one transaction. Unknown newer schemas are refused
 /// rather than pruned or rewritten by an older daemon.
 fn migrate(connection: &mut Connection) -> Result<()> {
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -371,29 +372,35 @@ fn migrate(connection: &mut Connection) -> Result<()> {
         return Ok(());
     }
     let tx = connection.transaction()?;
-    tx.execute_batch(
-        "CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT (unixepoch()), text TEXT NOT NULL, provider TEXT NOT NULL);
-         ALTER TABLE history ADD COLUMN model TEXT;
-         ALTER TABLE history ADD COLUMN raw_text TEXT;
-         ALTER TABLE history ADD COLUMN app_id TEXT;
-         ALTER TABLE history ADD COLUMN language TEXT;
-         ALTER TABLE history ADD COLUMN duration_ms INTEGER;
-         ALTER TABLE history ADD COLUMN latency_ms INTEGER;
-         ALTER TABLE history ADD COLUMN mode TEXT NOT NULL DEFAULT 'dictation';
-         ALTER TABLE history ADD COLUMN words INTEGER NOT NULL DEFAULT 0;
-         CREATE INDEX IF NOT EXISTS history_created_at ON history (created_at);
-         CREATE INDEX IF NOT EXISTS history_latency ON history (latency_ms);",
-    )?;
-    {
-        let mut select = tx.prepare("SELECT id, text FROM history")?;
-        let mut update = tx.prepare("UPDATE history SET words = ?2 WHERE id = ?1")?;
-        let rows = select.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (id, text) = row?;
-            update.execute(params![id, words(&text)])?;
+    if version < 2 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT (unixepoch()), text TEXT NOT NULL, provider TEXT NOT NULL);
+             ALTER TABLE history ADD COLUMN model TEXT;
+             ALTER TABLE history ADD COLUMN raw_text TEXT;
+             ALTER TABLE history ADD COLUMN app_id TEXT;
+             ALTER TABLE history ADD COLUMN language TEXT;
+             ALTER TABLE history ADD COLUMN duration_ms INTEGER;
+             ALTER TABLE history ADD COLUMN latency_ms INTEGER;
+             ALTER TABLE history ADD COLUMN mode TEXT NOT NULL DEFAULT 'dictation';
+             ALTER TABLE history ADD COLUMN words INTEGER NOT NULL DEFAULT 0;
+             CREATE INDEX IF NOT EXISTS history_created_at ON history (created_at);
+             CREATE INDEX IF NOT EXISTS history_latency ON history (latency_ms);",
+        )?;
+        {
+            let mut select = tx.prepare("SELECT id, text FROM history")?;
+            let mut update = tx.prepare("UPDATE history SET words = ?2 WHERE id = ?1")?;
+            let rows = select.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (id, text) = row?;
+                update.execute(params![id, words(&text)])?;
+            }
         }
+    }
+    // v3: what cleanup did (#67).
+    if version < 3 {
+        tx.execute_batch("ALTER TABLE history ADD COLUMN cleanup TEXT;")?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     tx.commit()?;
@@ -424,6 +431,10 @@ fn entry_from_row(row: &Row) -> rusqlite::Result<HistoryEntry> {
             "command" => Mode::Command,
             _ => Mode::Dictation,
         },
+        cleanup: row
+            .get_ref(11)?
+            .as_str_or_null()?
+            .and_then(|name| CleanupOutcome::ALL.into_iter().find(|c| c.name() == name)),
     })
 }
 
@@ -610,7 +621,7 @@ mod tests {
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         // Reopening an already-migrated database is a no-op.
         assert_eq!(
             Store::open(&path, true, 500)
@@ -624,9 +635,40 @@ mod tests {
         // A database from a newer xflow is refused, not rewritten.
         Connection::open(&path)
             .unwrap()
-            .execute_batch("PRAGMA user_version=3;")
+            .execute_batch("PRAGMA user_version=4;")
             .unwrap();
         assert!(Store::open(&path, true, 500).is_err());
+    }
+
+    #[tokio::test]
+    async fn v2_history_gains_the_cleanup_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        Store::open(&path, true, 500)
+            .unwrap()
+            .append(entry("before"))
+            .await
+            .unwrap();
+        // Roll the file back to v2: no cleanup column.
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("ALTER TABLE history DROP COLUMN cleanup; PRAGMA user_version=2;")
+            .unwrap();
+        let store = Store::open(&path, true, 500).unwrap();
+        store
+            .append(HistoryEntry {
+                cleanup: Some(CleanupOutcome::Rejected),
+                ..entry("after")
+            })
+            .await
+            .unwrap();
+        let (rows, _) = store.history(10, 0, None).await.unwrap();
+        assert_eq!(rows[0].cleanup, Some(CleanupOutcome::Rejected));
+        assert_eq!(rows[1].cleanup, None);
+        for outcome in CleanupOutcome::ALL {
+            let json = serde_json::to_string(&outcome).unwrap();
+            assert_eq!(json, format!("\"{}\"", outcome.name()));
+        }
     }
 
     #[tokio::test]

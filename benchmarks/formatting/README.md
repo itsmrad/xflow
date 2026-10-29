@@ -39,7 +39,7 @@ benchmarks/formatting/run.sh --replay results.jsonl  # re-check saved outputs, n
 `--replay` runs the current skip gate and guards over a saved run's outputs, so
 a guard change is checked against real model output without spending credit.
 
-Failures go to stderr with the input and output. Groq's free tier limits tokens
+Corpus calls are 4 s apart (the shared free-tier key allows about 15 a minute). Failures go to stderr with the input and output. Groq's free tier limits tokens
 per minute, so back-to-back runs can hit HTTP 429; the runner waits outside the
 measured time, and stops retrying after a minute.
 
