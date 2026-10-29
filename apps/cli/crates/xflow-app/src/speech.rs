@@ -63,3 +63,32 @@ pub fn suspect(text: &str, config: &Config) -> bool {
         )
         || text.iter().all(|word| hint_words.contains(word))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #63: the larger hint prompt must not let a key thump through as dictionary words.
+    // Groq outputs for #51's thump clip, both models, every prompt variant.
+    #[test]
+    fn larger_prompt_thump_outputs_stay_suspect() {
+        let live: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../benchmarks/devterms/silence.json"
+        ))
+        .unwrap();
+        let mut config = Config::default();
+        config.dictionary.words = serde_json::from_value(live["dictionary"].clone()).unwrap();
+        let thumps: Vec<_> = live["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["voice"] == "thump")
+            .collect();
+        assert_eq!(thumps.len(), 6);
+        for case in thumps {
+            assert!(suspect(case["text"].as_str().unwrap(), &config), "{case}");
+        }
+        assert!(suspect("OpenResty, ZenML.", &config));
+        assert!(!suspect("OpenResty is ready", &config));
+    }
+}

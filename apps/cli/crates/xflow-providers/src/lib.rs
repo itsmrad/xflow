@@ -880,14 +880,14 @@ mod tests {
             assert!(error.to_string().contains("language"), "{language}");
         }
         cfg.language = Some("en".into());
-        cfg.vocabulary = vec!["a".repeat(224)];
+        cfg.vocabulary = vec![" world".repeat(149)];
         assert!(build_stt(&cfg, true).is_ok());
-        cfg.vocabulary = vec!["a".repeat(225)];
+        cfg.vocabulary = vec![" world".repeat(150)];
         assert!(build_stt(&cfg, true)
             .err()
             .unwrap()
             .to_string()
-            .contains("224-byte"));
+            .contains("224 bytes and 200 estimated tokens, or 896 bytes"));
         cfg.provider = "openrouter".into();
         cfg.vocabulary = vec!["Postgres".into()];
         assert!(build_stt(&cfg, true)
@@ -895,6 +895,22 @@ mod tests {
             .unwrap()
             .to_string()
             .contains("OpenRouter vocabulary"));
+    }
+    #[test]
+    fn non_ascii_hints_keep_the_old_224_byte_allowance() {
+        // Estimated tokens count CJK bytewise; 224 bytes must still fit as before #63.
+        let mut cfg = config("groq", "http://127.0.0.1:9/x".into());
+        cfg.vocabulary = (0..5)
+            .map(|i| char::from_u32(0x6570 + i).unwrap().to_string().repeat(14))
+            .collect();
+        assert_eq!(cfg.vocabulary.join(", ").len(), 218);
+        assert!(build_stt(&cfg, true).is_ok());
+        cfg.vocabulary.clear();
+        let words: Vec<_> = (0..30)
+            .map(|i| char::from_u32(0x4e00 + i).unwrap().to_string().repeat(3))
+            .collect();
+        // 20 × 9 bytes + 19 × ", " = 218; one more would be 229.
+        assert_eq!(hint_fit(&cfg, &words).unwrap(), 20);
     }
     #[tokio::test]
     async fn merged_request_options_are_validated_before_network() {
@@ -918,10 +934,9 @@ mod tests {
     async fn over_budget_dictionary_hints_are_truncated_not_fatal() {
         let (url, rx) = server("200 OK", br#"{"text":"hello"}"#, Duration::ZERO, "").await;
         let mut cfg = config("groq", url);
-        cfg.vocabulary = vec!["a".repeat(120)];
-        // 120 + 2 + 50 fits the 224-byte prompt; the 103-byte word stops the prefix.
-        let words = vec!["c".repeat(50), "b".repeat(103), "d".into()];
-        assert_eq!(hint_fit(&cfg, &words).unwrap(), 1);
+        cfg.vocabulary = vec!["Q".repeat(140)];
+        let words = vec!["Z".repeat(30), "Q".repeat(80), "d".into()];
+        assert_eq!(hint_fit(&cfg, &words).unwrap(), 2);
         let result = build_stt(&cfg, true)
             .unwrap()
             .transcribe(
@@ -935,8 +950,8 @@ mod tests {
             .unwrap();
         assert_eq!(result.text, "hello");
         let request = String::from_utf8_lossy(&rx.await.unwrap()).into_owned();
-        assert!(request.contains(&format!("{}, {}", "a".repeat(120), "c".repeat(50))));
-        assert!(!request.contains(&"b".repeat(103)));
+        assert!(request.contains(&format!("{}, {}, d", "Q".repeat(140), "Z".repeat(30))));
+        assert!(!request.contains(&format!(", {}", "Q".repeat(80))));
         let cfg = config("openrouter", "http://127.0.0.1:9/x".into());
         assert_eq!(hint_fit(&cfg, &["Postgres".into()]).unwrap(), 0);
     }

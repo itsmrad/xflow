@@ -1,0 +1,210 @@
+{
+  "dictionary": [
+    "React",
+    "Apache",
+    "Flyte",
+    "ngrok",
+    "Redux",
+    "OpenResty",
+    "ZenML",
+    "cloudflared",
+    "Zustand",
+    "Consul",
+    "DVC",
+    "bore",
+    "Jotai",
+    "Vault",
+    "Pachyderm",
+    "frp",
+    "Recoil",
+    "Nomad",
+    "LakeFS",
+    "ssh",
+    "MobX",
+    "Terraform",
+    "DeltaLake",
+    "scp",
+    "Immer",
+    "OpenTofu",
+    "Iceberg",
+    "rsync",
+    "XState",
+    "Pulumi",
+    "Hudi",
+    "rclone",
+    "RxJS",
+    "Ansible",
+    "LanceDB",
+    "restic",
+    "Preact",
+    "Chef",
+    "Chroma",
+    "borg",
+    "SolidJS",
+    "Puppet",
+    "Qdrant",
+    "age",
+    "Svelte",
+    "SaltStack",
+    "Milvus",
+    "sops",
+    "Vue",
+    "Packer",
+    "Weaviate",
+    "gpg",
+    "Angular",
+    "Vagrant",
+    "Pinecone",
+    "openssl",
+    "Astro",
+    "Terragrunt",
+    "pgvector",
+    "mkcert"
+  ],
+  "cases": [
+    {
+      "model": "whisper-large-v3",
+      "variant": "old",
+      "voice": "silence",
+      "text": "Thank you for watching!"
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "old",
+      "voice": "silence",
+      "text": "Thank you"
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "list",
+      "voice": "silence",
+      "text": "Thank you for watching!"
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "list",
+      "voice": "silence",
+      "text": "Sous-titrage Société Radio-Canada"
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "list",
+      "voice": "hiss",
+      "text": "Thanks for watching!"
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "list",
+      "voice": "hiss",
+      "text": "Sous-titrage Société Radio-Canada"
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "old",
+      "voice": "hiss",
+      "text": "Thank you for watching!"
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "old",
+      "voice": "hiss",
+      "text": "Thank you"
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "old",
+      "voice": "click",
+      "text": "Thanks for watching!"
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "old",
+      "voice": "click",
+      "text": "Icmer, OpenResty, ZenML, dd."
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "list",
+      "voice": "click",
+      "text": "Thank you."
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "list",
+      "voice": "click",
+      "text": "Thanks for watching!"
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "old",
+      "voice": "thump",
+      "text": "Thanks for watching!"
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "old",
+      "voice": "thump",
+      "text": "."
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "list",
+      "voice": "thump",
+      "text": "."
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "list",
+      "voice": "thump",
+      "text": "Thanks for watching!"
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "sentence",
+      "voice": "silence",
+      "text": "Thank you for watching!"
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "sentence",
+      "voice": "silence",
+      "text": "Glossary."
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "sentence",
+      "voice": "hiss",
+      "text": "Thank you for watching!"
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "sentence",
+      "voice": "hiss",
+      "text": "Thank you."
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "sentence",
+      "voice": "click",
+      "text": "Thanks for watching!"
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "sentence",
+      "voice": "click",
+      "text": "Thank you."
+    },
+    {
+      "model": "whisper-large-v3-turbo",
+      "variant": "sentence",
+      "voice": "thump",
+      "text": "."
+    },
+    {
+      "model": "whisper-large-v3",
+      "variant": "sentence",
+      "voice": "thump",
+      "text": "Thanks for watching!"
+    }
+  ]
+}
