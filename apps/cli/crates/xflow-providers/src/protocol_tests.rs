@@ -341,6 +341,7 @@ async fn cleanup_command_context_and_vocabulary() {
         endpoint: Some(url),
         model: Some("test".into()),
         api_key_env: String::new(),
+        app_context: true,
         ..Default::default()
     };
     let transformer = build_transformer(&cfg, true).unwrap().unwrap();
@@ -567,7 +568,7 @@ async fn cleanup_presets_and_context_opt_out() {
         endpoint: Some(url),
         model: Some("test".into()),
         api_key_env: String::new(),
-        app_context: false,
+        // The default never shares the app id (#38).
         ..Default::default()
     };
     build_transformer(&cfg, true)
@@ -627,6 +628,7 @@ async fn cleanup_reasoning_settings_only_for_verified_models() {
     for (id, model, effort) in [
         ("openai", None, Some("none")),
         ("groq", None, Some("none")),
+        ("groq", Some("openai/gpt-oss-120b"), Some("low")),
         ("fireworks", None, Some("none")),
         ("gemini", None, Some("minimal")),
         ("openai", Some("unknown-model"), None),
@@ -662,7 +664,12 @@ async fn cleanup_reasoning_settings_only_for_verified_models() {
         let bytes = rx.await.unwrap();
         let body: Value = serde_json::from_slice(body(&bytes)).unwrap();
         assert_eq!(body["reasoning_effort"].as_str(), effort);
-        // Only the verified Groq preset gets an explicit output budget.
+        // gpt-oss reasons anyway; its reasoning must stay out of the reply.
+        assert_eq!(
+            body["include_reasoning"].as_bool(),
+            (effort == Some("low")).then_some(false)
+        );
+        // Only the verified Groq presets get an explicit output budget.
         let budget = (id == "groq").then_some(8192);
         assert_eq!(body["max_completion_tokens"].as_u64(), budget);
     }

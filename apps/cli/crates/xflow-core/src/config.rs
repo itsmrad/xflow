@@ -167,7 +167,7 @@ impl Default for CleanupConfig {
             api_key_env: "OPENAI_API_KEY".into(),
             prompt: None,
             timeout_secs: 20,
-            app_context: true,
+            app_context: false,
         }
     }
 }
@@ -557,6 +557,10 @@ mod tests {
             toml::from_str(include_str!("../../../../../config/default.toml")).unwrap();
         template.validate().unwrap();
         assert_eq!(template, Config::default());
+        // App context is opt-in (#38); an explicit choice survives.
+        assert!(!template.cleanup.app_context);
+        let kept: Config = toml::from_str("[cleanup]\napp_context = true").unwrap();
+        assert!(kept.cleanup.app_context);
     }
 
     #[test]

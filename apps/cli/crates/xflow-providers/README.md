@@ -106,13 +106,20 @@ are set only for verified specific models per the
 [Gemini compatibility](https://ai.google.dev/gemini-api/docs/openai) references.
 Unknown model overrides retain server defaults.
 
-Light cleanup fixes punctuation/capitalization, fillers and backtracking while
-preserving wording. Polished improves clarity; custom uses
-`TransformRequest.instructions`. Authorized commands edit supplied text or
-write new text when input is empty. Vocabulary spellings/code identifiers are
-preserved in the prompt. App tone uses `app_id` only when `cleanup.app_context`
-is enabled. The transcript is a separate user message explicitly treated as data,
-which reduces injection risk without guaranteeing model behavior. Retain raw
+Light cleanup fixes punctuation, casing, fillers and backtracking, keeps
+existing list lines, turns spoken sequences into numbered lists, writes numbers
+as digits where that is the convention, and never changes code, paths or URLs.
+Polished also smooths wording; custom uses `TransformRequest.instructions`.
+Dictation goes in `<transcript>` tags after four few-shot pairs, and the system
+prompt is at most 1.5 KB (pinned by a test). Dictionary words follow as a
+glossary capped at 4 KB, so sound-alikes map to their exact spelling. Authorized
+commands edit supplied text or write new text when input is empty. App tone uses
+`app_id` only when `cleanup.app_context` is enabled (off by default). The
+transcript is treated as data, which reduces injection risk without guaranteeing
+model behavior. `cleanup_can_help` and `cleanup_rewrote` are the daemon's skip
+gate and output guard (word ratio, question mark, verbatim identifiers and
+glossary terms, new-word share).
+`benchmarks/formatting/` measures it on real Groq. Retain raw
 text for recovery. Raw factory mode returns no transformer; command callers must
 build an enabled transformer.
 

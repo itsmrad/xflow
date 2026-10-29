@@ -6,6 +6,7 @@ mod runtime;
 mod state;
 mod theme;
 
+pub use integrations::{smart_formatting, smart_line};
 pub use options::key_label;
 pub use runtime::run;
 pub use state::Step;

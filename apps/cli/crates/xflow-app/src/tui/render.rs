@@ -431,7 +431,7 @@ fn home(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
                 ),
             ),
             (
-                "Cleanup",
+                "Formatting",
                 value_text(
                     "cleanup.mode",
                     super::state::mode_label(app.config.cleanup.mode),

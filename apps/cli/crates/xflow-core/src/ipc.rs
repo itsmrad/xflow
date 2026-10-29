@@ -190,6 +190,12 @@ pub struct Timings {
     pub stt_ms: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleanup_ms: Option<u32>,
+    /// Light cleanup wasn't called: too short to improve.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleanup_skipped: bool,
+    /// Cleanup output was discarded for changing too much; local text was kept.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleanup_rejected: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inject_ms: Option<u32>,
     /// Stop -> text delivered (or ready, when delivery failed).

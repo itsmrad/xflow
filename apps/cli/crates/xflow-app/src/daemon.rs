@@ -734,10 +734,18 @@ impl Engine {
                 let instructions = style
                     .and_then(|s| s.prompt.as_deref())
                     .or(config.cleanup.prompt.as_deref());
-                let text = if let Some(transformer) = services
+                let dictation = session_mode != Mode::Command;
+                let cleanup = services
                     .transformer
-                    .filter(|_| session_mode == Mode::Command || mode != CleanupMode::Raw)
-                {
+                    .filter(|_| !dictation || mode != CleanupMode::Raw);
+                // Skip the round trip when it can't help (#68). Terminals keep their
+                // deterministic text unless a style asks: a model adds periods,
+                // capitalizes `git` and "fixes" flags.
+                timings.cleanup_skipped = cleanup.is_some()
+                    && dictation
+                    && (terminal && style.and_then(|s| s.mode).is_none()
+                        || mode == CleanupMode::Light && !xflow_providers::cleanup_can_help(&local));
+                let text = if let Some(transformer) = cleanup.filter(|_| !timings.cleanup_skipped) {
                     let cleanup_start = Instant::now();
                     let transformed = transformer
                         .transform(TransformRequest {
@@ -759,14 +767,32 @@ impl Engine {
                                 .filter(|_| config.cleanup.app_context),
                             vocabulary: &config.dictionary.words,
                         })
-                        .await;
+                        ;
+                    // Dictation never waits long on formatting: past a length-scaled
+                    // budget (Groq takes ~0.2 s per 40 words) the local text is pasted.
+                    let budget = Duration::from_millis(3000 + 25 * local.split_whitespace().count() as u64);
+                    let transformed = if dictation {
+                        tokio::time::timeout(budget, transformed).await.ok()
+                    } else {
+                        Some(transformed.await)
+                    };
                     timings.cleanup_ms = Some(ms(cleanup_start.elapsed()));
-                    match transformed {
-                        Ok(s) if !s.trim().is_empty() && s.len() <= 32 * 1024 => s,
-                        _ if session_mode == Mode::Command => {
+                    match transformed.map(|r| r.ok().filter(|s| !s.trim().is_empty() && s.len() <= 32 * 1024)) {
+                        // The model answered or rewrote instead of formatting.
+                        Some(Some(s)) if dictation && xflow_providers::cleanup_rewrote(&local, &s, mode, &config.dictionary.words) => {
+                            timings.cleanup_rejected = true;
+                            add_warning(&mut warning, "Cleanup changed too much; original transcript retained");
+                            local
+                        }
+                        Some(Some(s)) => s,
+                        _ if !dictation => {
                             bail!("command transformation failed; selection left untouched")
                         }
-                        _ => {
+                        None => {
+                            add_warning(&mut warning, "Cleanup was too slow; original transcript retained");
+                            local
+                        }
+                        Some(None) => {
                             add_warning(&mut warning, "Cleanup failed; original transcript retained");
                             local
                         }
@@ -3424,7 +3450,8 @@ mod tests {
             ..SegmentStt::default()
         });
         let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio, stt.clone());
-        engine.config.cleanup.mode = CleanupMode::Light;
+        // Polished: never skipped, so the cleanup call really fails.
+        engine.config.cleanup.mode = CleanupMode::Polished;
         engine.services.transformer = Some(Arc::new(FailingCleanup));
         let task = tokio::spawn(engine.run(rx));
         ask(&tx, Request::start()).await;
@@ -4344,6 +4371,158 @@ mod tests {
                 vec!["Postgres".into()]
             )
         );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    struct Reply(&'static str, AtomicUsize);
+    #[async_trait]
+    impl TextTransformer for Reply {
+        async fn transform(&self, _: TransformRequest<'_>) -> Result<String> {
+            self.1.fetch_add(1, Ordering::SeqCst);
+            Ok(self.0.into())
+        }
+    }
+    #[tokio::test]
+    async fn light_cleanup_skips_short_dictations_and_rejects_answers() {
+        let question = "can you tell me what the capital of France is";
+        let answer = "The capital of France is Paris, which is also its largest city and home to about two million people.";
+        for (said, reply, calls, delivered, skipped, rejected) in [
+            ("ok sounds good", "Okay.", 0, "ok sounds good", true, false),
+            (
+                "um actually make it five",
+                "Make it 5.",
+                1,
+                "Make it 5.",
+                false,
+                false,
+            ),
+            (question, answer, 1, question, false, true),
+        ] {
+            let (mut engine, tx, rx, mut events, _) = fixture(
+                Config::default(),
+                Arc::new(RecordingDesktop::default()),
+                Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+            );
+            engine.config.cleanup.mode = CleanupMode::Light;
+            engine.services.stt = Arc::new(ImmediateStt {
+                calls: Arc::default(),
+                text: said,
+            });
+            let transformer = Arc::new(Reply(reply, AtomicUsize::new(0)));
+            engine.services.transformer = Some(transformer.clone());
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+            let r = success(&mut events).await;
+            assert_eq!(transformer.1.load(Ordering::SeqCst), calls, "{said}");
+            assert_eq!(r.text.as_deref().map(str::trim_end), Some(delivered));
+            let timings = r.timings.unwrap();
+            assert_eq!(timings.cleanup_skipped, skipped, "{said}");
+            assert_eq!(timings.cleanup_ms.is_none(), skipped, "{said}");
+            assert_eq!(timings.cleanup_rejected, rejected, "{said}");
+            assert_eq!(
+                r.message
+                    .is_some_and(|m| m.contains("Cleanup changed too much")),
+                rejected
+            );
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn terminals_keep_their_text_unless_a_style_asks_for_cleanup() {
+        let said = "git commit dash m fix the build on the main branch";
+        for (style, calls) in [(None, 0), (Some(CleanupMode::Light), 1)] {
+            let mut config = Config::default();
+            config.cleanup.mode = CleanupMode::Light;
+            config.styles = style
+                .map(|mode| xflow_core::config::Style {
+                    name: "shell".into(),
+                    apps: vec!["terminal".into()],
+                    mode: Some(mode),
+                    prompt: None,
+                })
+                .into_iter()
+                .collect();
+            let (mut engine, tx, rx, mut events, _) = fixture(
+                config,
+                Arc::new(RecordingDesktop::default()),
+                Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+            );
+            engine.services.stt = Arc::new(ImmediateStt {
+                calls: Arc::default(),
+                text: said,
+            });
+            let transformer = Arc::new(Reply(
+                "Git commit dash m, fix the build on the main branch.",
+                AtomicUsize::new(0),
+            ));
+            engine.services.transformer = Some(transformer.clone());
+            let task = tokio::spawn(engine.run(rx));
+            let start = Request::Start {
+                mode: Mode::Dictation,
+                context: Some(AppContext {
+                    app_id: Some("com.apple.Terminal".into()),
+                    ..AppContext::default()
+                }),
+                t0_us: None,
+                delivery: Delivery::Inject,
+                hold: false,
+            };
+            ask(&tx, start).await;
+            ask(&tx, Request::Stop).await;
+            let r = success(&mut events).await;
+            assert_eq!(transformer.1.load(Ordering::SeqCst), calls);
+            assert_eq!(r.timings.unwrap().cleanup_skipped, calls == 0);
+            if calls == 0 {
+                assert_eq!(r.text.as_deref().map(str::trim_end), Some(said));
+            }
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    struct Stalled;
+    #[async_trait]
+    impl TextTransformer for Stalled {
+        async fn transform(&self, _: TransformRequest<'_>) -> Result<String> {
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            Ok("late".into())
+        }
+    }
+    #[tokio::test]
+    async fn a_stalled_cleanup_pastes_the_local_text_after_its_budget() {
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        engine.config.cleanup.mode = CleanupMode::Light;
+        engine.services.transformer = Some(Arc::new(Stalled));
+        engine.services.stt = Arc::new(ImmediateStt {
+            calls: Arc::default(),
+            text: "the deploy failed because the token expired last night",
+        });
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        let stopped = Instant::now();
+        ask(&tx, Request::Stop).await;
+        let r = tokio::time::timeout(Duration::from_secs(6), async {
+            loop {
+                let r = events.recv().await.unwrap();
+                if r.state == State::Success {
+                    return r;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        // 3 s plus 25 ms a word, not the 20 s provider timeout.
+        assert!(stopped.elapsed() < Duration::from_secs(4));
+        assert_eq!(
+            r.text.as_deref().map(str::trim_end),
+            Some("the deploy failed because the token expired last night")
+        );
+        assert!(r.message.unwrap().contains("Cleanup was too slow"));
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }

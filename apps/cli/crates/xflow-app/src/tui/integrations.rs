@@ -66,6 +66,40 @@ pub fn selection(config: &Config, id: &str, cleanup: bool, model: Option<&str>) 
     selected.validate()?;
     Ok(selected)
 }
+/// Setup's default (#67): light cleanup on the speech key, when that provider
+/// also cleans up and cleanup was never set up. Existing choices are kept.
+pub fn smart_formatting(config: &Config) -> Option<Config> {
+    let cleanup = &config.cleanup;
+    let id = config.stt.provider.as_str();
+    if cleanup.mode != xflow_core::CleanupMode::Raw
+        || cleanup.provider.is_some()
+        || cleanup.endpoint.is_some()
+        || matches!(id, "custom" | "local")
+    {
+        return None;
+    }
+    let mut smart = selection(config, id, true, None).ok()?;
+    smart.cleanup.mode = xflow_core::CleanupMode::Light;
+    smart.validate().ok()?;
+    Some(smart)
+}
+/// What setup tells the user it turned on: the key it uses and what it costs.
+pub fn smart_line(config: &Config) -> Option<String> {
+    let id = config.cleanup.provider.as_deref()?;
+    if config.cleanup.mode != xflow_core::CleanupMode::Light || id != config.stt.provider {
+        return None;
+    }
+    let name = find_provider(ProviderKind::Cleanup, id)?.name;
+    // Measured on the default model only (benchmarks/formatting).
+    let measured = id == "groq"
+        && config
+            .cleanup
+            .model
+            .as_deref()
+            .is_none_or(|m| m == "qwen/qwen3.8-27b");
+    let cost = if measured { " · ~+0.2 s" } else { "" };
+    Some(format!("Smart formatting: on · uses your {name} key{cost}"))
+}
 /// Credential state per route; a pending prompt is neither "missing" nor "added".
 pub async fn missing_keys(config: &Config) -> (KeySource, KeySource) {
     // Custom servers can be anonymous on loopback; their connection check is
