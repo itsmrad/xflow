@@ -112,3 +112,10 @@ durations and tests cached-device and direct 16 kHz mono configurations. No
 audio is stored or transmitted. The worker has not run this probe; CPAL first
 sample cost remains unmeasured. Keep-warm and first-open behavior need actual
 device/backend traces; no generic millisecond estimate is substituted for them.
+
+## Long dictation (macOS, Groq)
+
+`long_dictation.py` streams generated `say` speech (3/6/12 minutes by default)
+through a `test-support` xflowd as a live microphone and reports checkpoint
+coverage, stop→text latency and daemon RSS. It needs `GROQ_API_KEY` in the
+environment and never reads the Keychain; see its `--help`.

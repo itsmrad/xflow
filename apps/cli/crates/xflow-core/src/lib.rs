@@ -158,6 +158,12 @@ pub trait AudioCapture: Send + Sync {
     fn finished(&self) -> bool {
         false
     }
+    /// Audio captured since the last drain, while recording continues; `stop()`
+    /// returns only what is left. Lets the daemon transcribe long dictations in
+    /// segments with bounded memory. `None`: not supported or nothing captured.
+    async fn drain(&self) -> Result<Option<AudioClip>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]

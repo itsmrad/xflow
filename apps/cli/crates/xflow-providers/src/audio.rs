@@ -108,6 +108,14 @@ pub(crate) fn mono16(audio: &AudioClip) -> Result<Vec<f32>> {
     }
     Ok(out)
 }
+/// The 16 kHz mono clip every upload is encoded from; encoding it again is a copy.
+pub fn upload_audio(audio: &AudioClip) -> Result<AudioClip> {
+    Ok(AudioClip {
+        samples: mono16(audio)?,
+        sample_rate: RATE,
+        channels: 1,
+    })
+}
 /// Encode 16 kHz mono PCM16 WAV after proper anti-alias filtering.
 pub fn encode_wav(audio: &AudioClip) -> Result<Vec<u8>> {
     wav(&mono16(audio)?)

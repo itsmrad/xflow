@@ -64,9 +64,120 @@ pub fn suspect(text: &str, config: &Config) -> bool {
         || text.iter().all(|word| hint_words.contains(word))
 }
 
+/// Long dictations are transcribed in segments while recording continues. A
+/// segment ends at the quietest moment between these bounds, so words are never
+/// split, providers get enough context, and only the last segment (< 60 s) is
+/// left to transcribe after stop.
+pub const SEGMENT_MIN_SECS: usize = 30;
+pub const SEGMENT_MAX_SECS: usize = 60;
+
+/// Sample offset (whole frames) where the next segment of a growing recording
+/// ends: the centre of the quietest 250 ms between 30 s and 60 s. `None` until
+/// 60 s are buffered.
+pub fn split_point(audio: &AudioClip) -> Option<usize> {
+    let (rate, channels) = (audio.sample_rate as usize, usize::from(audio.channels));
+    if rate == 0 || channels == 0 || audio.samples.len() / channels < rate * SEGMENT_MAX_SECS {
+        return None;
+    }
+    let hop = (rate / 100).max(1); // 10 ms frames
+    const WINDOW: usize = 25;
+    let first = rate * SEGMENT_MIN_SECS;
+    let energy: Vec<f64> = audio.samples[first * channels..rate * SEGMENT_MAX_SECS * channels]
+        .chunks(hop * channels)
+        .map(|frame| frame.iter().map(|s| f64::from(*s).powi(2)).sum())
+        .collect();
+    let mut sum: f64 = energy[..WINDOW].iter().sum();
+    let (mut quietest, mut start) = (sum, 0);
+    for i in WINDOW..energy.len() {
+        sum += energy[i] - energy[i - WINDOW];
+        if sum < quietest {
+            (quietest, start) = (sum, i + 1 - WINDOW);
+        }
+    }
+    Some((first + (start + WINDOW / 2) * hop) * channels)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Speech-like bursts with a 400 ms pause at each second in `pauses`.
+    fn speech(rate: u32, channels: u16, seconds: usize, pauses: &[usize]) -> AudioClip {
+        let rate_ = rate as usize;
+        let samples = (0..rate_ * seconds)
+            .flat_map(|i| {
+                let paused = pauses
+                    .iter()
+                    .any(|p| (p * rate_..p * rate_ + rate_ * 2 / 5).contains(&i));
+                let s = if paused {
+                    0.001
+                } else {
+                    0.3 * (i as f32 * 0.07).sin()
+                };
+                std::iter::repeat_n(s, usize::from(channels))
+            })
+            .collect();
+        AudioClip {
+            samples,
+            sample_rate: rate,
+            channels,
+        }
+    }
+
+    #[test]
+    fn waits_for_a_full_segment() {
+        assert_eq!(split_point(&speech(16_000, 1, 59, &[40])), None);
+        assert!(split_point(&speech(16_000, 1, 60, &[40])).is_some());
+        let empty = AudioClip {
+            samples: vec![],
+            sample_rate: 0,
+            channels: 1,
+        };
+        assert_eq!(split_point(&empty), None);
+    }
+
+    #[test]
+    fn cuts_inside_the_pause_not_inside_a_word() {
+        for (rate, channels) in [(16_000, 1), (48_000, 1), (44_100, 2)] {
+            let audio = speech(rate, channels, 75, &[12, 47, 70]);
+            let cut = split_point(&audio).unwrap();
+            assert_eq!(cut % usize::from(channels), 0, "whole frames only");
+            let second = cut as f64 / f64::from(rate) / f64::from(channels);
+            // The 47.0–47.4 s pause; outside [30, 60] pauses are ignored.
+            assert!(
+                (47.0..47.4).contains(&second),
+                "{rate}/{channels}: {second}"
+            );
+        }
+    }
+
+    #[test]
+    fn continuous_speech_still_cuts_within_bounds() {
+        let audio = speech(16_000, 1, 90, &[]);
+        let cut = split_point(&audio).unwrap() / 16_000;
+        assert!((SEGMENT_MIN_SECS..SEGMENT_MAX_SECS).contains(&cut));
+    }
+
+    #[test]
+    fn repeated_splits_keep_every_sample_in_order() {
+        // 12 minutes at 8 kHz with a pause every 7 s: segments tile the recording.
+        let pauses: Vec<usize> = (3..720).step_by(7).collect();
+        let mut tail = speech(8_000, 1, 720, &pauses);
+        let original = tail.samples.clone();
+        let mut rebuilt = Vec::new();
+        let mut segments = 0;
+        while let Some(cut) = split_point(&tail) {
+            let rest = tail.samples.split_off(cut);
+            let head = std::mem::replace(&mut tail.samples, rest);
+            assert!((SEGMENT_MIN_SECS * 8_000..SEGMENT_MAX_SECS * 8_000).contains(&head.len()));
+            rebuilt.extend(head);
+            segments += 1;
+        }
+        assert!(tail.samples.len() < SEGMENT_MAX_SECS * 8_000);
+        rebuilt.extend(&tail.samples);
+        assert_eq!(rebuilt, original);
+        assert!((12..=24).contains(&segments), "{segments} segments");
+    }
 
     // #63: the larger hint prompt must not let a key thump through as dictionary words.
     // Groq outputs for #51's thump clip, both models, every prompt variant.

@@ -8,12 +8,16 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use xflow_core::{config::RecordingConfig, AudioCapture, AudioClip, MAX_UPLOAD_FRAMES};
+use xflow_core::{
+    config::{RecordingConfig, MAX_RECORDING_SECS},
+    AudioCapture, AudioClip,
+};
 
 enum Command {
     Start(oneshot::Sender<Result<()>>),
     Stop(oneshot::Sender<Result<AudioClip>>),
     Cancel(oneshot::Sender<Result<()>>),
+    Drain(oneshot::Sender<Result<Option<AudioClip>>>),
     Limit(u64),
     Shutdown,
 }
@@ -31,13 +35,18 @@ struct Recording {
     sample_rate: u32,
     channels: u16,
     limit: usize,
+    reserve: usize,
     complete: bool,
     error: Option<String>,
 }
 
 // Bound allocation even if a device advertises an unusually high rate or
 // channel count. The duration remains an upper bound, never a memory promise.
+// The daemon drains the buffer every second, so this only stops a capture
+// nobody drains; the dictation length is the daemon's `max_seconds` deadline.
 const MAX_SAMPLES: usize = 16 * 1024 * 1024;
+// Preallocated per buffer so the audio callback rarely reallocates between drains.
+const RESERVE_SECONDS: usize = 10;
 
 impl Recording {
     fn sample_limit(sample_rate: u32, channels: u16, max_seconds: u32) -> Result<usize> {
@@ -48,9 +57,7 @@ impl Recording {
         let duration_frames = (sample_rate as usize)
             .checked_mul(max_seconds as usize)
             .context("recording size overflow")?;
-        let frames = duration_frames
-            .min(MAX_SAMPLES / channels)
-            .min(MAX_UPLOAD_FRAMES);
+        let frames = duration_frames.min(MAX_SAMPLES / channels);
         if frames == 0 {
             bail!("invalid audio stream configuration");
         }
@@ -59,15 +66,17 @@ impl Recording {
 
     fn new(sample_rate: u32, channels: u16, config: &RecordingConfig) -> Result<Self> {
         let limit = Self::sample_limit(sample_rate, channels, config.max_seconds)?;
+        let reserve = limit.min(sample_rate as usize * usize::from(channels) * RESERVE_SECONDS);
         let mut samples = Vec::new();
         samples
-            .try_reserve_exact(limit)
+            .try_reserve_exact(reserve)
             .context("cannot allocate recording buffer")?;
         Ok(Self {
             samples,
             sample_rate,
             channels,
             limit,
+            reserve,
             complete: false,
             error: None,
         })
@@ -100,6 +109,15 @@ impl Recording {
         };
         self.complete = self.samples.len() == self.limit;
         (rms, self.complete)
+    }
+
+    /// Hands over everything captured so far and keeps recording into `fresh`.
+    fn drain(&mut self, fresh: Vec<f32>) -> AudioClip {
+        AudioClip {
+            samples: std::mem::replace(&mut self.samples, fresh),
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+        }
     }
 
     fn finish(self) -> Result<AudioClip> {
@@ -189,6 +207,28 @@ impl CaptureBuffer {
         }))
     }
 
+    fn drain(&self) -> Result<Option<AudioClip>> {
+        let reserve = match self
+            .recording
+            .lock()
+            .map_err(|_| anyhow!("audio buffer lock poisoned"))?
+            .as_ref()
+        {
+            Some(recording) if !recording.samples.is_empty() => recording.reserve,
+            _ => return Ok(None),
+        };
+        // Allocate outside the lock the audio callback also takes.
+        let mut fresh = Vec::new();
+        fresh
+            .try_reserve_exact(reserve)
+            .context("cannot allocate recording buffer")?;
+        let mut guard = self
+            .recording
+            .lock()
+            .map_err(|_| anyhow!("audio buffer lock poisoned"))?;
+        Ok(guard.as_mut().map(|recording| recording.drain(fresh)))
+    }
+
     fn fail(&self, error: String) {
         self.active.store(false, Ordering::Release);
         if let Ok(mut guard) = self.recording.lock() {
@@ -217,7 +257,7 @@ fn warm_deadline(config: &RecordingConfig, has_stream: bool, now: Instant) -> Op
 
 impl CpalCapture {
     pub fn new(config: &RecordingConfig) -> Result<Self> {
-        if !(1..=600).contains(&config.max_seconds)
+        if !(1..=MAX_RECORDING_SECS).contains(&config.max_seconds)
             || !config.silence_threshold.is_finite()
             || !(0.0..=1.0).contains(&config.silence_threshold)
             || config.keep_warm_secs > 600
@@ -336,6 +376,19 @@ impl CpalCapture {
                             thread_level.store(0, Ordering::Relaxed);
                             thread_finished.store(false, Ordering::Release);
                             let _ = reply.send(Ok(()));
+                        }
+                        Command::Drain(reply) => {
+                            // Also after a failure or limit, so the audio captured before
+                            // it survives; stop() then only reports the error. Idle
+                            // streams hold no recording and return nothing.
+                            let result = match (&stream, completed.as_mut()) {
+                                (Some(open), _) => open.buffer.drain(),
+                                (None, Some(done)) if !done.samples.is_empty() => {
+                                    Ok(Some(done.drain(Vec::new())))
+                                }
+                                _ => Ok(None),
+                            };
+                            let _ = reply.send(result);
                         }
                         Command::Limit(source) => {
                             if stream.as_ref().is_some_and(|s| {
@@ -680,6 +733,13 @@ impl AudioCapture for CpalCapture {
             .context("audio thread stopped")?;
         receive.await.context("audio thread stopped")?
     }
+    async fn drain(&self) -> Result<Option<AudioClip>> {
+        let (reply, receive) = oneshot::channel();
+        self.sender
+            .send(Command::Drain(reply))
+            .context("audio thread stopped")?;
+        receive.await.context("audio thread stopped")?
+    }
     fn level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
@@ -871,6 +931,21 @@ mod tests {
         assert_eq!(voiced.finish().unwrap().samples.len(), 4);
     }
     #[test]
+    fn drains_hand_over_audio_without_gaps_and_keep_recording() {
+        let config = RecordingConfig {
+            max_seconds: 10,
+            ..Default::default()
+        };
+        let mut recording = Recording::new(4, 2, &config).unwrap();
+        assert_eq!(recording.reserve, 4 * 2 * 10);
+        recording.push(&[0.1_f32, 0.2, 0.3, 0.4]);
+        let first = recording.drain(Vec::with_capacity(recording.reserve));
+        assert_eq!((first.sample_rate, first.channels), (4, 2));
+        assert_eq!(first.samples, vec![0.1, 0.2, 0.3, 0.4]);
+        recording.push(&[0.5_f32, 0.6]);
+        assert_eq!(recording.finish().unwrap().samples, vec![0.5, 0.6]);
+    }
+    #[test]
     fn integer_pcm_is_scaled() {
         let mut recording = Recording::new(2, 1, &RecordingConfig::default()).unwrap();
         recording.push(&[i16::MIN, 0, i16::MAX]);
@@ -881,14 +956,14 @@ mod tests {
     }
 
     #[test]
-    fn high_rate_capture_stays_within_upload_memory_and_whole_frame_limits() {
+    fn high_rate_capture_stays_within_memory_and_whole_frame_limits() {
         assert_eq!(
             Recording::sample_limit(192_000, 1, 120).unwrap(),
-            MAX_UPLOAD_FRAMES
+            MAX_SAMPLES
         );
         assert_eq!(
-            Recording::sample_limit(48_000, 1, 600).unwrap(),
-            MAX_UPLOAD_FRAMES
+            Recording::sample_limit(48_000, 1, 300).unwrap(),
+            48_000 * 300
         );
         assert_eq!(
             Recording::sample_limit(48_000, 2, 120).unwrap(),

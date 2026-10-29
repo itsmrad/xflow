@@ -3395,6 +3395,7 @@ dependencies = [
  "crossterm",
  "fs2",
  "futures-util",
+ "hound",
  "libc",
  "ratatui",
  "rpassword",

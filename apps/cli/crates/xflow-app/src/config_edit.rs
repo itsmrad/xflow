@@ -200,6 +200,30 @@ impl ConfigFile {
     }
 }
 
+/// Templates before the 20-minute limit wrote `recording.max_seconds = 120`, which
+/// stopped every dictation after two minutes. Unpin that value once so the current
+/// default applies; `marker` records the run so a 120 chosen later is kept.
+/// Returns whether the file changed.
+pub fn migrate_recording_limit(path: &Path, marker: &Path) -> Result<bool> {
+    if marker.exists() {
+        return Ok(false);
+    }
+    let mut changed = false;
+    if path.exists() {
+        let _lock = lock(path)?;
+        let mut file = ConfigFile::load(path)?;
+        if file.get("recording.max_seconds").as_deref() == Some("120") {
+            changed = file.unset("recording.max_seconds")?;
+            file.save()?;
+        }
+    }
+    if let Some(parent) = marker.parent() {
+        crate::paths::private_dir(parent)?;
+    }
+    std::fs::write(marker, b"")?;
+    Ok(changed)
+}
+
 impl std::fmt::Display for ConfigFile {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.doc, formatter)
@@ -287,6 +311,33 @@ mod tests {
     }
 
     #[test]
+    fn legacy_two_minute_limit_is_unpinned_once() {
+        let (dir, path) = temp_config(
+            "[recording]\nmax_seconds = 120\nmin_ms = 300 # keep\n[stt]\nprovider = \"groq\"\n",
+        );
+        let marker = dir.path().join("data/migrated");
+        assert!(migrate_recording_limit(&path, &marker).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("max_seconds"), "{text}");
+        assert!(text.contains("min_ms = 300 # keep"));
+        assert_eq!(
+            Config::load(&path).unwrap().recording.max_seconds,
+            xflow_core::config::MAX_RECORDING_SECS
+        );
+        // A 120 chosen after the migration is the user's and stays.
+        std::fs::write(&path, "[recording]\nmax_seconds = 120\n").unwrap();
+        assert!(!migrate_recording_limit(&path, &marker).unwrap());
+        assert!(std::fs::read_to_string(&path).unwrap().contains("120"));
+        // Other values are never touched; a missing config still records the run.
+        let (dir, path) = temp_config("[recording]\nmax_seconds = 300\n");
+        assert!(!migrate_recording_limit(&path, &dir.path().join("m")).unwrap());
+        assert!(std::fs::read_to_string(&path).unwrap().contains("300"));
+        let missing = dir.path().join("none.toml");
+        assert!(!migrate_recording_limit(&missing, &dir.path().join("m2")).unwrap());
+        assert!(!missing.exists() && dir.path().join("m2").exists());
+    }
+
+    #[test]
     fn edits_preserve_comments_validate_and_save_atomically() {
         let (_dir, path) = temp_config(TEMPLATE);
         let mut file = ConfigFile::load(&path).unwrap();
@@ -328,7 +379,7 @@ mod tests {
         assert_eq!(file.get("stt.model"), None);
         assert_eq!(
             file.effective("recording.max_seconds").unwrap().as_deref(),
-            Some("120")
+            Some("1200")
         );
         assert!(file
             .list_effective()

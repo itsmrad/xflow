@@ -3,10 +3,12 @@
 The Ubuntu MVP uses CPAL/ALSA for capture and a GNOME Shell extension for shortcuts,
 the floating pill, and focused-window identity. The daemon does not depend on GTK,
 Electron, a WebView, or a local model runtime. The microphone opens on `start` and
-closes on `stop`, `cancel`, capture error, or the recording duration limit. The
-recording buffer is bounded by `recording.max_seconds`, 16 Mi input samples
-(64 MiB PCM), and 12,499,978 complete input frames (the 25 MB mono WAV upload
-limit), whichever comes first. A lightweight RMS detector
+closes on `stop`, `cancel`, capture error, or the recording duration limit
+(`recording.max_seconds`, 20 minutes by default and at most). The daemon drains the
+capture buffer every second and transcribes 30–60 s segments, cut at the quietest
+250 ms, while recording continues, so memory stays bounded and stop only waits for
+the last segment. An undrained buffer is capped at 16 Mi input samples (64 MiB
+PCM). A lightweight RMS detector
 rejects silence while preserving internal pauses. It does not automatically stop
 after a pause or classify noise versus speech.
 

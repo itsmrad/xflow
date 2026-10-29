@@ -119,9 +119,9 @@ fn stale_history_responses_never_replace_current_search() {
 #[test]
 fn validation_and_quit_preserve_unsaved_edits() {
     let (_dir, mut app) = app();
-    app.set("recording.max_seconds", "600").unwrap();
-    assert!(app.set("recording.max_seconds", "601").is_err());
-    assert_eq!(app.config.recording.max_seconds, 600);
+    app.set("recording.max_seconds", "1200").unwrap();
+    assert!(app.set("recording.max_seconds", "1201").is_err());
+    assert_eq!(app.config.recording.max_seconds, 1200);
     app.action(Action::Quit);
     assert!(!app.quit);
     assert!(app.modal.is_some());

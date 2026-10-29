@@ -13,6 +13,9 @@ pub const MAX_SNIPPET_BYTES: usize = 16 * 1024;
 pub const MAX_DICTIONARY_ITEMS: usize = 1000;
 pub const MAX_SNIPPETS: usize = 500;
 pub const MAX_STYLES: usize = 100;
+/// Longest dictation. 20 minutes of fast speech (~4000 words) stays inside the
+/// 32 KiB transcript and 64 KiB IPC frame limits.
+pub const MAX_RECORDING_SECS: u32 = 1200;
 
 /// Everything the daemon, CLI and TUI read from `config.toml`. Desktop-shell
 /// settings for the Linux overlay/shortcuts belong to the GNOME extension's
@@ -190,7 +193,7 @@ pub struct RecordingConfig {
 impl Default for RecordingConfig {
     fn default() -> Self {
         Self {
-            max_seconds: 120,
+            max_seconds: MAX_RECORDING_SECS,
             silence_threshold: 0.005,
             device: None,
             min_ms: 300,
@@ -413,8 +416,8 @@ impl Config {
     }
     pub fn validate(&self) -> Result<()> {
         self.hotkey.validate()?;
-        if !(1..=600).contains(&self.recording.max_seconds) {
-            bail!("recording.max_seconds must be 1..600");
+        if !(1..=MAX_RECORDING_SECS).contains(&self.recording.max_seconds) {
+            bail!("recording.max_seconds must be 1..{MAX_RECORDING_SECS}");
         }
         if !self.recording.silence_threshold.is_finite()
             || !(0.0..=1.0).contains(&self.recording.silence_threshold)

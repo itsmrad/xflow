@@ -6,7 +6,7 @@ license.workspace = true
 
 [features]
 # Explicit opt-in for isolated binary integration tests; never enabled in releases.
-test-support = []
+test-support = ["dep:hound"]
 
 [[bin]]
 name = "xflow"
@@ -38,3 +38,5 @@ ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 futures-util = "0.3"
 rpassword = "7"
+# Streams WAV fixtures into the daemon in test-support builds only.
+hound = { version = "3.5", optional = true }
