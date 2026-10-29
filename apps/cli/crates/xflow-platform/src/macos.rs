@@ -242,8 +242,10 @@ impl Pasteboard {
             Err(NO_FLAVOR) => match self.bytes(item, "public.utf16-plain-text") {
                 Ok(bytes) if bytes.len() % 2 == 0 => {
                     let units: Vec<u16> = bytes
-                        .chunks_exact(2)
-                        .map(|unit| u16::from_ne_bytes([unit[0], unit[1]]))
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|&unit| u16::from_ne_bytes(unit))
                         .collect();
                     let text = String::from_utf16(&units).ok()?;
                     text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned()
@@ -315,6 +317,10 @@ fn clipboard() -> Result<std::sync::MutexGuard<'static, Pasteboard>> {
 /// that promised its data and is busy blocks the read until it answers. A fresh
 /// handle on a detached thread, so an abandoned read never holds the shared
 /// handle, a runtime thread, or the daemon's exit.
+// ponytail: an abandoned read resumes whenever the hung owner answers and may
+// then overlap shared-handle calls, which HIServices does not promise are safe.
+// Rare (hung owner + overlap); a single pasteboard thread with a cancellable
+// read queue is the upgrade if it ever shows up in crash logs.
 async fn read_previous(name: String) -> Option<String> {
     let (reply, read) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
@@ -1005,10 +1011,32 @@ mod tests {
         assert_eq!(read_previous(CLIPBOARD.into()).await.unwrap(), previous);
     }
     /// A private named pasteboard, so tests never touch the user's clipboard.
-    fn scratch(test: &str) -> (String, Pasteboard) {
+    fn scratch(test: &str) -> (String, Pasteboard, std::sync::MutexGuard<'static, ()>) {
+        // HIServices state is process-wide and not thread safe: one test at a time.
+        static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let serial = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let name = format!("com.xflow.test.{}.{test}", std::process::id());
         let pasteboard = Pasteboard::open(&name).unwrap();
-        (name, pasteboard)
+        (name, pasteboard, serial)
+    }
+    extern "C" {
+        fn PasteboardCopyItemFlavors(pasteboard: Ref, item: Ref, flavors: *mut Ref) -> i32;
+        fn CFArrayGetCount(array: Ref) -> isize;
+    }
+    /// Whether the first item lists any flavor, without fetching (and so
+    /// without resolving) a promise.
+    fn published(pasteboard: &Pasteboard) -> bool {
+        let (mut count, mut item, mut flavors) = (0, ptr::null(), ptr::null());
+        unsafe {
+            PasteboardSynchronize(pasteboard.0);
+            PasteboardGetItemCount(pasteboard.0, &mut count) == 0
+                && count > 0
+                && PasteboardGetItemIdentifier(pasteboard.0, 1, &mut item) == 0
+                && PasteboardCopyItemFlavors(pasteboard.0, item, &mut flavors) == 0
+                && Owned::new(flavors).is_some_and(|flavors| CFArrayGetCount(flavors.0) > 0)
+        }
     }
     /// Run JXA as another (AppKit) app against pasteboard `name`, bound to `p`.
     fn appkit(name: &str, script: &str) -> std::process::Command {
@@ -1023,7 +1051,7 @@ mod tests {
     }
     #[test]
     fn pasteboard_round_trips_text_in_process() {
-        let (_, pasteboard) = scratch("round-trip");
+        let (_, pasteboard, _serial) = scratch("round-trip");
         for text in ["", "fix `cargo` — naïve 🚀\n  indented\r\n"] {
             pasteboard.write(text).unwrap();
             assert!(pasteboard.owned());
@@ -1035,7 +1063,7 @@ mod tests {
     }
     #[test]
     fn read_matches_pbpaste_for_utf16_and_textless_clipboards() {
-        let (name, pasteboard) = scratch("flavors");
+        let (name, pasteboard, _serial) = scratch("flavors");
         for (script, expected) in [
             (
                 "p.setDataForType($('héllo utf16').dataUsingEncoding($.NSUTF16StringEncoding), \
@@ -1054,7 +1082,7 @@ mod tests {
     }
     #[test]
     fn restore_never_clobbers_another_apps_newer_copy() {
-        let (name, pasteboard) = scratch("restore");
+        let (name, pasteboard, _serial) = scratch("restore");
         pasteboard.write("transcript").unwrap();
         pasteboard.restore("previous");
         assert_eq!(pasteboard.read().as_deref(), Some("previous"));
@@ -1068,34 +1096,60 @@ mod tests {
         assert_eq!(pasteboard.read().as_deref(), Some("newer copy"));
     }
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard serializes HIServices tests, not tasks
     async fn a_busy_owners_promise_bounds_the_read_and_never_stalls_writes() {
-        let (name, pasteboard) = scratch("promise");
+        let (name, pasteboard, _serial) = scratch("promise");
         pasteboard.write("ours").unwrap();
-        // The owner promises text, then never answers while it sleeps.
-        let mut owner = appkit(
-            &name,
-            "p.declareTypesOwner($(['public.utf8-plain-text']), $.NSObject.alloc.init); delay(10)",
-        )
-        .spawn()
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while pasteboard.owned() {
-            assert!(Instant::now() < deadline, "owner never took the pasteboard");
-            std::thread::sleep(Duration::from_millis(20));
+        // The owner promises text, then hangs (SIGSTOP) once pboard publishes the
+        // promise: declareTypes reaches pboard asynchronously, and a live owner's
+        // run loop would answer the request with nothing.
+        struct Reap(std::process::Child);
+        impl Drop for Reap {
+            // SIGKILL also ends a stopped owner, even when an assertion fails.
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
         }
+        let owner = Reap(
+            appkit(
+                &name,
+                "p.declareTypesOwner($(['public.utf8-plain-text']), $.NSObject.alloc.init); \
+                 delay(10)",
+            )
+            .spawn()
+            .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while pasteboard.owned() || !published(&pasteboard) {
+            assert!(
+                Instant::now() < deadline,
+                "the owner never published its promise"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let stopped = std::process::Command::new("/bin/kill")
+            .args(["-STOP", &owner.0.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(stopped.success());
         let started = Instant::now();
-        let read = tokio::spawn(read_previous(name));
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        // The paste proceeds on the shared handle while the read is stuck.
+        let read = read_previous(name).await;
+        let took = started.elapsed();
+        assert_eq!(read, None, "a stuck read restores nothing");
+        assert!(
+            (Duration::from_millis(1900)..Duration::from_millis(2500)).contains(&took),
+            "None must come from the 2 s bound: {took:?}"
+        );
+        // The paste proceeds on the shared handle while the abandoned read is stuck.
         let write = Instant::now();
         pasteboard.write("transcript").unwrap();
         assert!(pasteboard.owned());
         assert!(write.elapsed() < Duration::from_millis(500));
-        assert_eq!(read.await.unwrap(), None, "a stuck read restores nothing");
-        assert!(started.elapsed() < Duration::from_millis(2500));
-        let _ = owner.kill();
-        let _ = owner.wait();
-        pasteboard.write("").unwrap();
+        drop(owner);
+        // Let the abandoned read return before the next test touches HIServices.
+        std::thread::sleep(Duration::from_millis(300));
+        let _ = pasteboard.write("");
     }
     #[test]
     fn editability_selects_paste_copy_or_both() {
