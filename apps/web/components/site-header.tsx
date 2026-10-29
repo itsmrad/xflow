@@ -1,6 +1,6 @@
 import { NAV, REPO } from "@/content/site";
 import { getStars } from "@/lib/github";
-import { AuthSlot, CloseMenuOnNavigate, NavLinks } from "./header-client";
+import { CloseMenuOnNavigate, NavLinks } from "./header-client";
 import { IconGitHub, IconMenu } from "./icons";
 import { Button } from "./ui";
 import { Wordmark } from "./wordmark";
@@ -47,5 +47,25 @@ export async function SiteHeader() {
         <CloseMenuOnNavigate id="site-menu" />
       </div>
     </header>
+  );
+}
+
+/**
+ * Signed-in hint without loading Clerk on marketing pages: Clerk keeps a readable `__client_uat` cookie
+ * that is non-zero while a session exists. Server markup says "Sign in"; this inline script flips it.
+ * Wrong at worst means "Sign in" → Clerk redirects. A plain link: account routes load Clerk anyway.
+ */
+const AUTH = `if(/(?:^|; )__client_uat=(?!0(?:;|$))\\d+/.test(document.cookie)){const a=document.currentScript.previousElementSibling;a.href="/dashboard";a.textContent="Dashboard"}`;
+
+function AuthSlot() {
+  return (
+    <span className="inline-flex w-[96px] justify-end">
+      {/* A plain <a>: <Link> would route by its own href prop and ignore the script's swap to /dashboard. */}
+      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+      <a href="/sign-in" suppressHydrationWarning className="t-label inline-flex h-8 items-center rounded-sm px-3 text-fg-muted transition-colors duration-[120ms] hover:bg-ink-a4 hover:text-fg">
+        Sign in
+      </a>
+      <script dangerouslySetInnerHTML={{ __html: AUTH }} />
+    </span>
   );
 }

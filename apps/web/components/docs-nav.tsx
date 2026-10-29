@@ -1,13 +1,12 @@
-"use client";
-
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import type { Root, Node } from "fumadocs-core/page-tree";
-import { AnchorProvider, TOCItem, type TOCItemType } from "fumadocs-core/toc";
+import type { TOCItemType } from "fumadocs-core/toc";
 
-/** Sidebar from the page tree (§7.21): groups as mono labels, active item with a 2px Volt bar. */
-export function Sidebar({ tree }: { tree: Root }) {
-  const path = usePathname();
+/**
+ * Sidebar from the page tree (§7.21): groups as mono labels, active item with a 2px Volt bar.
+ * A server component: each docs page renders it with its own URL, so no client JS is needed.
+ */
+export function Sidebar({ tree, path }: { tree: Root; path: string }) {
   function render(nodes: Node[], depth = 0) {
     return nodes.map((n, i) => {
       if (n.type === "separator") return null;
@@ -56,26 +55,25 @@ function Item({ url, name, active, group = false }: { url: string; name: React.R
   );
 }
 
+/** "On this page" as plain anchor links: no scroll-spy client code on read-only pages. */
 export function Toc({ toc }: { toc: TOCItemType[] }) {
   if (toc.length === 0) return null;
   return (
-    <AnchorProvider toc={toc} single>
-      <nav aria-label="On this page">
-        <p className="t-mono-label text-fg-subtle">On this page</p>
-        <ul className="mt-3 border-l border-line">
-          {toc.map((t) => (
-            <li key={t.url}>
-              <TOCItem
-                href={t.url}
-                className="t-caption -ml-px block border-l border-transparent py-1 text-fg-muted transition-colors duration-[120ms] hover:text-fg data-[active=true]:border-volt data-[active=true]:text-fg"
-                style={{ paddingLeft: 12 + (t.depth - 2) * 12 }}
-              >
-                {t.title}
-              </TOCItem>
-            </li>
-          ))}
-        </ul>
-      </nav>
-    </AnchorProvider>
+    <nav aria-label="On this page">
+      <p className="t-mono-label text-fg-subtle">On this page</p>
+      <ul className="mt-3 border-l border-line">
+        {toc.map((t) => (
+          <li key={t.url}>
+            <a
+              href={t.url}
+              className="t-caption -ml-px block border-l border-transparent py-1 text-fg-muted transition-colors duration-[120ms] hover:border-line-strong hover:text-fg"
+              style={{ paddingLeft: 12 + (t.depth - 2) * 12 }}
+            >
+              {t.title}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }

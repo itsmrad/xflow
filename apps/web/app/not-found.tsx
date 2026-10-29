@@ -8,9 +8,7 @@ export default function NotFound() {
       <CenterPanel label="404" wide>
         <h1 className="sr-only">Page not found</h1>
         <figure className="overflow-hidden rounded-md border border-line bg-bg-raised shadow-1">
-          <pre className="t-mono-sm overflow-x-auto p-5">
-            <NotFoundPath />
-          </pre>
+          <NotFoundPath />
         </figure>
         <div className="mt-6 flex gap-3">
           <Button href="/" variant="primary">

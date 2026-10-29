@@ -1,20 +1,18 @@
 /**
  * DESIGN.md §10.2 size budgets, from the `next build` output alone (deterministic, no server, no timing):
  * first-load JS (gzip) per prerendered route, CSS (gzip), preloaded font bytes and the home page's HTML.
- * `bun scripts/budget.ts` after `bun run build`; exits 1 over budget. Timing budgets (LCP, TBT) stay
- * with Lighthouse locally: shared CI runners make them flaky.
+ * `bun scripts/budget.ts` after `bun run build`; exits 1 over budget. This is the CI performance gate.
+ * Lighthouse (score, LCP, TBT) is a manual pre-release check (§10.2): shared runners make timing flaky.
  *
- * JS can't meet §10.2 on this stack: React 19 + the Next 16 App Router runtime alone are ~136 KB gz on
- * every page, over the 90 KB marketing budget before any of our code. So JS fails on a ceiling just above
- * today's size (a regression ratchet; lower it as JS comes off) and reports the §10.2 gap on every run.
+ * Marketing JS is a ratchet, not the original 90 KB: React 19 + the Next 16 App Router runtime alone are
+ * ~136.5 KB gz on every page. It must not grow; lower BUDGET.marketingJs whenever JS comes off.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { gzipSync } from "node:zlib";
 
 const KB = 1024;
-export const BUDGET = { marketingJs: 90 * KB, docsJs: 140 * KB, css: 30 * KB, fonts: 110 * KB, fontFiles: 2, homeHtml: 60 * KB };
-export const JS_CEILING = { marketing: 143 * KB, docs: 147 * KB };
+export const BUDGET = { marketingJs: 140 * KB, docsJs: 140 * KB, css: 30 * KB, fonts: 110 * KB, fontFiles: 2, homeHtml: 60 * KB };
 
 const NEXT = join(import.meta.dir, "../.next");
 const gz = (bytes: Buffer) => gzipSync(bytes, { level: 9 }).length;
@@ -30,7 +28,6 @@ const over = (what: string, size: number, budget: number) => {
 
 const pages = walk(join(NEXT, "server/app")).filter((f) => f.endsWith(".html"));
 const rows: [string, number, number][] = [];
-const jsGap: [string, number][] = [];
 for (const file of pages) {
   const route = "/" + relative(join(NEXT, "server/app"), file).replace(/\.html$/, "").replace(/(^|\/)index$/, "");
   if (route.startsWith("/_")) continue; // _not-found, _global-error: not routes anyone lands on
@@ -41,9 +38,7 @@ for (const file of pages) {
   const js = [...scripts].reduce((n, s) => n + gz(asset(s)), 0);
   const css = [...styles].reduce((n, s) => n + gz(asset(s)), 0);
   rows.push([route, js, css]);
-  const docs = route.startsWith("/docs");
-  over(`first-load JS ${route} (ceiling)`, js, docs ? JS_CEILING.docs : JS_CEILING.marketing);
-  if (js > (docs ? BUDGET.docsJs : BUDGET.marketingJs)) jsGap.push([route, js - (docs ? BUDGET.docsJs : BUDGET.marketingJs)]);
+  over(`first-load JS ${route}`, js, route.startsWith("/docs") ? BUDGET.docsJs : BUDGET.marketingJs);
   over(`CSS ${route}`, css, BUDGET.css);
   if (route === "/") over("HTML /", gz(Buffer.from(html)), BUDGET.homeHtml);
 }
@@ -57,11 +52,7 @@ if (fonts.length > BUDGET.fontFiles) failures.push(`fonts: ${fonts.length} files
 
 rows.sort((a, b) => b[1] - a[1]);
 console.log(`route${" ".repeat(40)}first-load JS (gz)  CSS (gz)`);
-for (const [route, js, css] of rows.slice(0, 8)) console.log(`${route.padEnd(45)}${kb(js).padStart(18)}  ${kb(css).padStart(8)}`);
+for (const [route, js, css] of rows.slice(0, Number(process.env.ROWS ?? 8))) console.log(`${route.padEnd(45)}${kb(js).padStart(18)}  ${kb(css).padStart(8)}`);
 console.log(`… ${rows.length} routes. Fonts: ${fonts.length} files, ${kb(fontBytes)}.`);
-if (jsGap.length) {
-  const worst = jsGap.reduce((a, b) => (b[1] > a[1] ? b : a));
-  console.log(`\n§10.2 JS budget not met on ${jsGap.length} routes (worst ${worst[0]}, +${kb(worst[1])}); see the header comment.`);
-}
-console.log(failures.length ? `\nover budget:\n  ${failures.join("\n  ")}` : "\nbudget: fonts, CSS and HTML within §10.2; JS within its ceiling");
+console.log(failures.length ? `\nover budget:\n  ${failures.join("\n  ")}` : "\nbudget: all within DESIGN.md §10.2");
 process.exit(failures.length ? 1 : 0);

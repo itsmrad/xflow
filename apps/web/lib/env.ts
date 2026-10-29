@@ -12,11 +12,24 @@ export function missingProductionEnv(env: Env): string[] {
     "CLERK_SECRET_KEY",
     "DATABASE_URL",
     "NEON_REALTIME_SECRET",
+    "NEON_REALTIME_URL",
     "NEXT_PUBLIC_NEON_REALTIME_URL",
   ];
   if (env.PRO_LAUNCHED === "1") required.push("DODO_PAYMENTS_API_KEY", "DODO_PAYMENTS_WEBHOOK_SECRET", "DODO_PRO_PRODUCT_ID", "GROQ_API_KEY");
   const missing = required.filter((name) => !env[name]);
-  const url = env.NEXT_PUBLIC_NEON_REALTIME_URL;
-  if (url && !/^(wss|https):\/\/[^/\s]+/.test(url)) missing.push("NEXT_PUBLIC_NEON_REALTIME_URL (must be a wss:// or https:// URL)");
+  for (const name of ["NEON_REALTIME_URL", "NEXT_PUBLIC_NEON_REALTIME_URL"]) {
+    const value = env[name];
+    if (value && !isWssUrl(value)) missing.push(`${name} (must be a wss:// URL)`);
+  }
   return missing;
+}
+
+/** Parses, not pattern-matches: "wss://[", "wss://host bad" or a bad port fail like the browser would. */
+export function isWssUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "wss:" && url.hostname !== "";
+  } catch {
+    return false;
+  }
 }

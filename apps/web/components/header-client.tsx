@@ -2,26 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useSyncExternalStore } from "react";
-
-/**
- * Signed-in hint without loading Clerk on marketing pages: Clerk keeps a readable `__client_uat`
- * cookie that is non-zero while a session exists. Wrong at worst means "Sign in" → Clerk redirects.
- */
-function signedIn() {
-  return /(?:^|; )__client_uat=(?!0(?:;|$))\d+/.test(document.cookie);
-}
-
-export function AuthSlot() {
-  const on = useSyncExternalStore(() => () => {}, signedIn, () => false);
-  return (
-    <span className="inline-flex w-[96px] justify-end">
-      <Link href={on ? "/dashboard" : "/sign-in"} prefetch={false} className="t-label inline-flex h-8 items-center rounded-sm px-3 text-fg-muted transition-colors duration-[120ms] hover:bg-ink-a4 hover:text-fg">
-        {on ? "Dashboard" : "Sign in"}
-      </Link>
-    </span>
-  );
-}
+import { useEffect, useRef } from "react";
 
 /** Nav links with aria-current; client only because the active route is known after navigation. */
 export function NavLinks({ links, className = "", vertical = false }: { links: readonly { href: string; label: string }[]; className?: string; vertical?: boolean }) {
