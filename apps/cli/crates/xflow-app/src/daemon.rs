@@ -1360,9 +1360,21 @@ async fn observe(
 const FIELD_READ_GAP: Duration = Duration::from_millis(20);
 /// A changed span is re-read after this pause. When the dictation then leaves
 /// the field, its last span is trusted only if it was read twice in a row, or
-/// if the clear was the only change since that read (each edit posts its own
-/// notification), so a word still being typed is never learned.
+/// if the clear was the only change since that read, so a word still being
+/// typed is never learned. Notifications carry no text: when more than one
+/// change happened between two reads, the states in between are unknown (a
+/// clear, then a new message) and nothing is learned from that field.
 const FIELD_SETTLE: Duration = Duration::from_millis(60);
+/// The span to trust when the dictation has left the field: the last one read,
+/// if the clear was the only change after it. With no unread change the clear's
+/// own notification is still in flight, so the edits before it are unknown too.
+fn trusted_before_clear(unread: usize, last: &str) -> String {
+    if unread == 1 {
+        last.to_owned()
+    } else {
+        String::new()
+    }
+}
 /// Pin the field a dictation was pasted into and return (dictated, corrected)
 /// spans. The field is read ~120 ms after the paste to anchor the span, then
 /// after each change notification, keeping the last span that is still
@@ -1458,6 +1470,9 @@ async fn watch_edit(
                     changes += unread;
                     continue;
                 };
+                if unread > 1 {
+                    return Err(Some("unsettled"));
+                }
                 match anchored.corrected(&text.value) {
                     Some(span) if span == good => settled = good.clone(),
                     Some(span) => {
@@ -1466,10 +1481,7 @@ async fn watch_edit(
                         next_read = last_read + FIELD_SETTLE;
                     }
                     None => {
-                        // Only the clear happened after the last span was read.
-                        if unread <= 1 {
-                            settled = good.clone();
-                        }
+                        settled = trusted_before_clear(unread, &good);
                         lost = true;
                         break;
                     }
@@ -1479,15 +1491,26 @@ async fn watch_edit(
     }
     let receipt = receipt.ok_or(Some("no-receipt"))?;
     if !lost {
-        // The user moved on: what the field shows now is final.
-        if let Some(text) = read(&mut field).await {
-            match receipt.corrected(&text.value) {
+        // The user moved on: what the field shows now is final, under the same
+        // rule for changes it has not read yet.
+        let unread = changes;
+        if unread > 1 {
+            return Err(Some("unsettled"));
+        }
+        match read(&mut field).await {
+            Some(text) => match receipt.corrected(&text.value) {
                 Some(span) => {
                     good = span.to_owned();
                     settled = good.clone();
                 }
-                None => lost = true,
-            }
+                None => {
+                    settled = trusted_before_clear(unread, &good);
+                    lost = true;
+                }
+            },
+            // Nothing changed since the last read: that span is final.
+            None if unread == 0 => settled = good.clone(),
+            None => return Err(Some("unsettled")),
         }
     }
     drop(field);
@@ -3693,6 +3716,36 @@ mod tests {
             )
             .await,
             Ok(("post gres is ready ".into(), "Postgres is ready ".into()))
+        );
+    }
+    /// Notifications carry no text: a send and a new message queued before one
+    /// read leave the field's history unknown, so nothing is learned (review R1).
+    #[tokio::test]
+    async fn queued_send_and_next_message_learn_nothing() {
+        assert_eq!(
+            watch_script(
+                "post gres is ready ",
+                &[(0, ""), (0, "Postgres is ready for staging")]
+            )
+            .await,
+            Err(Some("unsettled"))
+        );
+    }
+    /// "Postgre" confirmed by a pause, then the last letter and Enter queued
+    /// before a read: the earlier confirmation no longer holds (review R2).
+    #[tokio::test]
+    async fn unread_edits_void_an_earlier_confirmed_spelling() {
+        assert_eq!(
+            watch_script(
+                "post gres is ready ",
+                &[
+                    (0, "Postgre is ready "),
+                    (200, "Postgres is ready "),
+                    (0, "")
+                ]
+            )
+            .await,
+            Err(Some("unsettled"))
         );
     }
     #[tokio::test]
