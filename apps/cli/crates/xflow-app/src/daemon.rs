@@ -1358,15 +1358,18 @@ async fn observe(
 }
 /// Minimum gap between field reads; reads follow every change notification.
 const FIELD_READ_GAP: Duration = Duration::from_millis(20);
-/// A changed span is re-read after this pause; only a span read twice in a row
-/// is trusted as what the user meant (not a word still being typed).
+/// A changed span is re-read after this pause. When the dictation then leaves
+/// the field, its last span is trusted only if it was read twice in a row, or
+/// if the clear was the only change since that read (each edit posts its own
+/// notification), so a word still being typed is never learned.
 const FIELD_SETTLE: Duration = Duration::from_millis(60);
 /// Pin the field a dictation was pasted into and return (dictated, corrected)
 /// spans. The field is read ~120 ms after the paste to anchor the span, then
 /// after each change notification, keeping the last span that is still
 /// recognisably the dictation. Once the dictation leaves the field (a chat
 /// app's Enter, a clear, a rewrite) the observation is over: its last span is
-/// learned only if it had settled, and nothing typed there later is read.
+/// learned only if nothing typed after it went unread (see FIELD_SETTLE), and
+/// nothing typed there later is read.
 /// Otherwise the window ends when focus leaves the field (after a 250 ms
 /// grace), the next dictation starts, or after 60 s, with one last read. Only
 /// the span and 16 characters each side stay in memory. Err holds the outcome
@@ -1396,6 +1399,9 @@ async fn watch_edit(
     // The last span read, and the last one read twice in a row.
     let (mut good, mut settled) = (String::new(), String::new());
     let (mut dirty, mut left, mut lost) = (true, false, false);
+    // Change notifications handled since the last read; events that queued
+    // during a read count too, which only errs towards not learning.
+    let mut changes = 0;
     let (mut last_read, mut next_read) = (started, started);
     let mut recheck: Option<Instant> = None;
     loop {
@@ -1415,8 +1421,19 @@ async fn watch_edit(
                     break;
                 }
             }
+            // Queued notifications are counted before any read (see `changes`).
+            event = field.next() => match event {
+                Some(FieldEvent::Changed) => {
+                    changes += 1;
+                    dirty = true;
+                    next_read = last_read + FIELD_READ_GAP;
+                }
+                Some(FieldEvent::Focus) => recheck = Some(Instant::now() + Duration::from_millis(250)),
+                None => break,
+            },
             _ = sleep_until(next_read), if dirty => {
                 dirty = false;
+                let unread = std::mem::take(&mut changes);
                 let text = read(&mut field).await;
                 last_read = Instant::now();
                 let Some(anchored) = &receipt else {
@@ -1436,7 +1453,11 @@ async fn watch_edit(
                     }
                     continue;
                 };
-                let Some(text) = text else { continue };
+                let Some(text) = text else {
+                    // A failed read saw nothing; its changes are still unread.
+                    changes += unread;
+                    continue;
+                };
                 match anchored.corrected(&text.value) {
                     Some(span) if span == good => settled = good.clone(),
                     Some(span) => {
@@ -1445,19 +1466,15 @@ async fn watch_edit(
                         next_read = last_read + FIELD_SETTLE;
                     }
                     None => {
+                        // Only the clear happened after the last span was read.
+                        if unread <= 1 {
+                            settled = good.clone();
+                        }
                         lost = true;
                         break;
                     }
                 }
             }
-            event = field.next() => match event {
-                Some(FieldEvent::Changed) => {
-                    dirty = true;
-                    next_read = last_read + FIELD_READ_GAP;
-                }
-                Some(FieldEvent::Focus) => recheck = Some(Instant::now() + Duration::from_millis(250)),
-                None => break,
-            },
         }
     }
     let receipt = receipt.ok_or(Some("no-receipt"))?;
@@ -3639,7 +3656,10 @@ mod tests {
         let script = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(300)).await;
             for (ms, text) in steps {
-                tokio::time::sleep(Duration::from_millis(ms)).await;
+                // 0 ms: no yield, so the observer sees both changes before reading.
+                if ms > 0 {
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                }
                 *field.lock().unwrap() = Some(text);
                 let _ = notify.send(FieldEvent::Changed);
             }
@@ -3676,9 +3696,9 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn enter_while_still_typing_learns_nothing() {
-        // The last letter and Enter land inside one settle interval: the final
-        // spelling was never confirmed, so neither it nor "Postgre" is learned.
+    async fn fast_enter_learns_the_final_spelling_or_nothing() {
+        // The last letter and Enter land inside one settle interval, but the
+        // final spelling was read before the clear: it is learned, not "Postgre".
         assert_eq!(
             watch_script(
                 "post gres is ready ",
@@ -3686,6 +3706,20 @@ mod tests {
                     (0, "Postgre is ready "),
                     (40, "Postgres is ready "),
                     (30, "")
+                ]
+            )
+            .await,
+            Ok(("post gres is ready ".into(), "Postgres is ready ".into()))
+        );
+        // The last letter and Enter both land before the next read: the final
+        // spelling was never seen, so neither it nor "Postgre" is learned.
+        assert_eq!(
+            watch_script(
+                "post gres is ready ",
+                &[
+                    (0, "Postgre is ready "),
+                    (40, "Postgres is ready "),
+                    (0, "")
                 ]
             )
             .await,
