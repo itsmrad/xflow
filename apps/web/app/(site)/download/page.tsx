@@ -73,8 +73,16 @@ export default async function Download() {
             <p className="t-caption text-fg-subtle">
               {pkg ? `${release?.prerelease ? "Pre-release · " : ""}macOS, Apple silicon and Intel` : "No macOS package yet"}
             </p>
-            {!pkg && release && (
-              <LinkMono href={release.url}>Linux binaries, {release.tag} →</LinkMono>
+            {pkg && (
+              <p className="t-caption max-w-[36ch] text-fg-subtle md:text-right">
+                Not notarised yet: macOS blocks a downloaded .pkg until you allow it in System Settings › Privacy &amp; Security › Open
+                Anyway.
+              </p>
+            )}
+            {release && (
+              <LinkMono href={release.url}>
+                {pkg ? "Linux and all files" : "Linux binaries"}, {release.tag} →
+              </LinkMono>
             )}
           </div>
         </div>
@@ -90,7 +98,15 @@ export default async function Download() {
 
       <Section id="install" label={{ n: 1, total: 3, title: "Install" }} labelledBy="install-title">
         <div className="section-y px-[var(--cell-p)]">
-          <Heading id="install-title" title="Build it, run setup." lede="Until a signed package is published, xflow installs from source. It takes one cargo build and the install script." />
+          <Heading
+            id="install-title"
+            title={pkg ? "Or build it from source." : "Build it, run setup."}
+            lede={
+              pkg
+                ? "The same code as the package. It takes one cargo build and the install script."
+                : "Until a package is published, xflow installs from source. It takes one cargo build and the install script."
+            }
+          />
           <div id="linux" className="scroll-mt-24">
             <CommandBox methods={INSTALL} />
           </div>
@@ -130,7 +146,7 @@ export default async function Download() {
           <div>
             <Heading id="verify-title" title="Check what you run." lede={
                 pkg
-                  ? "Every line is on GitHub. Packaged releases list a SHA-256 per file and are signed as com.xflow.xflowd."
+                  ? "Every line is on GitHub. Releases list a SHA-256 per file. The binaries are signed as com.xflow.xflowd with xflow's own certificate, not an Apple Developer ID, and aren't notarised yet."
                   : "Every line is on GitHub, and a source build runs exactly the code you read. Release binaries come with a SHA256SUMS file."
               }
             />
@@ -139,7 +155,7 @@ export default async function Download() {
                 {pkg.name}: <span className="text-fg">{pkg.sha256}</span>
               </p>
             )}
-            <LinkMono href="/changelog">Release notes →</LinkMono>
+            <LinkMono href={release?.url ?? "/changelog"}>Release notes →</LinkMono>
           </div>
           <Terminal
             title="verify"
