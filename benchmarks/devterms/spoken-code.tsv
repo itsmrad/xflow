@@ -1,0 +1,241 @@
+# spoken text	expected local output
+camel case user id	userId
+snake case user id	user_id
+kebab case user id	user-id
+pascal case user id	UserId
+constant case user id	USER_ID
+camel case max retries	maxRetries
+snake case max retries	max_retries
+kebab case max retries	max-retries
+pascal case max retries	MaxRetries
+constant case max retries	MAX_RETRIES
+camel case request timeout ms	requestTimeoutMs
+snake case request timeout ms	request_timeout_ms
+kebab case request timeout ms	request-timeout-ms
+pascal case request timeout ms	RequestTimeoutMs
+constant case request timeout ms	REQUEST_TIMEOUT_MS
+camel case api base url	apiBaseUrl
+snake case api base url	api_base_url
+kebab case api base url	api-base-url
+pascal case api base url	ApiBaseUrl
+constant case api base url	API_BASE_URL
+camel case created at	createdAt
+snake case created at	created_at
+kebab case created at	created-at
+pascal case created at	CreatedAt
+constant case created at	CREATED_AT
+camel case http client	httpClient
+snake case http client	http_client
+kebab case http client	http-client
+pascal case http client	HttpClient
+constant case http client	HTTP_CLIENT
+camel case page size	pageSize
+snake case page size	page_size
+kebab case page size	page-size
+pascal case page size	PageSize
+constant case page size	PAGE_SIZE
+camel case session token	sessionToken
+snake case session token	session_token
+kebab case session token	session-token
+pascal case session token	SessionToken
+constant case session token	SESSION_TOKEN
+camel case error message	errorMessage
+snake case error message	error_message
+kebab case error message	error-message
+pascal case error message	ErrorMessage
+constant case error message	ERROR_MESSAGE
+camel case next page cursor	nextPageCursor
+snake case next page cursor	next_page_cursor
+kebab case next page cursor	next-page-cursor
+pascal case next page cursor	NextPageCursor
+constant case next page cursor	NEXT_PAGE_CURSOR
+camel case is valid	isValid
+camel case to string	toString
+camel case on click	onClick
+camel case for each	forEach
+camel case has children	hasChildren
+snake case is admin	is_admin
+pascal case config	Config
+constant case timeout	TIMEOUT
+pascal case user service	UserService
+constant case debug	DEBUG
+rename it to camel case account id	rename it to accountId
+add a field called snake case updated at	add a field called updated_at
+set camel case max retries to none	set maxRetries to none
+create a struct named pascal case dictation config	create a struct named DictationConfig
+Use kebab case main nav.	Use main-nav.
+export constant case api key	export API_KEY
+return camel case is valid	return isValid
+Rename the variable to snake case user name.	Rename the variable to user_name.
+The function is called camel case fetch user.	The function is called fetchUser.
+Make a class called pascal case audio buffer.	Make a class called AudioBuffer.
+call camel case handle submit when the form posts	call handleSubmit when the form posts
+Set constant case log level to debug.	Set LOG_LEVEL to debug.
+name it kebab case user avatar	name it user-avatar
+Add a column called snake case last seen at.	Add a column called last_seen_at.
+type pascal case request options	type RequestOptions
+pass camel case retry delay	pass retryDelay
+Check camel case is ready before starting.	Check isReady before starting.
+define pascal case app state	define AppState
+insert snake case row count	insert row_count
+Then camel case render list, then return.	Then renderList, then return.
+camel case first name, camel case last name	firstName, lastName
+snake case first name and snake case last name	first_name and last_name
+camel case user id snake case user id	userId user_id
+pascal case user, pascal case account, pascal case team	User, Account, Team
+constant case port, constant case host	PORT, HOST
+kebab case primary button or kebab case secondary button	primary-button or secondary-button
+Map camel case user id to snake case user id.	Map userId to user_id.
+rename snake case old name to snake case new name	rename old_name to new_name
+camel case is loading then camel case is done	isLoading then isDone
+One camel case user id, two snake case user id.	One userId, two user_id.
+main dot rs	main.rs
+lib dot rs	lib.rs
+index dot ts	index.ts
+app dot tsx	app.tsx
+server dot js	server.js
+button dot jsx	button.jsx
+package dot json	package.json
+tsconfig dot json	tsconfig.json
+readme dot md	README.md
+changelog dot md	CHANGELOG.md
+cargo dot toml	Cargo.toml
+cargo dot lock	Cargo.lock
+config dot yaml	config.yaml
+ci dot yml	ci.yml
+main dot py	main.py
+main dot go	main.go
+install dot sh	install.sh
+bun dot lock	bun.lock
+styles dot css	styles.css
+index dot html	index.html
+schema dot sql	schema.sql
+default dot toml	default.toml
+next dot config dot js	next.config.js
+vite dot config dot ts	vite.config.ts
+tailwind dot config dot ts	tailwind.config.ts
+app dot test dot ts	app.test.ts
+button dot stories dot tsx	button.stories.tsx
+dot env	.env
+dot git ignore	.gitignore
+Index dot ts	index.ts
+Open main dot rs.	Open main.rs.
+edit the index dot ts file	edit the index.ts file
+Check package dot json for the version.	Check package.json for the version.
+The bug is in snap dot rs.	The bug is in snap.rs.
+add it to dot env	add it to .env
+put the key in dot env, not in the code	put the key in .env, not in the code
+add node modules to dot git ignore	add node modules to .gitignore
+write a dot md file	write a .md file
+convert the dot yaml config	convert the .yaml config
+run install dot sh then restart	run install.sh then restart
+Compare main dot rs and lib dot rs.	Compare main.rs and lib.rs.
+open cargo dot toml and bump the version	open Cargo.toml and bump the version
+delete bun dot lock and reinstall	delete bun.lock and reinstall
+the tests live in app dot test dot ts	the tests live in app.test.ts
+update readme dot md	update README.md
+rename utils dot js to utils dot ts	rename utils.js to utils.ts
+move the config into default dot toml	move the config into default.toml
+In next dot config dot js, enable strict mode.	In next.config.js, enable strict mode.
+Lint server dot py.	Lint server.py.
+source dot env before running	source .env before running
+open paren	(
+close paren	)
+open bracket close bracket	[]
+open brace close brace	{}
+print open paren name close paren	print (name)
+call it with open paren user id close paren	call it with (user id)
+see the docs open paren page two close paren	see the docs (page two)
+open bracket index close bracket	[index]
+wrap it in open brace close brace	wrap it in {}
+if open paren camel case is ready close paren	if (isReady)
+open paren optional close paren.	(optional).
+the list open bracket red green close bracket	the list [red green]
+open parenthesis beta close parenthesis	(beta)
+open brace snake case user id close brace	{user_id}
+call open paren close paren	call ()
+In main dot rs, rename camel case user id to camel case account id.	In main.rs, rename userId to accountId.
+Set constant case max retries in dot env.	Set MAX_RETRIES in .env.
+add camel case is enabled to package dot json	add isEnabled to package.json
+Read snake case api key from dot env.	Read api_key from .env.
+rename snake case max retries to snake case retry limit in config dot toml	rename max_retries to retry_limit in config.toml
+export pascal case user card from button dot tsx	export UserCard from button.tsx
+call camel case load config open paren close paren	call loadConfig ()
+constant case node env	NODE_ENV
+camel case use effect	useEffect
+Camel case user ID.	userId.
+Snake case user ID.	user_id.
+Pascal case HTTP client.	HttpClient.
+Constant case API key.	API_KEY.
+Kebab case nav bar.	nav-bar.
+Camel case, user ID	Camel case, user ID
+camel case get user by id	getUserById
+snake case parse json	parse_json
+pascal case json value	JsonValue
+camel case on mouse down	onMouseDown
+camel case to lower case	toLowerCase
+constant case default port	DEFAULT_PORT
+kebab case dark mode	dark-mode
+the field is called camel case display name	the field is called displayName
+rename the struct to pascal case word list	rename the struct to WordList
+set snake case batch size to the default	set batch_size to the default
+change camel case is open to false	change isOpen to false
+return snake case total count	return total_count
+import pascal case text input from the ui package	import TextInput from the ui package
+log camel case elapsed ms	log elapsedMs
+update constant case schema version	update SCHEMA_VERSION
+delete camel case old token	delete oldToken
+the column is named snake case user email	the column is named user_email
+convert camel case start time to a date	convert startTime to a date
+Save it in config dot json.	Save it in config.json.
+main dot rs is too long	main.rs is too long
+Open lib dot rs and text dot rs.	Open lib.rs and text.rs.
+commit the cargo dot lock	commit the Cargo.lock
+eslint dot config dot js	eslint.config.js
+jest dot config dot ts	jest.config.ts
+load dot env dot local	load .env.local
+copy dot env dot example	copy .env.example
+check the dot json output	check the .json output
+the schema lives in schema dot sql	the schema lives in schema.sql
+run main dot py with python	run main.py with python
+open bracket camel case user id close bracket	[userId]
+the variable should be camel case user id	the variable should be userId
+using snake case max retries	using max_retries
+with camel case user id	with userId
+it uses pascal case request handler	it uses RequestHandler
+The default is constant case max connections.	The default is MAX_CONNECTIONS.
+I think it should be snake case created at.	I think it should be created_at.
+Now type camel case is visible.	Now type isVisible.
+please make it kebab case side bar	please make it side-bar
+we need camel case handle change	we need handleChange
+the hook is camel case use debounce	the hook is useDebounce
+maybe pascal case token stream	maybe TokenStream
+Okay, snake case retry count.	Okay, retry_count.
+So the key would be constant case github token.	So the key would be GITHUB_TOKEN.
+go with kebab case user menu	go with user-menu
+it returns camel case has more	it returns hasMore
+the prop is called camel case on close	the prop is called onClose
+I'd go for pascal case search bar	I'd go for SearchBar
+inside the loop use snake case line number	inside the loop use line_number
+the env var is constant case database url	the env var is DATABASE_URL
+the slug should be kebab case getting started	the slug should be getting-started
+next up, camel case fetch posts	next up, fetchPosts
+and finally snake case batch id	and finally batch_id
+the component is pascal case nav link	the component is NavLink
+our flag is kebab case dry run	our flag is dry-run
+maybe camel case is dirty	maybe isDirty
+the table is snake case user sessions	the table is user_sessions
+the class is pascal case http error	the class is HttpError
+try camel case retry limit	try retryLimit
+the field is snake case display order	the field is display_order
+it's stored as constant case cache ttl	it's stored as CACHE_TTL
+the route is kebab case reset password	the route is reset-password
+the method should be camel case to json	the method should be toJson
+the enum is pascal case log level	the enum is LogLevel
+my favorite name is camel case is ready	my favorite name is isReady
+it's kebab case main content	it's main-content
+the test is called snake case parses empty input	the test is called parses_empty_input
+The prop should be camel case is disabled.	The prop should be isDisabled.
+the header is kebab case content type	the header is content-type
+the constant is constant case max file size	the constant is MAX_FILE_SIZE
+and the struct is pascal case session store	and the struct is SessionStore

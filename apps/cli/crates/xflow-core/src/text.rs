@@ -99,7 +99,7 @@ fn replace(text: &str, pairs: &[(&str, &str)], punctuation_insensitive: bool) ->
 fn tidy(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut space = false;
-    for c in text.chars() {
+    for (i, c) in text.char_indices() {
         if c == '\n' {
             while out.ends_with(' ') {
                 out.pop();
@@ -112,7 +112,9 @@ fn tidy(text: &str) -> String {
             if space
                 && !out.is_empty()
                 && !out.ends_with('\n')
-                && !matches!(c, ',' | '.' | '!' | '?' | ':' | ';' | ')')
+                && (!matches!(c, ',' | '.' | '!' | '?' | ':' | ';' | ')')
+                    // A dotfile or extension keeps its space: "in .env", "a .md file".
+                    || c == '.' && text[i + 1..].starts_with(char::is_alphanumeric))
             {
                 out.push(' ');
             }
@@ -152,7 +154,7 @@ pub fn before_cleanup(text: &str, config: &Config, terminal: bool) -> String {
         text = replace(&text, &pairs, false);
     }
     text = tidy(&text);
-    text = crate::snap::apply(&text, config, terminal);
+    text = crate::code::apply(&text, config, |s| crate::snap::apply(s, config, terminal));
     let pairs: Vec<_> = config
         .dictionary
         .replacements

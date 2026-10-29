@@ -70,3 +70,18 @@ No Python tokenizer or new dependency is needed at runtime or in Rust tests.
 
 Tokenizer data is from OpenAI GPT-2/tiktoken and Whisper (MIT), see
 [the tokenizer licence](../../apps/cli/crates/xflow-providers/src/bpe/LICENSE), and the pinned source in the generator.
+
+## Spoken code (#33)
+
+`spoken-code.tsv` is 200 spoken phrases → expected local output for the
+`code.rs` grammar (casing commands, filenames, bracket pairs).
+`spoken-code-prose.txt` is the 100-sentence prose control that must stay
+byte-identical; both run as Rust tests. The opt-in STT check sends one
+Samantha WAV per row to Groq turbo and scores the pipeline output:
+
+```sh
+# from apps/cli: cargo-locked build -p xflow-core --example spoken_code
+# Export GROQ_API_KEY privately, then from the repository root:
+python3 benchmarks/devterms/spoken_code.py            # 200 paid requests
+python3 benchmarks/devterms/spoken_code.py --summary  # rescore, no network
+```
