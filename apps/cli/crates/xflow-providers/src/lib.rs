@@ -688,6 +688,32 @@ struct HttpTransformer {
 }
 #[async_trait]
 impl TextTransformer for HttpTransformer {
+    /// A fresh connection added ~107 ms p50 to a 40-word Groq cleanup
+    /// (benchmarks/formatting), so open it while the user is still talking.
+    async fn warm(&self) -> Result<()> {
+        let (method, url) = probe_url(&self.endpoint, &self.provider, None)?;
+        let auth = if self.provider == "gemini" {
+            Auth::Raw("x-goog-api-key")
+        } else {
+            Auth::Bearer
+        };
+        tokio::time::timeout(self.timeout.min(Duration::from_secs(5)), async {
+            let response = self
+                .credential
+                .apply(self.client.request(method, url), auth)
+                .await?
+                .send()
+                .await
+                .map_err(http_error)?;
+            if matches!(response.status().as_u16(), 401 | 403) {
+                self.credential.invalidate().await;
+            }
+            // Drain the bounded body so the pool can reuse the socket.
+            read_bytes(response, false).await.map(|_| ())
+        })
+        .await
+        .map_err(|_| anyhow!("provider warm-up timed out"))?
+    }
     async fn transform(&self, request: TransformRequest<'_>) -> Result<String> {
         if request.mode == CleanupMode::Raw && request.command.is_none() {
             return Ok(request.text.to_owned());

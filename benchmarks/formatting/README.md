@@ -32,6 +32,7 @@ benchmarks/formatting/run.sh                  # default model, qwen/qwen3.8-27b
 benchmarks/formatting/run.sh --model openai/gpt-oss-20b --out /tmp/oss.jsonl
 benchmarks/formatting/run.sh --latency 30         # 40-word dictation, one warm client
 benchmarks/formatting/run.sh --latency 30 --cold  # new client (DNS+TLS) per call
+benchmarks/formatting/run.sh --latency 30 --cold --prewarm  # new client, warmed like the daemon does
 benchmarks/formatting/run.sh --replay results.jsonl  # re-check saved outputs, no API
 ```
 
@@ -52,6 +53,7 @@ First 76 items (312 checks):
 | Old Light prompt, qwen3.8-27b | 87.2% model / 90.1% delivered | 60 | 10 of 16 |
 | New prompt, gpt-oss-20b (reasoning low) | aborted: refusals, empty output | — | 2 refusals |
 | New prompt, gpt-oss-120b (reasoning low), all 82 items / 332 checks | 97.3% / 97.3% | 77 / 82 | 0 |
+| **Shipped prompt and guards, qwen3.8-27b, all 82 items / 332 checks** | **99.7% / 99.7%** | **81 / 82** | **0** |
 | **New prompt, qwen3.8-27b, temperature 0** (2 runs) | **100% / 100%** | **76 / 76** | **0** |
 | New prompt, qwen3.8-27b, default temperature (2 runs) | 100% and 98.7% model / 99.0% delivered | 76 and 74 | 0 delivered (1 caught by the guard) |
 
@@ -64,7 +66,10 @@ them as text.
 
 | Model | Corpus calls, all lengths | 40-word dictation, 30 runs |
 |---|---|---|
-| **qwen3.8-27b**, temperature 0 | **p50 223 ms, p95 558 ms** (n = 144) | not measured: daily token cap reached |
+| **qwen3.8-27b**, temperature 0 | **p50 223 ms, p95 558 ms** (n = 144) | **p50 231 ms, p95 390 ms** |
+| qwen3.8-27b, shipped prompt (final run) | p50 185 ms, p95 358 ms (n = 78) | — |
+| qwen3.8-27b, new client per call (cold) | — | p50 338 ms, p95 679 ms; rerun p50 317 ms, p95 541 ms (15 runs each) |
+| qwen3.8-27b, new client + `warm()` (what the daemon does) | — | p50 241 ms, p95 586 ms (15 runs) |
 | qwen3.8-27b, default temperature | p50 225 ms, p95 597 ms (n = 144) | — |
 | gpt-oss-120b | p50 582 ms, p95 1929 ms (n = 78) | **p50 914 ms, p95 1878 ms** |
 | Old prompt, qwen3.8-27b | p50 147 ms, p95 1050 ms (n = 72) | — |
@@ -73,8 +78,12 @@ By length on qwen (temperature 0): 7–12 words p50 210 ms; 13–20 words p50
 248 ms; 21–60 words p50 238 ms (n = 4); 61–100 words p50 487 ms (n = 4). The
 old prompt was faster per call only because it sent no examples; its p95 came
 from long answers to questions. Groq's free tier allows 200,000 tokens a day
-per model (about 250 dictations); the 30-run qwen gate needs the cap to roll
-over or a Dev-tier key.
+per model, about 250 dictations.
+
+A cold connection costs ~107 ms p50, and reqwest drops idle connections after
+90 s, so the daemon warms the cleanup connection when recording starts (see
+`--prewarm`). The one shipped-prompt miss is "post office" written as "Post
+Office"; no glossary term was inserted.
 
 **Default: qwen3.8-27b.** It is the only model that scores 100% and stays near
 0.2 s. gpt-oss-120b is in the catalog as the Production-status alternative

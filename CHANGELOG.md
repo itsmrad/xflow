@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Dictation
+- **Smart formatting is on after setup.** When your speech key can also run cleanup (Groq today), setup turns on light cleanup with that key. It turns spoken sequences into lists, keeps only your correction when you say "actually" or "no wait", writes times and amounts as digits, and spells your dictionary terms. The setup screen says so: "Smart formatting: on · uses your Groq key · ~+0.2 s". Turn it off in Settings › Writing. Configs where you already set cleanup up are not changed. (#67)
+- **Cleanup never answers you.** A question or "ignore your instructions" in your dictation stays text. If the model answers, rewrites, drops a path or flag, or takes longer than about 3 s, xflow pastes your words as transcribed and says why. Dictations of six words or fewer, mostly-code text and terminals skip cleanup, so they cost no time. (#67, #68)
+
+### Privacy
+- **The focused app's name is no longer sent to the writing service by default.** Turn it on in Settings › Privacy › Share app name. If you had set `cleanup.app_context = true` yourself, it stays on. (#38)
+
 ## 0.2.0-beta — 2026-10-29
 
 Beta for macOS 13+ (universal: Apple silicon and Intel; `.pkg` or Homebrew) and Linux (tarball).

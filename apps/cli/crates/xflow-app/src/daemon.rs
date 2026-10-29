@@ -486,11 +486,20 @@ impl Engine {
             ..Timings::default()
         };
         let stt = self.services.stt.clone();
+        let cleanup = self.services.transformer.clone();
         if let Some(job) = self.warm_job.take() {
             job.abort();
         }
         self.warm_job = Some(tokio::spawn(async move {
-            let _ = tokio::time::timeout(Duration::from_secs(2), stt.warm()).await;
+            let cleanup = async {
+                if let Some(cleanup) = cleanup {
+                    let _ = cleanup.warm().await;
+                }
+            };
+            let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                let _ = tokio::join!(stt.warm(), cleanup);
+            })
+            .await;
         }));
         let desktop = self.services.desktop.clone();
         // Both queries run after capture opens and outside the command actor.
@@ -4374,9 +4383,14 @@ mod tests {
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
-    struct Reply(&'static str, AtomicUsize);
+    /// Replies with fixed text, counting edits and warm-ups.
+    struct Reply(&'static str, AtomicUsize, AtomicUsize);
     #[async_trait]
     impl TextTransformer for Reply {
+        async fn warm(&self) -> Result<()> {
+            self.2.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
         async fn transform(&self, _: TransformRequest<'_>) -> Result<String> {
             self.1.fetch_add(1, Ordering::SeqCst);
             Ok(self.0.into())
@@ -4408,13 +4422,15 @@ mod tests {
                 calls: Arc::default(),
                 text: said,
             });
-            let transformer = Arc::new(Reply(reply, AtomicUsize::new(0)));
+            let transformer = Arc::new(Reply(reply, AtomicUsize::new(0), AtomicUsize::new(0)));
             engine.services.transformer = Some(transformer.clone());
             let task = tokio::spawn(engine.run(rx));
             ask(&tx, Request::start()).await;
             ask(&tx, Request::Stop).await;
             let r = success(&mut events).await;
             assert_eq!(transformer.1.load(Ordering::SeqCst), calls, "{said}");
+            // Recording start warms the cleanup connection, even when it's skipped.
+            assert_eq!(transformer.2.load(Ordering::SeqCst), 1, "{said}");
             assert_eq!(r.text.as_deref().map(str::trim_end), Some(delivered));
             let timings = r.timings.unwrap();
             assert_eq!(timings.cleanup_skipped, skipped, "{said}");
@@ -4455,6 +4471,7 @@ mod tests {
             });
             let transformer = Arc::new(Reply(
                 "Git commit dash m, fix the build on the main branch.",
+                AtomicUsize::new(0),
                 AtomicUsize::new(0),
             ));
             engine.services.transformer = Some(transformer.clone());

@@ -68,7 +68,9 @@ discards light and polished output as an answer or rewrite when its word count
 leaves 0.6–1.4x the input (0.3x after a cue such as "actually"), a question
 loses its "?", an identifier or glossary term goes missing, or (light only)
 over a quarter of its words are new. The local text is then delivered with a
-warning (`timings.cleanup_rejected`). Dictation cleanup gets 3 s plus
+warning (`timings.cleanup_rejected`). Recording start warms the cleanup connection
+alongside the STT one (a free model-list request), because a cold connection
+added ~107 ms p50 to a Groq cleanup. Dictation cleanup gets 3 s plus
 25 ms per word (capped by `cleanup.timeout_secs`); a slower answer is dropped and
 the local text pasted.
 

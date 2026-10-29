@@ -113,12 +113,20 @@ async fn main() -> Result<()> {
         for _ in 0..runs {
             if flag("--cold") {
                 t = transformer(&model)?;
+                // What the daemon does while the user is still talking.
+                if flag("--prewarm") {
+                    t.warm().await?;
+                }
             }
             ms.push(clean(&*t, FORTY, &[]).await?.1);
             // Free-tier Groq allows 8k tokens a minute; also realistic dictation pacing.
             tokio::time::sleep(Duration::from_secs(8)).await;
         }
-        let cold = if flag("--cold") { "cold" } else { "warm" };
+        let cold = match (flag("--cold"), flag("--prewarm")) {
+            (true, true) => "new client + warm()",
+            (true, false) => "cold",
+            _ => "warm",
+        };
         println!(
             "{model} {cold} {runs} runs, 40 words: p50 {} ms, p95 {} ms, max {} ms",
             percentile(ms.clone(), 50),
