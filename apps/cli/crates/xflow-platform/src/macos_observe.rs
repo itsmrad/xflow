@@ -3,7 +3,7 @@
 //! the idle daemon has no thread, timer or AX traffic. Text is read only on
 //! request and never leaves the daemon.
 use super::{
-    cf_text, focus, is_terminal, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
+    cf_text, focus, is_terminal, secure, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
     AXUIElementGetPid, CFGetTypeID, CFRelease, Owned, Ref,
 };
 use async_trait::async_trait;
@@ -167,7 +167,12 @@ unsafe extern "C" fn callback(_: Ref, _: Ref, notification: Ref, context: *mut c
     // A full queue already holds a pending change for the reader.
     let _ = events.try_send(event);
 }
+/// A field that turned secure since it was pinned (a page swapping in a
+/// password input) is no longer read.
 fn read(element: &Owned) -> Option<FieldText> {
+    if secure(element) {
+        return None;
+    }
     let value = element.text("AXValue")?;
     let caret = element.attribute("AXSelectedTextRange").and_then(|range| {
         let mut r = CFRange {
@@ -285,19 +290,35 @@ mod tests {
         let name = Owned::string("AXSelectedText");
         let edited = Instant::now();
         let set = unsafe { super::super::AXUIElementSetAttributeValue(editor.0, name.0, text.0) };
-        let event = tokio::time::timeout(Duration::from_secs(1), watch.next()).await;
-        let notified_ms = edited.elapsed().as_millis();
+        // Wait for a value change specifically; focus notifications are counted apart.
+        let (mut changed_ms, mut focus_events) = (None, 0);
+        let _ = tokio::time::timeout(Duration::from_secs(1), async {
+            while let Some(event) = watch.next().await {
+                match event {
+                    FieldEvent::Changed => {
+                        changed_ms = Some(edited.elapsed().as_millis());
+                        break;
+                    }
+                    FieldEvent::Focus => focus_events += 1,
+                }
+            }
+        })
+        .await;
         let read_at = Instant::now();
         let after = watch.read().await.expect("unreadable");
         println!(
-            "set={set} event={:?} event_ms={notified_ms} read_ms={} len {}->{} caret {:?}->{:?} marker={}",
-            event.ok().flatten(),
+            "set={set} changed_ms={changed_ms:?} focus_events={focus_events} read_ms={} len {}->{} caret {:?}->{:?} marker={}",
             read_at.elapsed().as_millis(),
             before.value.encode_utf16().count(),
             after.value.encode_utf16().count(),
             before.caret,
             after.caret,
             after.value.contains(marker)
+        );
+        assert_eq!(set, 0, "the app refused the edit");
+        assert!(
+            after.value.contains(marker),
+            "the read does not show the edit"
         );
         drop(watch);
         std::thread::sleep(Duration::from_millis(1200));

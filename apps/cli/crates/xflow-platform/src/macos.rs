@@ -419,9 +419,7 @@ fn focus() -> Focus {
         return focus;
     };
     let role = role.unwrap_or_default();
-    focus.secure = role == "AXSecureTextField"
-        || element.text("AXSubrole").as_deref() == Some("AXSecureTextField")
-        || element.flag("AXProtectedContent") == Some(true);
+    focus.secure = secure(&element);
     focus.editable = if focus.secure
         || element.flag("AXEnabled") == Some(false)
         || element.flag("AXEditable") == Some(false)
@@ -444,6 +442,19 @@ fn focus() -> Focus {
     };
     focus.element = Some(element);
     focus
+}
+/// A password or otherwise protected field, whose text xflow never reads or pastes into.
+fn secure(element: &Owned) -> bool {
+    is_secure(
+        element.text("AXRole").as_deref(),
+        element.text("AXSubrole").as_deref(),
+        element.flag("AXProtectedContent"),
+    )
+}
+fn is_secure(role: Option<&str>, subrole: Option<&str>, protected: Option<bool>) -> bool {
+    role == Some("AXSecureTextField")
+        || subrole == Some("AXSecureTextField")
+        || protected == Some(true)
 }
 fn is_container(role: &str) -> bool {
     matches!(
@@ -1146,6 +1157,18 @@ mod tests {
         // Let the abandoned read return before the next test touches HIServices.
         std::thread::sleep(Duration::from_millis(300));
         let _ = pasteboard.write("");
+    }
+    #[test]
+    fn secure_role_subrole_or_protected_content_is_never_read() {
+        assert!(is_secure(Some("AXSecureTextField"), None, None));
+        assert!(is_secure(
+            Some("AXTextField"),
+            Some("AXSecureTextField"),
+            None
+        ));
+        assert!(is_secure(Some("AXTextArea"), None, Some(true)));
+        assert!(!is_secure(Some("AXTextArea"), None, Some(false)));
+        assert!(!is_secure(Some("AXTextField"), None, None));
     }
     #[test]
     fn editability_selects_paste_copy_or_both() {

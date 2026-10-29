@@ -29,8 +29,11 @@ impl Receipt {
             .into_iter()
             .filter(|s| !s.trim().is_empty())
             .find_map(|s| {
-                let needle: Vec<char> = s.chars().filter_map(fold_char).collect();
+                let needle: Vec<char> = folded(s).into_iter().map(|c| c.0).collect();
                 let n = needle.len();
+                if n == 0 {
+                    return None;
+                }
                 let at_caret = caret.and_then(|c| utf16_to_byte(field, c)).and_then(|end| {
                     let j = chars.partition_point(|c| c.1 < end);
                     (j >= n && keys[j - n..j] == needle[..]).then(|| j - n)
@@ -44,7 +47,10 @@ impl Receipt {
                 };
                 at_caret.or_else(unique).map(|i| (i, n))
             })?;
-        let (start, end) = (chars[i].1, chars[i + n - 1].2);
+        // Combining marks sorted into canonical order may swap byte ranges.
+        let span = &chars[i..i + n];
+        let start = span.iter().map(|c| c.1).min()?;
+        let end = span.iter().map(|c| c.2).max()?;
         let before = &field[..start];
         let after = &field[end..];
         let before = &before[before
@@ -100,7 +106,6 @@ impl Receipt {
 /// The comparison form of a character. Smart quotes and dashes, no-break
 /// spaces and auto-capitalisation fold away; CR and zero-width characters are
 /// dropped (CRLF reads as LF).
-// ponytail: no NFC; macOS text fields keep pasted code points as sent.
 fn fold_char(c: char) -> Option<char> {
     Some(match c {
         '\r' | '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}' => return None,
@@ -111,11 +116,31 @@ fn fold_char(c: char) -> Option<char> {
         c => c.to_lowercase().next().unwrap_or(c),
     })
 }
-/// Folded characters with each one's byte range in `s`.
+/// Folded characters of `s` in canonical decomposition (NFD), each with the
+/// byte range of the character it came from, so "é" and "e\u{301}" compare
+/// equal and a match still maps back to the field's own text.
 fn folded(s: &str) -> Vec<(char, usize, usize)> {
-    s.char_indices()
-        .filter_map(|(i, c)| Some((fold_char(c)?, i, i + c.len_utf8())))
-        .collect()
+    use unicode_normalization::char::{canonical_combining_class, decompose_canonical};
+    let mut out: Vec<(char, usize, usize)> = Vec::with_capacity(s.len());
+    for (i, c) in s.char_indices() {
+        decompose_canonical(c, |d| {
+            if let Some(f) = fold_char(d) {
+                out.push((f, i, i + c.len_utf8()));
+            }
+        });
+    }
+    // Canonical ordering: runs of combining marks sort by combining class.
+    let mut start = 0;
+    while start < out.len() {
+        let end = start
+            + out[start..]
+                .iter()
+                .take_while(|c| canonical_combining_class(c.0) != 0)
+                .count();
+        out[start..end].sort_by_key(|c| canonical_combining_class(c.0));
+        start = end + 1;
+    }
+    out
 }
 /// Byte offset of a UTF-16 offset; None when it is past the end or splits a character.
 fn utf16_to_byte(s: &str, units: usize) -> Option<usize> {
@@ -188,6 +213,11 @@ pub fn corrections(
 ) -> Result<Vec<Replacement>, &'static str> {
     let a: Vec<&str> = original.split_whitespace().map(key).collect();
     let b: Vec<&str> = corrected.split_whitespace().map(key).collect();
+    // Bounds the LCS matrix below; punctuation-only tokens count here even
+    // though `similar` skips them.
+    if a.len() > MAX_DIFF_WORDS || b.len() > MAX_DIFF_WORDS {
+        return Err("too-long");
+    }
     // Case-insensitive, so recapitalizing the next word is not part of a fix.
     if !similar(original, corrected) {
         return Err("dissimilar");
@@ -596,6 +626,17 @@ mod tests {
                 "{original} -> {corrected}"
             );
         }
+        // Punctuation-only tokens count toward the diff bound.
+        let dots = " .".repeat(600);
+        assert_eq!(
+            corrections(
+                &format!("we use post gres{dots}"),
+                &format!("we use Postgres{dots}"),
+                &DictionaryConfig::default()
+            )
+            .unwrap_err(),
+            "too-long"
+        );
         let long = "averyveryveryveryverylongidentifiername42x";
         assert!(learn("use a very long name", &format!("use {long}")).is_empty());
     }
@@ -692,6 +733,25 @@ mod tests {
                 Receipt::new(field, inserted, None).unwrap_or_else(|| panic!("{field:?}"));
             assert!(field.ends_with(receipt.inserted()), "{field:?}");
         }
+        // Canonically equivalent text: composed in one, decomposed in the other,
+        // marks in either order; the caret counts the field's own UTF-16 units.
+        let field = "we use cafe\u{301} daily";
+        let receipt = Receipt::new(field, "we use café daily", None).unwrap();
+        assert_eq!(receipt.inserted(), field);
+        let field = "Menu: café au lait";
+        let caret = field.encode_utf16().count();
+        let receipt = Receipt::new(field, "cafe\u{301} au lait", Some(caret)).unwrap();
+        assert_eq!(receipt.inserted(), "café au lait");
+        assert_eq!(receipt.before, "Menu: ");
+        let field = "x a\u{323}\u{301} y";
+        let receipt = Receipt::new(
+            field,
+            "a\u{301}\u{323} y",
+            Some(field.encode_utf16().count()),
+        );
+        assert_eq!(receipt.unwrap().inserted(), "a\u{323}\u{301} y");
+        // Text that folds away entirely is never searched for.
+        assert!(Receipt::new("abc", "\u{200b} ", None).is_none());
         // The anchored span must still be the dictation, not the next message.
         let receipt = Receipt::new("we use dev terms", "we use dev terms", Some(16)).unwrap();
         assert_eq!(

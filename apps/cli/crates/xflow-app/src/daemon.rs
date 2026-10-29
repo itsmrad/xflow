@@ -1356,17 +1356,21 @@ async fn observe(
     };
     log("debug", &format!("auto-learn: {outcome}"));
 }
-/// Throttle for field reads on change notifications: a leading read, then at
-/// most one per interval, plus a trailing read after the last change.
-const FIELD_READ_EVERY: Duration = Duration::from_millis(150);
+/// Minimum gap between field reads; reads follow every change notification.
+const FIELD_READ_GAP: Duration = Duration::from_millis(20);
+/// A changed span is re-read after this pause; only a span read twice in a row
+/// is trusted as what the user meant (not a word still being typed).
+const FIELD_SETTLE: Duration = Duration::from_millis(60);
 /// Pin the field a dictation was pasted into and return (dictated, corrected)
-/// spans. The field is read ~120 ms after the paste to anchor the span, then on
-/// its change notifications, keeping the last read that is still recognisably
-/// the dictation; when an edited dictation leaves the field (a chat app's
-/// Enter) that read is final. Otherwise the window ends when focus leaves the
-/// field (after a 250 ms grace), the next dictation starts, or after 60 s, with
-/// one last read. Only the span and 16 characters each side stay in memory.
-/// Err holds the outcome when there is nothing to learn, None when cancelled.
+/// spans. The field is read ~120 ms after the paste to anchor the span, then
+/// after each change notification, keeping the last span that is still
+/// recognisably the dictation. Once the dictation leaves the field (a chat
+/// app's Enter, a clear, a rewrite) the observation is over: its last span is
+/// learned only if it had settled, and nothing typed there later is read.
+/// Otherwise the window ends when focus leaves the field (after a 250 ms
+/// grace), the next dictation starts, or after 60 s, with one last read. Only
+/// the span and 16 characters each side stay in memory. Err holds the outcome
+/// when there is nothing to learn, None when cancelled.
 async fn watch_edit(
     desktop: &dyn Desktop,
     target: &AppContext,
@@ -1389,10 +1393,10 @@ async fn watch_edit(
         .ok_or(Some("unreadable"))?;
     let deadline = started + Duration::from_secs(60);
     let mut receipt: Option<xflow_core::learn::Receipt> = None;
-    // The last read span that is still the dictation.
-    let mut good = String::new();
-    let (mut dirty, mut lost, mut left, mut sent) = (true, false, false, false);
-    let mut next_read = started;
+    // The last span read, and the last one read twice in a row.
+    let (mut good, mut settled) = (String::new(), String::new());
+    let (mut dirty, mut left, mut lost) = (true, false, false);
+    let (mut last_read, mut next_read) = (started, started);
     let mut recheck: Option<Instant> = None;
     loop {
         tokio::select! {
@@ -1413,41 +1417,58 @@ async fn watch_edit(
             }
             _ = sleep_until(next_read), if dirty => {
                 dirty = false;
-                next_read = Instant::now() + FIELD_READ_EVERY;
                 let text = read(&mut field).await;
+                last_read = Instant::now();
                 let Some(anchored) = &receipt else {
                     let readable = text.is_some();
                     receipt = text.and_then(|t| xflow_core::learn::Receipt::new(&t.value, inserted, t.caret));
                     match &receipt {
-                        Some(r) => good = r.inserted().to_owned(),
+                        Some(r) => {
+                            good = r.inserted().to_owned();
+                            settled = good.clone();
+                        }
                         // Electron and Chromium can show the paste late.
-                        None if started.elapsed() < Duration::from_secs(1) => dirty = true,
+                        None if started.elapsed() < Duration::from_secs(1) => {
+                            dirty = true;
+                            next_read = last_read + Duration::from_millis(50);
+                        }
                         None => return Err(Some(if readable { "no-receipt" } else { "unreadable" })),
                     }
                     continue;
                 };
                 let Some(text) = text else { continue };
                 match anchored.corrected(&text.value) {
-                    Some(span) => good = span.to_owned(),
-                    None if good != anchored.inserted() => {
-                        sent = true;
+                    Some(span) if span == good => settled = good.clone(),
+                    Some(span) => {
+                        good = span.to_owned();
+                        dirty = true;
+                        next_read = last_read + FIELD_SETTLE;
+                    }
+                    None => {
+                        lost = true;
                         break;
                     }
-                    None => lost = true,
                 }
             }
             event = field.next() => match event {
-                Some(FieldEvent::Changed) => dirty = true,
+                Some(FieldEvent::Changed) => {
+                    dirty = true;
+                    next_read = last_read + FIELD_READ_GAP;
+                }
                 Some(FieldEvent::Focus) => recheck = Some(Instant::now() + Duration::from_millis(250)),
                 None => break,
             },
         }
     }
     let receipt = receipt.ok_or(Some("no-receipt"))?;
-    if !sent {
+    if !lost {
+        // The user moved on: what the field shows now is final.
         if let Some(text) = read(&mut field).await {
             match receipt.corrected(&text.value) {
-                Some(span) => good = span.to_owned(),
+                Some(span) => {
+                    good = span.to_owned();
+                    settled = good.clone();
+                }
                 None => lost = true,
             }
         }
@@ -1461,6 +1482,10 @@ async fn watch_edit(
         } else {
             "no-edit"
         }));
+    }
+    // The dictation left the field while its latest spelling was still changing.
+    if good != settled {
+        return Err(Some("unsettled"));
     }
     Ok((receipt.inserted().to_owned(), good))
 }
@@ -3543,9 +3568,9 @@ mod tests {
         .await
         .expect("nothing learned")
     }
-    /// A chat field: the user fixes a word and presses Enter within the read
-    /// throttle, then types a similar next message. The last read of the edited
-    /// dictation is learned at once, and the next dictation snaps to it (#64).
+    /// A chat field: the user fixes a word, presses Enter, then types a similar
+    /// next message. The settled edit is learned at once, the next message is
+    /// never read, and the next dictation snaps to the learned word (#64).
     #[tokio::test]
     async fn correction_sent_with_enter_learns_from_the_last_good_read() {
         let dir = tempfile::tempdir().unwrap();
@@ -3574,7 +3599,7 @@ mod tests {
             let _ = notify.send(FieldEvent::Changed);
         };
         edit("Postgres is ready ");
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         edit("");
         tokio::time::sleep(Duration::from_millis(300)).await;
         edit("post Gres is ready now?");
@@ -3595,6 +3620,86 @@ mod tests {
         );
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
+    }
+    /// Drives `watch_edit` over a field holding `pasted`: each step sets the
+    /// field (and notifies a change) after its delay. Returns the outcome.
+    async fn watch_script(
+        pasted: &str,
+        steps: &[(u64, &str)],
+    ) -> std::result::Result<(String, String), Option<&'static str>> {
+        let (notify, field_events) = mpsc::unbounded_channel();
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some(pasted.into()))),
+            field_events: Mutex::new(Some(field_events)),
+            ..RecordingDesktop::default()
+        });
+        let (finalize_tx, finalize) = oneshot::channel();
+        let field = desktop.field.clone();
+        let steps: Vec<(u64, String)> = steps.iter().map(|(ms, t)| (*ms, t.to_string())).collect();
+        let script = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            for (ms, text) in steps {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                *field.lock().unwrap() = Some(text);
+                let _ = notify.send(FieldEvent::Changed);
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = finalize_tx.send(());
+        });
+        let result = watch_edit(&*desktop, &AppContext::default(), pasted, finalize).await;
+        script.abort();
+        result
+    }
+    #[tokio::test]
+    async fn sent_dictation_ends_observation_before_the_next_message() {
+        // Sent unedited, then a similar message is typed: nothing to learn.
+        assert_eq!(
+            watch_script(
+                "post gres is ready ",
+                &[(0, ""), (250, "Postgres is ready for staging")]
+            )
+            .await,
+            Err(Some("anchors-lost"))
+        );
+        // A settled fix, then Enter: learned, and the next message is never read.
+        assert_eq!(
+            watch_script(
+                "post gres is ready ",
+                &[
+                    (0, "Postgres is ready "),
+                    (200, ""),
+                    (250, "post Gres is ready now")
+                ]
+            )
+            .await,
+            Ok(("post gres is ready ".into(), "Postgres is ready ".into()))
+        );
+    }
+    #[tokio::test]
+    async fn enter_while_still_typing_learns_nothing() {
+        // The last letter and Enter land inside one settle interval: the final
+        // spelling was never confirmed, so neither it nor "Postgre" is learned.
+        assert_eq!(
+            watch_script(
+                "post gres is ready ",
+                &[
+                    (0, "Postgre is ready "),
+                    (40, "Postgres is ready "),
+                    (30, "")
+                ]
+            )
+            .await,
+            Err(Some("unsettled"))
+        );
+        // Typing that pauses before the field is left is final.
+        assert_eq!(
+            watch_script(
+                "post gres is ready ",
+                &[(0, "Postgre is ready "), (40, "Postgres is ready ")]
+            )
+            .await,
+            Ok(("post gres is ready ".into(), "Postgres is ready ".into()))
+        );
     }
     /// An app without value notifications: the edit is read when focus leaves
     /// the field, not after 60 s or at the next dictation.
