@@ -190,6 +190,8 @@ pub trait FieldWatch: Send {
     /// The next change or focus notification; pending forever when the desktop
     /// cannot notify, None once the field is gone.
     async fn next(&mut self) -> Option<FieldEvent>;
+    /// A notification already queued, without waiting.
+    fn try_next(&mut self) -> Option<FieldEvent>;
     /// The field's value and caret now, read from the pinned element even when
     /// focus has moved on.
     async fn read(&mut self) -> Option<FieldText>;

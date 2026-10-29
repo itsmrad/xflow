@@ -239,6 +239,9 @@ impl FieldWatch for Watch {
         }
         self.events.recv().await
     }
+    fn try_next(&mut self) -> Option<FieldEvent> {
+        self.events.try_recv().ok()
+    }
     async fn read(&mut self) -> Option<FieldText> {
         let element = self.element.clone();
         tokio::task::spawn_blocking(move || read(&element.0))

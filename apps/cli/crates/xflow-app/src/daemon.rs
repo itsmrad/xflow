@@ -1404,6 +1404,18 @@ async fn watch_edit(
             .ok()
             .flatten()
     }
+    // Takes the notifications already queued, without waiting: a change that
+    // arrived during a read, or behind a finalize, is still a change.
+    fn drain(field: &mut Box<dyn xflow_core::FieldWatch>, recheck: &mut Option<Instant>) -> usize {
+        let mut changed = 0;
+        while let Some(event) = field.try_next() {
+            match event {
+                FieldEvent::Changed => changed += 1,
+                FieldEvent::Focus => *recheck = Some(Instant::now() + Duration::from_millis(250)),
+            }
+        }
+        changed
+    }
     tokio::time::sleep(Duration::from_millis(120)).await;
     let started = Instant::now();
     let mut field = timeout(Duration::from_secs(1), desktop.watch_field(target))
@@ -1481,20 +1493,32 @@ async fn watch_edit(
                 if unread > 1 {
                     return Err(Some("unsettled"));
                 }
+                // Changes announced while the read ran: after its value, so they
+                // are carried to the next read, but they count if this read
+                // finds the dictation gone.
+                let late = drain(&mut field, &mut recheck);
+                if late > 0 {
+                    notified = true;
+                    changes += late;
+                }
                 match anchored.corrected(&text.value) {
                     Some(span) if span == good => settled = good.clone(),
                     // The span changed without a notification for it.
-                    Some(_) if unread == 0 => return Err(Some("unsettled")),
+                    Some(_) if unread + late == 0 => return Err(Some("unsettled")),
                     Some(span) => {
                         good = span.to_owned();
                         dirty = true;
                         next_read = last_read + FIELD_SETTLE;
                     }
                     None => {
-                        settled = trusted_before_clear(unread, &good);
+                        settled = trusted_before_clear(unread + late, &good);
                         lost = true;
                         break;
                     }
+                }
+                if late > 0 {
+                    dirty = true;
+                    next_read = last_read + FIELD_READ_GAP;
                 }
             }
         }
@@ -1504,12 +1528,24 @@ async fn watch_edit(
     // rules. A field that never announced a change is not read again: in an
     // app that doesn't report edits, the dictation may already be sent and
     // the field may hold the next message.
+    // Finalize, focus leave and the deadline win over queued notifications in
+    // the select above; count those before deciding.
+    if !lost {
+        let pending = drain(&mut field, &mut recheck);
+        notified |= pending > 0;
+        changes += pending;
+    }
     if !lost && notified {
         let unread = changes;
         if unread > 1 {
             return Err(Some("unsettled"));
         }
-        match read(&mut field).await {
+        let text = read(&mut field).await;
+        // Still changing while the final read ran: its value is not final.
+        if drain(&mut field, &mut recheck) > 0 {
+            return Err(Some("unsettled"));
+        }
+        match text {
             Some(text) => match receipt.corrected(&text.value) {
                 Some(span) if span == good => settled = good.clone(),
                 Some(_) if unread == 0 => return Err(Some("unsettled")),
@@ -2646,6 +2682,9 @@ mod tests {
                 None => std::future::pending().await,
             }
         }
+        fn try_next(&mut self) -> Option<FieldEvent> {
+            self.events.as_mut()?.try_recv().ok()
+        }
         async fn read(&mut self) -> Option<xflow_core::FieldText> {
             let value = self.field.lock().unwrap().clone()?;
             let caret = Some(value.encode_utf16().count());
@@ -3770,6 +3809,60 @@ mod tests {
     }
     /// Notifications carry no text: a send and a new message queued before one
     /// read leave the field's history unknown, so nothing is learned (review R1).
+    /// Changes still queued when the watch is finalized count before the final
+    /// read: a send counted, then the next message and the next dictation's
+    /// start queued together, learns nothing (re-review of 6897db4).
+    #[tokio::test]
+    async fn changes_queued_behind_finalize_learn_nothing() {
+        for (queued, field_after) in [
+            // Send counted; the next message queued with finalize.
+            (
+                &["Postgres is ready for staging"][..],
+                Some("Postgres is ready for staging"),
+            ),
+            // "Postgre" confirmed; the last letter and an unreadable field queued.
+            (&["Postgres is ready "][..], None),
+        ] {
+            let pasted = "post gres is ready ";
+            let (notify, field_events) = mpsc::unbounded_channel();
+            let desktop = Arc::new(RecordingDesktop {
+                field: Arc::new(Mutex::new(Some(pasted.into()))),
+                field_events: Mutex::new(Some(field_events)),
+                ..RecordingDesktop::default()
+            });
+            let (finish, finalize) = oneshot::channel();
+            let observed = desktop.clone();
+            let watch = tokio::spawn(async move {
+                watch_edit(&*observed, &AppContext::default(), pasted, finalize).await
+            });
+            let set = |text: Option<&str>| {
+                *desktop.field.lock().unwrap() = text.map(str::to_owned);
+                let _ = notify.send(FieldEvent::Changed);
+            };
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            // A read 5 ms before the next change: that change is counted, and
+            // its read waits for the 20 ms gap.
+            if field_after.is_some() {
+                set(Some("post gres is ready now "));
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                set(Some(""));
+            } else {
+                set(Some("Postgre is ready "));
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                set(Some("Postgre is ready "));
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            // No yield from here: the queued change and the finalize race.
+            for text in queued {
+                set(Some(text));
+            }
+            if field_after.is_none() {
+                set(None);
+            }
+            let _ = finish.send(());
+            assert_eq!(watch.await.unwrap(), Err(Some("unsettled")), "{queued:?}");
+        }
+    }
     #[tokio::test]
     async fn queued_send_and_next_message_learn_nothing() {
         assert_eq!(
