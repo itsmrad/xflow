@@ -74,8 +74,10 @@ const NEGATIONS: [&str; 26] = [
     "shouldnt", "couldnt", "wouldnt", "havent", "hasnt", "aint",
 ];
 /// Spoken fillers that may sit inside a cue's clause.
-const FILLERS: [&str; 12] = [
-    "um", "uh", "er", "erm", "ah", "hmm", "like", "so", "well", "okay", "ok", "mm",
+/// Also what a cancel's sentence may open with: "You know, scratch that."
+const FILLERS: [&str; 26] = [
+    "um", "umm", "uh", "uhm", "er", "erm", "ah", "hm", "hmm", "mm", "mhm", "like", "so", "well",
+    "okay", "ok", "oh", "please", "you", "know", "wait", "right", "alright", "hey", "now", "yeah",
 ];
 /// A day or month is a time slot, never a person: "Ask John, sorry, Friday." stays.
 const DATES: [&str; 19] = [
@@ -409,10 +411,12 @@ impl<'a> Ctx<'a> {
             && match cue {
                 // Its own clause: "Thursday, scratch that", not "the phrase scratch that".
                 // After a full stop it is always a cancel: "He called. Scratch that."
+                // So is one that only fillers precede: "He called. Please scratch that."
                 ["scratch", "that"] | ["never", "mind"] => {
-                    (!prior || punct)
-                        && (self.initial(i)
-                            || !DETERMINERS.contains(&prev) && !MENTIONS.contains(&prev))
+                    self.opens(i)
+                        || (!prior || punct)
+                            && !DETERMINERS.contains(&prev)
+                            && !MENTIONS.contains(&prev)
                 }
                 ["no", "wait"] | ["wait", "no"] => prior,
                 ["no", "no"] => prior && !NO_TRAPS.contains(&next),
@@ -557,6 +561,11 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
         if end == c.t.len() {
             return Some(String::new());
         }
+        // "He called. Bring notes, scratch that.": "Bring notes" or "He called."?
+        // Only fillers before the cue settle it; with no sentence before, both agree.
+        if !opens && start > 0 {
+            return None;
+        }
         let to = c.t[end].start;
         return cut(window, to, &text[to..]);
     }
@@ -609,9 +618,17 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
             && old + 2 == i
             && c.slot(old + 1) == 0
             && !FUNCTION.contains(&c.lower(old + 1));
-    // Signs, currencies and sigils change the value: "-4", "€400", "@Mike".
+    // Signs, currencies and sigils change the value: "-4", "€400", "@Mike",
+    // also spaced ("- 4", "€ 400"): only plain punctuation around both values.
+    let clean = |k: usize| {
+        c.gap(k)
+            .chars()
+            .all(|g| g.is_whitespace() || ",.;:!?—".contains(g))
+    };
     if !adjacent
         || old < start + k
+        || !(end..=new + 1).all(clean)
+        || !(old - k..=old + 1).all(clean)
         || !(0..k).all(|f| c.same(old - k + f, end + f))
         || !c.plain(old)
         || !c.plain(new)
@@ -741,7 +758,7 @@ mod tests {
             ("Say 'hi.' At 3, actually, 4.", "Say 'hi.' At 4.", Edited),
             ("She said 'the dogs' toys are 3, actually, 4.'", "She said 'the dogs' toys are 3, actually, 4.'", Unchanged),
             ("She said ‘the dogs’ toys are 3, actually, 4.’", "She said ‘the dogs’ toys are 3, actually, 4.’", Unchanged),
-            ("dogs' 3, no, 4", "dogs' 4", Edited),
+            ("dogs' 3, no, 4", "dogs' 3, no, 4", Ambiguous),
             // The same value, or one we can't compare, is no correction.
             ("thirty, no, 30", "thirty, no, 30", Ambiguous),
             ("fifty, no, 50", "fifty, no, 50", Ambiguous),
@@ -777,7 +794,7 @@ mod tests {
             ("send it to John about Mike, sorry, to Sara", "send it to John about Mike, sorry, to Sara", Ambiguous),
             ("Tell May, sorry, June", "Tell June", Edited),
             ("3:30, no, 4:45", "4:45", Edited),
-            ("Please scratch that.", "Please scratch that.", Unchanged),
+            ("Please scratch that.", "", Discarded),
             // Fourth review: after a full stop "scratch that" is always a cancel.
             ("He called. Scratch that.", "", Discarded),
             ("He called. Never mind.", "", Discarded),
@@ -826,7 +843,7 @@ mod tests {
             ("buy 3 apples, I mean 4, no wait, get milk", "buy 3 apples, I mean 4, no wait, get milk", Ambiguous),
             ("send it to John, sorry, to Mike, sorry, to Ann", "send it to Ann", Edited),
             ("Email Jordan today about the launch no no email Jordan tomorrow", "Email Jordan tomorrow", Edited),
-            ("He called. Please scratch that.", "He called. Please scratch that.", Unchanged),
+            ("He called. Please scratch that.", "", Discarded),
             // Seventh review: a sign, currency or sigil changes the value.
             ("Set the temperature to 3, no, -4.", "Set the temperature to 3, no, -4.", Ambiguous),
             ("Set the temperature to 3, no, −4.", "Set the temperature to 3, no, −4.", Ambiguous),
@@ -846,6 +863,23 @@ mod tests {
             ("He called. Sorry, um, scratch that. Bring notes.", "Bring notes.", Edited),
             // An unclear cue isn't overridden by a later repair.
             ("The value is 3, actually 3 is correct, no no the value is 4.", "The value is 3, actually 3 is correct, no no the value is 4.", Ambiguous),
+            // Eighth review: spaced signs and currencies, and cancel preambles.
+            ("Set the temperature to 3, no, - 4.", "Set the temperature to 3, no, - 4.", Ambiguous),
+            ("Set the temperature to 3, no, − 4.", "Set the temperature to 3, no, − 4.", Ambiguous),
+            ("Charge 300 dollars, actually, € 400.", "Charge 300 dollars, actually, € 400.", Ambiguous),
+            ("Call John, sorry, @ Mike.", "Call John, sorry, @ Mike.", Ambiguous),
+            ("Keep 3, no, ( 4 ).", "Keep 3, no, ( 4 ).", Ambiguous),
+            ("He called. You know, scratch that. Bring notes.", "Bring notes.", Edited),
+            ("He called. Please, scratch that. Bring notes.", "Bring notes.", Edited),
+            ("He called. Okay, scratch that. Bring notes.", "Bring notes.", Edited),
+            ("He called. Umm, scratch that. Bring notes.", "Bring notes.", Edited),
+            ("He called. Uhm, never mind. Bring notes.", "Bring notes.", Edited),
+            ("He called. Mhm, scratch that. Bring notes.", "Bring notes.", Edited),
+            // A content preamble with a sentence before it: which is retracted?
+            ("He called. Bring notes, scratch that. Call me.", "He called. Bring notes, scratch that. Call me.", Ambiguous),
+            ("He called. Right then, scratch that. Bring notes.", "He called. Right then, scratch that. Bring notes.", Ambiguous),
+            // A frame longer than the words before the old value never underflows.
+            ("three, actually make it five", "three, actually make it five", Ambiguous),
         ] {
             assert_eq!(apply(input), (output.to_owned(), outcome), "{input}");
             assert_eq!(ambiguous(input), outcome == Ambiguous, "{input}");
@@ -867,6 +901,17 @@ mod tests {
                     "He called. Sorry, um, scratch that. Bring notes.",
                     "Bring notes.",
                 ),
+                (
+                    "He called. You know, scratch that. Bring notes.",
+                    "Bring notes.",
+                ),
+                (
+                    "He called. Please, scratch that. Bring notes.",
+                    "Bring notes.",
+                ),
+                ("He called. Umm, scratch that. Bring notes.", "Bring notes."),
+                ("He called. Uhm, never mind. Bring notes.", "Bring notes."),
+                ("He called. Mhm, scratch that. Bring notes.", "Bring notes."),
             ] {
                 assert_eq!(
                     crate::text::prepare(input, &config, false),
