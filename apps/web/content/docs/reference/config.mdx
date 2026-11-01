@@ -23,6 +23,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | `stt.language` | unset | ISO-639-1; unset = automatic detection; e.g. `"en"` |
 | `stt.vocabulary` | `[]` | extra recognition hints (dictionary.words are added too) |
 | `stt.timeout_secs` | `30` |  |
+| `stt.fallback` | `[]` | opt in: one backup id, e.g. ["openai"]; needs `xflow key set openai` |
 
 ## [cleanup]
 
@@ -162,6 +163,11 @@ provider = "groq"            # `xflow providers` lists every provider
 # language = "en"            # ISO-639-1; unset = automatic detection
 vocabulary = []              # extra recognition hints (dictionary.words are added too)
 timeout_secs = 30
+fallback = []               # opt in: one backup id, e.g. ["openai"]; needs `xflow key set openai`
+# Backup uses its catalog endpoint/model and stored key. Audio may go to both providers.
+# On connect/TLS errors, 408, 429, 5xx or timeout: try the other provider once.
+# With a backup, each attempt gets min(timeout_secs, 3 + 0.25 * audio_seconds).
+# After primary failure, backup goes first for 60 s. No parallel or background retries.
 
 [cleanup]
 mode = "raw"                 # raw | light | polished | custom (custom requires prompt)
