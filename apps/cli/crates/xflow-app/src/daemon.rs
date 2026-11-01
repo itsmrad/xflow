@@ -62,6 +62,8 @@ struct Processed {
     provider: String,
     model: Option<String>,
     text: String,
+    /// Field text around the caret for smart spacing; dropped once applied.
+    around: Option<(String, String)>,
     target: AppContext,
     entry: Option<HistoryEntry>,
     timings: Timings,
@@ -683,6 +685,20 @@ impl Engine {
         let session_mode = self.mode;
         let mut context = self.context_job.take();
         let mut timings = self.timings.clone();
+        // Read where the text lands while transcription runs; the bound starts at
+        // stop, so a slow app never holds the paste back by more than 100 ms.
+        let around = (session_mode == Mode::Dictation
+            && self.delivery == Delivery::Inject
+            && config.injection.smart_spacing)
+            .then(|| {
+                let desktop = services.desktop.clone();
+                tokio::spawn(async move {
+                    tokio::time::timeout(Duration::from_millis(100), desktop.neighbors())
+                        .await
+                        .ok()
+                        .flatten()
+                })
+            });
         self.job = Some(tokio::spawn(async move {
             let result = async {
                 let (mut pieces, mut failed) = (Vec::with_capacity(sent.len()), None);
@@ -871,10 +887,15 @@ impl Engine {
                         None
                     }
                 };
+                let around = match around {
+                    Some(job) => job.await.ok().flatten(),
+                    None => None,
+                };
                 Ok(Some(Processed {
                     provider,
                     model,
                     text,
+                    around,
                     target,
                     entry,
                     timings,
@@ -1098,7 +1119,7 @@ impl Engine {
                     Completion::Opened(result) => self.opened(result).await,
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
-                        match result { Ok(Some(processed)) => { self.last = Some(processed.text.clone()); pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
+                        match result { Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
                     Completion::Finished { generation, mut processed, result } => {
                         self.delivering = false;
@@ -2770,6 +2791,8 @@ mod tests {
         field_left: Arc<AtomicBool>,
         /// Field watches started (one per observed paste).
         watches: AtomicUsize,
+        /// Text around the caret, for smart spacing.
+        around: Option<(&'static str, &'static str)>,
     }
     struct ScriptedField {
         field: Arc<Mutex<Option<String>>>,
@@ -2830,6 +2853,9 @@ mod tests {
                 events: self.field_events.lock().unwrap().take(),
                 left: self.field_left.clone(),
             }))
+        }
+        async fn neighbors(&self) -> Option<(String, String)> {
+            self.around.map(|(b, a)| (b.into(), a.into()))
         }
     }
     struct ImmediateStt {
@@ -2975,6 +3001,35 @@ mod tests {
             } else {
                 assert!(event.entry.is_none());
             }
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn smart_spacing_adjusts_the_paste_but_not_history_or_last() {
+        for (smart, pasted) in [
+            (true, " Post gres is ready "),
+            (false, "post gres is ready "),
+        ] {
+            let desktop = Arc::new(RecordingDesktop {
+                around: Some(("Done.", "")),
+                ..RecordingDesktop::default()
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+            let mut config = Config::default();
+            config.injection.smart_spacing = smart;
+            let (engine, tx, rx, mut events, _) = fixture(config, desktop.clone(), store);
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+            let done = success(&mut events).await;
+            assert_eq!(*desktop.injections.lock().unwrap(), [pasted]);
+            assert_eq!(done.entry.unwrap().text, "post gres is ready ");
+            assert_eq!(
+                ask(&tx, Request::Last).await.text.as_deref(),
+                Some("post gres is ready ")
+            );
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }

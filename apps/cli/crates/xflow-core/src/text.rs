@@ -184,6 +184,105 @@ pub fn after_cleanup(text: &str, config: &Config) -> String {
     }
     text
 }
+/// Scripts written without spaces between words (CJK, kana, fullwidth forms, Thai).
+fn unspaced(c: char) -> bool {
+    matches!(c as u32, 0x0e00..=0x0e7f | 0x3000..=0x30ff | 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff | 0xff00..=0xffef | 0x20000..=0x3ffff)
+}
+fn closing(c: char) -> bool {
+    matches!(
+        c,
+        ',' | '.' | '!' | '?' | ';' | ':' | ')' | ']' | '}' | '…' | '”' | '’' | '%'
+    )
+}
+/// Whether text typed after `prev`, the last character of `before`, needs a space.
+fn space_after(prev: char, before: &str) -> bool {
+    match prev {
+        '"' | '\'' => {
+            // A straight quote opens when nothing or a space/bracket precedes it.
+            let mut chars = before.chars().rev().skip(1);
+            chars
+                .next()
+                .is_some_and(|c| !c.is_whitespace() && !matches!(c, '(' | '[' | '{'))
+        }
+        '(' | '[' | '{' | '“' | '‘' | '«' | '¿' | '¡' | '/' | '@' | '#' | '$' | '_' | '\\'
+        | '~' => false,
+        c => !c.is_whitespace() && !unspaced(c),
+    }
+}
+/// Spacing and first-letter case for `text` pasted between `before` and `after`,
+/// the field's text around the caret (only the nearest characters matter).
+/// Words in `keep` (dictionary words) never change case. Neither side is ever
+/// logged or uploaded.
+pub fn adjust(before: &str, after: &str, text: &str, keep: &[String]) -> String {
+    // A trailing space came from `injection.trailing_space`; the neighbours decide it here.
+    let body = text.trim_end_matches(' ');
+    let (prev, next) = (before.chars().next_back(), after.chars().next());
+    let Some(first) = body.chars().next() else {
+        return text.to_owned();
+    };
+    // Inside a word: insert exactly what was said.
+    if prev.is_some_and(word_char) && next.is_some_and(word_char) {
+        return body.to_owned();
+    }
+    let mut out = String::with_capacity(text.len() + 2);
+    if prev.is_some_and(|p| space_after(p, before))
+        && !first.is_whitespace()
+        && !closing(first)
+        && !unspaced(first)
+    {
+        out.push(' ');
+    }
+    let line_break = |c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}');
+    let last = before
+        .trim_end_matches(|c: char| c.is_whitespace() && !line_break(c))
+        .chars()
+        .next_back();
+    // Some(true): a sentence starts here; Some(false): one continues; None: leave the case.
+    let capitalize = match last {
+        None | Some('.' | '!' | '?' | '。' | '！' | '？') => Some(true),
+        Some(c) if line_break(c) => Some(true),
+        Some(c) if unspaced(c) => None,
+        Some(c) if word_char(c) || matches!(c, ',' | ';') => Some(false),
+        _ => None,
+    };
+    // Only plain words change case: never ALLCAPS, "I", camelCase, file names or dictionary words.
+    let end = body.find(char::is_whitespace).unwrap_or(body.len());
+    let word = body[..end].trim_end_matches([',', '.', '!', '?', ';', ':']);
+    let plain = word
+        .chars()
+        .skip(1)
+        .all(|c| c.is_lowercase() || matches!(c, '\'' | '’'))
+        && !keep.iter().any(|k| k == word);
+    let pronoun = word == "I" || word.starts_with("I'") || word.starts_with("I’");
+    let head = match capitalize {
+        Some(true) if plain && first.is_lowercase() => Some(first.to_uppercase().to_string()),
+        Some(false) if plain && first.is_uppercase() && !pronoun => {
+            Some(first.to_lowercase().to_string())
+        }
+        _ => None,
+    };
+    match head {
+        Some(head) => {
+            out.push_str(&head);
+            out.push_str(&body[first.len_utf8()..]);
+        }
+        None => out.push_str(body),
+    }
+    // The caret sits inside a sentence that goes on: drop the closing period.
+    if after.trim_start().starts_with(char::is_lowercase)
+        && out.ends_with('.')
+        && !out.ends_with("..")
+    {
+        out.pop();
+    }
+    match next {
+        Some(c) if word_char(c) && !unspaced(c) && !out.ends_with(unspaced) => out.push(' '),
+        // Whitespace or punctuation follows; field end keeps `trailing_space`.
+        Some(_) => {}
+        None => out.push_str(&text[body.len()..]),
+    }
+    out
+}
 pub fn style<'a>(config: &'a Config, app_id: Option<&str>) -> Option<&'a Style> {
     let app = app_id?.to_lowercase();
     config.styles.iter().find(|s| {
@@ -295,6 +394,68 @@ mod tests {
             before_cleanup("cafe\u{301} cafe", &c, false),
             "cafe\u{301} coffee"
         );
+    }
+    #[test]
+    fn adjust_spacing_and_case_to_the_caret() {
+        let keep = ["Postgres".to_owned(), "xflow".to_owned()];
+        for (before, after, text, expected) in [
+            // Mid-sentence: space, lowercase; field end keeps the trailing space.
+            ("I think", "", "That we should. ", " that we should. "),
+            ("hello", "", "World", " world"),
+            // Sentence and field starts capitalize.
+            ("It's done.", "", "hello there", " Hello there"),
+            ("Really?  ", "", "yes", "Yes"),
+            ("", "", "hello", "Hello"),
+            ("first line\n", "", "hello", "Hello"),
+            ("first line\n  ", "", "hello", "Hello"),
+            // After ':' the case stays; a space is still due.
+            ("Note:", "", "Remember this", " Remember this"),
+            // Brackets and quotes.
+            ("call (", "", "Maybe later", "Maybe later"),
+            ("he said \"", "", "Wait", "Wait"),
+            ("he said “", "", "Wait", "Wait"),
+            ("he said \"stop\"", "", "Then", " Then"),
+            ("a list,", "", "Then more", " then more"),
+            // Mid-word: inserted exactly, no spaces.
+            ("hel", "lo", "Xyz ", "Xyz"),
+            // Inside a sentence: drop the period, space before the next word.
+            ("I think", " we should", "That.", " that"),
+            ("I think ", "we should", "That.", "that "),
+            ("I think", ".", "So ", " so"),
+            ("see (", ")", "Here ", "Here"),
+            // Names, ALLCAPS, "I", camelCase and file names keep their case.
+            ("we use", "", "Postgres now", " Postgres now"),
+            ("and", "", "NASA launched", " NASA launched"),
+            ("and", "", "I'm here", " I'm here"),
+            ("and", "", "I said", " I said"),
+            ("and", "", "Don't stop", " don't stop"),
+            ("open", "", "README.md", " README.md"),
+            ("", "", "xflow rocks", "xflow rocks"),
+            ("", "", "userId is", "userId is"),
+            ("", "", "main.rs", "main.rs"),
+            ("so", "", "A cat", " a cat"),
+            // CJK: no spaces, no case changes after ideographs.
+            ("我们使用", "", "数据库", "数据库"),
+            ("我们使用", "", "Postgres", "Postgres"),
+            ("完成。", "", "hello", "Hello"),
+            ("and", "", "数据库", "数据库"),
+            // Emoji and surrogate pairs on either side.
+            ("Great 🎉", "", "Thanks", " Thanks"),
+            ("ok", "🎉", "Fine", " fine"),
+            ("😀", "😀", "hi", " hi"),
+            // Non-Latin scripts with case.
+            ("Привет,", "", "Мир", " мир"),
+            ("Fertig.", "", "über", " Über"),
+            // Leading punctuation never gets a space.
+            ("hello", "", ", world", ", world"),
+            ("", "", "", ""),
+        ] {
+            assert_eq!(
+                adjust(before, after, text, &keep),
+                expected,
+                "{before:?} | {after:?} <- {text:?}"
+            );
+        }
     }
     #[test]
     fn first_app_style_wins() {

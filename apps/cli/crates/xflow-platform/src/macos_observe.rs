@@ -1,10 +1,11 @@
 //! Watches the field a dictation was pasted into, for learning corrections.
 //! An AXObserver on a run-loop thread that exists only while a watch does, so
 //! the idle daemon has no thread, timer or AX traffic. Text is read only on
-//! request and never leaves the daemon.
+//! request and never leaves the daemon. Also reads the few characters around
+//! the caret that smart spacing needs.
 use super::{
     cf_text, focus, is_terminal, secure, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
-    AXUIElementGetPid, CFGetTypeID, CFRelease, Owned, Ref,
+    AXUIElementGetPid, AXUIElementSetMessagingTimeout, CFGetTypeID, CFRelease, Focus, Owned, Ref,
 };
 use async_trait::async_trait;
 use std::{
@@ -38,7 +39,16 @@ extern "C" {
     fn AXObserverGetRunLoopSource(observer: Ref) -> Ref;
     fn AXValueGetTypeID() -> usize;
     fn AXValueGetValue(value: Ref, kind: u32, out: *mut c_void) -> bool;
+    fn AXValueCreate(kind: u32, value: *const c_void) -> Ref;
+    fn AXUIElementCopyParameterizedAttributeValue(
+        element: Ref,
+        attribute: Ref,
+        parameter: Ref,
+        value: *mut Ref,
+    ) -> i32;
 }
+/// 4 = kAXValueTypeCFRange
+const CF_RANGE: u32 = 4;
 /// Run-loop calls take mutable refs, matching their declarations in macos_hotkey.rs.
 type MutRef = *mut c_void;
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -74,9 +84,7 @@ pub(super) fn watch(target: &AppContext) -> Option<Watch> {
     let focus = focus();
     if focus.context.app_id != target.app_id
         || focus.context.window_id != target.window_id
-        || focus.editable != Some(true)
-        || focus.secure
-        || is_terminal(focus.context.app_id.as_deref())
+        || !readable(&focus)
     {
         return None;
     }
@@ -86,6 +94,10 @@ pub(super) fn watch(target: &AppContext) -> Option<Watch> {
         return None;
     }
     observe(pid, element)
+}
+/// Only known-editable fields are read: never secure fields, terminals or unknown elements.
+fn readable(focus: &Focus) -> bool {
+    focus.editable == Some(true) && !focus.secure && !is_terminal(focus.context.app_id.as_deref())
 }
 /// Observe `element` of app `pid`; a watch without notifications when the app
 /// refuses an observer, so reads still work.
@@ -203,21 +215,76 @@ fn read(element: &Owned) -> Option<FieldText> {
     let value = element
         .text("AXValue")
         .filter(|v| !large(v.encode_utf16().count()))?;
-    let caret = element.attribute("AXSelectedTextRange").and_then(|range| {
-        let mut r = CFRange {
-            location: 0,
-            length: 0,
-        };
-        // 4 = kAXValueTypeCFRange
-        unsafe {
-            (CFGetTypeID(range.0) == AXValueGetTypeID()
-                && AXValueGetValue(range.0, 4, (&mut r as *mut CFRange).cast())
-                && r.location >= 0
-                && r.length >= 0)
-                .then(|| (r.location + r.length) as usize)
-        }
-    });
+    let caret = selection(element).map(|r| (r.location + r.length) as usize);
     Some(FieldText { value, caret })
+}
+fn selection(element: &Owned) -> Option<CFRange> {
+    let range = element.attribute("AXSelectedTextRange")?;
+    let mut r = CFRange {
+        location: 0,
+        length: 0,
+    };
+    unsafe {
+        (CFGetTypeID(range.0) == AXValueGetTypeID()
+            && AXValueGetValue(range.0, CF_RANGE, (&mut r as *mut CFRange).cast())
+            && r.location >= 0
+            && r.length >= 0)
+            .then_some(r)
+    }
+}
+/// UTF-16 units read before the selection and after it.
+const BEFORE: isize = 32;
+const AFTER: isize = 16;
+/// The focused editable field's text before and after the selection, which a
+/// paste replaces. None for secure, terminal and unknown fields and on any AX
+/// error. Blocking: three AX calls on the field, each bounded at 100 ms.
+pub(super) fn neighbors() -> Option<(String, String)> {
+    let focus = focus();
+    if !readable(&focus) {
+        return None;
+    }
+    let field = focus.element?;
+    unsafe { AXUIElementSetMessagingTimeout(field.0, 0.1) };
+    let selected = selection(&field)?;
+    let total = field.number("AXNumberOfCharacters")? as isize;
+    let end = selected.location + selected.length;
+    if end > total {
+        return None;
+    }
+    let start = (selected.location - BEFORE).max(0);
+    let range = CFRange {
+        location: start,
+        length: (end + AFTER).min(total) - start,
+    };
+    let parameter =
+        Owned::new(unsafe { AXValueCreate(CF_RANGE, (&range as *const CFRange).cast()) })?;
+    let name = Owned::string("AXStringForRange");
+    let mut value = ptr::null();
+    if unsafe {
+        AXUIElementCopyParameterizedAttributeValue(field.0, name.0, parameter.0, &mut value)
+    } != 0
+    {
+        return None;
+    }
+    let text = cf_text(Owned::new(value)?.0)?;
+    split(
+        &text,
+        range.length as usize,
+        (selected.location - start) as usize,
+        (end - start) as usize,
+    )
+}
+/// `text`, `len` UTF-16 units long, without its units `from..to`. None when the
+/// length is off or a cut splits a surrogate pair.
+fn split(text: &str, len: usize, from: usize, to: usize) -> Option<(String, String)> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    if units.len() != len || from > to {
+        return None;
+    }
+    Some((
+        String::from_utf16(units.get(..from)?).ok()?,
+        String::from_utf16(units.get(to..)?).ok()?,
+    ))
 }
 fn focused(pid: i32, app: &Owned, element: &Owned) -> bool {
     let Some(system) = Owned::new(unsafe { AXUIElementCreateSystemWide() }) else {
@@ -276,6 +343,40 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    #[test]
+    fn secure_terminal_and_unknown_fields_are_never_read() {
+        let field = |app: &str, editable, secure| Focus {
+            context: AppContext {
+                app_id: Some(app.into()),
+                ..AppContext::default()
+            },
+            editable,
+            secure,
+            ..Focus::default()
+        };
+        assert!(readable(&field("com.apple.TextEdit", Some(true), false)));
+        assert!(!readable(&field("com.apple.TextEdit", Some(true), true)));
+        assert!(!readable(&field("com.apple.TextEdit", None, false)));
+        assert!(!readable(&field("com.apple.TextEdit", Some(false), false)));
+        assert!(!readable(&field("com.apple.Terminal", Some(true), false)));
+        assert!(!readable(&field(
+            "com.mitchellh.ghostty",
+            Some(true),
+            false
+        )));
+    }
+    #[test]
+    fn neighbors_split_on_utf16_offsets() {
+        let s = |a: &str, b: &str| Some((a.to_owned(), b.to_owned()));
+        // "a😀b|sel|c": the emoji is two units.
+        assert_eq!(split("a😀bselc", 8, 4, 7), s("a😀b", "c"));
+        assert_eq!(split("ab", 2, 0, 0), s("", "ab"));
+        assert_eq!(split("ab", 2, 2, 2), s("ab", ""));
+        // A cut inside the surrogate pair, a short read or crossed cuts: unknown.
+        assert_eq!(split("a😀b", 4, 2, 2), None);
+        assert_eq!(split("ab", 3, 1, 1), None);
+        assert_eq!(split("ab", 2, 2, 1), None);
+    }
     #[test]
     fn duplicate_value_changes_within_5_ms_are_one_edit() {
         let t = Instant::now();

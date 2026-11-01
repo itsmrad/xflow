@@ -68,6 +68,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | `injection.restore_clipboard` | `true` | put your previous clipboard text back after pasting |
 | `injection.restore_delay_ms` | `300` |  |
 | `injection.trailing_space` | `true` |  |
+| `injection.smart_spacing` | `true` | match spacing and capitalization to the text around the cursor (macOS; read locally, never uploaded) |
 
 ## [formatting]
 
@@ -202,6 +203,7 @@ clipboard_only = false       # deprecated: use method = "clipboard"
 restore_clipboard = true     # put your previous clipboard text back after pasting
 restore_delay_ms = 300
 trailing_space = true
+smart_spacing = true         # match spacing and capitalization to the text around the cursor (macOS; read locally, never uploaded)
 
 [formatting]
 spoken_code = true           # "camel case user id" -> userId; "main dot rs" -> main.rs

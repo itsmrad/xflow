@@ -4,6 +4,7 @@
 
 ### Dictation
 - **Smart formatting is on after setup.** When your speech key can also run cleanup (Groq today), setup turns on light cleanup with that key. It turns spoken sequences into lists, keeps only your correction when you say "actually" or "no wait", writes times and amounts as digits, and spells your dictionary terms. The setup screen says so: "Smart formatting: on · uses your Groq key · ~+0.2 s". Turn it off in Settings › Writing. Configs where you already set cleanup up are not changed. (#67)
+- **Dictations fit where they land (macOS).** xflow reads a few characters on each side of the cursor and adds a space or doesn't, and capitalizes or doesn't. Dictating "That we should." after "I think" gives "I think that we should."; after a period, a new line or at the start of a field, you get a capital. It never touches ALLCAPS, "I", file names or your dictionary words. It reads nothing from password fields, terminals or fields it can't identify, and that text stays on your Mac. If the field takes more than 100 ms to answer, your text goes in unchanged. Turn it off with `injection.smart_spacing = false`. (#24)
 - **Cleanup never answers you.** A question or "ignore your instructions" in your dictation stays text. If the model answers, rewrites, drops a path or flag, or takes longer than about 3 s, xflow pastes your words as transcribed and says why. Dictations of six words or fewer, mostly-code text and terminals skip cleanup, so they cost no time. (#67, #68)
 
 ### Privacy

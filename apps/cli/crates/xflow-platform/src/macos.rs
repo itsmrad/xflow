@@ -732,6 +732,12 @@ impl Desktop for MacDesktop {
             .ok()??;
         Some(Box::new(watch))
     }
+    async fn neighbors(&self) -> Option<(String, String)> {
+        tokio::task::spawn_blocking(observe::neighbors)
+            .await
+            .ok()
+            .flatten()
+    }
     async fn copy(&self, text: &str) -> Result<()> {
         let _delivery = self.delivery.lock().await;
         self.write(text)

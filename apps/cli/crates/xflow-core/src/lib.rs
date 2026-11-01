@@ -195,6 +195,12 @@ pub trait Desktop: Send + Sync {
     async fn watch_field(&self, _target: &AppContext) -> Option<Box<dyn FieldWatch>> {
         None
     }
+    /// The focused field's text just before and after the caret (a few
+    /// characters each), for `text::adjust`. None when unsupported, secure, a
+    /// terminal or unreadable. Never logged or uploaded.
+    async fn neighbors(&self) -> Option<(String, String)> {
+        None
+    }
 }
 
 /// A pinned text field, for learning user corrections.
