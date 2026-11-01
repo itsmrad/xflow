@@ -426,10 +426,14 @@ impl Engine {
         for (index, part) in kept.parts.into_iter().enumerate() {
             let (stt, config, dir) = (self.services.stt.clone(), self.config.clone(), dir.clone());
             match part {
-                Part::Text { text, delivered: d } => {
+                Part::Text {
+                    text,
+                    delivered: d,
+                    provider,
+                } => {
                     delivered.push(d);
                     let transcript = Transcript {
-                        provider: None,
+                        provider,
                         text,
                         language: None,
                     };
@@ -914,13 +918,14 @@ impl Engine {
                     match piece {
                         Ok(transcript) => {
                             let provider = transcript.provider.unwrap_or_else(|| services.stt.name().into());
-                            if !providers.contains(&provider) { providers.push(provider); }
                             language = language.or(transcript.language);
                             let delivered = keep.delivered.get(index).copied().unwrap_or(false);
                             if keep.dir.is_some() {
-                                kept.push((Part::Text { text: transcript.text.clone(), delivered }, None));
+                                kept.push((Part::Text { text: transcript.text.clone(), delivered, provider: Some(provider.clone()) }, None));
                             }
+                            // Credit only the providers whose text this session delivers.
                             if !delivered || keep.full {
+                                if !providers.contains(&provider) { providers.push(provider); }
                                 parts.push(transcript.text);
                             }
                         }
@@ -940,7 +945,7 @@ impl Engine {
                         let (parts, audio): (Vec<_>, Vec<_>) = kept
                             .into_iter()
                             .map(|(part, audio)| match part {
-                                Part::Text { text, delivered } => (Part::Text { text, delivered: delivered || delivering }, audio),
+                                Part::Text { text, delivered, provider } => (Part::Text { text, delivered: delivered || delivering, provider }, audio),
                                 part => (part, audio),
                             })
                             .unzip();
@@ -3655,6 +3660,8 @@ mod tests {
         healed: AtomicBool,
         hang: bool,
         dropped: Arc<AtomicUsize>,
+        /// Answers come from the backup provider.
+        backup: AtomicBool,
     }
     struct DropCount(Arc<AtomicUsize>);
     impl Drop for DropCount {
@@ -3696,7 +3703,7 @@ mod tests {
             ))
             .await;
             Ok(Transcript {
-                provider: None,
+                provider: self.backup.load(Ordering::SeqCst).then(|| "backup".into()),
                 text: self
                     .words
                     .map_or_else(|| format!("at{start}"), |words| words(start).into()),
@@ -4119,6 +4126,48 @@ mod tests {
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }
+    }
+    #[tokio::test]
+    async fn a_retry_goes_through_failover_and_credits_only_the_provider_that_answered() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let middle: fn(usize) -> bool = |start| (30_000..31_000).contains(&start);
+        let (mut engine, tx, rx, mut events, desktop, stt) = kept_fixture(middle, Some(&dir));
+        // The whole failover chain already failed: no second attempt at stop.
+        let stt = Arc::new(SegmentStt {
+            audio: stt.audio.clone(),
+            broken: Some(middle),
+            failed_over: true,
+            words: stt.words,
+            ..SegmentStt::default()
+        });
+        engine.services.stt = stt.clone();
+        let task = tokio::spawn(engine.run(rx));
+        dictate(&tx, &stt).await;
+        assert!(success(&mut events).await.failed_audio.unwrap().partial);
+        let audio = stt.audio.as_ref().unwrap();
+        let attempts = || {
+            let clips = stt.clips.lock().unwrap();
+            clips.iter().filter(|c| middle(audio.position(c))).count()
+        };
+        assert_eq!(attempts(), 1);
+        assert!(std::fs::read_to_string(dir.join("current/kept.json"))
+            .unwrap()
+            .contains(r#""provider":"fixture""#));
+        // The retry uses the same failover service; the backup answers.
+        stt.healed.store(true, Ordering::SeqCst);
+        stt.backup.store(true, Ordering::SeqCst);
+        ask(&tx, retry(false)).await;
+        let done = success(&mut events).await;
+        assert_eq!(attempts(), 2);
+        assert_eq!(desktop.injections.lock().unwrap().last().unwrap(), "two ");
+        assert_eq!(done.provider.as_deref(), Some("backup"));
+        assert!(done
+            .message
+            .unwrap()
+            .contains("Transcribed by backup (fixture didn't answer)"));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
     }
     #[tokio::test]
     async fn a_retry_that_fails_after_transcribing_keeps_the_audio() {

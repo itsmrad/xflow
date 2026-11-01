@@ -25,8 +25,13 @@ const CURRENT: &str = "current";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Part {
-    /// Transcribed; `delivered` once its text was pasted, copied or printed.
-    Text { text: String, delivered: bool },
+    /// Transcribed by `provider`; `delivered` once pasted, copied or printed.
+    Text {
+        text: String,
+        delivered: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+    },
     /// Still to transcribe, in `<index>.wav` (16 kHz mono PCM16).
     Audio { low_energy: bool },
 }
@@ -272,6 +277,7 @@ mod tests {
             Part::Text {
                 text: "first".into(),
                 delivered: true,
+                provider: Some("groq".into()),
             },
             Part::Audio { low_energy: false },
         ];
