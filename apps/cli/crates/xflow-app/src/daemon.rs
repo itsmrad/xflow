@@ -191,6 +191,8 @@ pub struct Engine {
     kept: Option<FailedAudio>,
     /// The session in progress retries the kept dictation: cancel discards it.
     retrying: bool,
+    #[cfg(test)]
+    keep_hook: Option<KeepHook>,
     events: broadcast::Sender<Response>,
     desktop_events: broadcast::Sender<DesktopEvent>,
 }
@@ -204,7 +206,12 @@ struct Keep {
     delivered: Vec<bool>,
     /// ...and are delivered again only when `full`.
     full: bool,
+    #[cfg(test)]
+    hook: Option<KeepHook>,
 }
+/// Test-only: runs in the save thread at "staged" and "committed".
+#[cfg(test)]
+type KeepHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// A segment's transcript, or its audio and energy flag for one retry after stop.
 type Piece = std::result::Result<Transcript, (anyhow::Error, AudioClip, bool)>;
 /// The current recording, transcribed in segments while it continues (see
@@ -271,6 +278,8 @@ impl Engine {
             kept_dir: None,
             kept: None,
             retrying: false,
+            #[cfg(test)]
+            keep_hook: None,
             events,
             desktop_events,
         }
@@ -336,8 +345,14 @@ impl Engine {
         r.failed_audio = self.kept.clone();
         r
     }
-    /// Reads the kept dictation; while idle, deletes what is expired, invalid,
-    /// half-written or no longer allowed.
+    /// Where failed dictations go while `privacy.keep_failed_audio` is on.
+    fn keeping(&self) -> Option<&std::path::Path> {
+        self.kept_dir
+            .as_deref()
+            .filter(|_| self.config.privacy.keep_failed_audio)
+    }
+    /// Reads the kept dictation from disk; while idle, deletes what is expired,
+    /// invalid, never committed or no longer allowed.
     fn load_kept(&mut self) {
         let Some(dir) = self.kept_dir.as_deref() else {
             return;
@@ -346,8 +361,12 @@ impl Engine {
             .ok()
             .flatten()
             .filter(|_| self.config.privacy.keep_failed_audio);
-        if kept.is_none() && !self.active() {
-            if let Err(e) = retry::clear(dir) {
+        if !self.active() {
+            let cleaned = match kept {
+                Some(_) => retry::prune(dir),
+                None => retry::clear(dir),
+            };
+            if let Err(e) = cleaned {
                 log(
                     "warn",
                     &format!("could not delete kept failed audio: {e:#}"),
@@ -355,6 +374,19 @@ impl Engine {
             }
         }
         self.kept = kept.map(|k| k.summary());
+    }
+    /// Deletes what `generation` kept, then re-reads the disk.
+    fn discard_session(&mut self, generation: u64) {
+        let Some(dir) = self.keeping().map(ToOwned::to_owned) else {
+            return;
+        };
+        if let Err(e) = retry::discard(&dir, &retry::session(generation)) {
+            log(
+                "warn",
+                &format!("could not delete kept failed audio: {e:#}"),
+            );
+        }
+        self.load_kept();
     }
     fn discard_kept(&mut self) -> Result<()> {
         self.kept = None;
@@ -445,6 +477,8 @@ impl Engine {
             retry: true,
             delivered,
             full,
+            #[cfg(test)]
+            hook: self.keep_hook.clone(),
         };
         self.transcribe(sent, 0, None, Instant::now(), keep, completion.clone());
         Ok(())
@@ -736,13 +770,15 @@ impl Engine {
         self.timings.audio_ms = segments.audio_ms.min(u64::from(u32::MAX)) as u32;
         self.cue(xflow_platform::Cue::Stop);
         self.set_state(State::Processing, None);
-        let keep = Keep {
-            dir: self
-                .kept_dir
-                .clone()
-                .filter(|_| self.config.privacy.keep_failed_audio && self.mode == Mode::Dictation),
-            created_at: retry::now(),
-            ..Keep::default()
+        let keep = match self.keeping().filter(|_| self.mode == Mode::Dictation) {
+            Some(dir) => Keep {
+                dir: Some(dir.to_owned()),
+                created_at: retry::now(),
+                #[cfg(test)]
+                hook: self.keep_hook.clone(),
+                ..Keep::default()
+            },
+            None => Keep::default(),
         };
         self.transcribe(segments.sent, live, warning, stopped, keep, completion);
         Ok(())
@@ -844,6 +880,8 @@ impl Engine {
                 })
             });
         self.job = Some(tokio::spawn(async move {
+            // A retry with nothing left to transcribe.
+            let mut recovered = false;
             let result = async {
                 let (mut pieces, mut failed) = (Vec::with_capacity(sent.len()), None);
                 while let Some(joined) = sent.join_next().await {
@@ -896,7 +934,7 @@ impl Engine {
                 }
                 timings.stt_ms = ms(stopped.elapsed());
                 let raw = join_parts(&parts, language.as_deref().or(config.stt.language.as_deref()));
-                let note = match keep.dir {
+                let note = match keep.dir.clone() {
                     Some(dir) if failed.is_some() => {
                         let delivering = !raw.is_empty();
                         let (parts, audio): (Vec<_>, Vec<_>) = kept
@@ -907,32 +945,32 @@ impl Engine {
                             })
                             .unzip();
                         let audio = audio.into_iter().flatten().collect();
-                        let epoch = epoch.clone();
+                        let (epoch, created_at) = (epoch.clone(), keep.created_at);
+                        #[cfg(test)]
+                        let hook = keep.hook.clone();
                         let saved = tokio::task::spawn_blocking(move || {
+                            let staged = retry::stage(&dir, retry::session(generation), created_at, parts, audio)?;
+                            #[cfg(test)]
+                            if let Some(hook) = &hook { hook("staged"); }
                             // A canceled or cleared session keeps nothing.
-                            if epoch.load(Ordering::SeqCst) != generation {
-                                bail!("session ended");
-                            }
-                            retry::save(&dir, keep.created_at, parts, audio)
+                            retry::commit(staged, || epoch.load(Ordering::SeqCst) == generation)?;
+                            #[cfg(test)]
+                            if let Some(hook) = &hook { hook("committed"); }
+                            anyhow::Ok(())
                         })
                         .await
                         .unwrap_or_else(|e| Err(e.into()));
                         match saved {
-                            Ok(_) => "; its audio is kept for 24 h: run xflow retry",
+                            Ok(()) => "; its audio is kept for 24 h: run xflow retry",
                             Err(e) => {
                                 log("warn", &format!("could not keep the failed audio: {e:#}"));
                                 ""
                             }
                         }
                     }
-                    Some(dir) if keep.retry => {
-                        if let Err(e) = retry::clear(&dir) {
-                            log("warn", &format!("could not delete kept failed audio: {e:#}"));
-                        }
-                        ""
-                    }
                     _ => "",
                 };
+                recovered = keep.retry && failed.is_none();
                 if raw.len() > 32 * 1024 {
                     bail!("transcript exceeds 32 KiB safety limit");
                 }
@@ -1100,6 +1138,15 @@ impl Engine {
                 }))
             }
             .await;
+            // Only once the text is safe in `last` (and history): a later error keeps it.
+            if let Some(dir) = keep.dir.as_deref().filter(|_| recovered && result.is_ok()) {
+                if let Err(e) = retry::clear(dir) {
+                    log(
+                        "warn",
+                        &format!("could not delete kept failed audio: {e:#}"),
+                    );
+                }
+            }
             let _ = completion
                 .send(Completion::Ready { generation, result })
                 .await;
@@ -1115,9 +1162,14 @@ impl Engine {
         }
     }
     async fn cancel(&mut self) -> Result<()> {
+        let processing = (self.state == State::Processing).then_some(self.generation);
         self.advance();
         if let Some(job) = self.job.take() {
             job.abort();
+        }
+        // A save the session committed just before the cancel goes with it.
+        if let Some(generation) = processing {
+            self.discard_session(generation);
         }
         self.segments = Segments::default();
         self.abort_context();
@@ -1331,9 +1383,11 @@ impl Engine {
                     Completion::Opened(result) => self.opened(result).await,
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
-                        self.load_kept();
+                        if self.keeping().is_some() { self.load_kept(); }
                         match result { Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
+                    // Late, from a canceled session: nothing it kept may stay.
+                    Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
                     Completion::Finished { generation, mut processed, result } => {
                         self.delivering = false;
                         if generation != self.generation { continue; }
@@ -1385,7 +1439,6 @@ impl Engine {
                         let mut r = self.status(); r.message = Some(message.clone()); let _ = self.events.send(r);
                         self.notify("XFlow dictionary", &message);
                     }
-                    _ => (),
                 },
                 _ = async {}, if pending.is_some() => {
                     let mut processed = pending.take().unwrap();
@@ -4000,9 +4053,9 @@ mod tests {
         let done = success(&mut events).await;
         assert!(done.message.unwrap().contains("its audio is kept for 24 h"));
         assert!(done.failed_audio.unwrap().partial);
-        let kept = std::fs::read_to_string(dir.join("kept.json")).unwrap();
+        let kept = std::fs::read_to_string(dir.join("current/kept.json")).unwrap();
         assert!(kept.contains("one") && !kept.contains("two"), "{kept}");
-        assert!(dir.join("1.wav").exists() && !dir.join("0.wav").exists());
+        assert!(dir.join("current/1.wav").exists() && !dir.join("current/0.wav").exists());
 
         stt.healed.store(true, Ordering::SeqCst);
         ask(&tx, retry(false)).await;
@@ -4029,6 +4082,71 @@ mod tests {
             "one two three "
         );
         assert!(!dir.exists());
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_cancel_or_clear_during_a_slow_save_leaves_nothing_on_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let left =
+            |dir: &std::path::Path| std::fs::read_dir(dir).map_or(0, |entries| entries.count());
+        for (point, request) in [
+            ("staged", Request::Cancel),
+            ("committed", Request::Cancel),
+            ("staged", Request::ClearHistory),
+            ("committed", Request::ClearHistory),
+        ] {
+            let (mut engine, tx, rx, _, _, stt) = kept_fixture(|_| true, Some(&dir));
+            let (entered, inside) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let released = Mutex::new(released);
+            engine.keep_hook = Some(Arc::new(move |at: &str| {
+                if at == point {
+                    entered.send(()).unwrap();
+                    released.lock().unwrap().recv().unwrap();
+                }
+            }));
+            let task = tokio::spawn(engine.run(rx));
+            dictate(&tx, &stt).await;
+            wait_for(|| inside.try_recv().is_ok()).await;
+            assert!(ask(&tx, request.clone()).await.ok, "{point} {request:?}");
+            release.send(()).unwrap();
+            wait_for(|| left(&dir) == 0).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(left(&dir), 0, "{point} {request:?}");
+            assert!(ask(&tx, Request::Status).await.failed_audio.is_none());
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn a_retry_that_fails_after_transcribing_keeps_the_audio() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let (mut engine, tx, rx, mut events, desktop, stt) = kept_fixture(|_| true, Some(&dir));
+        // Three segments of 12.5 KB: joined, past the 32 KiB transcript limit.
+        let stt = Arc::new(SegmentStt {
+            audio: stt.audio.clone(),
+            broken: Some(|_| true),
+            words: Some(|_| {
+                static LONG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+                LONG.get_or_init(|| "word ".repeat(2500))
+            }),
+            ..SegmentStt::default()
+        });
+        engine.services.stt = stt.clone();
+        let task = tokio::spawn(engine.run(rx));
+        dictate(&tx, &stt).await;
+        let kept = timeout_event_error(&mut events).await.failed_audio;
+        assert!(kept.is_some());
+        stt.healed.store(true, Ordering::SeqCst);
+        ask(&tx, retry(false)).await;
+        let error = timeout_event_error(&mut events).await;
+        assert!(error.message.unwrap().contains("32 KiB"));
+        assert_eq!(error.failed_audio, kept);
+        assert!(dir.join("current/0.wav").exists());
+        assert!(desktop.injections.lock().unwrap().is_empty());
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
