@@ -92,15 +92,17 @@ fn markers(text: &str) -> Vec<Marker<'_>> {
     // "the first time", "our number one priority": noun modifiers, not markers.
     let modifier = |i: usize| i > 0 && DETERMINERS.iter().any(|d| is(&w[i - 1], d));
     let before = |i: usize| text[..w[i].start].trim_end_matches([' ', '\t']);
+    let numeral = |j: usize| {
+        w.get(j)
+            .and_then(|n| position(&CARDINALS, n.text).or_else(|| digit(text, n)))
+    };
     let boundary = |i: usize| {
         (unpunctuated && !modifier(i))
             || before(i).is_empty()
             || before(i).ends_with([',', '.', ':', ';', '?', '!', '\n'])
             || (i > 0 && (is(&w[i - 1], "and") || is(&w[i - 1], "then")))
-    };
-    let numeral = |j: usize| {
-        w.get(j)
-            .and_then(|n| position(&CARDINALS, n.text).or_else(|| digit(text, n)))
+            // "3 Roles 1 Developer, 2 …": a count and its noun lead into the first item.
+            || (i >= 2 && numeral(i - 2).is_some())
     };
     let mut out = Vec::new();
     let mut i = 0;
@@ -408,6 +410,15 @@ mod tests {
                 "There are three priorities, one speed, two accuracy, three price.",
                 "There are three priorities:\n1. Speed\n2. Accuracy\n3. Price",
             ),
+            // Issue #98: Whisper drops the comma after a digit lead count.
+            (
+                "3 Roles 1 Developer, 2 Designer, 3 Manager",
+                "3 Roles:\n1. Developer\n2. Designer\n3. Manager",
+            ),
+            (
+                "Three roles one developer, two designer, three manager.",
+                "Three roles:\n1. Developer\n2. Designer\n3. Manager",
+            ),
             // Text after the last item's sentence is its own paragraph.
             (
                 "First, install deps. Second, run tests. Third, deploy. Then we celebrate.",
@@ -492,6 +503,14 @@ mod tests {
             "Five, four, three, two, one, liftoff.",
             "Chapter one covers setup.",
             "We need two, not three.",
+            // A count followed by a lone "1" (#98) is not a list.
+            "I have 3 cats and 2 dogs.",
+            "I have 3 cats 1 dog, and 2 birds.",
+            "Version 2 build 1, 2, 3",
+            "It cost 5 dollars 1 cent, 2 later.",
+            "Meet at 3 pm 1 hour later, 2 hours after.",
+            "We shipped 3 versions 1.2, 1.3 and 2.0.",
+            "Pay $3 for 1 pen, 2 pens, or 3 pens.",
         ];
         corpus.push(&thirty);
         assert!(corpus.len() >= 50, "{}", corpus.len());
