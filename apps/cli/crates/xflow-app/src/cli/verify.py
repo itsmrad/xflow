@@ -16,8 +16,12 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import http.server
 import wave
+
+# The CLI rejects a daemon reporting another version, so the mock reports the CLI's own.
+VERSION = tomllib.loads((Path(__file__).resolve().parents[4] / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 
 
 class Daemon:
@@ -59,7 +63,7 @@ class Daemon:
             command = request["command"]
             if command == "subscribe":
                 # A stale last transcript in the snapshot must not become listen's result.
-                self.reply(connection, protocol=self.protocol, version="0.1.0", text="stale")
+                self.reply(connection, protocol=self.protocol, version=VERSION, text="stale")
                 self.reply(connection, state="success", text="queued stale dictation")
                 self.subscribers.append(connection)
                 continue
@@ -67,7 +71,7 @@ class Daemon:
                 self.reply(connection, ok=False, message="mock failure")
             elif command == "status":
                 fields = {"timings": self.timings} if self.timings is not None else {}
-                self.reply(connection, protocol=self.protocol, version="0.1.0", provider="local", model="test", **fields)
+                self.reply(connection, protocol=self.protocol, version=VERSION, provider="local", model="test", **fields)
             elif command == "history":
                 entries = [{"id": 7, "created_at": 42, "provider": "local", "text": 'hello, "you"\nagain'}]
                 self.reply(connection, history=entries if request.get("offset", 0) == 0 else [], total=1)
@@ -200,8 +204,8 @@ def main():
 
         daemon = Daemon(root)
         try:
-            assert json.loads(run("status", "--json").stdout)["protocol"] == 3
-            assert run("status").stdout == "FIELD     VALUE\nState     idle\nProvider  local\nModel     test\nDaemon    0.1.0\nProtocol  2\n"
+            assert json.loads(run("status", "--json").stdout)["protocol"] == daemon.protocol
+            assert run("status").stdout == f"FIELD     VALUE\nState     idle\nProvider  local\nModel     test\nDaemon    {VERSION}\nProtocol  {daemon.protocol}\n"
             daemon.timings = {"audio_ms": 500, "stt_ms": 40, "total_ms": 45}
             assert json.loads(run("status", "--json").stdout)["timings"] == daemon.timings
             assert "Last latency (ms)" in run("status").stdout
