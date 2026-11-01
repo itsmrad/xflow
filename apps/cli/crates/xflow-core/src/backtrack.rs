@@ -62,6 +62,28 @@ const FUNCTION: [&str; 26] = [
 const MENTIONS: [&str; 10] = [
     "phrase", "word", "words", "say", "says", "said", "saying", "called", "term", "like",
 ];
+/// A day or month is a time slot, never a person: "Ask John, sorry, Friday." stays.
+const DATES: [&str; 19] = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
 /// "no, no one came", "no, no problem": negation, not a retraction.
 const NO_TRAPS: [&str; 10] = [
     "one", "body", "thing", "where", "longer", "more", "way", "problem", "doubt", "matter",
@@ -81,7 +103,8 @@ pub enum Outcome {
 /// The text with every certain self-correction applied.
 pub fn apply(text: &str) -> (String, Outcome) {
     let mut edited = text.to_owned();
-    for _ in 0..8 {
+    // Up to 8 repairs, then one pass to confirm nothing is left.
+    for _ in 0..=8 {
         match pass(&edited) {
             (Some(next), _) => edited = next,
             (None, ambiguous) => {
@@ -98,14 +121,15 @@ pub fn apply(text: &str) -> (String, Outcome) {
             }
         }
     }
-    // More repairs than any real dictation has: not certain, leave it to the model.
+    // More than 8 repairs: no real dictation has that many; leave it to the model.
     (text.to_owned(), Outcome::Ambiguous)
 }
 pub fn ambiguous(text: &str) -> bool {
     apply(text).1 == Outcome::Ambiguous
 }
 
-/// A quote mark; an apostrophe inside a word ("o'clock", "don’t") isn't one.
+/// A quote mark, or a possessive that may be one; an apostrophe inside a word
+/// ("o'clock", "don’t") isn't. An edit never spans one.
 fn quote_mark(text: &str, at: usize, c: char) -> bool {
     match c {
         '"' | '“' | '”' | '‘' | '`' => true,
@@ -118,7 +142,7 @@ fn quote_mark(text: &str, at: usize, c: char) -> bool {
                 .chars()
                 .next()
                 .is_some_and(char::is_alphanumeric);
-            before != after
+            !(before && after)
         }
         _ => false,
     }
@@ -128,6 +152,42 @@ fn quote_marks(text: &str, from: usize, to: usize) -> usize {
         .char_indices()
         .filter(|&(i, c)| quote_mark(text, from + i, c))
         .count()
+}
+/// Per token: inside a quotation, where nothing is a cue. A single quote opens
+/// after a space and closes only where it can't be a possessive ("hi.'", "hi'."),
+/// so "the dogs' toys" inside a quote keeps it open and outside opens nothing.
+fn quoted(text: &str, t: &[Word]) -> Vec<bool> {
+    let (mut double, mut tick, mut single) = (false, false, false);
+    let mut out = Vec::with_capacity(t.len());
+    let mut chars = text.char_indices().peekable();
+    let mut prev: Option<char> = None;
+    while let Some((at, c)) = chars.next() {
+        while out.len() < t.len() && t[out.len()].start <= at {
+            out.push(double || tick || single);
+        }
+        let next = chars.peek().map(|&(_, n)| n);
+        let punct = |c: char| ".,!?;:".contains(c);
+        match c {
+            '"' => double = !double,
+            '“' => double = true,
+            '”' => double = false,
+            '`' => tick = !tick,
+            '‘' => single = true,
+            '\'' | '’' if !single => {
+                single = prev.is_none_or(|p| p.is_whitespace() || "([{—".contains(p))
+                    && next.is_some_and(|n| !n.is_whitespace());
+            }
+            '\'' | '’' => {
+                let after = next.is_none_or(|n| n.is_whitespace() || punct(n) || n == ')');
+                single = !(prev.is_some_and(punct) && after
+                    || prev.is_some_and(char::is_alphanumeric) && next.is_none_or(punct));
+            }
+            _ => {}
+        }
+        prev = Some(c);
+    }
+    out.resize(t.len(), double || tick || single);
+    out
 }
 
 /// Words, with digit groups joined: "10,000" and "3:30" are one token.
@@ -149,26 +209,40 @@ fn tokens(text: &str) -> Vec<Word<'_>> {
     out
 }
 fn lower(w: &Word) -> String {
-    w.text.to_lowercase().replace('’', "'")
-}
-/// For matching only: "three" and "3" are the same word.
-fn norm(w: &Word) -> String {
-    let l = lower(w);
-    match NUMBERS[..21].iter().position(|n| *n == l) {
-        Some(n) => n.to_string(),
-        None => l,
+    let l = w.text.to_lowercase();
+    if l.contains('’') {
+        l.replace('’', "'")
+    } else {
+        l
     }
 }
-fn number(w: &Word) -> bool {
-    w.text.starts_with(|c: char| c.is_ascii_digit()) || NUMBERS.contains(&lower(w).as_str())
+/// A number's value: "thirty" and "30" are 30. None for "5pm", "3:30".
+fn value(l: &str) -> Option<u64> {
+    if l.starts_with(|c: char| c.is_ascii_digit()) {
+        return l.chars().filter(|&c| c != ',').try_fold(0u64, |n, c| {
+            n.checked_mul(10)?.checked_add(u64::from(c.to_digit(10)?))
+        });
+    }
+    let i = NUMBERS.iter().position(|n| *n == l)? as u64;
+    Some(match i {
+        0..=20 => i,
+        21..=27 => (i - 18) * 10,
+        28 => 100,
+        29 => 1_000,
+        _ => 1_000_000,
+    })
 }
 
 struct Ctx<'a> {
     text: &'a str,
     t: Vec<Word<'a>>,
     low: Vec<String>,
-    /// Token `i` is inside a quotation: an odd number of quote marks precede it.
+    val: Vec<Option<u64>>,
+    /// Token `i` is inside a quotation.
     quoted: Vec<bool>,
+    /// End of the cue words that open the text ("Sorry, scratch that"): nothing
+    /// before them is content to retract.
+    lead: usize,
 }
 impl Ctx<'_> {
     /// Text between token `i - 1` (or the start) and token `i` (or the end).
@@ -189,6 +263,19 @@ impl Ctx<'_> {
     fn lower(&self, i: usize) -> &str {
         self.low.get(i).map_or("", String::as_str)
     }
+    fn number(&self, i: usize) -> bool {
+        i < self.t.len()
+            && (self.t[i].text.starts_with(|c: char| c.is_ascii_digit())
+                || NUMBERS.contains(&self.lower(i)))
+    }
+    /// For matching only: "three" and "3" are the same word.
+    fn same(&self, a: usize, b: usize) -> bool {
+        match (self.val[a], self.val[b]) {
+            (Some(x), Some(y)) => x == y,
+            (None, None) => self.low[a] == self.low[b],
+            _ => false,
+        }
+    }
     /// Capitalized and not "I": mid-sentence, or an uncommon word ("Thursday").
     fn name(&self, i: usize) -> bool {
         let w = self.t[i].text;
@@ -197,14 +284,16 @@ impl Ctx<'_> {
             && !w.contains(['\'', '’'])
             && (!self.initial(i) || !crate::words::common(&w.to_lowercase()))
     }
-    /// 1 number or time, 2 name, 0 neither.
+    /// 1 number or time, 2 name, 3 day or month, 0 none.
     fn slot(&self, i: usize) -> u8 {
-        if number(&self.t[i]) {
+        if self.number(i) {
             1
-        } else if self.name(i) {
-            2
-        } else {
+        } else if !self.name(i) {
             0
+        } else if DATES.contains(&self.lower(i)) {
+            3
+        } else {
+            2
         }
     }
     /// A cue phrase whose words stand alone ("--no-wait" is a flag): its end.
@@ -227,13 +316,12 @@ impl Ctx<'_> {
     /// A cue at `i`, with any stacked cues after it ("actually, scratch that"): its end.
     fn cue(&self, i: usize) -> Option<usize> {
         let (end, cue) = self.phrase(i)?;
-        let prior = i > 0;
+        let prior = i > self.lead;
         let punct = self
             .gap(i)
             .contains([',', '.', ';', ':', '!', '?', '—', '\n']);
         let (prev, next) = (if prior { self.lower(i - 1) } else { "" }, self.lower(end));
-        let slot_next = end < self.t.len() && self.slot(end) > 0;
-        let num = |k: usize| self.t.get(k).is_some_and(number);
+        let num = |k: usize| self.number(k);
         // Quoted or literal text ("she said 'at 3, actually 5'") is never a cue.
         let valid = !self.quoted[i]
             && match cue {
@@ -246,7 +334,9 @@ impl Ctx<'_> {
                 ["i", _] => {
                     prior && prev != "what" && !["it", "to", "well", "business"].contains(&next)
                 }
-                ["make", "that"] => prior && slot_next && (punct || num(i - 1)),
+                ["make", "that"] => {
+                    prior && end < self.t.len() && self.slot(end) > 0 && (punct || num(i - 1))
+                }
                 ["correction"] => prior && punct,
                 ["sorry"] => {
                     prior && punct && (self.gap(end).contains(',') || self.phrase(end).is_some())
@@ -258,6 +348,10 @@ impl Ctx<'_> {
             return None;
         }
         Some(self.stacked(end))
+    }
+    /// Only cue words precede `i` in its sentence.
+    fn opens(&self, i: usize) -> bool {
+        self.stacked(self.sentence(i)) >= i
     }
     fn stacked(&self, mut end: usize) -> usize {
         // A stacked bare "no" may be negation: "actually, no one came".
@@ -277,33 +371,32 @@ fn pass(text: &str) -> (Option<String>, bool) {
         return (None, false);
     }
     let t = tokens(text);
-    let low = t.iter().map(lower).collect();
-    let mut marks = 0;
-    let quoted = (0..t.len())
-        .map(|i| {
-            marks += quote_marks(text, if i == 0 { 0 } else { t[i - 1].end }, t[i].start);
-            marks % 2 == 1
-        })
-        .collect();
-    let c = Ctx {
+    let low: Vec<String> = t.iter().map(lower).collect();
+    let val = low.iter().map(|l| value(l)).collect();
+    let quoted = quoted(text, &t);
+    let mut c = Ctx {
         text,
         t,
         low,
+        val,
         quoted,
+        lead: 0,
     };
+    c.lead = c.stacked(0);
     let mut ambiguous = false;
     let mut i = 0;
     while i < c.t.len() {
         let Some(end) = c.cue(i) else {
-            // Skip a refused run whole: "Sorry, I mean Monday." has nothing to retract.
-            i = c.phrase(i).map_or(i + 1, |(end, _)| c.stacked(end));
+            // Skip only the refused phrase: "Sorry, scratch that." still cancels.
+            i = c.phrase(i).map_or(i + 1, |(end, _)| end);
             continue;
         };
         if let Some(edited) = repair(&c, i, end) {
             return (Some(tidy(&edited)), ambiguous);
         }
         // Content before and after, but no clear span: leave it to the model.
-        ambiguous |= i > 0 && end < c.t.len() && !c.initial(end);
+        // A cue that is a sentence of its own ("At 3. No, no. At 5.") counts too.
+        ambiguous |= i > c.lead && end < c.t.len() && (!c.initial(end) || c.opens(i));
         i = end;
     }
     (None, ambiguous)
@@ -312,9 +405,10 @@ fn pass(text: &str) -> (Option<String>, bool) {
 fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
     let text = c.text;
     let start = c.sentence(i);
+    let opens = c.opens(i);
     // A cue that opens a sentence corrects the previous one.
-    let window = if start == i && i > 0 {
-        c.sentence(i - 1)
+    let window = if opens && start > 0 {
+        c.sentence(start - 1)
     } else {
         start
     };
@@ -343,15 +437,13 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
         let to = c.t[end].start;
         return cut(c.t[window].start, to, &text[to..]);
     }
-    if window == i {
+    if window == i || opens && start == 0 {
         return None;
     }
     // Prefix restart: the repair repeats an earlier opening ("I will ... no no I will ...").
     for j in (window..i).rev() {
         let m = (0..)
-            .take_while(|&k| {
-                j + k < i && end + k < c.t.len() && norm(&c.t[j + k]) == norm(&c.t[end + k])
-            })
+            .take_while(|&k| j + k < i && end + k < c.t.len() && c.same(j + k, end + k))
             .count();
         let content = (0..m).all(|k| !FUNCTION.contains(&c.lower(j + k)));
         if m >= 3 || m == 2 && content {
@@ -361,7 +453,7 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
     // Same slot, only when the repair is set off by commas, is nothing but a new
     // number, time or name (after an optional repeated frame, "to Mike") and
     // stays in the cue's sentence: "buy 3 apples, I mean 4" -> "buy 4 apples".
-    if start == i || !c.gap(i).contains([',', ';', '—']) {
+    if opens || !c.gap(i).contains([',', ';', '—']) {
         return None;
     }
     let k = (0..=2).find(|&k| {
@@ -373,11 +465,14 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
             .contains([',', '.', ';', ':', '!', '?', '\n']);
     let kind = c.slot(new);
     let old = (start.max(i.saturating_sub(6))..i).rev().find(|&o| {
-        o >= start + k
-            && c.slot(o) == kind
-            && (0..k).all(|f| norm(&c.t[o - k + f]) == norm(&c.t[end + f]))
+        o >= start + k && c.slot(o) == kind && (0..k).all(|f| c.same(o - k + f, end + f))
     })?;
-    if !boundary || norm(&c.t[old]) == norm(&c.t[new]) {
+    // Same value ("thirty, no, 30"), a value we can't compare ("5pm, no, five")
+    // or part of a compound ("twenty five, no, 25"): not certain.
+    let unsure = kind == 1
+        && (c.val[old].is_none() != c.val[new].is_none()
+            || old > 0 && c.number(old - 1) && !c.gap(old).contains([',', ';']));
+    if !boundary || unsure || c.same(old, new) {
         return None;
     }
     let kept = &text[c.t[old].end..c.t[i - 1].end];
@@ -458,6 +553,33 @@ mod tests {
             ("3 no 4 no 5 no 6 no 7 no 8 no 9 no 10 no 11 no 12", "3 no 4 no 5 no 6 no 7 no 8 no 9 no 10 no 11 no 12", Ambiguous),
             ("3, no, 4, no, 5, no, 6, no, 7, no, 8, no, 9, no, 10, no, 11, no, 12", "3, no, 4, no, 5, no, 6, no, 7, no, 8, no, 9, no, 10, no, 11, no, 12", Ambiguous),
             ("3, no, 4, no, 5", "5", Edited),
+            ("3, no, 4, no, 5, no, 6, no, 7, no, 8, no, 9, no, 10, no, 11", "11", Edited),
+            // Second review of #107: cue words before a cancel don't hide it.
+            ("Sorry, scratch that.", "", Discarded),
+            ("Actually, scratch that.", "", Discarded),
+            ("I mean, scratch that.", "", Discarded),
+            ("Sorry, never mind.", "", Discarded),
+            ("Um, sorry, scratch that.", "", Discarded),
+            // #75 mid-dictation: no sentence before it, so only the cancel goes.
+            ("Sorry, scratch that. Meet at 5.", "Meet at 5.", Edited),
+            // Quote state survives a closer after punctuation and a possessive.
+            ("Say 'hi.' At 3, actually, 4.", "Say 'hi.' At 4.", Edited),
+            ("She said 'the dogs' toys are 3, actually, 4.'", "She said 'the dogs' toys are 3, actually, 4.'", Unchanged),
+            ("She said ‘the dogs’ toys are 3, actually, 4.’", "She said ‘the dogs’ toys are 3, actually, 4.’", Unchanged),
+            ("dogs' 3, no, 4", "dogs' 4", Edited),
+            // The same value, or one we can't compare, is no correction.
+            ("thirty, no, 30", "thirty, no, 30", Ambiguous),
+            ("fifty, no, 50", "fifty, no, 50", Ambiguous),
+            ("50, no, fifty.", "50, no, fifty.", Ambiguous),
+            ("twenty, no, 20", "twenty, no, 20", Ambiguous),
+            ("twenty five, no, 25", "twenty five, no, 25", Ambiguous),
+            ("5pm, no, five", "5pm, no, five", Ambiguous),
+            ("thirty, no, 40", "40", Edited),
+            // A cue that is its own sentence goes to the model.
+            ("At 3. No, no. At 5.", "At 3. No, no. At 5.", Ambiguous),
+            // A day or month isn't a person.
+            ("Ask John, sorry, Friday.", "Ask John, sorry, Friday.", Ambiguous),
+            ("Email Sarah, sorry, Monday.", "Email Sarah, sorry, Monday.", Ambiguous),
         ] {
             assert_eq!(apply(input), (output.to_owned(), outcome), "{input}");
             assert_eq!(ambiguous(input), outcome == Ambiguous, "{input}");
@@ -467,6 +589,8 @@ mod tests {
     fn repairs_stay_linear() {
         let unit = "Send it to John, sorry, to Mike. I will send it no no I will mail it. Sorry for the delay, I mean it. ";
         let text = unit.repeat(2_000 / unit.len() + 1);
+        // The common-word list decodes once per process (the daemon does it at start).
+        crate::words::common("warm");
         let start = std::time::Instant::now();
         for _ in 0..10 {
             std::hint::black_box(apply(std::hint::black_box(&text)));

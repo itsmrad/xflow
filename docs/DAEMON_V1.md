@@ -58,7 +58,8 @@ preserve word boundaries. Snippets ignore case and punctuation between words.
 Self-correction (`xflow_core::backtrack`, in every mode) edits only when the
 retracted words are certain: a restarted phrase ("I will do the meeting at 3 pm
 no no I will do the meeting at 5 pm"), or, within one sentence, a cue set off by
-commas followed by nothing but a new number, time or name ("send it to John,
+commas followed by nothing but a new value of the same kind, a number,
+day or month, or name ("send it to John,
 sorry, to Mike"; "buy 3 apples, I mean 4"). "Scratch that" or "never mind" as
 its own clause deletes the sentence before it; at the end of a dictation it
 discards all of it: nothing is cleaned or pasted, the status and the macOS pill
