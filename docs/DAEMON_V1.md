@@ -179,7 +179,8 @@ or backups. Real device capture, GNOME focus/selection/paste behavior, feedback
 and cloud model quality remain manual integration checks for the orchestrator.
 
 With `stt.fallback` enabled, the providers wrapper owns bounded failover and the
-60-second primary breaker. The daemon does not retry failed segments again in
-this mode. It joins successful segments and injects once, reports every serving
-provider in history and final events, and keeps the backup warning in the
-delivery message. With no backup, segment retry behavior remains unchanged.
+60-second primary breaker. The daemon does not retry an exhausted two-provider
+chain again, but keeps its one-time segment retry for errors that never failed
+over. Missing backup keys warn in status and allow primary-only dictation. It
+joins successful segments and injects once, reports every serving provider in
+history and final events, and keeps the backup warning in the delivery message. With no backup, segment retry behavior remains unchanged.

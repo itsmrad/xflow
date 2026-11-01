@@ -130,6 +130,16 @@ fn checks(
             detail,
             "Review xflow config show; keys belong in environment variables or xflow key set",
         ));
+        if !config.stt.fallback.is_empty() {
+            let warning = xflow_providers::fallback_warning(&config.stt);
+            checks.push(check(
+                "Backup provider",
+                warning.is_none(),
+                false,
+                warning.unwrap_or_else(|| "Backup provider key is available".into()),
+                "Restore the backup key with xflow key set, or unset stt.fallback",
+            ));
+        }
         // Over-budget dictionary words are optional; an unbuildable provider fails every dictation.
         let hints = super::config::hint_warning(&config);
         checks.push(check(

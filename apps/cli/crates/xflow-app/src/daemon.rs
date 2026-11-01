@@ -295,6 +295,9 @@ impl Engine {
         }
         r.version = Some(env!("CARGO_PKG_VERSION").into());
         r.protocol = Some(PROTOCOL_VERSION);
+        if let Some(warning) = self.services.stt.warning() {
+            add_warning(&mut r.message, warning);
+        }
         r.provider = Some(self.services.stt.name().into());
         r.model = Some(self.services.stt.model().to_owned()).filter(|s| !s.is_empty());
         if self.state == State::Success {
@@ -694,7 +697,7 @@ impl Engine {
                 pieces.sort_by_key(|(index, _)| *index);
                 // A segmented dictation retries each failed segment once and keeps the rest:
                 // one bad upload never discards minutes of transcribed speech. A single
-                // short clip still fails fast. An explicit backup already bounds retries.
+                // short clip still fails fast. Exhausted failover chains are never repeated.
                 let segmented = live > 0 || pieces.len() + usize::from(failed.is_some()) > 1;
                 if let Some(e) = failed.take_if(|_| !segmented) {
                     return Err(e);
@@ -703,7 +706,7 @@ impl Engine {
                 let (mut parts, mut language) = (Vec::with_capacity(pieces.len()), None);
                 for (_, piece) in pieces {
                     let piece = match piece {
-                        Err((_, audio, low_energy)) if segmented && config.stt.fallback.is_empty() => {
+                        Err((error, audio, low_energy)) if segmented && !error.is::<xflow_providers::FailoverExhausted>() => {
                             transcribe_segment(&*services.stt, audio, low_energy, &config).await
                         }
                         piece => piece,
@@ -3310,6 +3313,7 @@ mod tests {
         hints: Mutex<Vec<Vec<String>>>,
         words: Option<fn(usize) -> &'static str>,
         failures: usize,
+        failed_over: bool,
         calls: AtomicUsize,
         /// Segments (by start, ms) that fail on every attempt.
         broken: Option<fn(usize) -> bool>,
@@ -3342,7 +3346,12 @@ mod tests {
             if self.broken.is_some_and(|broken| broken(start))
                 || self.calls.fetch_add(1, Ordering::SeqCst) < self.failures
             {
-                bail!("provider returned HTTP 500");
+                let error = anyhow::anyhow!("provider returned HTTP 500");
+                return Err(if self.failed_over {
+                    error.context(xflow_providers::FailoverExhausted)
+                } else {
+                    error
+                });
             }
             tokio::time::sleep(Duration::from_millis(
                 400u64.saturating_sub(start as u64 / 500),
@@ -3426,11 +3435,12 @@ mod tests {
         task.await.unwrap();
     }
     #[tokio::test]
-    async fn explicit_backup_does_not_retry_failed_segments_again() {
+    async fn explicit_backup_does_not_retry_failed_over_segments_again() {
         let audio = Arc::new(StreamAudio::ramp(150, 140, false));
         let stt = Arc::new(SegmentStt {
             audio: Some(audio.clone()),
             failures: 1,
+            failed_over: true,
             ..Default::default()
         });
         let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio.clone(), stt.clone());
@@ -3455,6 +3465,45 @@ mod tests {
             starts.len(),
             count,
             "no segment is retried after explicit failover"
+        );
+        assert_eq!(desktop.injections.lock().unwrap().len(), 1);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn explicit_backup_preserves_retry_for_segments_that_never_failed_over() {
+        let audio = Arc::new(StreamAudio::ramp(150, 140, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            failures: 1,
+            ..Default::default()
+        });
+        let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio.clone(), stt.clone());
+        engine.config.stt.fallback = vec!["openai".into()];
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        wait_for(|| stt.clips.lock().unwrap().len() >= 2).await;
+        ask(&tx, Request::Stop).await;
+        let done = success(&mut events).await;
+        assert!(
+            done.message.is_none(),
+            "the failed segment was recovered: {:?}",
+            done.message
+        );
+        let mut starts: Vec<_> = stt
+            .clips
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|clip| audio.position(clip))
+            .collect();
+        let count = starts.len();
+        starts.sort_unstable();
+        starts.dedup();
+        assert_eq!(
+            count,
+            starts.len() + 1,
+            "only the failed segment is retried"
         );
         assert_eq!(desktop.injections.lock().unwrap().len(), 1);
         ask(&tx, Request::Shutdown).await;

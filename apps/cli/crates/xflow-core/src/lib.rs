@@ -104,6 +104,10 @@ pub trait SpeechToText: Send + Sync {
     fn model(&self) -> &str {
         ""
     }
+    /// A degraded route that should be visible in daemon status.
+    fn warning(&self) -> Option<&str> {
+        None
+    }
     fn supports_streaming(&self) -> bool {
         false
     }

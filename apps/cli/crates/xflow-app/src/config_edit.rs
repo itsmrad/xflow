@@ -58,9 +58,16 @@ impl ConfigFile {
         &self.path
     }
 
-    /// The validated configuration this document describes.
+    /// Validate routing and fields without requiring backup credentials for reads.
     pub fn config(&self) -> Result<Config> {
         parse(&self.doc)
+    }
+
+    /// Explicit validation and saves also require the backup key.
+    pub fn validate(&self) -> Result<Config> {
+        let config = self.config()?;
+        xflow_providers::validate_fallback(&config.stt, config.privacy.offline)?;
+        Ok(config)
     }
 
     /// The value written in the file at a dotted key (`stt.model`), as TOML text.
@@ -152,6 +159,7 @@ impl ConfigFile {
     /// creating a private config directory on first save. A symlinked config
     /// is written through.
     pub fn save(&self) -> Result<()> {
+        self.validate()?;
         let target = match std::fs::canonicalize(&self.path) {
             Ok(real) => real,
             Err(_) => {
@@ -233,7 +241,7 @@ impl std::fmt::Display for ConfigFile {
 fn parse(doc: &DocumentMut) -> Result<Config> {
     let config: Config = toml::from_str(&doc.to_string())?;
     config.validate()?;
-    xflow_providers::validate_fallback(&config.stt, config.privacy.offline)?;
+    xflow_providers::validate_fallback_route(&config.stt, config.privacy.offline)?;
     Ok(config)
 }
 

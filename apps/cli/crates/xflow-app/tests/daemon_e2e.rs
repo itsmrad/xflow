@@ -450,6 +450,116 @@ async fn transcript_is_uploaded_delivered_and_persisted() {
 }
 
 #[tokio::test]
+async fn missing_or_removed_backup_key_keeps_config_commands_and_primary_dictation_working() {
+    for remove_key in [false, true] {
+        let mut mock = MockStt::start(vec![Plan::success("primary remains available")]).await;
+        let contents = config(&mock.endpoint, false, None).replacen(
+            "[stt]",
+            "[stt]\nfallback = [\"openai\"]",
+            1,
+        );
+        let mut daemon = Daemon::spawn_with_config(contents, "voice", |_, root| {
+            if remove_key {
+                xflow_providers::keystore::Store::at(
+                    &root.join("config/xflow"),
+                    &root.join("data/xflow"),
+                )
+                .set("openai", "synthetic-backup-key")
+                .unwrap();
+            }
+        });
+        daemon.ready().await;
+        if remove_key {
+            let mut command = client(&daemon);
+            command
+                .env("XFLOW_NO_KEYCHAIN", "1")
+                .args(["key", "remove", "openai"]);
+            let output = tokio::task::spawn_blocking(move || command.output().unwrap())
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        for args in [vec!["config", "show"], vec!["key", "status", "openai"]] {
+            let mut command = client(&daemon);
+            command.env("XFLOW_NO_KEYCHAIN", "1").args(args);
+            let output = tokio::task::spawn_blocking(move || command.output().unwrap())
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        for args in [
+            vec!["config", "validate"],
+            vec!["config", "set", "recording.auto_stop_secs", "1"],
+        ] {
+            let mut command = client(&daemon);
+            command.args(args);
+            let output = tokio::task::spawn_blocking(move || command.output().unwrap())
+                .await
+                .unwrap();
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains("stored key"));
+        }
+        let status = daemon.request(json!({"command":"status"})).await;
+        assert!(status
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Backup unavailable; using primary only"));
+        let mut command = client(&daemon);
+        command.args(["--json", "doctor"]);
+        let output = tokio::task::spawn_blocking(move || command.output().unwrap())
+            .await
+            .unwrap();
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let check = report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "Backup provider")
+            .unwrap();
+        assert_eq!(check["ok"], false);
+        assert_eq!(check["required"], false);
+        assert!(check["detail"].as_str().unwrap().contains("primary only"));
+        let mut events = daemon.events().await;
+        dictate(&daemon, &mut events).await;
+        mock.upload().await;
+        assert_eq!(
+            fs::read_to_string(daemon.sink()).unwrap(),
+            "primary remains available"
+        );
+        let status = daemon.request(json!({"command":"status"})).await;
+        assert_eq!(status.provider.as_deref(), Some("custom"));
+        assert!(status
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Backup unavailable"));
+        xflow_providers::keystore::Store::at(
+            &daemon.root.path().join("config/xflow"),
+            &daemon.root.path().join("data/xflow"),
+        )
+        .set("openai", "synthetic-restored-key")
+        .unwrap();
+        assert!(daemon.request(json!({"command":"reload"})).await.ok);
+        let status = daemon.request(json!({"command":"status"})).await;
+        assert!(!status
+            .message
+            .as_deref()
+            .unwrap_or("")
+            .contains("Backup unavailable"));
+        daemon.stop_process().await;
+    }
+}
+
+#[tokio::test]
 async fn get_and_head_warm_up_probes_do_not_consume_upload_plans() {
     for (protocol, expected_probe, transcript) in [
         (None, ("GET", "/v1/models"), "after GET warm-up"),

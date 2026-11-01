@@ -83,7 +83,7 @@ pub fn run(path: &Path, action: Option<&args::Config>, out: &Output) -> Result<(
             commit(&file, out)?;
         }
         Validate => {
-            load(path)?.config().map_err(Error::config)?;
+            load(path)?.validate().map_err(Error::config)?;
             out.confirm("Configuration is valid")?;
         }
         Reset { yes } => {
@@ -110,7 +110,7 @@ pub fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(Error::config)?;
     temp.write_all(bytes).map_err(Error::config)?;
     temp.as_file().sync_all().map_err(Error::config)?;
-    load(temp.path())?.config().map_err(Error::config)?;
+    load(temp.path())?.validate().map_err(Error::config)?;
     temp.persist(&target).map_err(Error::config)?;
     Ok(())
 }
@@ -119,7 +119,7 @@ fn edit(path: &Path, out: &Output) -> Result<()> {
     temp.write_all(load(path)?.to_string().as_bytes())?;
     run_editor(temp.path())?;
     let content = bounded_read(temp.path(), 1024 * 1024)?;
-    load(temp.path())?.config().map_err(Error::config)?;
+    load(temp.path())?.validate().map_err(Error::config)?;
     replace(path, &content)?;
     super::ipc::reload_if_running(path, out)?;
     out.confirm("Configuration saved")?;

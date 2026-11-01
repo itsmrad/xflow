@@ -19,7 +19,8 @@ pub use check::{check_cleanup, CheckReport};
 use check::{check_request, probe_url};
 mod stt;
 pub use stt::{
-    backup_providers, build_stt, check_stt, hint_fit, transcribe_file, validate_fallback,
+    backup_providers, build_stt, check_stt, fallback_warning, hint_fit, transcribe_file,
+    validate_fallback, validate_fallback_route, FailoverExhausted,
 };
 mod audio;
 mod catalog;
@@ -675,6 +676,7 @@ pub fn check_keystore() -> Result<bool> {
 enum ProviderFailure {
     Timeout,
     Connect,
+    Interrupted,
     Status(u16),
 }
 impl std::fmt::Display for ProviderFailure {
@@ -682,6 +684,7 @@ impl std::fmt::Display for ProviderFailure {
         match self {
             Self::Timeout => f.write_str("provider request timed out; it was not retried"),
             Self::Connect => f.write_str("could not connect to provider"),
+            Self::Interrupted => f.write_str("provider connection interrupted; it was not retried"),
             Self::Status(status) => {
                 write!(f, "provider returned HTTP {status}; response body omitted")
             }
@@ -694,6 +697,9 @@ fn http_error(error: reqwest::Error) -> anyhow::Error {
         ProviderFailure::Timeout.into()
     } else if error.is_connect() {
         ProviderFailure::Connect.into()
+    } else if error.is_request() || error.is_body() || error.is_decode() {
+        // Body reads use reqwest's decode category; JSON parsing happens separately.
+        ProviderFailure::Interrupted.into()
     } else {
         anyhow!("provider HTTP request failed; it was not retried")
     }

@@ -130,21 +130,30 @@ safety check stay in Rust (`safe_target`).
 
 `stt.fallback = ["openai"]` permits one backup, different from the primary, with a
 stored keystore key. It uses that catalog entry's default endpoint and model.
-Unknown ids, missing stored keys and remote backups in offline mode are rejected.
-Each attempt (including any hint-free retry) gets
+Unknown ids and remote backups in offline mode are always rejected. Explicit
+`config validate` and config saves also reject a missing backup key. Config reads,
+daemon startup and reload remain usable: a missing/unreadable backup key disables
+the backup and shows a doctor/status warning while the primary runs normally.
+Each batch attempt (including any hint-free retry) gets
 `min(stt.timeout_secs, 3 + 0.25 * audio_seconds)` seconds. At most two attempts run
 sequentially, so two unavailable providers cannot consume two full default
-30-second timeouts for a short clip. A timed-out upstream may still bill.
+30-second timeouts for a short clip. Async AssemblyAI upload/poll keeps its full
+configured timeout instead of this batch deadline, for either route. A timed-out
+upstream may still bill.
 
-Connect/TLS errors, 408, 429, 5xx and deadline expiration use the other provider
-once. 400/413 and 401/403 do not switch; the existing 400/500 hint-free retry
-runs first within the same deadline. A primary failure puts the backup first
-for 60 seconds, then the next request probes the primary.
+Connect/TLS errors, upload/read interruptions, 408, 429, 5xx and deadline expiration
+use the other provider once. Primary 400/413 and 401/403 do not switch; the existing
+400/500 hint-free retry runs first within the same deadline. A primary failure
+puts the backup first for 60 seconds. While backup goes first, any backup error
+probes the primary once; success clears the breaker. Otherwise the next request
+after 60 seconds probes the primary. Only errors from an exhausted two-provider
+chain suppress the daemon's one-time failed-segment recovery.
 
 `Transcript.provider` is optional with a serde default for old payloads. History
 reuses its existing provider column. Final status/watch JSON names the actual
-provider (comma-separated ids when segments used both); the success message
-names a backup that answered. No history migration or pill text change is needed.
+provider (comma-separated ids when segments used both, with model left unset);
+the success message names a backup that answered. No history migration or pill
+text change is needed.
 
 This route applies to daemon dictation. File transcription and connection checks
 continue to target the selected primary provider explicitly.

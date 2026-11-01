@@ -248,6 +248,7 @@ struct HttpProvider {
     timeout: Duration,
     protocol: Protocol,
     options: TranscriptionOptions,
+    warning: Option<String>,
 }
 impl HttpProvider {
     fn new(config: &SttConfig, offline: bool) -> Result<Self> {
@@ -295,6 +296,7 @@ impl HttpProvider {
         )?;
         let timeout = checked_timeout(config.timeout_secs)?;
         Ok(Self {
+            warning: None,
             name: config.provider.clone(),
             endpoint: url.clone(),
             model: model.to_owned(),
@@ -686,6 +688,9 @@ impl HttpProvider {
 }
 #[async_trait]
 impl SpeechToText for HttpProvider {
+    fn warning(&self) -> Option<&str> {
+        self.warning.as_deref()
+    }
     fn name(&self) -> &str {
         &self.name
     }
@@ -759,7 +764,7 @@ pub fn backup_providers() -> Result<Vec<String>> {
         })
         .collect()
 }
-pub fn validate_fallback(config: &SttConfig, offline: bool) -> Result<()> {
+pub fn validate_fallback_route(config: &SttConfig, offline: bool) -> Result<()> {
     if config.fallback.len() > 1 || config.fallback.contains(&config.provider) {
         bail!("stt.fallback allows one backup, different from the primary");
     }
@@ -776,13 +781,41 @@ pub fn validate_fallback(config: &SttConfig, offline: bool) -> Result<()> {
             protocol,
             model,
         )?;
+    }
+    Ok(())
+}
+fn backup_key(config: &SttConfig) -> Result<()> {
+    for id in &config.fallback {
         if keystore::Store::open()?.get(id)?.0.is_none() {
             bail!("stt.fallback {id} needs a stored key; run `xflow key set {id}`");
         }
     }
     Ok(())
 }
-fn attempt_deadline(timeout: Duration, audio: &AudioClip) -> Duration {
+/// Explicit validation and saves require a usable key; reads remain recoverable.
+pub fn validate_fallback(config: &SttConfig, offline: bool) -> Result<()> {
+    validate_fallback_route(config, offline)?;
+    backup_key(config)
+}
+pub fn fallback_warning(config: &SttConfig) -> Option<String> {
+    backup_key(config)
+        .err()
+        .map(|e| format!("Backup unavailable; using primary only: {e:#}"))
+}
+/// Marks a completed two-provider chain so segment recovery cannot repeat it.
+#[derive(Debug)]
+pub struct FailoverExhausted;
+impl std::fmt::Display for FailoverExhausted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("both configured STT providers failed")
+    }
+}
+impl std::error::Error for FailoverExhausted {}
+fn attempt_deadline(timeout: Duration, audio: &AudioClip, protocol: Protocol) -> Duration {
+    // Async upload + job polling needs the user's full configured budget.
+    if protocol == Protocol::Assembly {
+        return timeout;
+    }
     let seconds = audio.samples.len() as f64
         / f64::from(audio.sample_rate.max(1))
         / f64::from(audio.channels.max(1));
@@ -794,6 +827,7 @@ fn can_fail_over(error: &anyhow::Error) -> bool {
         Some(
             ProviderFailure::Timeout
                 | ProviderFailure::Connect
+                | ProviderFailure::Interrupted
                 | ProviderFailure::Status(408 | 429 | 500..=599)
         )
     )
@@ -868,37 +902,53 @@ impl SpeechToText for Failover {
         options: TranscriptionOptions,
     ) -> Result<Transcript> {
         let now = tokio::time::Instant::now();
-        let budget = attempt_deadline(self.primary.timeout, &audio);
-        let total = now + budget * 2;
+        let primary_budget = attempt_deadline(self.primary.timeout, &audio, self.primary.protocol);
+        let backup_budget = attempt_deadline(
+            self.primary.timeout,
+            &audio,
+            resolve(&self.backup_config)?.2,
+        );
+        let total = now + primary_budget + backup_budget;
         let backup_first = self.backup_first(now);
+        let (first_budget, second_budget) = if backup_first {
+            (backup_budget, primary_budget)
+        } else {
+            (primary_budget, backup_budget)
+        };
         let result = self
             .attempt(
                 backup_first,
                 audio.clone(),
                 options.clone(),
-                total.min(now + budget),
+                now + first_budget,
             )
             .await;
         match result {
             Ok(transcript) => Ok(transcript),
-            Err(error) if can_fail_over(&error) => self
+            Err(error) if backup_first || can_fail_over(&error) => self
                 .attempt(
                     !backup_first,
                     audio,
                     options,
-                    total.min(tokio::time::Instant::now() + budget),
+                    total.min(tokio::time::Instant::now() + second_budget),
                 )
                 .await
                 .map_err(|second| {
-                    second.context(format!("{error:#}; alternate provider also failed"))
+                    second
+                        .context(format!("{error:#}; alternate provider also failed"))
+                        .context(FailoverExhausted)
                 }),
             Err(error) => Err(error),
         }
     }
 }
 pub fn build_stt(config: &SttConfig, offline: bool) -> Result<Arc<dyn SpeechToText>> {
-    validate_fallback(config, offline)?;
-    let primary = HttpProvider::new(config, offline)?;
+    validate_fallback_route(config, offline)?;
+    let mut primary = HttpProvider::new(config, offline)?;
+    primary.warning = fallback_warning(config);
+    if primary.warning.is_some() {
+        return Ok(Arc::new(primary));
+    }
     match config.fallback.first() {
         None => Ok(Arc::new(primary)),
         Some(id) => Ok(Arc::new(Failover {
@@ -1112,7 +1162,7 @@ mod prompt_tests {
 mod failover_tests {
     use super::*;
     use crate::{
-        protocol_tests::scripted,
+        protocol_tests::{read_request, scripted},
         tests::{clip, config, server},
     };
 
@@ -1168,6 +1218,7 @@ mod failover_tests {
                 .await
                 .unwrap_err();
             assert!(provider.backup.get().is_none());
+            assert!(!error.is::<FailoverExhausted>());
             assert_eq!(requests.await.unwrap().len(), 1);
             if status.starts_with("401") || status.starts_with("403") {
                 assert!(format!("{error:#}").contains("groq rejected the key"));
@@ -1340,6 +1391,174 @@ mod failover_tests {
         assert_eq!(backup_requests.await.unwrap().len(), 2);
     }
     #[tokio::test]
+    async fn backup_first_nontransient_errors_probe_primary_once() {
+        for status in [
+            "400 Bad Request",
+            "401 Unauthorized",
+            "403 Forbidden",
+            "413 Payload Too Large",
+            "200 OK",
+        ] {
+            let (primary, requests) = scripted(
+                vec![("200 OK", json!({"text":"Recovered primary"}))],
+                "/transcribe",
+            )
+            .await;
+            let (backup, backup_request) =
+                server(status, b"invalid JSON", Duration::ZERO, "").await;
+            let provider = failover(primary, backup);
+            *provider.failed_at.lock().unwrap() = Some(tokio::time::Instant::now());
+            let transcript = provider
+                .transcribe(clip(), Default::default())
+                .await
+                .unwrap();
+            assert_eq!(transcript.provider.as_deref(), Some("groq"));
+            assert_eq!(transcript.text, "Recovered primary");
+            assert!(!provider.backup_first(tokio::time::Instant::now()));
+            assert_eq!(requests.await.unwrap().len(), 1);
+            backup_request.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn backup_first_permanent_failures_are_bounded_to_two_attempts() {
+        let (primary, requests) =
+            scripted(vec![("401 Unauthorized", json!({}))], "/transcribe").await;
+        let (backup, backup_requests) =
+            scripted(vec![("401 Unauthorized", json!({}))], "/transcribe").await;
+        let provider = failover(primary, backup);
+        *provider.failed_at.lock().unwrap() = Some(tokio::time::Instant::now());
+        let error = provider
+            .transcribe(clip(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error.is::<FailoverExhausted>());
+        assert_eq!(requests.await.unwrap().len(), 1);
+        assert_eq!(backup_requests.await.unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn interrupted_upload_and_response_fail_over_in_either_order() {
+        use tokio::io::AsyncWriteExt;
+        for backup_first in [false, true] {
+            for partial_body in [false, true] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let broken = format!("http://{}", listener.local_addr().unwrap());
+                let interrupted = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    read_request(&mut socket).await;
+                    if partial_body {
+                        socket
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"text\":")
+                            .await
+                            .unwrap();
+                    }
+                    // Disconnect after accepting the upload, or midway through the response.
+                });
+                let (healthy, requests) =
+                    scripted(vec![("200 OK", json!({"text":"Recovered"}))], "/transcribe").await;
+                let provider = if backup_first {
+                    failover(healthy, broken)
+                } else {
+                    failover(broken, healthy)
+                };
+                if backup_first {
+                    *provider.failed_at.lock().unwrap() = Some(tokio::time::Instant::now());
+                }
+                assert_eq!(
+                    provider
+                        .transcribe(clip(), Default::default())
+                        .await
+                        .unwrap()
+                        .text,
+                    "Recovered"
+                );
+                interrupted.await.unwrap();
+                assert_eq!(requests.await.unwrap().len(), 1);
+            }
+        }
+    }
+    #[tokio::test]
+    async fn primary_invalid_json_does_not_mark_the_chain_exhausted() {
+        let (primary, request) = server("200 OK", b"invalid JSON", Duration::ZERO, "").await;
+        let provider = failover(primary, "http://127.0.0.1:1".into());
+        let error = provider
+            .transcribe(clip(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(!error.is::<FailoverExhausted>());
+        assert!(provider.backup.get().is_none());
+        assert!(format!("{error:#}").contains("invalid JSON"));
+        request.await.unwrap();
+    }
+    #[tokio::test]
+    async fn missing_backup_key_warns_while_primary_remains_usable() {
+        let (primary, request) =
+            server("200 OK", br#"{"text":"Primary"}"#, Duration::ZERO, "").await;
+        let mut cfg = config("groq", primary);
+        cfg.fallback = vec!["elevenlabs".into()];
+        assert!(validate_fallback_route(&cfg, false).is_ok());
+        assert!(validate_fallback(&cfg, false)
+            .unwrap_err()
+            .to_string()
+            .contains("stored key"));
+        let provider = build_stt(&cfg, false).unwrap();
+        let warning = provider.warning().unwrap();
+        assert!(
+            warning.contains("elevenlabs") && warning.contains("primary only"),
+            "{warning}"
+        );
+        assert_eq!(
+            provider
+                .transcribe(clip(), Default::default())
+                .await
+                .unwrap()
+                .text,
+            "Primary"
+        );
+        request.await.unwrap();
+    }
+    #[tokio::test]
+    async fn assembly_async_keeps_full_timeout_instead_of_the_batch_deadline() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = format!("http://{}/transcript", listener.local_addr().unwrap());
+        let requests = tokio::spawn(async move {
+            for (delay, body) in [
+                (
+                    Duration::from_millis(3100),
+                    json!({"upload_url":"https://fixture.invalid/audio"}),
+                ),
+                (
+                    Duration::ZERO,
+                    json!({"id":"fixture", "status":"completed", "text":"Async transcript"}),
+                ),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                read_request(&mut socket).await;
+                tokio::time::sleep(delay).await;
+                let body = body.to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let mut cfg = config("assemblyai", primary);
+        cfg.timeout_secs = 5;
+        let mut provider = failover("http://127.0.0.1:1".into(), "http://127.0.0.1:1".into());
+        provider.primary = HttpProvider::new(&cfg, true).unwrap();
+        assert_eq!(
+            attempt_deadline(Duration::from_secs(5), &clip(), Protocol::Assembly),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            provider
+                .transcribe(clip(), Default::default())
+                .await
+                .unwrap()
+                .text,
+            "Async transcript"
+        );
+        assert!(provider.backup.get().is_none());
+        requests.await.unwrap();
+    }
+    #[tokio::test]
     async fn backup_failure_is_reported_without_a_third_attempt() {
         let (primary, requests) =
             scripted(vec![("429 Too Many Requests", json!({}))], "/transcribe").await;
@@ -1349,6 +1568,7 @@ mod failover_tests {
             .transcribe(clip(), Default::default())
             .await
             .unwrap_err();
+        assert!(error.is::<FailoverExhausted>());
         let message = format!("{error:#}");
         assert!(
             message.contains("groq")
@@ -1366,16 +1586,16 @@ mod failover_tests {
         audio.channels = 1;
         audio.samples = vec![0.1; 5 * 16000];
         assert_eq!(
-            attempt_deadline(Duration::from_secs(30), &audio),
+            attempt_deadline(Duration::from_secs(30), &audio, Protocol::Multipart),
             Duration::from_millis(4250)
         );
         audio.samples.resize(60 * 16000, 0.1);
         assert_eq!(
-            attempt_deadline(Duration::from_secs(30), &audio),
+            attempt_deadline(Duration::from_secs(30), &audio, Protocol::Multipart),
             Duration::from_secs(18)
         );
         assert_eq!(
-            attempt_deadline(Duration::from_secs(10), &audio),
+            attempt_deadline(Duration::from_secs(10), &audio, Protocol::Multipart),
             Duration::from_secs(10)
         );
         let old: Transcript = serde_json::from_str(r#"{"text":"old","language":null}"#).unwrap();
