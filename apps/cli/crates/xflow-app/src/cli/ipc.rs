@@ -291,6 +291,54 @@ async fn collect(
         }
     }
 }
+/// Retries the kept failed dictation and prints its transcript; the desktop is untouched.
+pub async fn retry(full: bool, discard: bool, out: &Output) -> Result<()> {
+    let request = Request::Retry {
+        full,
+        delivery: Delivery::None,
+        discard,
+    };
+    if discard {
+        send(&request).await?;
+        return Ok(out.confirm("Deleted the kept audio")?);
+    }
+    let mut stream = transport::connect().await.map_err(Error::daemon)?;
+    transport::write_frame(&mut stream, &Request::Subscribe).await?;
+    let mut reader = BufReader::new(stream);
+    let snapshot: Response =
+        tokio::time::timeout(Duration::from_secs(10), transport::read_frame(&mut reader))
+            .await
+            .map_err(Error::daemon)?
+            .map_err(Error::daemon)?
+            .ok_or_else(|| Error::daemon("Daemon closed subscription"))?;
+    validate(&snapshot, true)?;
+    send(&request).await?;
+    // Events before the retry's own Processing event belong to an earlier session.
+    let mut processing = false;
+    loop {
+        let response = transport::read_frame::<Response, _>(&mut reader)
+            .await
+            .map_err(Error::daemon)?
+            .ok_or_else(|| Error::daemon("Daemon disconnected before the retry finished"))?;
+        validate(&response, false)?;
+        match response.state {
+            State::Processing => processing = true,
+            State::Success if processing && response.text.is_some() => {
+                return Ok(out.data(&response, response.text.as_deref().unwrap_or_default())?);
+            }
+            State::Error | State::Idle if processing => {
+                return Err(Error::new(
+                    1,
+                    response
+                        .message
+                        .unwrap_or_else(|| "Retry ended without a transcript".into()),
+                    "Run xflow status to see whether the audio is still kept",
+                ));
+            }
+            _ => (),
+        }
+    }
+}
 fn cancelled() -> Error {
     Error::new(
         130,

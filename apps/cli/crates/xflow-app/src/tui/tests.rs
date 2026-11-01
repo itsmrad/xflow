@@ -768,3 +768,25 @@ fn backup_picker_only_offers_known_stored_keys_and_displays_the_current_choice()
     key_enter(&mut app);
     assert!(editor_error(&app).unwrap().contains("saving"));
 }
+#[test]
+fn kept_failed_audio_offers_a_retry_that_copies_instead_of_pasting_into_the_terminal() {
+    let (_dir, mut app) = populated();
+    assert!(key(&mut app, KeyCode::Char('R')).is_empty());
+    assert!(!screen(&app, 80, 24).contains("R retry"));
+    app.event(Response {
+        failed_audio: Some(Default::default()),
+        ..Response::status(State::Error, 0.0)
+    });
+    assert!(screen(&app, 80, 24).contains("R retry"));
+    assert!(matches!(
+        key(&mut app, KeyCode::Char('R')).as_slice(),
+        [Effect::Request(
+            Request::Retry {
+                full: false,
+                delivery: Delivery::Clipboard,
+                discard: false
+            },
+            Tag::Done(_)
+        )]
+    ));
+}

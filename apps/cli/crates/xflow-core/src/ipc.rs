@@ -96,6 +96,17 @@ pub enum Request {
     },
     ClearHistory,
     Stats,
+    /// Transcribe the kept failed dictation again (`privacy.keep_failed_audio`), then
+    /// clean up and deliver it like a new one. Parts already delivered are left out
+    /// unless `full`; `discard` deletes the kept audio instead.
+    Retry {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        full: bool,
+        #[serde(default)]
+        delivery: Delivery,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        discard: bool,
+    },
     /// Re-read config.toml and rebuild providers/desktop services. On error the
     /// running configuration is kept and the error is returned.
     Reload,
@@ -132,6 +143,18 @@ impl Request {
             hold: false,
         }
     }
+}
+
+/// A failed dictation's audio kept on disk for `retry`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FailedAudio {
+    /// Unix seconds; the audio is deleted at `expires_at`.
+    pub created_at: i64,
+    pub expires_at: i64,
+    /// Kept audio still to transcribe.
+    pub audio_ms: u64,
+    /// Part of the dictation was already delivered; a retry delivers only the rest.
+    pub partial: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -334,6 +357,9 @@ pub struct Response {
     /// Final event of a session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timings: Option<Timings>,
+    /// The failed dictation kept for `retry`, on every status and event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_audio: Option<FailedAudio>,
     /// Daemon-internal, never on the wire: the session a successful start began.
     #[serde(skip)]
     pub session: Option<u64>,

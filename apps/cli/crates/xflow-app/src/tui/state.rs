@@ -72,6 +72,7 @@ pub enum Action {
     Cancel,
     Copy,
     Paste,
+    Retry,
     Add,
     AddCorrection,
     Choose,
@@ -110,6 +111,7 @@ pub fn commands() -> Vec<Command> {
         (Action::Command, "Edit selected text by voice", "C"),
         (Action::Copy, "Copy text", "c"),
         (Action::Paste, "Paste text into the app you were using", "p"),
+        (Action::Retry, "Retry the failed dictation and copy it", "R"),
         (Action::Choose, "Open or change the selected item", "Enter"),
         (Action::Add, "Add something new", "n"),
         (Action::Delete, "Delete the selected item", "Del"),
@@ -1188,6 +1190,7 @@ impl App {
             KeyCode::Esc => Action::Back,
             KeyCode::Char('c') => Action::Copy,
             KeyCode::Char('p') => Action::Paste,
+            KeyCode::Char('R') => Action::Retry,
             KeyCode::Char('n') | KeyCode::Char('N') => Action::Add,
             KeyCode::Enter => Action::Choose,
             KeyCode::Delete | KeyCode::Backspace => Action::Delete,
@@ -1468,6 +1471,20 @@ impl App {
                 )]
             }
             Action::Cancel => return vec![Effect::Request(Request::Cancel, Tag::Ordinary)],
+            Action::Retry if self.status.failed_audio.is_none() => {
+                self.toast = Some("No failed dictation is kept.".into());
+            }
+            // To the clipboard: the focused window is this terminal.
+            Action::Retry => {
+                return vec![Effect::Request(
+                    Request::Retry {
+                        full: false,
+                        delivery: Delivery::Clipboard,
+                        discard: false,
+                    },
+                    Tag::Done("Retrying — the text will be copied."),
+                )]
+            }
             Action::Back => {
                 if self.active() && self.page == Page::Home {
                     return self.action(Action::Cancel);
