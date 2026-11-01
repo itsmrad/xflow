@@ -62,6 +62,8 @@ const FUNCTION: [&str; 26] = [
 const MENTIONS: [&str; 10] = [
     "phrase", "word", "words", "say", "says", "said", "saying", "called", "term", "like",
 ];
+/// A full stop after these never ends a sentence.
+const TITLES: [&str; 9] = ["mr", "mrs", "ms", "dr", "st", "prof", "jr", "sr", "vs"];
 /// A day or month is a time slot, never a person: "Ask John, sorry, Friday." stays.
 const DATES: [&str; 19] = [
     "monday",
@@ -154,39 +156,56 @@ fn quote_marks(text: &str, from: usize, to: usize) -> usize {
         .count()
 }
 /// Per token: inside a quotation, where nothing is a cue. A single quote opens
-/// after a space and closes only where it can't be a possessive ("hi.'", "hi'."),
-/// so "the dogs' toys" inside a quote keeps it open and outside opens nothing.
+/// before a letter and pairs with the next closer that can't be a possessive
+/// ("hi' ", "hi.'", "yes'."; not "dogs' toys"). An opener without a closer is an
+/// apostrophe ("'em"), and "'90s" or "rock 'n' roll" never open one.
 fn quoted(text: &str, t: &[Word]) -> Vec<bool> {
-    let (mut double, mut tick, mut single) = (false, false, false);
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let at = |k: usize| chars.get(k).map(|&(_, c)| c);
+    let punct = |c: char| ".,!?;:".contains(c);
+    let (mut singles, mut open) = (Vec::new(), None);
+    for (k, &(pos, c)) in chars.iter().enumerate() {
+        if !matches!(c, '\'' | '’' | '‘') {
+            continue;
+        }
+        let (prev, next) = (k.checked_sub(1).and_then(at), at(k + 1));
+        let opener = c == '‘'
+            || prev.is_none_or(|p| p.is_whitespace() || "([{—\"“".contains(p))
+                && next.is_some_and(char::is_alphabetic)
+                && !(matches!(next, Some('n' | 'N')) && matches!(at(k + 2), Some('\'' | '’')));
+        let closer = c != '‘'
+            && prev.is_some_and(|p| !p.is_whitespace())
+            && next.is_none_or(|n| n.is_whitespace() || punct(n) || ")\"”".contains(n))
+            && (prev.is_some_and(punct)
+                || next.is_none_or(punct)
+                || !matches!(prev, Some('s' | 'S')));
+        if opener {
+            open = Some(pos);
+        } else if let (Some(from), true) = (open, closer) {
+            singles.push((from, pos));
+            open = None;
+        }
+    }
+    let (mut double, mut tick, mut span) = (false, false, 0);
     let mut out = Vec::with_capacity(t.len());
-    let mut chars = text.char_indices().peekable();
-    let mut prev: Option<char> = None;
-    while let Some((at, c)) = chars.next() {
-        while out.len() < t.len() && t[out.len()].start <= at {
+    for &(pos, c) in &chars {
+        while out.len() < t.len() && t[out.len()].start <= pos {
+            let start = t[out.len()].start;
+            while singles.get(span).is_some_and(|&(_, to)| to < start) {
+                span += 1;
+            }
+            let single = singles.get(span).is_some_and(|&(from, _)| from < start);
             out.push(double || tick || single);
         }
-        let next = chars.peek().map(|&(_, n)| n);
-        let punct = |c: char| ".,!?;:".contains(c);
         match c {
             '"' => double = !double,
             '“' => double = true,
             '”' => double = false,
             '`' => tick = !tick,
-            '‘' => single = true,
-            '\'' | '’' if !single => {
-                single = prev.is_none_or(|p| p.is_whitespace() || "([{—".contains(p))
-                    && next.is_some_and(|n| !n.is_whitespace());
-            }
-            '\'' | '’' => {
-                let after = next.is_none_or(|n| n.is_whitespace() || punct(n) || n == ')');
-                single = !(prev.is_some_and(punct) && after
-                    || prev.is_some_and(char::is_alphanumeric) && next.is_none_or(punct));
-            }
             _ => {}
         }
-        prev = Some(c);
     }
-    out.resize(t.len(), double || tick || single);
+    out.resize(t.len(), double || tick);
     out
 }
 
@@ -251,8 +270,26 @@ impl Ctx<'_> {
         let b = self.t.get(i).map_or(self.text.len(), |w| w.start);
         &self.text[a..b]
     }
+    /// A sentence starts at `i`: after "!", "?" or a line break, or after a
+    /// full stop and a space that doesn't follow an abbreviation ("Mr.", "p.m.").
     fn initial(&self, i: usize) -> bool {
-        i == 0 || self.gap(i).contains(['.', '!', '?', '\n'])
+        i == 0
+            || self.gap(i).contains(['!', '?', '\n'])
+            || self.stop(i) && !TITLES.contains(&self.lower(i - 1)) && !self.abbreviation(i - 1)
+    }
+    /// "etc. Next", "5 p.m. Next": a full stop that may or may not end a sentence.
+    fn unsure(&self, i: usize) -> bool {
+        i > 0 && !self.initial(i) && self.stop(i) && self.abbreviation(i - 1)
+    }
+    fn stop(&self, i: usize) -> bool {
+        let gap = self.gap(i);
+        gap.find('.')
+            .is_some_and(|d| gap[d..].contains(char::is_whitespace))
+    }
+    fn abbreviation(&self, k: usize) -> bool {
+        let w = self.lower(k);
+        w.len() == 1 && w.starts_with(char::is_alphabetic)
+            || ["etc", "inc", "ltd", "approx"].contains(&w)
     }
     fn sentence(&self, mut i: usize) -> usize {
         while !self.initial(i) {
@@ -342,12 +379,21 @@ impl Ctx<'_> {
                     prior && punct && (self.gap(end).contains(',') || self.phrase(end).is_some())
                 }
                 ["actually"] => prior && (punct || num(end)),
-                _ => prior && num(i - 1) && num(end),
+                _ => prior && self.value_before(i) && num(end),
             };
         if !valid {
             return None;
         }
         Some(self.stacked(end))
+    }
+    /// A number, or a time ("5 pm", "5 p.m."), ends just before `i`.
+    fn value_before(&self, i: usize) -> bool {
+        let unit = |k: usize| matches!(self.lower(k), "am" | "pm" | "m");
+        self.number(i - 1)
+            || i >= 2
+                && unit(i - 1)
+                && (self.number(i - 2)
+                    || i >= 3 && matches!(self.lower(i - 2), "a" | "p") && self.number(i - 3))
     }
     /// Only cue words precede `i` in its sentence.
     fn opens(&self, i: usize) -> bool {
@@ -412,9 +458,14 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
     } else {
         start
     };
-    // An edit never reaches into or out of a quotation.
-    let cut = |from: usize, to: usize, keep: &str| {
-        (quote_marks(text, from, to) == 0).then(|| {
+    // An edit never reaches into or out of a quotation, starts inside a token
+    // ("p.|m."), or crosses a full stop that might end a sentence ("etc. Bring").
+    let cut = |first: usize, to: usize, keep: &str| {
+        let from = c.t[first].start;
+        let clean = quote_marks(text, from, to) == 0
+            && (from == 0 || text[..from].ends_with(char::is_whitespace))
+            && !(first + 1..i).any(|k| c.unsure(k));
+        clean.then(|| {
             let mut keep = keep.to_owned();
             if text[from..].starts_with(char::is_uppercase) {
                 if let Some(first) = keep.chars().next() {
@@ -435,7 +486,7 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
             return Some(String::new());
         }
         let to = c.t[end].start;
-        return cut(c.t[window].start, to, &text[to..]);
+        return cut(window, to, &text[to..]);
     }
     if window == i || opens && start == 0 {
         return None;
@@ -447,7 +498,7 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
             .count();
         let content = (0..m).all(|k| !FUNCTION.contains(&c.lower(j + k)));
         if m >= 3 || m == 2 && content {
-            return cut(c.t[j].start, c.t[end].start, &text[c.t[end].start..]);
+            return cut(j, c.t[end].start, &text[c.t[end].start..]);
         }
     }
     // Same slot, only when the repair is set off by commas, is nothing but a new
@@ -464,20 +515,34 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
         || c.gap(new + 1)
             .contains([',', '.', ';', ':', '!', '?', '\n']);
     let kind = c.slot(new);
-    let old = (start.max(i.saturating_sub(6))..i).rev().find(|&o| {
-        o >= start + k && c.slot(o) == kind && (0..k).all(|f| c.same(o - k + f, end + f))
-    })?;
+    // The last value of that kind, right before the cue; a number may keep one
+    // unit word ("3 apples, I mean 4"). Never an earlier one ("to John about
+    // Mike, sorry, to Sara").
+    let old = (start..i).rev().find(|&o| c.slot(o) == kind)?;
+    let adjacent = old + 1 == i
+        || kind == 1
+            && k == 0
+            && old + 2 == i
+            && c.slot(old + 1) == 0
+            && !FUNCTION.contains(&c.lower(old + 1));
+    if !adjacent || old < start + k || !(0..k).all(|f| c.same(old - k + f, end + f)) {
+        return None;
+    }
     // Same value ("thirty, no, 30"), a value we can't compare ("5pm, no, five")
-    // or part of a compound ("twenty five, no, 25"): not certain.
-    let unsure = kind == 1
-        && (c.val[old].is_none() != c.val[new].is_none()
-            || old > 0 && c.number(old - 1) && !c.gap(old).contains([',', ';']));
+    // or part of a compound ("twenty five", "a hundred", "hundred and five"): not certain.
+    let joined = |k: usize| !c.gap(k + 1).contains([',', ';']);
+    let compound = old > 0
+        && joined(old - 1)
+        && (c.number(old - 1)
+            || matches!(c.lower(old - 1), "a" | "an")
+            || c.lower(old - 1) == "and" && old >= 2 && c.number(old - 2));
+    let unsure = kind == 1 && (c.val[old].is_none() != c.val[new].is_none() || compound);
     if !boundary || unsure || c.same(old, new) {
         return None;
     }
     let kept = &text[c.t[old].end..c.t[i - 1].end];
     cut(
-        c.t[old - k].start,
+        old - k,
         c.t[new].end,
         &format!(
             "{}{kept}{}",
@@ -580,6 +645,29 @@ mod tests {
             // A day or month isn't a person.
             ("Ask John, sorry, Friday.", "Ask John, sorry, Friday.", Ambiguous),
             ("Email Sarah, sorry, Monday.", "Email Sarah, sorry, Monday.", Ambiguous),
+            // Third review: a full stop after an abbreviation isn't a sentence end.
+            ("Meet at 5 p.m. Scratch that. Bring notes.", "Bring notes.", Edited),
+            ("Call Mr. Smith, scratch that. Call me.", "Call me.", Edited),
+            ("Email Dr. Adams, scratch that. Email Lee.", "Email Lee.", Edited),
+            ("See you at 5 p.m. No, 6 p.m.", "See you at 5 p.m. No, 6 p.m.", Ambiguous),
+            ("We bought pens etc. Bring notes. Scratch that. Call me.", "We bought pens etc. Bring notes. Scratch that. Call me.", Ambiguous),
+            // A leading apostrophe isn't a quote and can't hide a later cancel.
+            ("the '90s were great. Scratch that.", "", Discarded),
+            ("Play '90s hits. Scratch that.", "", Discarded),
+            ("I love rock 'n' roll. Scratch that.", "", Discarded),
+            ("I love rock ’n’ roll. Scratch that.", "", Discarded),
+            ("She said 'hello' to me. Scratch that.", "", Discarded),
+            ("Say 'hi' at 3, actually, 4.", "Say 'hi' at 4.", Edited),
+            ("I'll see 'em at 3, actually, 4.", "I'll see 'em at 4.", Edited),
+            ("She said 'Meet at noon. Scratch that.'", "She said 'Meet at noon. Scratch that.'", Unchanged),
+            // A number phrase is replaced whole or not at all.
+            ("a hundred, no, 200", "a hundred, no, 200", Ambiguous),
+            ("one hundred and five, no, 200", "one hundred and five, no, 200", Ambiguous),
+            // Only the value right before the cue.
+            ("send it to John about Mike, sorry, to Sara", "send it to John about Mike, sorry, to Sara", Ambiguous),
+            ("Tell May, sorry, June", "Tell June", Edited),
+            ("3:30, no, 4:45", "4:45", Edited),
+            ("Please scratch that.", "Please scratch that.", Unchanged),
         ] {
             assert_eq!(apply(input), (output.to_owned(), outcome), "{input}");
             assert_eq!(ambiguous(input), outcome == Ambiguous, "{input}");
