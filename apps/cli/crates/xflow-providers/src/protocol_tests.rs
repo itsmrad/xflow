@@ -5,7 +5,7 @@ use tokio::{
     net::TcpListener,
 };
 
-async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+pub(super) async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
     let mut bytes = Vec::new();
     loop {
         let mut buf = [0u8; 4096];
@@ -26,7 +26,7 @@ async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
         }
     }
 }
-async fn scripted(
+pub(super) async fn scripted(
     replies: Vec<(&'static str, Value)>,
     path: &str,
 ) -> (String, tokio::task::JoinHandle<Vec<Vec<u8>>>) {

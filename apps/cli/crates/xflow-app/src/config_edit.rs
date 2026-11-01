@@ -58,9 +58,16 @@ impl ConfigFile {
         &self.path
     }
 
-    /// The validated configuration this document describes.
+    /// Validate routing and fields without requiring backup credentials for reads.
     pub fn config(&self) -> Result<Config> {
         parse(&self.doc)
+    }
+
+    /// Explicit validation and saves also require the backup key.
+    pub fn validate(&self) -> Result<Config> {
+        let config = self.config()?;
+        xflow_providers::validate_fallback(&config.stt, config.privacy.offline)?;
+        Ok(config)
     }
 
     /// The value written in the file at a dotted key (`stt.model`), as TOML text.
@@ -152,6 +159,7 @@ impl ConfigFile {
     /// creating a private config directory on first save. A symlinked config
     /// is written through.
     pub fn save(&self) -> Result<()> {
+        self.validate()?;
         let target = match std::fs::canonicalize(&self.path) {
             Ok(real) => real,
             Err(_) => {
@@ -233,6 +241,7 @@ impl std::fmt::Display for ConfigFile {
 fn parse(doc: &DocumentMut) -> Result<Config> {
     let config: Config = toml::from_str(&doc.to_string())?;
     config.validate()?;
+    xflow_providers::validate_fallback_route(&config.stt, config.privacy.offline)?;
     Ok(config)
 }
 
@@ -335,6 +344,20 @@ mod tests {
         let missing = dir.path().join("none.toml");
         assert!(!migrate_recording_limit(&missing, &dir.path().join("m2")).unwrap());
         assert!(!missing.exists() && dir.path().join("m2").exists());
+    }
+
+    #[test]
+    fn backup_validation_rejects_remote_offline_and_unknown_routes() {
+        for text in [
+            "[stt]\nfallback = [\"openai\"]\n[privacy]\noffline = true\n",
+            "[stt]\nfallback = [\"missing-provider\"]\n",
+            "[stt]\nfallback = [\"groq\"]\n",
+            "[stt]\nfallback = [\"openai\", \"deepgram\"]\n",
+        ] {
+            let (_dir, path) = temp_config(text);
+            let error = ConfigFile::load(&path).unwrap().config().unwrap_err();
+            assert!(format!("{error:#}").contains("fallback"), "{error:#}");
+        }
     }
 
     #[test]

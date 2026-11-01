@@ -745,3 +745,26 @@ fn key_left_in_keychain_is_not_a_missing_key_and_the_wizard_never_vanishes() {
     app.devices(vec!["USB Mic".into()]);
     assert!(matches!(app.modal, Some(Modal::Setup(Step::Welcome))));
 }
+
+#[test]
+fn backup_picker_only_offers_known_stored_keys_and_displays_the_current_choice() {
+    let (_dir, mut app) = app();
+    app.backups = vec!["groq".into(), "openai".into()];
+    app.page = Page::Settings;
+    app.selected[Page::Settings.index()] = app
+        .settings()
+        .iter()
+        .position(|(key, _)| key == "stt.fallback")
+        .unwrap();
+    key_enter(&mut app);
+    assert_eq!(editor(&app).fields[0].choices, vec!["", "openai"]);
+    assert_eq!(options::value_text("stt.fallback", "[]"), "None");
+    assert_eq!(
+        options::value_text("stt.fallback", r#"["openai"]"#),
+        "OpenAI"
+    );
+    assert_eq!(options::value_text("stt.fallback", "openai"), "OpenAI");
+    app.saving = true;
+    key_enter(&mut app);
+    assert!(editor_error(&app).unwrap().contains("saving"));
+}

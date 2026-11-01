@@ -361,6 +361,7 @@ pub struct App {
     pub activity: Vec<u64>,
     pub overlay: Vec<Setting>,
     pub overlay_error: bool,
+    pub backups: Vec<String>,
     pub missing_key: bool,
     pub missing_cleanup_key: bool,
     /// A stored key xflow can't use yet, and what to do about it.
@@ -434,6 +435,7 @@ impl App {
             activity: vec![],
             overlay: vec![],
             overlay_error: false,
+            backups: Vec::new(),
             missing_key: false,
             missing_cleanup_key: false,
             key_issue: None,
@@ -1959,6 +1961,14 @@ impl App {
     /// Stage a setting chosen from a list.
     fn set_choice(&mut self, key: &str, value: &str) -> Result<()> {
         let result = match key {
+            "stt.fallback" => self.set(
+                key,
+                &if value.is_empty() {
+                    "[]".into()
+                } else {
+                    format!("[{value:?}]")
+                },
+            ),
             "stt.provider" | "cleanup.provider" => {
                 self.choose_provider(value, key == "cleanup.provider", None)
             }
@@ -2395,19 +2405,36 @@ impl App {
         vec![]
     }
     fn setting_field(&self, key: &str) -> Field {
-        let value = match self.effective(key) {
-            None => String::new(),
-            Some(value) => format!("value = {value}")
-                .parse::<toml::Table>()
-                .ok()
-                .and_then(|doc| {
-                    doc.get("value")
-                        .and_then(toml::Value::as_str)
-                        .map(String::from)
-                })
-                .unwrap_or(value),
+        let value = if key == "stt.fallback" {
+            self.config
+                .stt
+                .fallback
+                .first()
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            match self.effective(key) {
+                None => String::new(),
+                Some(value) => format!("value = {value}")
+                    .parse::<toml::Table>()
+                    .ok()
+                    .and_then(|doc| {
+                        doc.get("value")
+                            .and_then(toml::Value::as_str)
+                            .map(String::from)
+                    })
+                    .unwrap_or(value),
+            }
         };
         let choices = match key {
+            "stt.fallback" => std::iter::once(String::new())
+                .chain(
+                    self.backups
+                        .iter()
+                        .filter(|id| *id != &self.config.stt.provider)
+                        .cloned(),
+                )
+                .collect(),
             "stt.provider" | "cleanup.provider" => {
                 integrations::catalog(key.starts_with("cleanup."))
                     .into_iter()

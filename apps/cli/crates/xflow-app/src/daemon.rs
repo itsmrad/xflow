@@ -59,6 +59,8 @@ fn native_audio(config: &xflow_core::config::RecordingConfig) -> Result<Arc<dyn 
 }
 
 struct Processed {
+    provider: String,
+    model: Option<String>,
     text: String,
     target: AppContext,
     entry: Option<HistoryEntry>,
@@ -180,6 +182,7 @@ pub struct Engine {
     segments: Segments,
     timings: Timings,
     last_timings: Option<Timings>,
+    served: Option<(String, Option<String>)>,
     events: broadcast::Sender<Response>,
     desktop_events: broadcast::Sender<DesktopEvent>,
 }
@@ -245,6 +248,7 @@ impl Engine {
             segments: Segments::default(),
             timings: Timings::default(),
             last_timings: None,
+            served: None,
             events,
             desktop_events,
         }
@@ -291,8 +295,17 @@ impl Engine {
         }
         r.version = Some(env!("CARGO_PKG_VERSION").into());
         r.protocol = Some(PROTOCOL_VERSION);
+        if let Some(warning) = self.services.stt.warning() {
+            add_warning(&mut r.message, warning);
+        }
         r.provider = Some(self.services.stt.name().into());
         r.model = Some(self.services.stt.model().to_owned()).filter(|s| !s.is_empty());
+        if self.state == State::Success {
+            if let Some((provider, model)) = &self.served {
+                r.provider = Some(provider.clone());
+                r.model = model.clone();
+            }
+        }
         if self.active() {
             r.mode = Some(self.mode);
         } else {
@@ -684,21 +697,24 @@ impl Engine {
                 pieces.sort_by_key(|(index, _)| *index);
                 // A segmented dictation retries each failed segment once and keeps the rest:
                 // one bad upload never discards minutes of transcribed speech. A single
-                // short clip still fails fast instead of doubling a provider timeout.
+                // short clip still fails fast. Exhausted failover chains are never repeated.
                 let segmented = live > 0 || pieces.len() + usize::from(failed.is_some()) > 1;
                 if let Some(e) = failed.take_if(|_| !segmented) {
                     return Err(e);
                 }
+                let mut providers = Vec::new();
                 let (mut parts, mut language) = (Vec::with_capacity(pieces.len()), None);
                 for (_, piece) in pieces {
                     let piece = match piece {
-                        Err((_, audio, low_energy)) if segmented => {
+                        Err((error, audio, low_energy)) if segmented && !error.is::<xflow_providers::FailoverExhausted>() => {
                             transcribe_segment(&*services.stt, audio, low_energy, &config).await
                         }
                         piece => piece,
                     };
                     match piece {
                         Ok(transcript) => {
+                            let provider = transcript.provider.unwrap_or_else(|| services.stt.name().into());
+                            if !providers.contains(&provider) { providers.push(provider); }
                             language = language.or(transcript.language);
                             parts.push(transcript.text);
                         }
@@ -717,6 +733,16 @@ impl Engine {
                     return failed.map_or(Ok(None), Err);
                 }
                 let mut warning = warning;
+                for provider in providers.iter().filter(|id| id.as_str() != services.stt.name()) {
+                    add_warning(&mut warning, &format!("Transcribed by {provider} ({} didn't answer)", services.stt.name()));
+                }
+                let provider = providers.join(", ");
+                let model = if provider == services.stt.name() {
+                    Some(services.stt.model().to_owned()).filter(|s| !s.is_empty())
+                } else {
+                    xflow_providers::find_provider(xflow_providers::ProviderKind::Stt, &provider)
+                        .map(|p| p.default_model.to_owned())
+                };
                 if let Some(e) = failed {
                     // A partial instruction must never run against the selection.
                     if session_mode == Mode::Command {
@@ -826,8 +852,8 @@ impl Engine {
                 validate_last_frame(&text)?;
                 let entry = HistoryEntry {
                     text: text.clone(),
-                    provider: services.stt.name().into(),
-                    model: Some(services.stt.model().into()).filter(|s: &String| !s.is_empty()),
+                    provider: provider.clone(),
+                    model: model.clone(),
                     raw_text: (raw != text).then_some(raw),
                     app_id: target.app_id.clone(),
                     language: language.or(config.stt.language),
@@ -846,6 +872,8 @@ impl Engine {
                     }
                 };
                 Ok(Some(Processed {
+                    provider,
+                    model,
                     text,
                     target,
                     entry,
@@ -1082,6 +1110,7 @@ impl Engine {
                                 let message = delivery_message(processed.warning.take(), outcome);
                                 // One final success event: subscribers can trust its complete payload.
                                 self.last_timings = Some(processed.timings.clone());
+                                self.served = Some((processed.provider.clone(), processed.model.clone()));
                                 if matches!(outcome, Some(InjectionOutcome::Pasted | InjectionOutcome::Typed)) && self.mode == Mode::Dictation && self.config.dictionary.auto_learn {
                                     if let Some(path) = self.config_path.clone() {
                                         let (finalize, finalized) = oneshot::channel();
@@ -2362,6 +2391,7 @@ mod tests {
             self.called.notify_one();
             self.release.notified().await;
             Ok(Transcript {
+                provider: None,
                 text: "Postgres is ready.".into(),
                 language: Some("en".into()),
             })
@@ -2817,6 +2847,7 @@ mod tests {
         async fn transcribe(&self, _: AudioClip, _: TranscriptionOptions) -> Result<Transcript> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(Transcript {
+                provider: None,
                 text: self.text.into(),
                 language: Some("en".into()),
             })
@@ -2890,6 +2921,63 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+    struct BackupStt;
+    #[async_trait]
+    impl SpeechToText for BackupStt {
+        fn name(&self) -> &str {
+            "groq"
+        }
+        async fn transcribe(&self, _: AudioClip, _: TranscriptionOptions) -> Result<Transcript> {
+            Ok(Transcript {
+                text: "Recovered dictation.".into(),
+                language: None,
+                provider: Some("openai".into()),
+            })
+        }
+    }
+    #[tokio::test]
+    async fn backup_provider_is_pasted_once_and_named_in_history_watch_and_status() {
+        for history in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(&dir.path().join("history.db"), history, 10).unwrap();
+            let desktop = Arc::new(RecordingDesktop::default());
+            let (mut engine, tx, rx, mut events, _) =
+                fixture(Config::default(), desktop.clone(), store.clone());
+            engine.services.stt = Arc::new(BackupStt);
+            let task = tokio::spawn(engine.run(rx));
+            assert!(ask(&tx, Request::start()).await.ok);
+            assert!(ask(&tx, Request::Stop).await.ok);
+            let event = success(&mut events).await;
+            assert_eq!(desktop.injections.lock().unwrap().len(), 1);
+            assert_eq!(event.provider.as_deref(), Some("openai"));
+            assert!(event
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("Transcribed by openai (groq didn't answer)"));
+            let watch_json = serde_json::to_value(&event).unwrap();
+            assert_eq!(watch_json["provider"], "openai");
+            let status = ask(&tx, Request::Status).await;
+            assert_eq!(status.provider.as_deref(), Some("openai"));
+            if history {
+                assert_eq!(event.entry.unwrap().provider, "openai");
+                let response = ask(
+                    &tx,
+                    Request::History {
+                        limit: 10,
+                        offset: 0,
+                        query: None,
+                    },
+                )
+                .await;
+                assert_eq!(response.history[0].provider, "openai");
+            } else {
+                assert!(event.entry.is_none());
+            }
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
     }
     #[tokio::test]
     async fn status_and_subscription_report_daemon_permissions_and_tap_evidence() {
@@ -3225,6 +3313,7 @@ mod tests {
         hints: Mutex<Vec<Vec<String>>>,
         words: Option<fn(usize) -> &'static str>,
         failures: usize,
+        failed_over: bool,
         calls: AtomicUsize,
         /// Segments (by start, ms) that fail on every attempt.
         broken: Option<fn(usize) -> bool>,
@@ -3257,13 +3346,19 @@ mod tests {
             if self.broken.is_some_and(|broken| broken(start))
                 || self.calls.fetch_add(1, Ordering::SeqCst) < self.failures
             {
-                bail!("provider returned HTTP 500");
+                let error = anyhow::anyhow!("provider returned HTTP 500");
+                return Err(if self.failed_over {
+                    error.context(xflow_providers::FailoverExhausted)
+                } else {
+                    error
+                });
             }
             tokio::time::sleep(Duration::from_millis(
                 400u64.saturating_sub(start as u64 / 500),
             ))
             .await;
             Ok(Transcript {
+                provider: None,
                 text: self
                     .words
                     .map_or_else(|| format!("at{start}"), |words| words(start).into()),
@@ -3336,6 +3431,81 @@ mod tests {
             expected.join(" ")
         );
         assert_eq!(done.timings.unwrap().audio_ms, 300_000);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn explicit_backup_does_not_retry_failed_over_segments_again() {
+        let audio = Arc::new(StreamAudio::ramp(150, 140, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            failures: 1,
+            failed_over: true,
+            ..Default::default()
+        });
+        let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio.clone(), stt.clone());
+        engine.config.stt.fallback = vec!["openai".into()];
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        wait_for(|| stt.clips.lock().unwrap().len() >= 2).await;
+        ask(&tx, Request::Stop).await;
+        let done = success(&mut events).await;
+        assert!(done.message.unwrap().contains("Part of the dictation"));
+        let mut starts: Vec<_> = stt
+            .clips
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|clip| audio.position(clip))
+            .collect();
+        let count = starts.len();
+        starts.sort_unstable();
+        starts.dedup();
+        assert_eq!(
+            starts.len(),
+            count,
+            "no segment is retried after explicit failover"
+        );
+        assert_eq!(desktop.injections.lock().unwrap().len(), 1);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn explicit_backup_preserves_retry_for_segments_that_never_failed_over() {
+        let audio = Arc::new(StreamAudio::ramp(150, 140, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            failures: 1,
+            ..Default::default()
+        });
+        let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio.clone(), stt.clone());
+        engine.config.stt.fallback = vec!["openai".into()];
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        wait_for(|| stt.clips.lock().unwrap().len() >= 2).await;
+        ask(&tx, Request::Stop).await;
+        let done = success(&mut events).await;
+        assert!(
+            done.message.is_none(),
+            "the failed segment was recovered: {:?}",
+            done.message
+        );
+        let mut starts: Vec<_> = stt
+            .clips
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|clip| audio.position(clip))
+            .collect();
+        let count = starts.len();
+        starts.sort_unstable();
+        starts.dedup();
+        assert_eq!(
+            count,
+            starts.len() + 1,
+            "only the failed segment is retried"
+        );
+        assert_eq!(desktop.injections.lock().unwrap().len(), 1);
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
@@ -3620,6 +3790,7 @@ mod tests {
                 .unwrap()
                 .push((clip.sample_rate, clip.channels, clip.samples.len()));
             Ok(Transcript {
+                provider: None,
                 text: "part".into(),
                 language: None,
             })

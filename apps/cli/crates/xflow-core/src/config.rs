@@ -118,6 +118,8 @@ impl HotkeyConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct SttConfig {
     pub provider: String,
+    /// Opt-in backup catalog id; at most one, with its own stored key.
+    pub fallback: Vec<String>,
     /// Full endpoint URL, not a base URL.
     pub endpoint: Option<String>,
     pub model: Option<String>,
@@ -132,6 +134,7 @@ impl Default for SttConfig {
     fn default() -> Self {
         Self {
             provider: "groq".into(),
+            fallback: vec![],
             endpoint: None,
             model: None,
             protocol: None,
@@ -438,6 +441,12 @@ impl Config {
         }
         if let Some(device) = &self.recording.device {
             check_text("recording.device", device, 256)?;
+        }
+        if self.stt.fallback.len() > 1 {
+            bail!("stt.fallback allows at most one backup provider");
+        }
+        if self.stt.fallback.iter().any(|id| id == &self.stt.provider) {
+            bail!("stt.fallback must differ from the primary provider");
         }
         if self.stt.timeout_secs == 0 || self.stt.timeout_secs > 300 {
             bail!("stt.timeout_secs must be 1..300");

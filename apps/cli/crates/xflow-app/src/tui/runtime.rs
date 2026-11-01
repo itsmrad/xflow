@@ -50,7 +50,7 @@ enum Update {
     Event(Response),
     Connection(bool, String),
     Overlay(Result<Vec<Setting>>),
-    KeyStatus(Box<Config>, (KeySource, KeySource)),
+    KeyStatus(Box<Config>, (KeySource, KeySource), Result<Vec<String>>),
     KeySaved(Result<()>),
     Devices(Result<Vec<String>>),
     Doctor(Vec<String>),
@@ -387,7 +387,14 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             }
             Err(_) => app.overlay_error = true,
         },
-        Update::KeyStatus(config, missing) => {
+        Update::KeyStatus(config, missing, backups) => {
+            match backups {
+                Ok(backups) => app.backups = backups,
+                Err(e) => {
+                    app.backups.clear();
+                    app.toast = Some(options::plain(&format!("{e:#}")));
+                }
+            }
             app.key_status(&config, missing);
             if let Some(issue) = app.key_issue.as_ref().or(app.cleanup_key_issue.as_ref()) {
                 app.toast = Some(issue.clone());
@@ -515,7 +522,11 @@ fn dispatch(
                 ),
                 Effect::KeyStatus(config) => {
                     let missing = integrations::missing_keys(&config).await;
-                    Update::KeyStatus(Box::new(config), missing)
+                    Update::KeyStatus(
+                        Box::new(config),
+                        missing,
+                        blocking(xflow_providers::backup_providers).await,
+                    )
                 }
                 Effect::SaveKey(id, secret) => {
                     Update::KeySaved(xflow_providers::save_key(&id, &secret).await)
@@ -687,6 +698,23 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use xflow_core::State;
 
+    #[test]
+    fn an_unreadable_backup_store_is_reported_and_removes_stale_choices() {
+        let mut app = App::new("unused".into(), ColorMode::TrueColor);
+        app.backups = vec!["openai".into()];
+        let config = app.config.clone();
+        handle(
+            &mut app,
+            Update::KeyStatus(
+                Box::new(config),
+                (KeySource::NotRequired, KeySource::NotRequired),
+                Err(anyhow::anyhow!("stored key can't be decrypted")),
+            ),
+            &mut false,
+        );
+        assert!(app.backups.is_empty());
+        assert!(app.toast.is_some());
+    }
     #[test]
     fn onboarding_asks_for_each_grant_in_order_and_moves_on_by_itself() {
         use xflow_core::ipc::{Grant, Permissions};

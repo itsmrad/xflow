@@ -33,6 +33,8 @@ pub struct TranscriptionOptions {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transcript {
+    #[serde(default)]
+    pub provider: Option<String>,
     pub text: String,
     pub language: Option<String>,
 }
@@ -102,6 +104,10 @@ pub trait SpeechToText: Send + Sync {
     /// Effective model id, for status and history display.
     fn model(&self) -> &str {
         ""
+    }
+    /// A degraded route that should be visible in daemon status.
+    fn warning(&self) -> Option<&str> {
+        None
     }
     fn supports_streaming(&self) -> bool {
         false
