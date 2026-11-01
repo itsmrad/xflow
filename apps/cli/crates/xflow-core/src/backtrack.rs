@@ -66,8 +66,13 @@ const MENTIONS: [&str; 10] = [
 const TITLES: [&str; 4] = ["mr", "mrs", "ms", "prof"];
 /// Words of a list, range or alternative: "2 or 3", "from 2 to 3".
 const LISTS: [&str; 7] = ["or", "and", "through", "between", "from", "either", "vs"];
-/// A negated value isn't retracted by "no": "it's not 3, no, 4".
-const NEGATIONS: [&str; 5] = ["not", "never", "no", "without", "none"];
+/// Negation anywhere before a cue makes what it retracts unclear: "it's not 3, no, 4".
+/// Also any word ending in "n't".
+const NEGATIONS: [&str; 26] = [
+    "not", "never", "no", "nobody", "nothing", "nowhere", "neither", "nor", "none", "without",
+    "cannot", "dont", "doesnt", "didnt", "cant", "wont", "isnt", "arent", "wasnt", "werent",
+    "shouldnt", "couldnt", "wouldnt", "havent", "hasnt", "aint",
+];
 /// A day or month is a time slot, never a person: "Ask John, sorry, Friday." stays.
 const DATES: [&str; 19] = [
     "monday",
@@ -114,6 +119,11 @@ pub fn apply(text: &str) -> (String, Outcome) {
         match pass(&edited) {
             (Some(next), _) => edited = next,
             (None, ambiguous) => {
+                // A cue left over after a repair ("buy 3 apples, I mean 4, no, 5"):
+                // the edit is only partial, so nothing is edited.
+                if edited != text && (ambiguous || Ctx::new(&edited).any_cue()) {
+                    return (text.to_owned(), Outcome::Ambiguous);
+                }
                 let outcome = if ambiguous {
                     Outcome::Ambiguous
                 } else if edited.is_empty() && !text.trim().is_empty() {
@@ -267,7 +277,27 @@ struct Ctx<'a> {
     /// before them is content to retract.
     lead: usize,
 }
-impl Ctx<'_> {
+impl<'a> Ctx<'a> {
+    fn new(text: &'a str) -> Self {
+        let t = tokens(text);
+        let low: Vec<String> = t.iter().map(lower).collect();
+        let val = low.iter().map(|l| value(l)).collect();
+        let quoted = quoted(text, &t);
+        let mut c = Ctx {
+            text,
+            t,
+            low,
+            val,
+            quoted,
+            lead: 0,
+        };
+        c.lead = c.stacked(0);
+        c
+    }
+    /// A cue phrase outside quotes, even one refused as a cue here.
+    fn any_cue(&self) -> bool {
+        (0..self.t.len()).any(|i| !self.quoted[i] && self.phrase(i).is_some())
+    }
     /// Text between token `i - 1` (or the start) and token `i` (or the end).
     fn gap(&self, i: usize) -> &str {
         let a = if i == 0 { 0 } else { self.t[i - 1].end };
@@ -424,19 +454,7 @@ fn pass(text: &str) -> (Option<String>, bool) {
     if text.is_empty() {
         return (None, false);
     }
-    let t = tokens(text);
-    let low: Vec<String> = t.iter().map(lower).collect();
-    let val = low.iter().map(|l| value(l)).collect();
-    let quoted = quoted(text, &t);
-    let mut c = Ctx {
-        text,
-        t,
-        low,
-        val,
-        quoted,
-        lead: 0,
-    };
-    c.lead = c.stacked(0);
+    let c = Ctx::new(text);
     let mut ambiguous = false;
     let mut i = 0;
     while i < c.t.len() {
@@ -498,7 +516,12 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
         let to = c.t[end].start;
         return cut(window, to, &text[to..]);
     }
-    if window == i || opens && start == 0 {
+    // A negation anywhere before the cue in the sentences it edits, commas or not.
+    let negated = (window..i).any(|o| {
+        let w = c.lower(o);
+        NEGATIONS.contains(&w) || w.ends_with("n't")
+    });
+    if window == i || opens && start == 0 || negated {
         return None;
     }
     // Prefix restart: the repair repeats an earlier opening ("I will ... no no I will ...").
@@ -567,7 +590,7 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
             && (start..old - k).any(|o| (0..k).all(|f| o + f < old - k && c.same(o + f, end + f)))
         || (clause..old).any(|o| {
             let w = c.lower(o);
-            LISTS.contains(&w) || NEGATIONS.contains(&w) || w.ends_with("n't")
+            LISTS.contains(&w)
         })
         || c.gap(old).contains(['-', '–'])
         || c.lower(old + 1) == "or";
@@ -739,6 +762,21 @@ mod tests {
             ("Park on Main St. The cafe opens at 3, no, 4.", "Park on Main St. The cafe opens at 4.", Edited),
             ("buy 3 apples, no, 4", "buy 3 apples, no, 4", Unchanged),
             ("He said, scratch that.", "He said, scratch that.", Unchanged),
+            // Sixth review: a negation anywhere before the cue in its sentence.
+            ("It's not, 3, no, 4.", "It's not, 3, no, 4.", Ambiguous),
+            ("never, 3, no, 4", "never, 3, no, 4", Ambiguous),
+            ("We dont need 3, no, 4.", "We dont need 3, no, 4.", Ambiguous),
+            ("We cannot take 3, no, 4.", "We cannot take 3, no, 4.", Ambiguous),
+            ("We cant take 3, no, 4.", "We cant take 3, no, 4.", Ambiguous),
+            ("Nobody needs 3, no, 4.", "Nobody needs 3, no, 4.", Ambiguous),
+            ("I will not attend the review no no I will attend the review", "I will not attend the review no no I will attend the review", Ambiguous),
+            // A cue left after the repairs: the original stays, whole.
+            ("buy 3 apples, I mean 4, no, 5", "buy 3 apples, I mean 4, no, 5", Ambiguous),
+            ("send it to John, sorry, to Mike, no, to Ann", "send it to John, sorry, to Mike, no, to Ann", Ambiguous),
+            ("buy 3 apples, I mean 4, no wait, get milk", "buy 3 apples, I mean 4, no wait, get milk", Ambiguous),
+            ("send it to John, sorry, to Mike, sorry, to Ann", "send it to Ann", Edited),
+            ("Email Jordan today about the launch no no email Jordan tomorrow", "Email Jordan tomorrow", Edited),
+            ("He called. Please scratch that.", "He called. Please scratch that.", Unchanged),
         ] {
             assert_eq!(apply(input), (output.to_owned(), outcome), "{input}");
             assert_eq!(ambiguous(input), outcome == Ambiguous, "{input}");

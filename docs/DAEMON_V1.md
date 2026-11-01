@@ -61,9 +61,10 @@ no no I will do the meeting at 5 pm"), or, within one sentence, a cue set off by
 commas followed by nothing but a new value of the same kind, a number,
 day or month, or name ("send it to John,
 sorry, to Mike"; "buy 3 apples, I mean 4"); only the value right before the cue
-is replaced, never one inside a list, range or alternative ("2 or 3, no, 4"), after a
-negation ("not 3, no, 4"), or when the value, its frame or a restarted opening
-was said more than once. "Scratch that" or "never mind" as
+is replaced, never one inside a list, range or alternative ("2 or 3, no, 4"), or when the
+value, its frame or a restarted opening was said more than once. A negation
+anywhere before the cue in its sentence ("we dont need 3, no, 4") refuses the
+edit, and so does a cue left over after the repairs: the text stays whole. "Scratch that" or "never mind" as
 its own clause deletes the sentence before it (a full stop after "Mr." ends no
 sentence, and an unsure one such as "p.m.", "St." or "etc." refuses the edit);
 after a full stop it is always a cancel, even after "said" or "that"; at the end of a dictation it
