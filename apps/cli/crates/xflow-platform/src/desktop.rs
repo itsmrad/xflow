@@ -337,6 +337,10 @@ fn ydotool_socket() -> Option<PathBuf> {
 
 async fn virtual_paste(shortcut: &str) -> Result<()> {
     let socket = ydotool_socket().context("ydotool daemon unavailable")?;
+    // shortcut: evdev 47 is V only where the active layout keeps V there (QWERTY,
+    // QWERTZ, AZERTY, Colemak); Dvorak gets Ctrl+K. Resolve it with xkbcommon and
+    // the compositor's active group when ydotool paste must support those layouts.
+    // Shell, wtype and xdotool send the "v" keysym and already follow the layout.
     let keys: &[&str] = match shortcut {
         "ctrl+shift+v" => &["29:1", "42:1", "47:1", "47:0", "42:0", "29:0"],
         "shift+Insert" => &["42:1", "110:1", "110:0", "42:0"],
