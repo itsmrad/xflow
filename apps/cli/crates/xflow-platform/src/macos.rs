@@ -344,6 +344,10 @@ struct Focus {
     element: Option<Owned>,
 }
 fn focus() -> Focus {
+    focus_waiting(true)
+}
+/// `wait`: give Electron and Chromium up to 300 ms to build their AX tree.
+fn focus_waiting(wait: bool) -> Focus {
     static TIMEOUT: Once = Once::new();
     let mut focus = Focus::default();
     let mut psn = ProcessSerialNumber::default();
@@ -396,7 +400,7 @@ fn focus() -> Focus {
     let mut role = role_of(&element);
     // Electron and Chromium build their AX tree only once an assistive client asks;
     // Chrome builds it asynchronously even while reporting the attribute unsupported.
-    if role.as_deref().is_none_or(is_container) {
+    if wait && role.as_deref().is_none_or(is_container) {
         app.enable("AXManualAccessibility");
         for _ in 0..6 {
             std::thread::sleep(Duration::from_millis(50));
@@ -731,6 +735,12 @@ impl Desktop for MacDesktop {
             .await
             .ok()??;
         Some(Box::new(watch))
+    }
+    async fn neighbors(&self) -> Option<(String, String)> {
+        tokio::task::spawn_blocking(observe::neighbors)
+            .await
+            .ok()
+            .flatten()
     }
     async fn copy(&self, text: &str) -> Result<()> {
         let _delivery = self.delivery.lock().await;

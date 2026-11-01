@@ -228,6 +228,8 @@ pub struct InjectionConfig {
     pub restore_delay_ms: u32,
     /// Append a space so consecutive dictations do not run together.
     pub trailing_space: bool,
+    /// Match spacing and first-letter case to the text around the caret (macOS).
+    pub smart_spacing: bool,
 }
 impl Default for InjectionConfig {
     fn default() -> Self {
@@ -237,6 +239,7 @@ impl Default for InjectionConfig {
             restore_clipboard: true,
             restore_delay_ms: 300,
             trailing_space: true,
+            smart_spacing: true,
         }
     }
 }
