@@ -73,6 +73,8 @@ pub struct AppContext {
 #[serde(rename_all = "snake_case")]
 pub enum InjectionOutcome {
     Pasted,
+    /// Paste keys sent to an editable target, but no insertion receipt was available.
+    Uncertain,
     /// Delivered as synthesized key presses (`injection.method = "type"`).
     Typed,
     ClipboardOnly,

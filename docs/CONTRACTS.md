@@ -40,7 +40,7 @@ document, write atomically (temp file + rename, mode 0600), then send `Reload`.
 ## Unix-socket IPC (`$XDG_RUNTIME_DIR/xflow/daemon.sock`)
 
 Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 KiB per frame.
-`PROTOCOL_VERSION = 2`; `status` reports `version` and `protocol`.
+`PROTOCOL_VERSION = 3`; `status` reports `version` and `protocol`.
 
 | Request (`"command"`) | Fields | Reply / semantics |
 | --- | --- | --- |
@@ -109,6 +109,10 @@ safety check stay in Rust (`safe_target`).
   fails. The daemon checks it on its existing listening-level tick, then calls `stop()` to retrieve
   the buffered clip or original error. Reset on start/stop/cancel; no new idle polling.
 - `InjectionOutcome::Typed`, `CleanupMode::Custom`, `Mode::{Dictation, Command}`.
+- `InjectionOutcome::Uncertain` (`"uncertain"`): macOS dispatched paste keys to a known editable,
+  nonsecure, unchanged target but could not confirm insertion. The pill says "Pasted — check it
+  landed"; clipboard text and `last` remain available. Unknown focus is `ClipboardOnly`, with
+  a "Copied" pill. Uncertain delivery does not start correction learning.
 - `GlobalHotkeys::received_events()` optionally reports whether a native tap has received keyboard input.
 - `GlobalHotkeys::next_action()` adds `HandsFree` (latch notification without restarting capture);
   `reset()` clears a gesture when another control ends a session. Physical events are

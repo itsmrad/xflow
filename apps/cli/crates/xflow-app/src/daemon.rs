@@ -2034,11 +2034,18 @@ fn add_warning(warning: &mut Option<String>, message: &str) {
         None => message.into(),
     }));
 }
+pub(crate) const UNCERTAIN: &str = "Pasted — check it landed";
+
 fn delivery_message(warning: Option<String>, outcome: Option<InjectionOutcome>) -> Option<String> {
-    if outcome == Some(InjectionOutcome::ClipboardOnly) {
+    let delivery = match outcome {
+        Some(InjectionOutcome::ClipboardOnly) => Some(COPIED),
+        Some(InjectionOutcome::Uncertain) => Some(UNCERTAIN),
+        _ => None,
+    };
+    if let Some(delivery) = delivery {
         Some(bounded_message(&match warning {
-            Some(warning) => format!("{COPIED}; {warning}"),
-            None => COPIED.into(),
+            Some(warning) => format!("{delivery}; {warning}"),
+            None => delivery.into(),
         }))
     } else {
         warning.map(|s| bounded_message(&s))
@@ -3071,6 +3078,7 @@ mod tests {
         /// Text around the caret, for smart spacing, and how long reading it takes.
         around: Option<(&'static str, &'static str)>,
         around_delay: Duration,
+        outcome: Option<InjectionOutcome>,
     }
     struct ScriptedField {
         field: Arc<Mutex<Option<String>>>,
@@ -3121,7 +3129,7 @@ mod tests {
             if let Some(field) = self.field.lock().unwrap().as_mut() {
                 field.push_str(text);
             }
-            Ok(InjectionOutcome::Pasted)
+            Ok(self.outcome.unwrap_or(InjectionOutcome::Pasted))
         }
         async fn watch_field(&self, _: &AppContext) -> Option<Box<dyn xflow_core::FieldWatch>> {
             self.field.lock().unwrap().as_ref()?;
@@ -5046,7 +5054,7 @@ mod tests {
                 snapshot.provider.as_deref(),
                 snapshot.model.as_deref()
             ),
-            (Some(2), Some("fixture"), Some("mock-model"))
+            (Some(PROTOCOL_VERSION), Some("fixture"), Some("mock-model"))
         );
         let request = Request::Start {
             mode: Mode::Dictation,
@@ -6090,6 +6098,39 @@ mod tests {
         )
         .unwrap();
         assert!(message.contains("Cleanup failed") && message.contains(COPIED));
+    }
+
+    #[tokio::test]
+    async fn uncertain_delivery_is_explicit_and_keeps_last_without_learning() {
+        let desktop = Arc::new(RecordingDesktop {
+            outcome: Some(InjectionOutcome::Uncertain),
+            field: Arc::new(Mutex::new(Some(String::new()))),
+            ..Default::default()
+        });
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            Config::default(),
+            desktop.clone(),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        engine.config_path = Some(dir.path().join("config.toml"));
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        let event = success(&mut events).await;
+        assert_eq!(event.injection, Some(InjectionOutcome::Uncertain));
+        assert!(event
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("check it landed"));
+        assert_eq!(ask(&tx, Request::Last).await.text, event.text);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(desktop.watches.load(Ordering::SeqCst), 0);
+        let message = delivery_message(Some("Cleanup failed".into()), event.injection).unwrap();
+        assert!(message.contains("Cleanup failed") && message.contains("check it landed"));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
     }
 
     #[test]

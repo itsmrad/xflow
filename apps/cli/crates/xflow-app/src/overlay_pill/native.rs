@@ -280,6 +280,7 @@ pub(super) fn run(
                                 level: 0.0,
                                 hands_free: false,
                                 copied: false,
+                                uncertain: false,
                             },
                         };
                         let _ = events_tx.send(event);
@@ -397,8 +398,14 @@ pub(super) fn run(
                 } else {
                     state = event;
                     closing.get_or_insert((Instant::now(), event.state));
-                    if event.copied {
-                        msg!(panel, c"setAccessibilityLabel:", string(c"Copied — press ⌘V to paste") => Id; ());
+                    if event.copied || event.uncertain {
+                        let label = string(if event.uncertain {
+                            c"Pasted — check it landed"
+                        } else {
+                            c"Copied — press ⌘V to paste"
+                        });
+                        msg!(copied_label, c"setString:", label => Id; ());
+                        msg!(panel, c"setAccessibilityLabel:", label => Id; ());
                     }
                 }
             }
@@ -416,7 +423,7 @@ pub(super) fn run(
             } else {
                 1.0 - (-dt / 70.0).exp()
             };
-            width += ((if state.copied {
+            width += ((if state.copied || state.uncertain {
                 290.0
             } else if hands_free {
                 HANDS_FREE_W
@@ -435,7 +442,7 @@ pub(super) fn run(
             if let Some((at, final_state)) = closing {
                 let e = at.elapsed().as_secs_f64();
                 error = final_state == State::Error;
-                let fade_from = if state.copied {
+                let fade_from = if state.copied || state.uncertain {
                     3.0
                 } else if error {
                     0.45
@@ -472,13 +479,13 @@ pub(super) fn run(
             msg!(capsule, c"setOpacity:", (alpha * opacity) as f32 => f32; ());
             msg!(capsule, c"setBackgroundColor:", if error { alarm } else { dark } => Id; ());
             place(copied_label, w / 2.0, h / 2.0, w - 16.0 * s, 16.0 * s);
-            msg!(copied_label, c"setOpacity:", if state.copied { 1.0f32 } else { 0.0f32 } => f32; ());
+            msg!(copied_label, c"setOpacity:", if state.copied || state.uncertain { 1.0f32 } else { 0.0f32 } => f32; ());
             let pitch = (BAR_W + BAR_GAP) * s;
             let first_x = w / 2.0 - pitch * (BARS - 1) as f64 / 2.0;
             for (i, (&bar, (height, bar_alpha))) in bars.iter().zip(heights).enumerate() {
                 let bar_h = BAR_W * s + (BAR_MAX - BAR_W) * s * height;
                 place(bar, first_x + i as f64 * pitch, h / 2.0, BAR_W * s, bar_h);
-                msg!(bar, c"setOpacity:", if state.copied { 0.0f32 } else { bar_alpha as f32 } => f32; ());
+                msg!(bar, c"setOpacity:", if state.copied || state.uncertain { 0.0f32 } else { bar_alpha as f32 } => f32; ());
             }
             let inset = (PILL_H - BUTTON) / 2.0 * s + BUTTON * s / 2.0;
             place(cancel, inset, h / 2.0, BUTTON * s, BUTTON * s);

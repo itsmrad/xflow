@@ -44,7 +44,7 @@ def run(online, columns, rows):
         entry = dict(id=42, created_at=1790859600, text="Mock transcript with timing", provider="mock", duration_ms=2000, latency_ms=27, mode="dictation")
 
         def reply(client, **extra):
-            data = dict(ok=True, state=state[0], level=0.0, version="mock", protocol=2)
+            data = dict(ok=True, state=state[0], level=0.0, version="mock", protocol=3)
             data.update(extra)
             client.sendall(json.dumps(data).encode() + b"\n")
 

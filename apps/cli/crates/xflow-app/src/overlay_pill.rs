@@ -24,6 +24,8 @@ struct PillEvent {
     hands_free: bool,
     #[serde(default)]
     copied: bool,
+    #[serde(default)]
+    uncertain: bool,
 }
 
 impl PillEvent {
@@ -39,6 +41,10 @@ impl PillEvent {
             } else {
                 0.0
             },
+            uncertain: event
+                .message
+                .as_deref()
+                .is_some_and(|m| m.starts_with(crate::daemon::UNCERTAIN)),
             copied: event
                 .message
                 .as_deref()
@@ -66,7 +72,7 @@ pub async fn run(mut events: broadcast::Receiver<DesktopEvent>, config: std::pat
             if let Some(child) = &mut helper {
                 let _ = send(child, event).await;
             }
-            close(&mut helper, event.copied).await;
+            close(&mut helper, event.copied || event.uncertain).await;
             session_active = false;
             continue;
         }
@@ -186,6 +192,7 @@ pub fn preview() -> Result<()> {
             level,
             hands_free,
             copied: false,
+            uncertain: false,
         };
         writeln!(stdin, "{}", serde_json::to_string(&event)?)?;
         std::thread::sleep(Duration::from_millis(40));
@@ -212,6 +219,7 @@ mod tests {
             level: 0.5,
             hands_free: false,
             copied: false,
+            uncertain: false,
         };
         let mut stalled = false;
         for _ in 0..4096 {
@@ -263,5 +271,13 @@ mod tests {
             mode: Default::default(),
         });
         assert!(copied.copied && !copied.active());
+        let uncertain = PillEvent::from_desktop(DesktopEvent {
+            state: State::Success,
+            level: 0.0,
+            message: Some(crate::daemon::UNCERTAIN.into()),
+            mode: Default::default(),
+        });
+        assert!(uncertain.uncertain && !uncertain.copied && !uncertain.active());
+        assert!(serde_json::to_vec(&uncertain).unwrap().len() < MAX_EVENT_BYTES);
     }
 }

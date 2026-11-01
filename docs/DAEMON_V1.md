@@ -7,7 +7,7 @@ were performed by Codex. The orchestrator owns integration and release approval.
 
 ## IPC and history
 
-The socket implements protocol v2 history paging/search/get/delete/copy/paste,
+The socket implements protocol v3 history paging/search/get/delete/copy/paste,
 stats, reload, existing session commands, and subscriptions. A successful session
 publishes one final event containing text, delivery outcome, optional saved entry,
 and timings. Inactive status retains the last successful timings; an active

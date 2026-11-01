@@ -49,6 +49,7 @@ extern "C" {
     fn CFDataGetBytePtr(data: Ref) -> *const u8;
     fn CFDataGetLength(data: Ref) -> isize;
     static kCFBooleanTrue: Ref;
+    static kCFBooleanFalse: Ref;
     fn CFDictionaryGetValue(dict: Ref, key: Ref) -> Ref;
     fn CFDictionaryCreate(
         allocator: Ref,
@@ -139,9 +140,19 @@ impl Owned {
         let mut settable = false;
         unsafe { AXUIElementIsAttributeSettable(self.0, name.0, &mut settable) == 0 && settable }
     }
-    fn enable(&self, name: &str) {
+    fn set_flag(&self, name: &str, value: bool) -> bool {
         let name = Self::string(name);
-        unsafe { AXUIElementSetAttributeValue(self.0, name.0, kCFBooleanTrue) };
+        unsafe {
+            AXUIElementSetAttributeValue(
+                self.0,
+                name.0,
+                if value {
+                    kCFBooleanTrue
+                } else {
+                    kCFBooleanFalse
+                },
+            ) == 0
+        }
     }
     fn flag(&self, name: &str) -> Option<bool> {
         let value = self.attribute(name)?;
@@ -342,6 +353,98 @@ struct Focus {
     editable: Option<bool>,
     secure: bool,
     element: Option<Owned>,
+    _accessibility: Option<AccessibilityGuard<Owned>>,
+}
+
+trait AccessibilityFlag {
+    fn read(&self) -> Option<bool>;
+    fn write(&self, value: bool) -> bool;
+}
+impl AccessibilityFlag for Owned {
+    fn read(&self) -> Option<bool> {
+        self.flag("AXManualAccessibility")
+    }
+    fn write(&self, value: bool) -> bool {
+        self.set_flag("AXManualAccessibility", value)
+    }
+}
+/// Keep Chromium's AX tree alive until the focus/receipt query finishes.
+struct AccessibilityGuard<A: AccessibilityFlag> {
+    app: A,
+    previous: bool,
+}
+impl<A: AccessibilityFlag> AccessibilityGuard<A> {
+    fn enable(app: A) -> Option<Self> {
+        // Never change an attribute whose original value cannot be restored.
+        let previous = app.read()?;
+        if previous {
+            return None;
+        }
+        let guard = Self { app, previous };
+        // Retain the guard even on failure: the app may have applied the write.
+        guard.app.write(true);
+        Some(guard)
+    }
+}
+// SAFETY: AX element references are thread-safe CF objects; the guard only makes AX IPC calls.
+unsafe impl Send for AccessibilityGuard<Owned> {}
+impl<A: AccessibilityFlag> Drop for AccessibilityGuard<A> {
+    fn drop(&mut self) {
+        self.app.write(self.previous);
+        if self.app.read() != Some(self.previous) {
+            eprintln!("xflowd [warn]: could not verify AXManualAccessibility restoration");
+        }
+    }
+}
+fn is_chromium(app: Option<&str>) -> bool {
+    matches!(
+        app,
+        Some(
+            "com.google.Chrome"
+                | "com.google.Chrome.beta"
+                | "com.google.Chrome.dev"
+                | "com.google.Chrome.canary"
+                | "org.chromium.Chromium"
+                | "com.microsoft.VSCode"
+                | "com.microsoft.VSCodeInsiders"
+                | "com.todesktop.230313mzl4w4u92"
+                | "com.tinyspeck.slackmacgap"
+                | "com.hnc.Discord"
+                | "notion.id"
+                | "company.thebrowser.Browser"
+                | "com.linear"
+        )
+    )
+}
+/// Unlisted Electron/Chromium apps (Edge, Brave, Obsidian, Teams, Postman…) by their bundle.
+fn chromium_bundle(bundle: &str) -> bool {
+    static LAST: std::sync::Mutex<Option<(String, bool)>> = std::sync::Mutex::new(None);
+    let path = std::path::Path::new(bundle);
+    let home = std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("Applications"));
+    // shortcut: only /Applications and ~/Applications are read; elsewhere (e.g. Downloads) a read
+    // can raise a folder-access prompt. Add a fast-path ID for apps commonly run from there.
+    if !(path.starts_with("/Applications") || home.is_some_and(|h| path.starts_with(h))) {
+        return false;
+    }
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, chromium)) = last.as_ref().filter(|(cached, _)| cached == bundle) {
+        return *chromium;
+    }
+    let chromium = has_chromium_framework(path);
+    *last = Some((bundle.to_owned(), chromium));
+    chromium
+}
+/// Electron Framework and every Chromium browser framework ship Chromium's resource pak.
+fn has_chromium_framework(bundle: &std::path::Path) -> bool {
+    bundle
+        .join("Contents/Frameworks")
+        .read_dir()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|f| f.path().join("Resources/chrome_100_percent.pak").is_file())
 }
 fn focus() -> Focus {
     focus_waiting(true)
@@ -377,7 +480,10 @@ fn focus_waiting(wait: bool) -> Focus {
             }
         }
     }
+    let mut bundle = None;
     if let Some(info) = Owned::new(unsafe { ProcessInformationCopyDictionary(&psn, u32::MAX) }) {
+        let key = Owned::string("BundlePath");
+        bundle = cf_text(unsafe { CFDictionaryGetValue(info.0, key.0) });
         for key in ["CFBundleIdentifier", "CFBundleName"] {
             let key = Owned::string(key);
             if let Some(app) = cf_text(unsafe { CFDictionaryGetValue(info.0, key.0) }) {
@@ -395,13 +501,20 @@ fn focus_waiting(wait: bool) -> Focus {
     let Some(app) = Owned::new(unsafe { AXUIElementCreateApplication(pid) }) else {
         return focus;
     };
+    let chromium = is_chromium(focus.context.app_id.as_deref())
+        || bundle.as_deref().is_some_and(chromium_bundle);
+    if chromium {
+        // Chromium activates native accessibility when an assistive client reads its app role.
+        let _ = app.text("AXRole");
+    }
     let role_of = |e: &Option<Owned>| e.as_ref().and_then(|e| e.text("AXRole"));
     let mut element = app.attribute("AXFocusedUIElement");
     let mut role = role_of(&element);
     // Electron and Chromium build their AX tree only once an assistive client asks;
-    // Chrome builds it asynchronously even while reporting the attribute unsupported.
-    if wait && role.as_deref().is_none_or(is_container) {
-        app.enable("AXManualAccessibility");
+    // Poll asynchronous tree creation without Chrome's window-affecting AXEnhancedUserInterface.
+    if wait && role.as_deref().is_none_or(is_container) && chromium {
+        let enabling_app = Owned::new(unsafe { AXUIElementCreateApplication(pid) });
+        focus._accessibility = enabling_app.and_then(AccessibilityGuard::enable);
         for _ in 0..6 {
             std::thread::sleep(Duration::from_millis(50));
             element = app.attribute("AXFocusedUIElement");
@@ -415,10 +528,9 @@ fn focus_waiting(wait: bool) -> Focus {
         .as_ref()
         .and_then(|e| e.attribute("AXWindow"))
         .or_else(|| app.attribute("AXFocusedWindow"));
-    focus.context.window_id = Some(format!(
-        "{pid}:{}",
-        window.as_ref().map_or(0, |w| unsafe { CFHash(w.0) })
-    ));
+    focus.context.window_id = window
+        .as_ref()
+        .map(|w| format!("{pid}:{}", unsafe { CFHash(w.0) }));
     let Some(element) = element else {
         return focus;
     };
@@ -485,8 +597,6 @@ fn is_terminal(app: Option<&str>) -> bool {
 enum Decision {
     /// An editable field: paste, then restore the user's clipboard.
     Paste,
-    /// Editability unknown (canvas apps, games): paste and keep the text copied.
-    PasteAndCopy,
     Type,
     Copy,
     Refuse,
@@ -498,14 +608,13 @@ fn decision(text: &str, method: InjectionMethod, target: &AppContext, current: &
     if current.secure {
         return Decision::Refuse;
     }
-    // Unknown editability pastes blind, like Wispr Flow; a changed window or a
-    // known non-editable element copies instead.
+    // Unknown focus cannot rule out a secure field; leave the transcript copied.
     if target.app_id.as_deref().is_none_or(str::is_empty)
         || current.context.app_id.as_deref() == Some("com.apple.loginwindow")
         || target.window_id.is_none()
         || target.app_id != current.context.app_id
         || target.window_id != current.context.window_id
-        || current.editable == Some(false)
+        || current.editable != Some(true)
         // Terminal control characters can submit commands; leave them on the clipboard.
         || (is_terminal(current.context.app_id.as_deref()) && text.chars().any(char::is_control))
     {
@@ -513,8 +622,6 @@ fn decision(text: &str, method: InjectionMethod, target: &AppContext, current: &
     }
     if method == InjectionMethod::Type {
         Decision::Type
-    } else if current.editable.is_none() {
-        Decision::PasteAndCopy
     } else {
         Decision::Paste
     }
@@ -560,6 +667,17 @@ fn receipt_budget(restore_delay_ms: u32, started: Instant) -> Duration {
     Duration::from_millis(u64::from(restore_delay_ms) + 2000)
         .min(Duration::from_secs(4))
         .min((started + Duration::from_secs(8)).saturating_duration_since(Instant::now()))
+}
+/// A field exposing nothing can show no receipt: reply Uncertain at once. An empty value may be
+/// a fresh field or one that never updates (VS Code), so it gets only restore_delay_ms. The
+/// delivery lock is still held to PENDING_PASTE either way.
+fn reply_budget(before: Option<&Snapshot>, restore_delay_ms: u32, started: Instant) -> Duration {
+    let budget = receipt_budget(restore_delay_ms, started);
+    match before.and_then(content_len) {
+        None => Duration::ZERO,
+        Some(0) => budget.min(Duration::from_millis(restore_delay_ms.into())),
+        Some(_) => budget,
+    }
 }
 /// Shared by every MacDesktop: a config reload must not drop a pending paste's lock.
 static DELIVERY: std::sync::LazyLock<std::sync::Arc<tokio::sync::Mutex<()>>> =
@@ -755,8 +873,15 @@ impl Desktop for MacDesktop {
         let method = self.config.effective_method();
         let target_owned = target.clone();
         let text_owned = text.to_owned();
-        let action = tokio::task::spawn_blocking(move || {
-            decision(&text_owned, method, &target_owned, &focus())
+        // One ManualAccessibility guard spans the pre-check, keys and receipt. Refuse/Copy
+        // restore the flag here, off the async runtime.
+        // shortcut: a clipboard error (`?`) or cancellation before the worker restores it on the
+        // async thread (two AX calls, each capped by the 0.2 s messaging timeout); fine while rare.
+        let (action, accessibility) = tokio::task::spawn_blocking(move || {
+            let mut focus = focus();
+            let action = decision(&text_owned, method, &target_owned, &focus);
+            let keys = matches!(action, Decision::Paste | Decision::Type);
+            (action, focus._accessibility.take().filter(|_| keys))
         })
         .await?;
         match action {
@@ -778,20 +903,28 @@ impl Desktop for MacDesktop {
             // Cmd+V only while the pasteboard holds the transcript, never another writer's text.
             if !clipboard()?.owned() {
                 self.write(text)?;
+                // Restore off the runtime, still under the delivery lock.
+                let _ = tokio::task::spawn_blocking(move || drop(accessibility)).await;
                 return Ok(InjectionOutcome::ClipboardOnly);
             }
         }
         let target = target.clone();
         let text_owned = text.to_owned();
-        let restore = previous.is_some();
         let restore_delay_ms = self.config.restore_delay_ms;
         let (reply, outcome) = tokio::sync::oneshot::channel();
         // Re-check focus just before the keys; the lock then stays with the pending paste.
         tokio::task::spawn_blocking(move || {
             let _delivery = delivery;
+            // Dropped before the lock, so the next paste sees the original flag.
+            let _accessibility = accessibility;
             let current = focus();
             let action = decision(&text_owned, method, &target, &current);
-            if matches!(action, Decision::Refuse | Decision::Copy) {
+            if action == Decision::Refuse {
+                return drop(reply.send(Err(anyhow::anyhow!(
+                    "refusing delivery into a secure field"
+                ))));
+            }
+            if action == Decision::Copy {
                 let copied = clipboard().and_then(|c| c.write(&text_owned));
                 return drop(reply.send(copied.map(|()| (Decision::Copy, false))));
             }
@@ -806,47 +939,36 @@ impl Desktop for MacDesktop {
             if action == Decision::Type {
                 return drop(reply.send(Ok((action, false))));
             }
-            // A known-editable field showing no content may never show the paste
-            // (VS Code exposes an empty AXValue): report pasted at once, restore on
-            // receipt or at the PENDING_PASTE bound.
-            let opaque = field
-                .as_ref()
-                .is_none_or(|(_, before)| content_len(before).unwrap_or(0) == 0);
             let restore_previous = || {
                 if let (Some(previous), Ok(clipboard)) = (&previous, clipboard()) {
                     clipboard.restore(previous);
                 }
             };
-            let mut restored = false;
             await_paste(
                 || {
                     field
                         .as_ref()
                         .is_some_and(|(f, before)| inserted(before, &snapshot(f), &text_owned))
                 },
-                if opaque || !restore {
-                    Duration::ZERO
-                } else {
-                    receipt_budget(restore_delay_ms, started)
-                },
+                reply_budget(field.as_ref().map(|(_, b)| b), restore_delay_ms, started),
                 |confirmed| {
                     if confirmed {
                         restore_previous();
-                        restored = true;
                     }
-                    let _ = reply.send(Ok((action, confirmed || opaque)));
+                    let _ = reply.send(Ok((action, confirmed)));
                 },
             );
-            if opaque && !restored {
-                restore_previous();
-            }
         });
         let (action, confirmed) = outcome.await.context("delivery task stopped")??;
-        Ok(match action {
-            Decision::Type => InjectionOutcome::Typed,
-            Decision::Paste if confirmed || !restore => InjectionOutcome::Pasted,
-            _ => InjectionOutcome::ClipboardOnly,
-        })
+        Ok(injection_outcome(action, confirmed))
+    }
+}
+fn injection_outcome(action: Decision, confirmed: bool) -> InjectionOutcome {
+    match action {
+        Decision::Type => InjectionOutcome::Typed,
+        Decision::Paste if confirmed => InjectionOutcome::Pasted,
+        Decision::Paste => InjectionOutcome::Uncertain,
+        _ => InjectionOutcome::ClipboardOnly,
     }
 }
 
@@ -996,6 +1118,80 @@ pub fn microphone_permission(request: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    #[ignore = "pastes 20 markers into an explicitly named scratch Chrome/VS Code window"]
+    async fn native_chromium_paste_matrix() {
+        assert!(
+            unsafe { AXIsProcessTrusted() && CGPreflightPostEventAccess() },
+            "test executable lacks an existing Accessibility grant; do not request one"
+        );
+        let expected = std::env::var("XFLOW_PASTE_APP").unwrap();
+        assert!(matches!(
+            expected.as_str(),
+            "com.google.Chrome" | "com.microsoft.VSCode"
+        ));
+        let title = "XFlow delivery scratch 25";
+        let mut psn = ProcessSerialNumber::default();
+        let mut pid = 0;
+        assert_eq!(unsafe { GetFrontProcess(&mut psn) }, 0);
+        assert_eq!(unsafe { GetProcessPID(&psn, &mut pid) }, 0);
+        let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) }).unwrap();
+        let info = Owned::new(unsafe { ProcessInformationCopyDictionary(&psn, u32::MAX) }).unwrap();
+        let key = Owned::string("BundlePath");
+        let bundle = cf_text(unsafe { CFDictionaryGetValue(info.0, key.0) }).unwrap();
+        assert!(
+            chromium_bundle(&bundle),
+            "generic detection missed {bundle}"
+        );
+        let trials = std::env::var("XFLOW_PASTE_TRIALS").map_or(20, |n| n.parse().unwrap());
+        let original = [
+            app.flag("AXManualAccessibility"),
+            app.flag("AXEnhancedUserInterface"),
+        ];
+        let desktop = MacDesktop::new(&InjectionConfig::default());
+        let target = desktop.context().await.unwrap();
+        assert_eq!(target.app_id.as_deref(), Some(expected.as_str()));
+        let previous = read_previous(CLIPBOARD.into()).await;
+        let mut confirmed = 0;
+        let mut uncertain = 0;
+        let mut copied = 0;
+        for trial in 0..trials {
+            let current = focus();
+            assert_eq!(current.context, target, "focus changed; stop the matrix");
+            assert!(
+                app.attribute("AXFocusedWindow")
+                    .and_then(|w| w.text("AXTitle"))
+                    .is_some_and(|t| t.contains(title)),
+                "only an explicitly titled scratch window is allowed"
+            );
+            assert!(!current.secure);
+            drop(current);
+            let marker = format!("xflow25-{trial:02} ");
+            let started = Instant::now();
+            let outcome = desktop.inject(&marker, &target).await.unwrap();
+            println!("trial {trial}: {outcome:?} after {:?}", started.elapsed());
+            match outcome {
+                InjectionOutcome::Pasted => confirmed += 1,
+                InjectionOutcome::Uncertain => uncertain += 1,
+                InjectionOutcome::ClipboardOnly => copied += 1,
+                other => panic!("unexpected outcome {other:?}"),
+            }
+            // Wait for a pending receipt worker to release its AX guard too.
+            let _delivery = desktop.delivery.lock().await;
+            assert_eq!(
+                [
+                    app.flag("AXManualAccessibility"),
+                    app.flag("AXEnhancedUserInterface")
+                ],
+                original,
+                "attribute restoration trial {trial}"
+            );
+        }
+        if let (Some(previous), Ok(clipboard)) = (previous, clipboard()) {
+            clipboard.restore(&previous);
+        }
+        println!("{expected}: confirmed={confirmed}/{trials} uncertain={uncertain}/{trials} copied={copied}/{trials}; AX flags original={original:?}, restored={trials}/{trials}");
+    }
     #[tokio::test]
     #[ignore = "types a marker into the frontmost TextEdit document; run explicitly on macOS"]
     async fn native_textedit_paste() {
@@ -1181,7 +1377,7 @@ mod tests {
         assert!(!is_secure(Some("AXTextField"), None, None));
     }
     #[test]
-    fn editability_selects_paste_copy_or_both() {
+    fn only_known_editability_selects_paste() {
         let target = AppContext {
             app_id: Some("app".into()),
             window_id: Some("1:2".into()),
@@ -1190,7 +1386,7 @@ mod tests {
         for (editable, expected) in [
             (Some(true), Decision::Paste),
             (Some(false), Decision::Copy),
-            (None, Decision::PasteAndCopy),
+            (None, Decision::Copy),
         ] {
             let current = Focus {
                 context: target.clone(),
@@ -1202,6 +1398,192 @@ mod tests {
                 expected
             );
         }
+    }
+    #[test]
+    fn manual_accessibility_restores_only_a_known_original_value() {
+        use std::{cell::RefCell, rc::Rc};
+        struct Flags {
+            value: Option<bool>,
+            writes: Vec<bool>,
+            writes_succeed: bool,
+        }
+        #[derive(Clone)]
+        struct App(Rc<RefCell<Flags>>);
+        impl AccessibilityFlag for App {
+            fn read(&self) -> Option<bool> {
+                self.0.borrow().value
+            }
+            fn write(&self, value: bool) -> bool {
+                let mut flags = self.0.borrow_mut();
+                flags.writes.push(value);
+                flags.value = Some(value);
+                flags.writes_succeed
+            }
+        }
+        for (original, writes_succeed) in [
+            (Some(false), true),
+            (Some(true), true),
+            (None, true),
+            (Some(false), false),
+        ] {
+            let app = App(Rc::new(RefCell::new(Flags {
+                value: original,
+                writes: vec![],
+                writes_succeed,
+            })));
+            let attempt = || -> Result<()> {
+                let _guard = AccessibilityGuard::enable(app.clone());
+                if original == Some(false) {
+                    assert_eq!(app.read(), Some(true));
+                }
+                bail!("delivery failed or was cancelled");
+            };
+            assert!(attempt().is_err());
+            assert_eq!(app.read(), original);
+            assert_eq!(
+                app.0.borrow().writes,
+                if original == Some(false) {
+                    vec![true, false]
+                } else {
+                    vec![]
+                }
+            );
+            let guard = AccessibilityGuard::enable(app.clone());
+            drop(guard);
+            assert_eq!(app.read(), original, "success also restores the original");
+            let mut cancelled = Box::pin(async {
+                let _guard = AccessibilityGuard::enable(app.clone());
+                std::future::pending::<()>().await;
+            });
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(std::future::Future::poll(cancelled.as_mut(), &mut context).is_pending());
+            drop(cancelled);
+            assert_eq!(
+                app.read(),
+                original,
+                "cancellation also restores the original"
+            );
+        }
+    }
+
+    #[test]
+    fn chromium_classification_does_not_enable_native_apps() {
+        for app in [
+            "com.google.Chrome",
+            "org.chromium.Chromium",
+            "com.microsoft.VSCode",
+            "com.todesktop.230313mzl4w4u92",
+            "com.tinyspeck.slackmacgap",
+            "com.hnc.Discord",
+            "notion.id",
+            "company.thebrowser.Browser",
+            "com.linear",
+        ] {
+            assert!(is_chromium(Some(app)), "{app}");
+        }
+        for app in [
+            None,
+            Some("com.apple.TextEdit"),
+            Some("com.apple.finder"),
+            Some("com.google.Chrome.fake"),
+        ] {
+            assert!(!is_chromium(app));
+        }
+        assert!(is_container("AXWebArea"));
+        assert!(is_container("AXGroup"));
+        assert!(!is_container("AXTextArea"));
+        assert!(!is_container("AXSecureTextField"));
+    }
+    #[test]
+    fn generic_chromium_classification_reads_bundle_frameworks() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = |name: &str, framework: &str, pak: Option<&str>| {
+            let framework = dir
+                .path()
+                .join(name)
+                .join("Contents/Frameworks")
+                .join(framework);
+            let resources = framework.join("Versions/A/Resources");
+            std::fs::create_dir_all(&resources).unwrap();
+            // Real frameworks link Resources to Versions/Current/Resources.
+            std::os::unix::fs::symlink("Versions/A/Resources", framework.join("Resources"))
+                .unwrap();
+            if let Some(pak) = pak {
+                std::fs::write(resources.join(pak), b"").unwrap();
+            }
+            dir.path().join(name)
+        };
+        let pak = Some("chrome_100_percent.pak");
+        let edge = app("Edge.app", "Microsoft Edge Framework.framework", pak);
+        assert!(has_chromium_framework(&edge));
+        assert!(has_chromium_framework(&app(
+            "Obsidian.app",
+            "Electron Framework.framework",
+            pak
+        )));
+        let native = app("Native.app", "Sparkle.framework", Some("Sparkle.nib"));
+        assert!(!has_chromium_framework(&native));
+        assert!(!has_chromium_framework(&dir.path().join("Missing.app")));
+        // Bundles outside the Applications folders are never read.
+        assert!(!chromium_bundle(edge.to_str().unwrap()));
+        assert!(!chromium_bundle("/Users/someone/Downloads/Edge.app"));
+    }
+    #[test]
+    fn opaque_field_replies_uncertain_at_once_but_keeps_the_paste_lock() {
+        let start = Instant::now();
+        let empty: Snapshot = (Some(0), Some(String::new()), 0);
+        let text: Snapshot = (Some(5), Some("hello".into()), 0);
+        assert_eq!(reply_budget(None, 300, start), Duration::ZERO);
+        assert_eq!(
+            reply_budget(Some(&empty), 300, start),
+            Duration::from_millis(300)
+        );
+        assert_eq!(
+            reply_budget(Some(&text), 300, start),
+            Duration::from_millis(2300)
+        );
+        // Count receipt polls instead of timing them, so a slow runner cannot race the test.
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let polls = std::sync::Arc::new(AtomicUsize::new(0));
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let guard = lock.clone().try_lock_owned().unwrap();
+        let (reply, replied) = std::sync::mpsc::channel();
+        let (land, landed) = std::sync::mpsc::channel();
+        let counted = polls.clone();
+        let worker = std::thread::spawn(move || {
+            let _guard = guard;
+            await_paste(
+                || counted.fetch_add(1, SeqCst) > 0 && landed.try_recv().is_ok(),
+                reply_budget(None, 300, start),
+                |confirmed| reply.send((confirmed, counted.load(SeqCst))).unwrap(),
+            );
+        });
+        let (confirmed, polls_at_reply) = replied.recv().unwrap();
+        assert_eq!(polls_at_reply, 1, "replied after one look, without waiting");
+        assert_eq!(
+            injection_outcome(Decision::Paste, confirmed),
+            InjectionOutcome::Uncertain
+        );
+        // The worker keeps the lock and keeps watching until a late receipt lands.
+        let _ = land.send(());
+        worker.join().unwrap();
+        assert!(polls.load(SeqCst) > 1);
+        drop(lock.blocking_lock());
+    }
+    #[test]
+    fn opaque_paste_is_uncertain_and_unknown_focus_is_copy_only() {
+        assert_eq!(
+            injection_outcome(Decision::Paste, false),
+            InjectionOutcome::Uncertain
+        );
+        assert_eq!(
+            injection_outcome(Decision::Paste, true),
+            InjectionOutcome::Pasted
+        );
+        assert_eq!(
+            injection_outcome(Decision::Copy, false),
+            InjectionOutcome::ClipboardOnly
+        );
     }
     #[test]
     fn receipt_accepts_insertion_and_selection_replacement() {
@@ -1271,18 +1653,21 @@ mod tests {
         let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
         let guard = lock.clone().try_lock_owned().unwrap();
         let start = Instant::now();
+        let budget = receipt_budget(config.injection.restore_delay_ms, start);
+        // Leaves the 10 s IPC timeout room for focus checks and clipboard commands.
+        assert!(budget <= Duration::from_secs(4), "{budget:?}");
         let (reply, replied) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _guard = guard;
             await_paste(
                 || false,
-                receipt_budget(config.injection.restore_delay_ms, start),
+                budget,
                 |confirmed| reply.send((confirmed, start.elapsed())).unwrap(),
             );
         });
+        // Lower bounds only: a loaded CI runner may oversleep, never undersleep.
         let (confirmed, at) = replied.recv().unwrap();
-        // Leaves the 10 s IPC timeout room for focus checks and clipboard commands.
-        assert!(!confirmed && at <= Duration::from_millis(4100), "{at:?}");
+        assert!(!confirmed && at >= budget, "{at:?}");
         drop(lock.blocking_lock());
         assert!(start.elapsed() >= PENDING_PASTE);
     }
@@ -1323,9 +1708,11 @@ mod tests {
         current.secure = false;
         current.editable = Some(false);
         assert_eq!(decision("hello", P, &target, &current), Copy);
-        // Electron/web content without an AX tree: paste blind into the same window.
+        // An absent AX tree cannot establish that the field is safe to paste into.
         current.editable = None;
-        assert_eq!(decision("hello", P, &target, &current), PasteAndCopy);
+        assert_eq!(decision("hello", P, &target, &current), Copy);
+        assert_eq!(decision("hello", T, &target, &current), Copy);
+        current.editable = Some(true);
         current.context.window_id = Some("1:3".into());
         assert_eq!(decision("hello", P, &target, &current), Copy);
         current.context.app_id = Some("com.googlecode.iterm2".into());
@@ -1333,7 +1720,7 @@ mod tests {
         for text in ["echo hi\n", "echo hi\r", "\u{1b}"] {
             assert_eq!(decision(text, P, &terminal, &current), Copy);
         }
-        assert_eq!(decision("echo hi", P, &terminal, &current), PasteAndCopy);
+        assert_eq!(decision("echo hi", P, &terminal, &current), Paste);
         assert_eq!(decision("hello", P, &AppContext::default(), &current), Copy);
     }
 }
