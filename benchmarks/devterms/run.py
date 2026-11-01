@@ -202,15 +202,16 @@ def self_test():
 
 
 def main():
+    total = len(rows())
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--generate-only', action='store_true')
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--summary', action='store_true')
-    parser.add_argument('--limit', type=int, default=150, help='smoke-test phrase count (default: all 150)')
+    parser.add_argument('--limit', type=int, default=total, help=f'smoke-test phrase count (default: all {total})')
     parser.add_argument('--workers', type=int, default=2)
     args = parser.parse_args()
-    if not 1 <= args.limit <= 150 or not 1 <= args.workers <= 4:
-        parser.error('--limit must be 1..150 and --workers must be 1..4')
+    if not 1 <= args.limit <= total or not 1 <= args.workers <= 4:
+        parser.error(f'--limit must be 1..{total} and --workers must be 1..4')
     result_dir = ROOT / 'results'
     result_dir.mkdir(exist_ok=True)
     result_file = result_dir / 'transcripts.jsonl'

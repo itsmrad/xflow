@@ -251,7 +251,7 @@ impl InjectionConfig {
 pub struct FormattingConfig {
     /// Format explicit casing commands and recognized spoken filenames locally.
     pub spoken_code: bool,
-    /// Restore dictionary spellings locally, with common-word guards.
+    /// Restore user spellings and context-gated developer terms locally.
     pub snap_to_dictionary: bool,
     /// Drop standalone filler words locally, before any cleanup model.
     pub remove_fillers: bool,

@@ -73,7 +73,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | Key | Default | Description |
 | --- | --- | --- |
 | `formatting.spoken_code` | `true` | "camel case user id" -\> userId; "main dot rs" -\> main.rs |
-| `formatting.snap_to_dictionary` | `true` | Snapping runs before dictionary.replacements, so a replacement's `from` must match the snapped spelling ("xflow", not "x flow", when xflow is saved). restore dictionary/vocabulary spellings locally; false disables snapping |
+| `formatting.snap_to_dictionary` | `true` | Snapping runs before dictionary.replacements, so a replacement's `from` must match the snapped spelling ("xflow", not "x flow", when xflow is saved). restore user spellings and context-gated dev terms; false disables both |
 | `formatting.remove_fillers` | `true` |  |
 | `formatting.fillers` | `["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]` |  |
 | `formatting.spoken_punctuation` | `false` | "comma", "period", "new line", ... become punctuation |
@@ -199,7 +199,7 @@ trailing_space = true
 spoken_code = true           # "camel case user id" -> userId; "main dot rs" -> main.rs
 # Snapping runs before dictionary.replacements, so a replacement's `from` must
 # match the snapped spelling ("xflow", not "x flow", when xflow is saved).
-snap_to_dictionary = true    # restore dictionary/vocabulary spellings locally; false disables snapping
+snap_to_dictionary = true    # restore user spellings and context-gated dev terms; false disables both
 remove_fillers = true
 fillers = ["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]
 spoken_punctuation = false   # "comma", "period", "new line", ... become punctuation

@@ -1,8 +1,9 @@
 # Dev-term STT benchmark (#63)
 
 Manual and opt-in: sends synthetic speech to Groq and spends API credit.
-150 phrases contain 568 distinct libraries, CLIs, products and camelCase identifiers.
-Two installed macOS voices, Samantha (US) and Daniel (UK), produce 300 clips.
+The original 150 phrases cover 568 libraries, CLIs, products and camelCase identifiers.
+An appended group of 15 Claude/cloud phrases covers homophones and real cloud usage.
+Two installed macOS voices, Samantha (US) and Daniel (UK), produce 330 clips.
 No speakers, microphone, daemon, desktop delivery or Keychain access is used.
 
 Build the CLI from `apps/cli` using the project's resource gate and cargo-locked
@@ -12,7 +13,7 @@ wrapper. Then, from the repository root:
 benchmarks/devterms/run.sh --self-test
 benchmarks/devterms/run.sh --generate-only  # say + afconvert; no API calls
 # Export GROQ_API_KEY privately before running this command.
-benchmarks/devterms/run.sh                 # 1,824 paid requests, two workers
+benchmarks/devterms/run.sh                 # 2,004 paid requests, two workers
 benchmarks/devterms/run.sh --summary
 ```
 
@@ -85,3 +86,24 @@ Samantha WAV per row to Groq turbo and scores the pipeline output:
 python3 benchmarks/devterms/spoken_code.py            # 240 paid requests
 python3 benchmarks/devterms/spoken_code.py --summary  # rescore, no network
 ```
+
+## Context-gated terms
+
+The appended Claude/cloud group measures provider prompt recall, including real
+cloud usage that must survive. `xflow transcribe` returns raw STT; the local cue
+corrector runs in the daemon's pre-cleanup pipeline. Offline regression and
+latency checks need no credentials or paid requests:
+
+```sh
+cargo test --manifest-path apps/cli/Cargo.toml --locked -p xflow-core cues
+cargo test --manifest-path apps/cli/Cargo.toml --locked --release -p xflow-core cues::tests::pipeline_latency -- --nocapture
+```
+
+The shipped `cues.txt` contains exact heard forms and adjacent left/right cues;
+either side may enable a correction, while either blocker prevents it. Matching
+stops at punctuation, line breaks, paths and identifiers. The same
+`formatting.snap_to_dictionary` switch disables the shipped corrector. User
+spellings, blocked terms and explicit replacements outrank the shipped cues.
+No app lookup, fuzzy index, new provider call, download or additional model is
+involved. Shipped prompt hints are deferred: the current Whisper fallback retains
+a second copy of encoded audio whenever hints are present.

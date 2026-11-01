@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod code;
 pub mod config;
+mod cues;
 pub mod ipc;
 pub mod learn;
 pub mod lists;
