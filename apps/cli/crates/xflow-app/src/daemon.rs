@@ -1016,9 +1016,9 @@ impl Engine {
                     bail!("selected text exceeds safety limit");
                 }
                 let terminal = xflow_platform::terminal_context(&target);
-                let local = xflow_core::text::before_cleanup(&raw, &config, terminal);
-                // "scratch that" took everything back (#75): nothing is cleaned or pasted.
-                let discarded = local.is_empty() && xflow_core::backtrack::cancelled(&raw);
+                let (local, backtrack) = xflow_core::text::prepare(&raw, &config, terminal);
+                // The dictation ended with "scratch that" (#75): nothing is cleaned or pasted.
+                let discarded = backtrack == xflow_core::backtrack::Outcome::Discarded;
                 let style = xflow_core::text::style(&config, target.app_id.as_deref());
                 let mode = style.and_then(|s| s.mode).unwrap_or(config.cleanup.mode);
                 let instructions = style
@@ -1400,7 +1400,7 @@ impl Engine {
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
                         if self.keeping().is_some() { self.load_kept(); }
-                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some("Discarded".into())); }, Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
+                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some(DISCARDED.into())); }, Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
                     // Late, from a canceled session: nothing it kept may stay.
                     Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
@@ -2037,6 +2037,8 @@ async fn edit_history(
     fit_final(&mut r);
     Ok(r)
 }
+/// The dictation ended with "scratch that" (#75); the pill shows it too.
+pub(crate) const DISCARDED: &str = "Discarded";
 #[cfg(target_os = "macos")]
 pub(crate) const COPIED: &str = "Copied — press ⌘V to paste";
 #[cfg(not(target_os = "macos"))]
@@ -5479,52 +5481,59 @@ mod tests {
     }
     #[tokio::test]
     async fn scratch_that_alone_discards_without_cleanup_or_paste() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
-        let desktop = Arc::new(RecordingDesktop::default());
-        let (mut engine, tx, rx, mut events, _) =
-            fixture(Config::default(), desktop.clone(), store.clone());
-        engine.config.cleanup.mode = CleanupMode::Polished;
-        engine.services.stt = Arc::new(ImmediateStt {
-            calls: Arc::default(),
-            text: "Um, scratch that.",
-        });
-        let transformer = Arc::new(Reply(
-            "resurrected",
-            AtomicUsize::new(0),
-            AtomicUsize::new(0),
-        ));
-        engine.services.transformer = Some(transformer.clone());
-        let task = tokio::spawn(engine.run(rx));
-        ask(&tx, Request::start()).await;
-        ask(&tx, Request::Stop).await;
-        let idle = tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                let r = events.recv().await.unwrap();
-                assert!(
-                    !matches!(r.state, State::Success | State::Error),
-                    "{:?}",
-                    r.message
-                );
-                if r.state == State::Idle && r.message.is_some() {
-                    return r;
+        // The parser's outcome decides, not the raw words (#107 review).
+        for said in [
+            "Um, scratch that.",
+            "Bring notes. Scratch, that.",
+            "Scratch\nthat.",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+            let desktop = Arc::new(RecordingDesktop::default());
+            let (mut engine, tx, rx, mut events, _) =
+                fixture(Config::default(), desktop.clone(), store.clone());
+            engine.config.cleanup.mode = CleanupMode::Polished;
+            engine.services.stt = Arc::new(ImmediateStt {
+                calls: Arc::default(),
+                text: said,
+            });
+            let transformer = Arc::new(Reply(
+                "resurrected",
+                AtomicUsize::new(0),
+                AtomicUsize::new(0),
+            ));
+            engine.services.transformer = Some(transformer.clone());
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+            let idle = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let r = events.recv().await.unwrap();
+                    assert!(
+                        !matches!(r.state, State::Success | State::Error),
+                        "{said}: {:?}",
+                        r.message
+                    );
+                    if r.state == State::Idle && r.message.is_some() {
+                        return r;
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(idle.message.as_deref(), Some("Discarded"));
-        // Cleanup can't resurrect it, nothing is pasted, and history says why.
-        assert_eq!(transformer.1.load(Ordering::SeqCst), 0);
-        assert!(desktop.injections.lock().unwrap().is_empty());
-        assert!(desktop.copies.lock().unwrap().is_empty());
-        let (rows, _) = store.history(10, 0, None).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].text, "");
-        assert_eq!(rows[0].raw_text.as_deref(), Some("Um, scratch that."));
-        assert_eq!(rows[0].cleanup, Some(CleanupOutcome::Discarded));
-        ask(&tx, Request::Shutdown).await;
-        task.await.unwrap();
+            })
+            .await
+            .unwrap();
+            assert_eq!(idle.message.as_deref(), Some(DISCARDED), "{said}");
+            // Cleanup can't resurrect it, nothing is pasted, and history says why.
+            assert_eq!(transformer.1.load(Ordering::SeqCst), 0, "{said}");
+            assert!(desktop.injections.lock().unwrap().is_empty(), "{said}");
+            assert!(desktop.copies.lock().unwrap().is_empty(), "{said}");
+            let (rows, _) = store.history(10, 0, None).await.unwrap();
+            assert_eq!(rows.len(), 1, "{said}");
+            assert_eq!(rows[0].text, "");
+            assert_eq!(rows[0].raw_text.as_deref(), Some(said));
+            assert_eq!(rows[0].cleanup, Some(CleanupOutcome::Discarded));
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
     }
     #[tokio::test]
     async fn terminals_keep_their_text_unless_a_style_asks_for_cleanup() {

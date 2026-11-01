@@ -55,15 +55,17 @@ original input once per stage, and inserted values are not recursively expanded.
 Unicode letters, digits, underscores, combining marks and internal apostrophes
 preserve word boundaries. Snippets ignore case and punctuation between words.
 
-Self-correction (`xflow_core::backtrack`, in every mode) keeps only the
-corrected words when the span is clear: a restarted phrase ("I will do the
-meeting at 3 pm no no I will do the meeting at 5 pm"), or a number, time or name
-replaced after a cue ("send it to John, sorry, to Mike"). "Scratch that" or
-"never mind" ending a sentence deletes the sentence before it; when nothing is
-left, nothing is cleaned or pasted, the status says "Discarded" and history
-records `cleanup: discarded`. Emphasis, apologies, negation ("no, no one came"),
-quoted speech, flags and noun uses ("the scratch that I made") are left alone. A
-cue whose span isn't clear stays in the text for model cleanup.
+Self-correction (`xflow_core::backtrack`, in every mode) edits only when the
+retracted words are certain: a restarted phrase ("I will do the meeting at 3 pm
+no no I will do the meeting at 5 pm"), or, within one sentence, a cue set off by
+commas followed by nothing but a new number, time or name ("send it to John,
+sorry, to Mike"; "buy 3 apples, I mean 4"). "Scratch that" or "never mind" as
+its own clause deletes the sentence before it; at the end of a dictation it
+discards all of it: nothing is cleaned or pasted, the status and the macOS pill
+say "Discarded", and history records `cleanup: discarded`. Emphasis, apologies,
+negation ("no, no one came"), quoted or backticked text, flags and mentions ("the
+phrase scratch that") are left alone. Any other cue stays in the text verbatim
+and makes model cleanup run.
 
 The first style whose app pattern matches the focused app id overrides cleanup
 mode/prompt. App identifiers are sent to the transformer only with

@@ -26,6 +26,8 @@ struct PillEvent {
     copied: bool,
     #[serde(default)]
     uncertain: bool,
+    #[serde(default)]
+    discarded: bool,
 }
 
 impl PillEvent {
@@ -49,6 +51,8 @@ impl PillEvent {
                 .message
                 .as_deref()
                 .is_some_and(|m| m.contains(crate::daemon::COPIED)),
+            discarded: event.state == State::Idle
+                && event.message.as_deref() == Some(crate::daemon::DISCARDED),
             hands_free: event
                 .message
                 .is_some_and(|m| m.starts_with(crate::daemon::HANDS_FREE)),
@@ -72,7 +76,7 @@ pub async fn run(mut events: broadcast::Receiver<DesktopEvent>, config: std::pat
             if let Some(child) = &mut helper {
                 let _ = send(child, event).await;
             }
-            close(&mut helper, event.copied || event.uncertain).await;
+            close(&mut helper, event.copied || event.uncertain || event.discarded).await;
             session_active = false;
             continue;
         }
@@ -118,11 +122,12 @@ async fn send(child: &mut Child, event: PillEvent) -> Result<()> {
     Ok(())
 }
 
-async fn close(helper: &mut Option<Child>, copied: bool) {
+/// `notice`: the pill holds a message (copied, discarded) before it fades.
+async fn close(helper: &mut Option<Child>, notice: bool) {
     if let Some(mut child) = helper.take() {
         drop(child.stdin.take());
         if timeout(
-            Duration::from_secs(if copied { 4 } else { 1 }),
+            Duration::from_secs(if notice { 4 } else { 1 }),
             child.wait(),
         )
         .await
@@ -193,6 +198,7 @@ pub fn preview() -> Result<()> {
             hands_free,
             copied: false,
             uncertain: false,
+            discarded: false,
         };
         writeln!(stdin, "{}", serde_json::to_string(&event)?)?;
         std::thread::sleep(Duration::from_millis(40));
@@ -220,6 +226,7 @@ mod tests {
             hands_free: false,
             copied: false,
             uncertain: false,
+            discarded: false,
         };
         let mut stalled = false;
         for _ in 0..4096 {
@@ -279,5 +286,13 @@ mod tests {
         });
         assert!(uncertain.uncertain && !uncertain.copied && !uncertain.active());
         assert!(serde_json::to_vec(&uncertain).unwrap().len() < MAX_EVENT_BYTES);
+        let discarded = PillEvent::from_desktop(DesktopEvent {
+            state: State::Idle,
+            level: 0.0,
+            message: Some(crate::daemon::DISCARDED.into()),
+            mode: Default::default(),
+        });
+        assert!(discarded.discarded && !discarded.copied && !discarded.active());
+        assert!(serde_json::to_string(&discarded).unwrap().len() < MAX_EVENT_BYTES);
     }
 }
