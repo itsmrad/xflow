@@ -29,8 +29,10 @@ focused element initially returned no value. Reading the application's `AXRole`
 then exposed `AXTextArea`. Chromium's
 [application-role implementation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/chrome/browser/chrome_browser_application_mac.mm)
 activates native accessibility on that read. xflow now requests the app role for
-the known Chromium/Electron bundle IDs and retains its bounded asynchronous
-focus polling. It never writes `AXEnhancedUserInterface`, avoiding that flag's
+the known Chromium/Electron bundle IDs, and for any app in `/Applications` or
+`~/Applications` whose bundle has a framework containing Chromium's
+`Resources/chrome_100_percent.pak` (Electron Framework, Edge, Brave, Helium…;
+cached per bundle), and retains its bounded asynchronous focus polling. It never writes `AXEnhancedUserInterface`, avoiding that flag's
 screen-reader debounce/window side effects. No visual animation certification
 is claimed.
 
@@ -46,7 +48,9 @@ cannot be guaranteed to accept restoration.
 Previously, an empty AX value (VS Code) or disabled clipboard restoration could
 report `Pasted` without a receipt. Now only a receipt confirms a paste; otherwise
 the outcome is `uncertain`, the pill says **Pasted — check it landed**, and the
-transcript stays copied and available through `last`. Unknown editability or a
+transcript stays copied and available through `last`. A field exposing no value
+replies at once and an empty value within `restore_delay_ms`; the delivery lock
+still waits for a late receipt up to five seconds. Unknown editability or a
 missing/changed window copies without sending keys; its pill says **Copied**.
 Secure fields remain refused. Uncertain pastes do not start correction learning.
 

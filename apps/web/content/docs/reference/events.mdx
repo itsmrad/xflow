@@ -34,10 +34,10 @@ Fields that don't apply are left out.
 | `level` | number | Always. Input level while listening |
 | `message` | string | Status or error text, such as `Didn't catch anything` |
 | `text` | string | The final transcript |
-| `injection` | `"pasted"` \| `"typed"` \| `"clipboard_only"` | How the text was delivered |
+| `injection` | `"pasted"` \| `"uncertain"` \| `"typed"` \| `"clipboard_only"` | How the text was delivered; `uncertain`: paste sent but not confirmed, text stays copied |
 | `mode` | `"dictation"` \| `"command"` | While listening or processing |
 | `provider`, `model` | string | The speech provider and model |
-| `version`, `protocol` | string, number | On the snapshot: daemon version and IPC protocol (currently 2) |
+| `version`, `protocol` | string, number | On the snapshot: daemon version and IPC protocol (currently 3) |
 | `permissions` | object | macOS: `accessibility`, `input_monitoring`, `keyboard_events` |
 | `entry` | object | The saved history entry, on the final event of a successful session |
 | `timings` | object | On the final event of a session |

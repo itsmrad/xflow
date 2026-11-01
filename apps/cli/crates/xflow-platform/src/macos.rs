@@ -386,6 +386,8 @@ impl<A: AccessibilityFlag> AccessibilityGuard<A> {
         Some(guard)
     }
 }
+// SAFETY: AX element references are thread-safe CF objects; the guard only makes AX IPC calls.
+unsafe impl Send for AccessibilityGuard<Owned> {}
 impl<A: AccessibilityFlag> Drop for AccessibilityGuard<A> {
     fn drop(&mut self) {
         self.app.write(self.previous);
@@ -413,6 +415,36 @@ fn is_chromium(app: Option<&str>) -> bool {
                 | "com.linear"
         )
     )
+}
+/// Unlisted Electron/Chromium apps (Edge, Brave, Obsidian, Teams, Postman…) by their bundle.
+fn chromium_bundle(bundle: &str) -> bool {
+    static LAST: std::sync::Mutex<Option<(String, bool)>> = std::sync::Mutex::new(None);
+    let path = std::path::Path::new(bundle);
+    let home = std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("Applications"));
+    // shortcut: only /Applications and ~/Applications are read; elsewhere (e.g. Downloads) a read
+    // can raise a folder-access prompt. Add a fast-path ID for apps commonly run from there.
+    if !(path.starts_with("/Applications") || home.is_some_and(|h| path.starts_with(h))) {
+        return false;
+    }
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, chromium)) = last.as_ref().filter(|(cached, _)| cached == bundle) {
+        return *chromium;
+    }
+    let chromium = has_chromium_framework(path);
+    *last = Some((bundle.to_owned(), chromium));
+    chromium
+}
+/// Electron Framework and every Chromium browser framework ship Chromium's resource pak.
+fn has_chromium_framework(bundle: &std::path::Path) -> bool {
+    bundle
+        .join("Contents/Frameworks")
+        .read_dir()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|f| f.path().join("Resources/chrome_100_percent.pak").is_file())
 }
 fn focus() -> Focus {
     focus_waiting(true)
@@ -448,7 +480,10 @@ fn focus_waiting(wait: bool) -> Focus {
             }
         }
     }
+    let mut bundle = None;
     if let Some(info) = Owned::new(unsafe { ProcessInformationCopyDictionary(&psn, u32::MAX) }) {
+        let key = Owned::string("BundlePath");
+        bundle = cf_text(unsafe { CFDictionaryGetValue(info.0, key.0) });
         for key in ["CFBundleIdentifier", "CFBundleName"] {
             let key = Owned::string(key);
             if let Some(app) = cf_text(unsafe { CFDictionaryGetValue(info.0, key.0) }) {
@@ -466,7 +501,9 @@ fn focus_waiting(wait: bool) -> Focus {
     let Some(app) = Owned::new(unsafe { AXUIElementCreateApplication(pid) }) else {
         return focus;
     };
-    if is_chromium(focus.context.app_id.as_deref()) {
+    let chromium = is_chromium(focus.context.app_id.as_deref())
+        || bundle.as_deref().is_some_and(chromium_bundle);
+    if chromium {
         // Chromium activates native accessibility when an assistive client reads its app role.
         let _ = app.text("AXRole");
     }
@@ -475,10 +512,7 @@ fn focus_waiting(wait: bool) -> Focus {
     let mut role = role_of(&element);
     // Electron and Chromium build their AX tree only once an assistive client asks;
     // Poll asynchronous tree creation without Chrome's window-affecting AXEnhancedUserInterface.
-    if wait
-        && role.as_deref().is_none_or(is_container)
-        && is_chromium(focus.context.app_id.as_deref())
-    {
+    if wait && role.as_deref().is_none_or(is_container) && chromium {
         let enabling_app = Owned::new(unsafe { AXUIElementCreateApplication(pid) });
         focus._accessibility = enabling_app.and_then(AccessibilityGuard::enable);
         for _ in 0..6 {
@@ -633,6 +667,17 @@ fn receipt_budget(restore_delay_ms: u32, started: Instant) -> Duration {
     Duration::from_millis(u64::from(restore_delay_ms) + 2000)
         .min(Duration::from_secs(4))
         .min((started + Duration::from_secs(8)).saturating_duration_since(Instant::now()))
+}
+/// A field exposing nothing can show no receipt: reply Uncertain at once. An empty value may be
+/// a fresh field or one that never updates (VS Code), so it gets only restore_delay_ms. The
+/// delivery lock is still held to PENDING_PASTE either way.
+fn reply_budget(before: Option<&Snapshot>, restore_delay_ms: u32, started: Instant) -> Duration {
+    let budget = receipt_budget(restore_delay_ms, started);
+    match before.and_then(content_len) {
+        None => Duration::ZERO,
+        Some(0) => budget.min(Duration::from_millis(restore_delay_ms.into())),
+        Some(_) => budget,
+    }
 }
 /// Shared by every MacDesktop: a config reload must not drop a pending paste's lock.
 static DELIVERY: std::sync::LazyLock<std::sync::Arc<tokio::sync::Mutex<()>>> =
@@ -828,8 +873,11 @@ impl Desktop for MacDesktop {
         let method = self.config.effective_method();
         let target_owned = target.clone();
         let text_owned = text.to_owned();
-        let action = tokio::task::spawn_blocking(move || {
-            decision(&text_owned, method, &target_owned, &focus())
+        // One ManualAccessibility guard spans the pre-check, keys and receipt.
+        let (action, accessibility) = tokio::task::spawn_blocking(move || {
+            let mut focus = focus();
+            let action = decision(&text_owned, method, &target_owned, &focus);
+            (action, focus._accessibility.take())
         })
         .await?;
         match action {
@@ -861,6 +909,8 @@ impl Desktop for MacDesktop {
         // Re-check focus just before the keys; the lock then stays with the pending paste.
         tokio::task::spawn_blocking(move || {
             let _delivery = delivery;
+            // Dropped before the lock, so the next paste sees the original flag.
+            let _accessibility = accessibility;
             let current = focus();
             let action = decision(&text_owned, method, &target, &current);
             if action == Decision::Refuse {
@@ -894,7 +944,7 @@ impl Desktop for MacDesktop {
                         .as_ref()
                         .is_some_and(|(f, before)| inserted(before, &snapshot(f), &text_owned))
                 },
-                receipt_budget(restore_delay_ms, started),
+                reply_budget(field.as_ref().map(|(_, b)| b), restore_delay_ms, started),
                 |confirmed| {
                     if confirmed {
                         restore_previous();
@@ -1080,6 +1130,14 @@ mod tests {
         assert_eq!(unsafe { GetFrontProcess(&mut psn) }, 0);
         assert_eq!(unsafe { GetProcessPID(&psn, &mut pid) }, 0);
         let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) }).unwrap();
+        let info = Owned::new(unsafe { ProcessInformationCopyDictionary(&psn, u32::MAX) }).unwrap();
+        let key = Owned::string("BundlePath");
+        let bundle = cf_text(unsafe { CFDictionaryGetValue(info.0, key.0) }).unwrap();
+        assert!(
+            chromium_bundle(&bundle),
+            "generic detection missed {bundle}"
+        );
+        let trials = std::env::var("XFLOW_PASTE_TRIALS").map_or(20, |n| n.parse().unwrap());
         let original = [
             app.flag("AXManualAccessibility"),
             app.flag("AXEnhancedUserInterface"),
@@ -1091,7 +1149,7 @@ mod tests {
         let mut confirmed = 0;
         let mut uncertain = 0;
         let mut copied = 0;
-        for trial in 0..20 {
+        for trial in 0..trials {
             let current = focus();
             assert_eq!(current.context, target, "focus changed; stop the matrix");
             assert!(
@@ -1103,7 +1161,10 @@ mod tests {
             assert!(!current.secure);
             drop(current);
             let marker = format!("xflow25-{trial:02} ");
-            match desktop.inject(&marker, &target).await.unwrap() {
+            let started = Instant::now();
+            let outcome = desktop.inject(&marker, &target).await.unwrap();
+            println!("trial {trial}: {outcome:?} after {:?}", started.elapsed());
+            match outcome {
                 InjectionOutcome::Pasted => confirmed += 1,
                 InjectionOutcome::Uncertain => uncertain += 1,
                 InjectionOutcome::ClipboardOnly => copied += 1,
@@ -1123,7 +1184,7 @@ mod tests {
         if let (Some(previous), Ok(clipboard)) = (previous, clipboard()) {
             clipboard.restore(&previous);
         }
-        println!("{expected}: confirmed={confirmed}/20 uncertain={uncertain}/20 copied={copied}/20; AX flags original={original:?}, restored=20/20");
+        println!("{expected}: confirmed={confirmed}/{trials} uncertain={uncertain}/{trials} copied={copied}/{trials}; AX flags original={original:?}, restored={trials}/{trials}");
     }
     #[tokio::test]
     #[ignore = "types a marker into the frontmost TextEdit document; run explicitly on macOS"]
@@ -1426,6 +1487,76 @@ mod tests {
         assert!(is_container("AXGroup"));
         assert!(!is_container("AXTextArea"));
         assert!(!is_container("AXSecureTextField"));
+    }
+    #[test]
+    fn generic_chromium_classification_reads_bundle_frameworks() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = |name: &str, framework: &str, pak: Option<&str>| {
+            let framework = dir
+                .path()
+                .join(name)
+                .join("Contents/Frameworks")
+                .join(framework);
+            let resources = framework.join("Versions/A/Resources");
+            std::fs::create_dir_all(&resources).unwrap();
+            // Real frameworks link Resources to Versions/Current/Resources.
+            std::os::unix::fs::symlink("Versions/A/Resources", framework.join("Resources"))
+                .unwrap();
+            if let Some(pak) = pak {
+                std::fs::write(resources.join(pak), b"").unwrap();
+            }
+            dir.path().join(name)
+        };
+        let pak = Some("chrome_100_percent.pak");
+        let edge = app("Edge.app", "Microsoft Edge Framework.framework", pak);
+        assert!(has_chromium_framework(&edge));
+        assert!(has_chromium_framework(&app(
+            "Obsidian.app",
+            "Electron Framework.framework",
+            pak
+        )));
+        let native = app("Native.app", "Sparkle.framework", Some("Sparkle.nib"));
+        assert!(!has_chromium_framework(&native));
+        assert!(!has_chromium_framework(&dir.path().join("Missing.app")));
+        // Bundles outside the Applications folders are never read.
+        assert!(!chromium_bundle(edge.to_str().unwrap()));
+        assert!(!chromium_bundle("/Users/someone/Downloads/Edge.app"));
+    }
+    #[test]
+    fn opaque_field_replies_uncertain_at_once_but_keeps_the_paste_lock() {
+        let start = Instant::now();
+        let empty: Snapshot = (Some(0), Some(String::new()), 0);
+        let text: Snapshot = (Some(5), Some("hello".into()), 0);
+        assert_eq!(reply_budget(None, 300, start), Duration::ZERO);
+        assert_eq!(
+            reply_budget(Some(&empty), 300, start),
+            Duration::from_millis(300)
+        );
+        assert_eq!(
+            reply_budget(Some(&text), 300, start),
+            Duration::from_millis(2300)
+        );
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let guard = lock.clone().try_lock_owned().unwrap();
+        let (reply, replied) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _guard = guard;
+            await_paste(
+                || false,
+                reply_budget(None, 300, start),
+                |confirmed| reply.send((confirmed, start.elapsed())).unwrap(),
+            );
+        });
+        let (confirmed, at) = replied.recv().unwrap();
+        assert!(at < Duration::from_millis(200), "{at:?}");
+        assert_eq!(
+            injection_outcome(Decision::Paste, confirmed),
+            InjectionOutcome::Uncertain
+        );
+        assert!(
+            lock.try_lock().is_err(),
+            "the pending paste still holds the lock"
+        );
     }
     #[test]
     fn opaque_paste_is_uncertain_and_unknown_focus_is_copy_only() {

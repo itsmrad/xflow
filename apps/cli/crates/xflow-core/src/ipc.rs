@@ -4,7 +4,7 @@ use tokio::sync::oneshot;
 
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Bumped when a request or response changes incompatibly; reported by Status.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Where a finished transcript goes.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -24,7 +24,7 @@ class Daemon:
     def __init__(self, root):
         self.requests = []
         self.subscribers = []
-        self.protocol = 2
+        self.protocol = 3
         self.timings = None
         self.fail = False
         self.start_gate = None
@@ -200,7 +200,7 @@ def main():
 
         daemon = Daemon(root)
         try:
-            assert json.loads(run("status", "--json").stdout)["protocol"] == 2
+            assert json.loads(run("status", "--json").stdout)["protocol"] == 3
             assert run("status").stdout == "FIELD     VALUE\nState     idle\nProvider  local\nModel     test\nDaemon    0.1.0\nProtocol  2\n"
             daemon.timings = {"audio_ms": 500, "stt_ms": 40, "total_ms": 45}
             assert json.loads(run("status", "--json").stdout)["timings"] == daemon.timings
@@ -275,7 +275,7 @@ def main():
                     listen.wait()
             daemon.protocol = 1
             assert "Restart" in run("status", code=3).stderr
-            daemon.protocol = 2
+            daemon.protocol = 3
             daemon.fail = True
             failure = run("toggle", "--json", code=1)
             assert not failure.stdout and json.loads(failure.stderr)["error"] == "mock failure"

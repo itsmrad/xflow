@@ -43,7 +43,7 @@ function Dev({ title, body, children }: { title: string; body: string; children:
 
 const DOCTOR = [
   ["config", "ok", "~/.config/xflow/config.toml"],
-  ["daemon", "ok", "0.1.0; protocol 2"],
+  ["daemon", "ok", "0.1.0; protocol 3"],
   ["session", "ok", "desktop=macOS; session=macos"],
   ["launchd", "ok", "LaunchAgent user service management"],
   ["privacy", "ok", "Cloud transcription uploads audio to the configured provider"],

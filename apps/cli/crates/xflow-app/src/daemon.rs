@@ -4412,7 +4412,7 @@ mod tests {
                 snapshot.provider.as_deref(),
                 snapshot.model.as_deref()
             ),
-            (Some(2), Some("fixture"), Some("mock-model"))
+            (Some(PROTOCOL_VERSION), Some("fixture"), Some("mock-model"))
         );
         let request = Request::Start {
             mode: Mode::Dictation,

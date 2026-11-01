@@ -40,7 +40,7 @@ document, write atomically (temp file + rename, mode 0600), then send `Reload`.
 ## Unix-socket IPC (`$XDG_RUNTIME_DIR/xflow/daemon.sock`)
 
 Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 KiB per frame.
-`PROTOCOL_VERSION = 2`; `status` reports `version` and `protocol`.
+`PROTOCOL_VERSION = 3`; `status` reports `version` and `protocol`.
 
 | Request (`"command"`) | Fields | Reply / semantics |
 | --- | --- | --- |
