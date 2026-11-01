@@ -165,9 +165,11 @@ vocabulary = []              # extra recognition hints (dictionary.words are add
 timeout_secs = 30
 fallback = []               # opt in: one backup id, e.g. ["openai"]; needs `xflow key set openai`
 # Backup uses its catalog endpoint/model and stored key. Audio may go to both providers.
-# On connect/TLS errors, 408, 429, 5xx or timeout: try the other provider once.
-# With a backup, each attempt gets min(timeout_secs, 3 + 0.25 * audio_seconds).
-# After primary failure, backup goes first for 60 s. No parallel or background retries.
+# On connect/TLS/upload/read errors, 408, 429, 5xx or timeout: try the other provider once.
+# Batch attempts get min(timeout_secs, 3 + 0.25 * audio_seconds); async AssemblyAI gets timeout_secs.
+# After primary failure, backup goes first for 60 s; any backup error probes the primary once.
+# A missing backup key warns and runs primary-only; validate/save still require the key.
+# No parallel or background retries.
 
 [cleanup]
 mode = "raw"                 # raw | light | polished | custom (custom requires prompt)
