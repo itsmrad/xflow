@@ -96,7 +96,7 @@ fn replace(text: &str, pairs: &[(&str, &str)], punctuation_insensitive: bool) ->
     output.push_str(&text[cursor..]);
     output
 }
-fn tidy(text: &str) -> String {
+pub(crate) fn tidy(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut space = false;
     for (i, c) in text.char_indices() {
@@ -165,6 +165,8 @@ pub fn before_cleanup(text: &str, config: &Config, terminal: bool) -> String {
         .collect();
     // Tidy before replacement: dictionary values, like snippets, stay literal.
     let text = replace(&text, &pairs, false);
+    // Self-corrections see the corrected names, before lists eat "one … two".
+    let text = crate::backtrack::apply(&text);
     // After replacements, so list items carry the corrected terms.
     if config.formatting.lists && !terminal {
         crate::lists::format(&text, &config.dictionary).unwrap_or(text)

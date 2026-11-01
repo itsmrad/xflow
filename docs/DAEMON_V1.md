@@ -48,12 +48,22 @@ latency p50/p95 use nearest-rank percentiles of rows with recorded latency.
 ## Text and command processing
 
 The order is spoken punctuation (opt-in), configured filler removal, whitespace
-tidying, whole-word dictionary replacements, model cleanup, literal snippets,
-then optional trailing space. Dictionary corrections reach the model; snippet
+tidying, whole-word dictionary replacements, spoken self-correction, model
+cleanup, literal snippets, then optional trailing space. Dictionary corrections reach the model; snippet
 expansions never reach it. Longest matching phrases win, replacements scan the
 original input once per stage, and inserted values are not recursively expanded.
 Unicode letters, digits, underscores, combining marks and internal apostrophes
 preserve word boundaries. Snippets ignore case and punctuation between words.
+
+Self-correction (`xflow_core::backtrack`, in every mode) keeps only the
+corrected words when the span is clear: a restarted phrase ("I will do the
+meeting at 3 pm no no I will do the meeting at 5 pm"), or a number, time or name
+replaced after a cue ("send it to John, sorry, to Mike"). "Scratch that" or
+"never mind" ending a sentence deletes the sentence before it; when nothing is
+left, nothing is cleaned or pasted, the status says "Discarded" and history
+records `cleanup: discarded`. Emphasis, apologies, negation ("no, no one came"),
+quoted speech, flags and noun uses ("the scratch that I made") are left alone. A
+cue whose span isn't clear stays in the text for model cleanup.
 
 The first style whose app pattern matches the focused app id overrides cleanup
 mode/prompt. App identifiers are sent to the transformer only with
@@ -62,14 +72,14 @@ dictation skips model cleanup, but an explicitly configured transformer remains
 available for styles and commands. Failed dictation cleanup retains the locally
 corrected transcript and reports a warning. Cleanup is skipped
 (`timings.cleanup_skipped`) in terminals unless a style sets a mode for that
-app, and light cleanup is skipped for six words or fewer without a
-self-correction cue, or for mostly-code text. `xflow_providers::cleanup_rewrote`
+app, and light cleanup is skipped for six words or fewer, or for mostly-code
+text, unless a self-correction cue remains that the local pass couldn't resolve. `xflow_providers::cleanup_rewrote`
 discards light and polished output as an answer or rewrite when its word count
-leaves 0.6–1.4x the input (0.3x after a cue such as "actually"), a question
+leaves 0.6–1.4x the input (0.3x after such an unresolved cue), a question
 loses its "?", an identifier or glossary term goes missing, or (light only)
 over a quarter of its words are new. The local text is then delivered with a
 warning (`timings.cleanup_rejected`). History records the outcome in `cleanup`
-(`applied`, `skipped`, `rejected`, `slow`, `failed`), and History shows why a
+(`applied`, `skipped`, `rejected`, `slow`, `failed`, `discarded`), and History shows why a
 dictation kept its transcribed words. Recording start warms the cleanup connection
 alongside the STT one (a free model-list request), because a cold connection
 added ~107 ms p50 to a Groq cleanup. Dictation cleanup gets 3 s plus

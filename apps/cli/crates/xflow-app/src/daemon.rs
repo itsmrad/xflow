@@ -1017,6 +1017,8 @@ impl Engine {
                 }
                 let terminal = xflow_platform::terminal_context(&target);
                 let local = xflow_core::text::before_cleanup(&raw, &config, terminal);
+                // "scratch that" took everything back (#75): nothing is cleaned or pasted.
+                let discarded = local.is_empty() && xflow_core::backtrack::cancelled(&raw);
                 let style = xflow_core::text::style(&config, target.app_id.as_deref());
                 let mode = style.and_then(|s| s.mode).unwrap_or(config.cleanup.mode);
                 let instructions = style
@@ -1025,7 +1027,7 @@ impl Engine {
                 let dictation = session_mode != Mode::Command;
                 let cleanup = services
                     .transformer
-                    .filter(|_| !dictation || mode != CleanupMode::Raw);
+                    .filter(|_| !discarded && (!dictation || mode != CleanupMode::Raw));
                 // Skip the round trip when it can't help (#68). Terminals keep their
                 // deterministic text unless a style asks: a model adds periods,
                 // capitalizes `git` and "fixes" flags.
@@ -1033,7 +1035,11 @@ impl Engine {
                     && dictation
                     && (terminal && style.and_then(|s| s.mode).is_none()
                         || mode == CleanupMode::Light && !xflow_providers::cleanup_can_help(&local));
-                let mut outcome = timings.cleanup_skipped.then_some(CleanupOutcome::Skipped);
+                let mut outcome = if discarded {
+                    Some(CleanupOutcome::Discarded)
+                } else {
+                    timings.cleanup_skipped.then_some(CleanupOutcome::Skipped)
+                };
                 let text = if let Some(transformer) = cleanup.filter(|_| !timings.cleanup_skipped) {
                     let cleanup_start = Instant::now();
                     let transformed = transformer
@@ -1101,7 +1107,7 @@ impl Engine {
                 } else {
                     text
                 };
-                if text.trim().is_empty() {
+                if text.trim().is_empty() && !discarded {
                     bail!("no speech recognized after formatting");
                 }
                 validate_last_frame(&text)?;
@@ -1394,7 +1400,7 @@ impl Engine {
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
                         if self.keeping().is_some() { self.load_kept(); }
-                        match result { Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
+                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some("Discarded".into())); }, Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
                     // Late, from a canceled session: nothing it kept may stay.
                     Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
@@ -5350,7 +5356,7 @@ mod tests {
                 Skipped,
             ),
             (
-                "um actually make it five",
+                "um three, actually make it five",
                 "Make it 5.",
                 1,
                 "Make it 5.",
@@ -5470,6 +5476,55 @@ mod tests {
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }
+    }
+    #[tokio::test]
+    async fn scratch_that_alone_discards_without_cleanup_or_paste() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let desktop = Arc::new(RecordingDesktop::default());
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop.clone(), store.clone());
+        engine.config.cleanup.mode = CleanupMode::Polished;
+        engine.services.stt = Arc::new(ImmediateStt {
+            calls: Arc::default(),
+            text: "Um, scratch that.",
+        });
+        let transformer = Arc::new(Reply(
+            "resurrected",
+            AtomicUsize::new(0),
+            AtomicUsize::new(0),
+        ));
+        engine.services.transformer = Some(transformer.clone());
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        let idle = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let r = events.recv().await.unwrap();
+                assert!(
+                    !matches!(r.state, State::Success | State::Error),
+                    "{:?}",
+                    r.message
+                );
+                if r.state == State::Idle && r.message.is_some() {
+                    return r;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(idle.message.as_deref(), Some("Discarded"));
+        // Cleanup can't resurrect it, nothing is pasted, and history says why.
+        assert_eq!(transformer.1.load(Ordering::SeqCst), 0);
+        assert!(desktop.injections.lock().unwrap().is_empty());
+        assert!(desktop.copies.lock().unwrap().is_empty());
+        let (rows, _) = store.history(10, 0, None).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "");
+        assert_eq!(rows[0].raw_text.as_deref(), Some("Um, scratch that."));
+        assert_eq!(rows[0].cleanup, Some(CleanupOutcome::Discarded));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
     }
     #[tokio::test]
     async fn terminals_keep_their_text_unless_a_style_asks_for_cleanup() {

@@ -629,6 +629,9 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
                 if let Some(why) = kept {
                     text.push_str(&format!("\n\nCleanup was not used: {why}. These are your words as transcribed."));
                 }
+                if h.cleanup == Some(CleanupOutcome::Discarded) {
+                    text.push_str("\n\nDiscarded: you took it back, so nothing was pasted.");
+                }
                 text
             });
             ("Details", text.unwrap_or_else(|| "Pick a dictation to see it in full.".into()))

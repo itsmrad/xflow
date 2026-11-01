@@ -198,14 +198,17 @@ pub enum CleanupOutcome {
     Slow,
     /// The provider failed; the local text was delivered.
     Failed,
+    /// The speaker took it all back ("scratch that"); nothing was delivered.
+    Discarded,
 }
 impl CleanupOutcome {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Applied,
         Self::Skipped,
         Self::Rejected,
         Self::Slow,
         Self::Failed,
+        Self::Discarded,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -214,6 +217,7 @@ impl CleanupOutcome {
             Self::Rejected => "rejected",
             Self::Slow => "slow",
             Self::Failed => "failed",
+            Self::Discarded => "discarded",
         }
     }
 }

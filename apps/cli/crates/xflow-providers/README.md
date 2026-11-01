@@ -110,7 +110,7 @@ Light cleanup fixes punctuation, casing, fillers and backtracking, keeps
 existing list lines, turns spoken sequences into numbered lists, writes numbers
 as digits where that is the convention, and never changes code, paths or URLs.
 Polished also smooths wording; custom uses `TransformRequest.instructions`.
-Dictation goes in `<transcript>` tags after four few-shot pairs, and the system
+Dictation goes in `<transcript>` tags after five few-shot pairs, and the system
 prompt is at most 1.5 KB (pinned by a test). Dictionary words follow as a
 glossary capped at 4 KB, so sound-alikes map to their exact spelling. Authorized
 commands edit supplied text or write new text when input is empty. App tone uses
