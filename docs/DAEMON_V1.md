@@ -91,6 +91,11 @@ spacing, learning, receipt confirmation and clipboard restoration. Unrecognized
 integrated terminals, including JetBrains/Zed or localized VS Code without the
 DOM class, retain ordinary-editor behavior and remain a #32 follow-up.
 
+Identified terminals skip receipt reads, so a dispatched terminal paste reports
+`Uncertain`, retains the dictation on the clipboard instead of restoring it, and
+holds the delivery lock up to `PENDING_PASTE` (currently 5 s). Control-character
+payloads return copy-only immediately without dispatching paste keys.
+
 This is S1 of #32, not multiline enablement. A future delivery path must prove
 mode 2004 for the *focused pane*, recheck focus, reject escape/control injection
 and password prompts, and pass ten 3–15-line metacharacter prompts per agent and

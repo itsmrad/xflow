@@ -124,10 +124,10 @@ pub fn is_terminal(app: Option<&str>) -> bool {
             "com.apple.terminal"
                 | "com.googlecode.iterm2"
                 | "dev.warp.warp-stable"
+                | "dev.warp.warp-preview"
                 | "net.kovidgoyal.kitty"
                 | "org.alacritty"
-                | "io.alacritty"
-                | "org.wezfurlong.wezterm"
+                | "com.github.wez.wezterm"
                 | "com.mitchellh.ghostty"
                 | "co.zeit.hyper"
                 | "org.tabby"
@@ -619,6 +619,7 @@ mod tests {
             "com.apple.Terminal",
             "com.googlecode.iterm2",
             "dev.warp.Warp-Stable",
+            "dev.warp.Warp-Preview",
             "co.zeit.hyper",
             #[cfg(not(target_os = "macos"))]
             "org.gnome.Terminal",
@@ -634,7 +635,7 @@ mod tests {
             #[cfg(not(target_os = "macos"))]
             "konsole",
             "alacritty",
-            "org.wezfurlong.wezterm",
+            "com.github.wez.wezterm",
             "ghostty",
             "org.tabby",
             "com.raphaelamorim.rio",
@@ -711,9 +712,11 @@ mod tests {
             "com.apple.Terminal",
             "com.googlecode.iterm2",
             "dev.warp.Warp-Stable",
+            "dev.warp.Warp-Preview",
+            "DEV.WARP.WARP-PREVIEW",
             "net.kovidgoyal.kitty",
             "org.alacritty",
-            "org.wezfurlong.wezterm",
+            "com.github.wez.wezterm",
             "com.mitchellh.ghostty",
             "co.zeit.hyper",
             "org.tabby",

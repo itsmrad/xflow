@@ -109,6 +109,12 @@ remain a #32 follow-up and retain ordinary-editor behavior. Native secure/protec
 fields refuse injection; shell password prompts not exposed as secure AX fields
 remain an unverified limitation.
 
+Identified terminals skip the paste receipt read. A dispatched terminal paste
+therefore reports `Uncertain`, keeps the dictation on the clipboard (no automatic
+restoration), and holds the delivery lock up to `PENDING_PASTE` (currently 5 s).
+This applies to terminal pastes that pass the input guard; control-character
+payloads take the immediate copy-only path instead.
+
 No live bracketed-paste capability is yet proven, so terminal newlines, tabs,
 carriage returns, ESC/framing bytes and other controls still copy only. Process
 names (`claude`, `codex`, `aider`) never grant a capability. Never wrap clipboard
