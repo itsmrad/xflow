@@ -73,6 +73,10 @@ const NEGATIONS: [&str; 26] = [
     "cannot", "dont", "doesnt", "didnt", "cant", "wont", "isnt", "arent", "wasnt", "werent",
     "shouldnt", "couldnt", "wouldnt", "havent", "hasnt", "aint",
 ];
+/// Spoken fillers that may sit inside a cue's clause.
+const FILLERS: [&str; 12] = [
+    "um", "uh", "er", "erm", "ah", "hmm", "like", "so", "well", "okay", "ok", "mm",
+];
 /// A day or month is a time slot, never a person: "Ask John, sorry, Friday." stays.
 const DATES: [&str; 19] = [
     "monday",
@@ -114,11 +118,17 @@ pub enum Outcome {
 /// The text with every certain self-correction applied.
 pub fn apply(text: &str) -> (String, Outcome) {
     let mut edited = text.to_owned();
+    // An unclear cue seen in any pass stays decisive, even before a later repair.
+    let mut doubt = false;
     // Up to 8 repairs, then one pass to confirm nothing is left.
     for _ in 0..=8 {
         match pass(&edited) {
-            (Some(next), _) => edited = next,
+            (Some(next), ambiguous) => {
+                doubt |= ambiguous;
+                edited = next;
+            }
             (None, ambiguous) => {
+                let ambiguous = ambiguous || doubt;
                 // A cue left over after a repair ("buy 3 apples, I mean 4, no, 5"):
                 // the edit is only partial, so nothing is edited.
                 if edited != text && (ambiguous || Ctx::new(&edited).any_cue()) {
@@ -291,7 +301,7 @@ impl<'a> Ctx<'a> {
             quoted,
             lead: 0,
         };
-        c.lead = c.stacked(0);
+        c.lead = c.lead_in(0);
         c
     }
     /// A cue phrase outside quotes, even one refused as a cue here.
@@ -434,18 +444,52 @@ impl<'a> Ctx<'a> {
                     || i >= 3 && matches!(self.lower(i - 2), "a" | "p") && self.number(i - 3))
     }
     /// Only cue words precede `i` in its sentence.
+    /// Fillers and cue words belong to the cue's clause: "He called. Um,
+    /// scratch that." takes back "He called."
     fn opens(&self, i: usize) -> bool {
-        self.stacked(self.sentence(i)) >= i
+        self.lead_in(self.sentence(i)) >= i
     }
-    fn stacked(&self, mut end: usize) -> usize {
-        // A stacked bare "no" may be negation: "actually, no one came".
-        while let Some((next, _)) = self
-            .phrase(end)
-            .filter(|(n, cue)| *cue != ["no"] || !NO_TRAPS.contains(&self.lower(*n)))
-        {
-            end = next;
+    /// The end of the fillers and cue words starting at `k`.
+    fn lead_in(&self, mut k: usize) -> usize {
+        loop {
+            if let Some((end, _)) = self.phrase(k) {
+                k = end;
+            } else if FILLERS.contains(&self.lower(k)) {
+                k += 1;
+            } else {
+                return k;
+            }
         }
-        end
+    }
+    /// The end of cue phrases stacked after `end`, with fillers between them
+    /// ("sorry, um, scratch that").
+    fn stacked(&self, mut end: usize) -> usize {
+        loop {
+            let mut next = end;
+            while FILLERS.contains(&self.lower(next)) {
+                next += 1;
+            }
+            // A stacked bare "no" may be negation: "actually, no one came".
+            match self
+                .phrase(next)
+                .filter(|(n, cue)| *cue != ["no"] || !NO_TRAPS.contains(&self.lower(*n)))
+            {
+                Some((after, _)) => end = after,
+                None => return end,
+            }
+        }
+    }
+    /// Nothing is attached to token `k`: not "-4", "$400", "@Mike", "(4)".
+    fn plain(&self, k: usize) -> bool {
+        let w = &self.t[k];
+        self.text[..w.start]
+            .chars()
+            .next_back()
+            .is_none_or(char::is_whitespace)
+            && self.text[w.end..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_whitespace() || ",.;:!?".contains(c))
     }
 }
 
@@ -565,7 +609,13 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
             && old + 2 == i
             && c.slot(old + 1) == 0
             && !FUNCTION.contains(&c.lower(old + 1));
-    if !adjacent || old < start + k || !(0..k).all(|f| c.same(old - k + f, end + f)) {
+    // Signs, currencies and sigils change the value: "-4", "€400", "@Mike".
+    if !adjacent
+        || old < start + k
+        || !(0..k).all(|f| c.same(old - k + f, end + f))
+        || !c.plain(old)
+        || !c.plain(new)
+    {
         return None;
     }
     // Same value ("thirty, no, 30"), a value we can't compare ("5pm, no, five")
@@ -777,9 +827,53 @@ mod tests {
             ("send it to John, sorry, to Mike, sorry, to Ann", "send it to Ann", Edited),
             ("Email Jordan today about the launch no no email Jordan tomorrow", "Email Jordan tomorrow", Edited),
             ("He called. Please scratch that.", "He called. Please scratch that.", Unchanged),
+            // Seventh review: a sign, currency or sigil changes the value.
+            ("Set the temperature to 3, no, -4.", "Set the temperature to 3, no, -4.", Ambiguous),
+            ("Set the temperature to 3, no, −4.", "Set the temperature to 3, no, −4.", Ambiguous),
+            ("The budget is 300 dollars, actually, $400.", "The budget is 300 dollars, actually, $400.", Ambiguous),
+            ("Charge 300 dollars, actually, €400.", "Charge 300 dollars, actually, €400.", Ambiguous),
+            ("The budget is 300, actually, €400.", "The budget is 300, actually, €400.", Ambiguous),
+            ("Send it to John, sorry, @Mike.", "Send it to John, sorry, @Mike.", Ambiguous),
+            ("Call John, sorry, #Mike.", "Call John, sorry, #Mike.", Ambiguous),
+            ("Use port 8080, actually, :9090.", "Use port 8080, actually, :9090.", Ambiguous),
+            ("Keep 3, no, (4).", "Keep 3, no, (4).", Ambiguous),
+            ("Use 3, no, [4].", "Use 3, no, [4].", Ambiguous),
+            ("Use version 3.1, actually, 3.2.", "Use version 3.2.", Edited),
+            // Fillers before a cancel belong to it.
+            ("He called. Um, scratch that. Bring notes.", "Bring notes.", Edited),
+            ("He called. Uh, never mind. Bring notes.", "Bring notes.", Edited),
+            ("We will meet at 3. Um, scratch that. Meet at 5.", "Meet at 5.", Edited),
+            ("He called. Sorry, um, scratch that. Bring notes.", "Bring notes.", Edited),
+            // An unclear cue isn't overridden by a later repair.
+            ("The value is 3, actually 3 is correct, no no the value is 4.", "The value is 3, actually 3 is correct, no no the value is 4.", Ambiguous),
         ] {
             assert_eq!(apply(input), (output.to_owned(), outcome), "{input}");
             assert_eq!(ambiguous(input), outcome == Ambiguous, "{input}");
+        }
+    }
+    #[test]
+    fn cancels_after_kept_or_removed_fillers() {
+        let mut config = crate::config::Config::default();
+        for remove in [true, false] {
+            config.formatting.remove_fillers = remove;
+            for (input, output) in [
+                ("He called. Um, scratch that. Bring notes.", "Bring notes."),
+                ("He called. Uh, never mind. Bring notes.", "Bring notes."),
+                (
+                    "We will meet at 3. Um, scratch that. Meet at 5.",
+                    "Meet at 5.",
+                ),
+                (
+                    "He called. Sorry, um, scratch that. Bring notes.",
+                    "Bring notes.",
+                ),
+            ] {
+                assert_eq!(
+                    crate::text::prepare(input, &config, false),
+                    (output.to_owned(), Outcome::Edited),
+                    "{input} (remove_fillers = {remove})"
+                );
+            }
         }
     }
     #[test]
