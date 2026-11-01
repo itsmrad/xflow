@@ -875,8 +875,8 @@ impl Desktop for MacDesktop {
         let text_owned = text.to_owned();
         // One ManualAccessibility guard spans the pre-check, keys and receipt. Refuse/Copy
         // restore the flag here, off the async runtime.
-        // shortcut: a clipboard error or cancellation before the worker restores it on the async
-        // thread (two AX calls, each capped by the 0.2 s messaging timeout); fine while that is rare.
+        // shortcut: a clipboard error (`?`) or cancellation before the worker restores it on the
+        // async thread (two AX calls, each capped by the 0.2 s messaging timeout); fine while rare.
         let (action, accessibility) = tokio::task::spawn_blocking(move || {
             let mut focus = focus();
             let action = decision(&text_owned, method, &target_owned, &focus);
@@ -903,6 +903,8 @@ impl Desktop for MacDesktop {
             // Cmd+V only while the pasteboard holds the transcript, never another writer's text.
             if !clipboard()?.owned() {
                 self.write(text)?;
+                // Restore off the runtime, still under the delivery lock.
+                let _ = tokio::task::spawn_blocking(move || drop(accessibility)).await;
                 return Ok(InjectionOutcome::ClipboardOnly);
             }
         }
