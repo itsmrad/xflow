@@ -1134,6 +1134,11 @@ impl Engine {
                 };
                 // A transcript that is ready first waits at most 20 ms, then goes unadjusted.
                 let around = match around {
+                    // Nothing is pasted after a discard, so its field read is dropped.
+                    Some(job) if discarded => {
+                        job.abort();
+                        None
+                    }
                     Some(job) => tokio::time::timeout(Duration::from_millis(20), job)
                         .await
                         .ok()
@@ -5489,9 +5494,15 @@ mod tests {
         ] {
             let dir = tempfile::tempdir().unwrap();
             let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
-            let desktop = Arc::new(RecordingDesktop::default());
+            // Smart spacing (#109) has a field to read: a discard still pastes nothing.
+            let desktop = Arc::new(RecordingDesktop {
+                around: Some(("Done.", "")),
+                ..RecordingDesktop::default()
+            });
+            let mut config = Config::default();
+            config.injection.smart_spacing = true;
             let (mut engine, tx, rx, mut events, _) =
-                fixture(Config::default(), desktop.clone(), store.clone());
+                fixture(config, desktop.clone(), store.clone());
             engine.config.cleanup.mode = CleanupMode::Polished;
             engine.services.stt = Arc::new(ImmediateStt {
                 calls: Arc::default(),
