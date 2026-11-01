@@ -4913,22 +4913,27 @@ mod tests {
         let audio = Arc::new(GatedAudio::default());
         engine.services.audio = audio.clone();
         let (mut client, server) = UnixStream::pair().unwrap();
-        let connection = tokio::spawn(connection(
+        let connection = connection(
             server,
             tx.clone(),
             engine.events.clone(),
             engine.live.subscribe(),
-        ));
+        );
+        tokio::pin!(connection);
         let task = tokio::spawn(engine.run(rx));
         write_frame(&mut client, &Request::start()).await.unwrap();
-        let waiting = hotkey_state(&mut events, State::Idle).await;
-        assert_eq!(waiting.message.as_deref(), Some(MIC_WAITING));
-        // No await between: the actor starts capture before the socket task sees EOF.
+        tokio::select! {
+            result = &mut connection => panic!("connection ended before capture opened: {result:?}"),
+            waiting = hotkey_state(&mut events, State::Idle) => {
+                assert_eq!(waiting.message.as_deref(), Some(MIC_WAITING));
+            }
+        }
+        // Hold the connection future until capture starts, so EOF and the reply are both ready.
         drop(client);
         audio.open.notify_one();
         hotkey_state(&mut events, State::Listening).await;
+        connection.await.unwrap();
         hotkey_state(&mut events, State::Idle).await;
-        let _ = connection.await.unwrap();
         assert_eq!(audio.cancels.load(Ordering::SeqCst), 1);
         // A late abandon for that session leaves a newer one alone.
         audio.open.notify_one();
