@@ -4,8 +4,9 @@
 //! request and never leaves the daemon. Also reads the few characters around
 //! the caret that smart spacing needs.
 use super::{
-    cf_text, focus, is_terminal, secure, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
-    AXUIElementGetPid, AXUIElementSetMessagingTimeout, CFGetTypeID, CFRelease, Focus, Owned, Ref,
+    cf_text, focus, focus_waiting, is_terminal, secure, AXUIElementCreateApplication,
+    AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementSetMessagingTimeout, CFGetTypeID,
+    CFRelease, Focus, Owned, Ref,
 };
 use async_trait::async_trait;
 use std::{
@@ -232,29 +233,36 @@ fn selection(element: &Owned) -> Option<CFRange> {
             .then_some(r)
     }
 }
-/// UTF-16 units read before the selection and after it.
+/// UTF-16 units read before the caret and after it.
 const BEFORE: isize = 32;
 const AFTER: isize = 16;
-/// The focused editable field's text before and after the selection, which a
-/// paste replaces. None for secure, terminal and unknown fields and on any AX
-/// error. Blocking: three AX calls on the field, each bounded at 100 ms.
+/// The focused editable field's text around the caret. None for secure,
+/// terminal and unknown fields and on any AX error. Blocking: after one look at
+/// focus, two AX calls with a selection, three without, each bounded at 100 ms.
 pub(super) fn neighbors() -> Option<(String, String)> {
-    let focus = focus();
+    // No waiting for a Chromium tree to appear: the whole read has 100 ms.
+    let focus = focus_waiting(false);
     if !readable(&focus) {
         return None;
     }
     let field = focus.element?;
     unsafe { AXUIElementSetMessagingTimeout(field.0, 0.1) };
     let selected = selection(&field)?;
-    let total = field.number("AXNumberOfCharacters")? as isize;
-    let end = selected.location + selected.length;
-    if end > total {
+    let caret = selected.location;
+    let start = (caret - BEFORE).max(0);
+    // A paste replaces a selection: neither it nor what follows is read, as at the
+    // field end. A bare caret needs the length, since reads past the end fail.
+    let stop = if selected.length == 0 {
+        (caret + AFTER).min(field.number("AXNumberOfCharacters")? as isize)
+    } else {
+        caret
+    };
+    if stop < caret {
         return None;
     }
-    let start = (selected.location - BEFORE).max(0);
     let range = CFRange {
         location: start,
-        length: (end + AFTER).min(total) - start,
+        length: stop - start,
     };
     let parameter =
         Owned::new(unsafe { AXValueCreate(CF_RANGE, (&range as *const CFRange).cast()) })?;
@@ -267,23 +275,18 @@ pub(super) fn neighbors() -> Option<(String, String)> {
         return None;
     }
     let text = cf_text(Owned::new(value)?.0)?;
-    split(
-        &text,
-        range.length as usize,
-        (selected.location - start) as usize,
-        (end - start) as usize,
-    )
+    split(&text, range.length as usize, (caret - start) as usize)
 }
-/// `text`, `len` UTF-16 units long, without its units `from..to`. None when the
-/// length is off or a cut splits a surrogate pair.
-fn split(text: &str, len: usize, from: usize, to: usize) -> Option<(String, String)> {
+/// `text`, `len` UTF-16 units long, cut at unit `at`. None when the length is
+/// off or the cut splits a surrogate pair.
+fn split(text: &str, len: usize, at: usize) -> Option<(String, String)> {
     let units: Vec<u16> = text.encode_utf16().collect();
-    if units.len() != len || from > to {
+    if units.len() != len {
         return None;
     }
     Some((
-        String::from_utf16(units.get(..from)?).ok()?,
-        String::from_utf16(units.get(to..)?).ok()?,
+        String::from_utf16(units.get(..at)?).ok()?,
+        String::from_utf16(&units[at..]).ok()?,
     ))
 }
 fn focused(pid: i32, app: &Owned, element: &Owned) -> bool {
@@ -368,14 +371,14 @@ mod tests {
     #[test]
     fn neighbors_split_on_utf16_offsets() {
         let s = |a: &str, b: &str| Some((a.to_owned(), b.to_owned()));
-        // "a😀b|sel|c": the emoji is two units.
-        assert_eq!(split("a😀bselc", 8, 4, 7), s("a😀b", "c"));
-        assert_eq!(split("ab", 2, 0, 0), s("", "ab"));
-        assert_eq!(split("ab", 2, 2, 2), s("ab", ""));
-        // A cut inside the surrogate pair, a short read or crossed cuts: unknown.
-        assert_eq!(split("a😀b", 4, 2, 2), None);
-        assert_eq!(split("ab", 3, 1, 1), None);
-        assert_eq!(split("ab", 2, 2, 1), None);
+        // The emoji is two units.
+        assert_eq!(split("a😀bc", 5, 4), s("a😀b", "c"));
+        assert_eq!(split("ab", 2, 0), s("", "ab"));
+        assert_eq!(split("ab", 2, 2), s("ab", ""));
+        // A cut inside the surrogate pair, a short read or a cut past the end: unknown.
+        assert_eq!(split("a😀b", 4, 2), None);
+        assert_eq!(split("ab", 3, 1), None);
+        assert_eq!(split("ab", 2, 3), None);
     }
     #[test]
     fn duplicate_value_changes_within_5_ms_are_one_edit() {

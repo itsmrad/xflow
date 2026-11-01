@@ -685,8 +685,8 @@ impl Engine {
         let session_mode = self.mode;
         let mut context = self.context_job.take();
         let mut timings = self.timings.clone();
-        // Read where the text lands while transcription runs; the bound starts at
-        // stop, so a slow app never holds the paste back by more than 100 ms.
+        // Read where the text lands while transcription runs. A read past 100 ms is
+        // dropped; its blocking AX thread finishes on its own within the AX timeouts.
         let around = (session_mode == Mode::Dictation
             && self.delivery == Delivery::Inject
             && config.injection.smart_spacing)
@@ -887,8 +887,13 @@ impl Engine {
                         None
                     }
                 };
+                // A transcript that is ready first waits at most 20 ms, then goes unadjusted.
                 let around = match around {
-                    Some(job) => job.await.ok().flatten(),
+                    Some(job) => tokio::time::timeout(Duration::from_millis(20), job)
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .flatten(),
                     None => None,
                 };
                 Ok(Some(Processed {
@@ -2791,8 +2796,9 @@ mod tests {
         field_left: Arc<AtomicBool>,
         /// Field watches started (one per observed paste).
         watches: AtomicUsize,
-        /// Text around the caret, for smart spacing.
+        /// Text around the caret, for smart spacing, and how long reading it takes.
         around: Option<(&'static str, &'static str)>,
+        around_delay: Duration,
     }
     struct ScriptedField {
         field: Arc<Mutex<Option<String>>>,
@@ -2855,6 +2861,7 @@ mod tests {
             }))
         }
         async fn neighbors(&self) -> Option<(String, String)> {
+            tokio::time::sleep(self.around_delay).await;
             self.around.map(|(b, a)| (b.into(), a.into()))
         }
     }
@@ -3007,12 +3014,15 @@ mod tests {
     }
     #[tokio::test]
     async fn smart_spacing_adjusts_the_paste_but_not_history_or_last() {
-        for (smart, pasted) in [
-            (true, " Post gres is ready "),
-            (false, "post gres is ready "),
+        // A read that misses the transcript is skipped, never waited out.
+        for (smart, delay, pasted) in [
+            (true, 0, "Post gres is ready "),
+            (false, 0, "post gres is ready "),
+            (true, 500, "post gres is ready "),
         ] {
             let desktop = Arc::new(RecordingDesktop {
-                around: Some(("Done.", "")),
+                around: Some(("Done. ", "")),
+                around_delay: Duration::from_millis(delay),
                 ..RecordingDesktop::default()
             });
             let dir = tempfile::tempdir().unwrap();

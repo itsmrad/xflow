@@ -194,6 +194,177 @@ fn closing(c: char) -> bool {
         ',' | '.' | '!' | '?' | ';' | ':' | ')' | ']' | '}' | '…' | '”' | '’' | '%'
     )
 }
+/// A period after these doesn't end a sentence.
+const ABBREVIATIONS: &[&str] = &[
+    "approx", "ave", "capt", "co", "col", "dept", "dr", "etc", "fig", "gen", "gov", "inc", "jr",
+    "lt", "ltd", "mr", "mrs", "ms", "mt", "no", "prof", "rev", "sgt", "sr", "st", "vs",
+];
+/// Function words, which never start a name, so mid-sentence they are lowercased.
+/// SCOWL's common list can't decide this: "john", "notes", "ok" and "smith" are on it.
+const CONTINUING: &[&str] = &[
+    "a",
+    "about",
+    "after",
+    "again",
+    "all",
+    "also",
+    "although",
+    "always",
+    "am",
+    "an",
+    "and",
+    "another",
+    "any",
+    "anyone",
+    "anything",
+    "are",
+    "aren't",
+    "around",
+    "as",
+    "at",
+    "be",
+    "because",
+    "been",
+    "before",
+    "being",
+    "between",
+    "both",
+    "but",
+    "by",
+    "can't",
+    "could",
+    "couldn't",
+    "did",
+    "didn't",
+    "do",
+    "does",
+    "doesn't",
+    "don't",
+    "during",
+    "each",
+    "either",
+    "even",
+    "every",
+    "everyone",
+    "everything",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "he",
+    "he's",
+    "her",
+    "here",
+    "here's",
+    "him",
+    "his",
+    "how",
+    "if",
+    "in",
+    "into",
+    "is",
+    "isn't",
+    "it",
+    "it's",
+    "its",
+    "just",
+    "let's",
+    "maybe",
+    "me",
+    "might",
+    "more",
+    "most",
+    "much",
+    "must",
+    "my",
+    "neither",
+    "never",
+    "no",
+    "nor",
+    "not",
+    "nothing",
+    "now",
+    "of",
+    "off",
+    "often",
+    "on",
+    "once",
+    "only",
+    "onto",
+    "or",
+    "our",
+    "out",
+    "over",
+    "perhaps",
+    "probably",
+    "rather",
+    "really",
+    "she",
+    "she's",
+    "should",
+    "shouldn't",
+    "since",
+    "so",
+    "some",
+    "someone",
+    "something",
+    "sometimes",
+    "still",
+    "such",
+    "than",
+    "that",
+    "that's",
+    "the",
+    "their",
+    "them",
+    "then",
+    "there",
+    "there's",
+    "these",
+    "they",
+    "they're",
+    "this",
+    "those",
+    "though",
+    "through",
+    "to",
+    "too",
+    "under",
+    "unless",
+    "until",
+    "up",
+    "us",
+    "very",
+    "was",
+    "wasn't",
+    "we",
+    "we're",
+    "we've",
+    "were",
+    "weren't",
+    "what",
+    "what's",
+    "when",
+    "where",
+    "whether",
+    "which",
+    "while",
+    "who",
+    "whom",
+    "whose",
+    "why",
+    "with",
+    "within",
+    "without",
+    "won't",
+    "would",
+    "wouldn't",
+    "yet",
+    "you",
+    "you're",
+    "your",
+];
 /// Whether text typed after `prev`, the last character of `before`, needs a space.
 fn space_after(prev: char, before: &str) -> bool {
     match prev {
@@ -233,19 +404,27 @@ pub fn adjust(before: &str, after: &str, text: &str, keep: &[String]) -> String 
         out.push(' ');
     }
     let line_break = |c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}');
-    let last = before
-        .trim_end_matches(|c: char| c.is_whitespace() && !line_break(c))
-        .chars()
-        .next_back();
+    let trimmed = before.trim_end_matches(|c: char| c.is_whitespace() && !line_break(c));
     // Some(true): a sentence starts here; Some(false): one continues; None: leave the case.
-    let capitalize = match last {
-        None | Some('.' | '!' | '?' | '。' | '！' | '？') => Some(true),
+    let capitalize = match trimmed.chars().next_back() {
+        None | Some('!' | '?' | '。' | '！' | '？') => Some(true),
         Some(c) if line_break(c) => Some(true),
+        // "done. " ends a sentence; "Dr. ", "e.g. ", "example.com" and "v1." don't.
+        Some('.') => (trimmed.len() < before.len() && {
+            let token = trimmed[..trimmed.len() - 1]
+                .rsplit(char::is_whitespace)
+                .next()
+                .unwrap_or_default();
+            token.chars().count() >= 2
+                && token.chars().all(char::is_alphabetic)
+                && !ABBREVIATIONS.contains(&token.to_lowercase().as_str())
+        })
+        .then_some(true),
         Some(c) if unspaced(c) => None,
         Some(c) if word_char(c) || matches!(c, ',' | ';') => Some(false),
         _ => None,
     };
-    // Only plain words change case: never ALLCAPS, "I", camelCase, file names or dictionary words.
+    // Only plain words change case: never ALLCAPS, camelCase, file names or dictionary words.
     let end = body.find(char::is_whitespace).unwrap_or(body.len());
     let word = body[..end].trim_end_matches([',', '.', '!', '?', ';', ':']);
     let plain = word
@@ -253,10 +432,14 @@ pub fn adjust(before: &str, after: &str, text: &str, keep: &[String]) -> String 
         .skip(1)
         .all(|c| c.is_lowercase() || matches!(c, '\'' | '’'))
         && !keep.iter().any(|k| k == word);
-    let pronoun = word == "I" || word.starts_with("I'") || word.starts_with("I’");
     let head = match capitalize {
         Some(true) if plain && first.is_lowercase() => Some(first.to_uppercase().to_string()),
-        Some(false) if plain && first.is_uppercase() && !pronoun => {
+        // Lowercased only when it can't be a name, so "John", "Notes" and "Monday" stay.
+        Some(false)
+            if plain
+                && first.is_uppercase()
+                && CONTINUING.contains(&word.to_lowercase().replace('’', "'").as_str()) =>
+        {
             Some(first.to_lowercase().to_string())
         }
         _ => None,
@@ -267,13 +450,6 @@ pub fn adjust(before: &str, after: &str, text: &str, keep: &[String]) -> String 
             out.push_str(&body[first.len_utf8()..]);
         }
         None => out.push_str(body),
-    }
-    // The caret sits inside a sentence that goes on: drop the closing period.
-    if after.trim_start().starts_with(char::is_lowercase)
-        && out.ends_with('.')
-        && !out.ends_with("..")
-    {
-        out.pop();
     }
     match next {
         Some(c) if word_char(c) && !unspaced(c) && !out.ends_with(unspaced) => out.push(' '),
@@ -399,15 +575,49 @@ mod tests {
     fn adjust_spacing_and_case_to_the_caret() {
         let keep = ["Postgres".to_owned(), "xflow".to_owned()];
         for (before, after, text, expected) in [
-            // Mid-sentence: space, lowercase; field end keeps the trailing space.
+            // Mid-sentence: space, function words lowercase; field end keeps the trailing space.
             ("I think", "", "That we should. ", " that we should. "),
-            ("hello", "", "World", " world"),
+            ("hello", "", "There it is", " there it is"),
+            ("a list,", "", "Then more", " then more"),
+            ("so", "", "A cat", " a cat"),
+            ("and", "", "Don't stop", " don't stop"),
+            ("and", "", "Don’t stop", " don’t stop"),
+            // Anything that could be a name keeps its case (review probes).
+            ("hello", "", "World", " World"),
+            ("met", "", "John ", " John "),
+            ("met", "", "John's idea", " John's idea"),
+            ("on", "", "Monday we", " Monday we"),
+            ("open", "", "Notes app", " Notes app"),
+            ("and", "", "Ok fine", " Ok fine"),
+            ("met ", " today", "Sarah ", "Sarah"),
+            ("ok", "🎉", "Fine", " Fine"),
             // Sentence and field starts capitalize.
-            ("It's done.", "", "hello there", " Hello there"),
+            ("It's done. ", "", "hello there", "Hello there"),
             ("Really?  ", "", "yes", "Yes"),
+            ("Really?", "", "yes", " Yes"),
+            ("Fertig. ", "", "über", "Über"),
             ("", "", "hello", "Hello"),
             ("first line\n", "", "hello", "Hello"),
             ("first line\n  ", "", "hello", "Hello"),
+            // A period ends a sentence only after a word, before a space, and not
+            // after an abbreviation (review probes); otherwise only spacing changes.
+            ("It's done.", "", "hello there", " hello there"),
+            ("See e.g.", "", "the docs", " the docs"),
+            ("See e.g. ", "", "the docs", "the docs"),
+            ("Ask Dr.", "", "who called", " who called"),
+            ("Ask Dr. ", "", "who called", "who called"),
+            ("Mr.", "", "smith", " smith"),
+            ("the U.S. ", "", "army", "army"),
+            ("Version 2. ", "", "next", "next"),
+            ("example.", "", "com", " com"),
+            ("file.", "", "txt", " txt"),
+            // A trailing period is never deleted, and text is never emptied.
+            ("ask", " smith", "Dr. ", " Dr."),
+            ("see", " the", "e.g. ", " e.g."),
+            ("the", " army", "U.S. ", " U.S."),
+            ("hello", " world", ". ", "."),
+            ("I think", " we should", "That.", " that."),
+            ("I think ", "we should", "That", "that "),
             // After ':' the case stays; a space is still due.
             ("Note:", "", "Remember this", " Remember this"),
             // Brackets and quotes.
@@ -415,25 +625,20 @@ mod tests {
             ("he said \"", "", "Wait", "Wait"),
             ("he said “", "", "Wait", "Wait"),
             ("he said \"stop\"", "", "Then", " Then"),
-            ("a list,", "", "Then more", " then more"),
             // Mid-word: inserted exactly, no spaces.
             ("hel", "lo", "Xyz ", "Xyz"),
-            // Inside a sentence: drop the period, space before the next word.
-            ("I think", " we should", "That.", " that"),
-            ("I think ", "we should", "That.", "that "),
+            // Punctuation after the caret: no space of our own.
             ("I think", ".", "So ", " so"),
             ("see (", ")", "Here ", "Here"),
-            // Names, ALLCAPS, "I", camelCase and file names keep their case.
+            // ALLCAPS, "I", camelCase, file names and dictionary words keep their case.
             ("we use", "", "Postgres now", " Postgres now"),
             ("and", "", "NASA launched", " NASA launched"),
             ("and", "", "I'm here", " I'm here"),
             ("and", "", "I said", " I said"),
-            ("and", "", "Don't stop", " don't stop"),
             ("open", "", "README.md", " README.md"),
             ("", "", "xflow rocks", "xflow rocks"),
             ("", "", "userId is", "userId is"),
             ("", "", "main.rs", "main.rs"),
-            ("so", "", "A cat", " a cat"),
             // CJK: no spaces, no case changes after ideographs.
             ("我们使用", "", "数据库", "数据库"),
             ("我们使用", "", "Postgres", "Postgres"),
@@ -441,11 +646,9 @@ mod tests {
             ("and", "", "数据库", "数据库"),
             // Emoji and surrogate pairs on either side.
             ("Great 🎉", "", "Thanks", " Thanks"),
-            ("ok", "🎉", "Fine", " fine"),
             ("😀", "😀", "hi", " hi"),
-            // Non-Latin scripts with case.
-            ("Привет,", "", "Мир", " мир"),
-            ("Fertig.", "", "über", " Über"),
+            // Other scripts keep their case mid-sentence.
+            ("Привет,", "", "Мир", " Мир"),
             // Leading punctuation never gets a space.
             ("hello", "", ", world", ", world"),
             ("", "", "", ""),
