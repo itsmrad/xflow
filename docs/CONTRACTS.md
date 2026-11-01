@@ -26,7 +26,7 @@ history disabled; it must never silently erase saved rows at startup.
 | `[[styles]]` | name, apps, mode, prompt | daemon (picks style by focused app id) |
 | `[sounds]` | enabled, volume, start, stop, error | daemon/platform |
 | `[notifications]` | enabled | daemon/platform |
-| `[privacy]` | history, history_limit, offline | daemon, providers |
+| `[privacy]` | history, history_limit, offline, keep_failed_audio | daemon, providers |
 | `[ui]` | theme, themes = {name = {slot = color}}, mouse | TUI only |
 
 Linux overlay appearance and shortcuts remain GSettings keys of
@@ -52,6 +52,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | `history_get` / `history_delete` / `history_copy` / `history_paste` | `id` | `entry` for get; injection outcome for paste |
 | `history_update` | `id`, `text` | replaces the entry text (first text kept as `raw_text`); with `auto_learn`, learns close word corrections (vocabulary only) exactly like a corrected paste; command-mode entries learn nothing. Reply: updated `entry`; `message` = "Added 'X' to your dictionary" when something was learned |
 | `clear_history` | — | clears persisted rows even with history disabled; also clears the in-memory last result/timings |
+| `retry` | `full` (bool), `delivery` (as `start`), `discard` (bool) | idle only; transcribes the dictation kept by `privacy.keep_failed_audio` again, then cleans up and delivers it to the current focus. Parts already delivered are left out unless `full`; `discard` deletes it instead. Replies `processing`; the final event is a normal session's. Every status and event carries `failed_audio` (created_at, expires_at, audio_ms, partial) while one is kept |
 | `stats` | — | `stats` (sessions, words, audio_ms, today, streak, wpm, latency p50/p95) |
 | `reload` | — | idle only; stage services before swapping config; on error keep the running config and return the error; SIGHUP uses this path |
 | `subscribe` | — | snapshot, then every state/level event; the final event of a successful session carries `text`, `injection`, `entry`, `timings`. A learned-words event carries only `message` and leaves the state unchanged |

@@ -235,6 +235,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
             Ok(())
         }
         Command::Watch => ipc::block_on(ipc::watch(out)),
+        Command::Retry { full, discard } => ipc::block_on(ipc::retry(*full, *discard, out)),
         Command::Listen {
             once,
             seconds,

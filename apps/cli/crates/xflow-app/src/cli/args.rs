@@ -75,6 +75,15 @@ pub enum Command {
     /// Insert the last transcript into the focused app.
     #[command(visible_alias = "paste-last")]
     Paste,
+    /// Transcribe the failed dictation kept by privacy.keep_failed_audio again and print it.
+    Retry {
+        /// Also include the parts that were delivered when it failed.
+        #[arg(long)]
+        full: bool,
+        /// Delete the kept audio instead.
+        #[arg(long, conflicts_with = "full")]
+        discard: bool,
+    },
     /// Browse, search and export local dictation history.
     History {
         #[command(flatten)]

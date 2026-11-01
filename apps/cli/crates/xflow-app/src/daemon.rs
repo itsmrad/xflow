@@ -1,5 +1,6 @@
 use crate::{
     config_edit::ConfigFile,
+    retry::{self, Part},
     speech::{self, NOT_CAUGHT},
     store::Store,
     transport::{read_frame, write_frame},
@@ -26,8 +27,8 @@ pub use xflow_core::ipc::Command;
 use xflow_core::{
     config::{Config, DictionaryConfig, HotkeyConfig},
     ipc::{
-        CleanupOutcome, Delivery, Grant, HistoryEntry, Permissions, Request, Response, Timings,
-        MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
+        CleanupOutcome, Delivery, FailedAudio, Grant, HistoryEntry, Permissions, Request, Response,
+        Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     },
     AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, FieldEvent,
     GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
@@ -185,9 +186,32 @@ pub struct Engine {
     timings: Timings,
     last_timings: Option<Timings>,
     served: Option<(String, Option<String>)>,
+    /// Where a failed dictation is kept for `retry`; None never keeps one.
+    kept_dir: Option<PathBuf>,
+    kept: Option<FailedAudio>,
+    /// The session in progress retries the kept dictation: cancel discards it.
+    retrying: bool,
+    #[cfg(test)]
+    keep_hook: Option<KeepHook>,
     events: broadcast::Sender<Response>,
     desktop_events: broadcast::Sender<DesktopEvent>,
 }
+/// Where `transcribe` keeps a dictation that failed (see `retry`).
+#[derive(Default)]
+struct Keep {
+    dir: Option<PathBuf>,
+    created_at: i64,
+    retry: bool,
+    /// The retried dictation's parts that were already delivered...
+    delivered: Vec<bool>,
+    /// ...and are delivered again only when `full`.
+    full: bool,
+    #[cfg(test)]
+    hook: Option<KeepHook>,
+}
+/// Test-only: runs in the save thread at "staged" and "committed".
+#[cfg(test)]
+type KeepHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// A segment's transcript, or its audio and energy flag for one retry after stop.
 type Piece = std::result::Result<Transcript, (anyhow::Error, AudioClip, bool)>;
 /// The current recording, transcribed in segments while it continues (see
@@ -251,6 +275,11 @@ impl Engine {
             timings: Timings::default(),
             last_timings: None,
             served: None,
+            kept_dir: None,
+            kept: None,
+            retrying: false,
+            #[cfg(test)]
+            keep_hook: None,
             events,
             desktop_events,
         }
@@ -313,7 +342,150 @@ impl Engine {
         } else {
             r.timings = self.last_timings.clone();
         }
+        r.failed_audio = self.kept.clone();
         r
+    }
+    /// Where failed dictations go while `privacy.keep_failed_audio` is on.
+    fn keeping(&self) -> Option<&std::path::Path> {
+        self.kept_dir
+            .as_deref()
+            .filter(|_| self.config.privacy.keep_failed_audio)
+    }
+    /// Reads the kept dictation from disk; while idle, deletes what is expired,
+    /// invalid, never committed or no longer allowed.
+    fn load_kept(&mut self) {
+        let Some(dir) = self.kept_dir.as_deref() else {
+            return;
+        };
+        let kept = retry::load(dir)
+            .ok()
+            .flatten()
+            .filter(|_| self.config.privacy.keep_failed_audio);
+        if !self.active() {
+            let cleaned = match kept {
+                Some(_) => retry::prune(dir),
+                None => retry::clear(dir),
+            };
+            if let Err(e) = cleaned {
+                log(
+                    "warn",
+                    &format!("could not delete kept failed audio: {e:#}"),
+                );
+            }
+        }
+        self.kept = kept.map(|k| k.summary());
+    }
+    /// Deletes what `generation` kept, then re-reads the disk.
+    fn discard_session(&mut self, generation: u64) {
+        let Some(dir) = self.keeping().map(ToOwned::to_owned) else {
+            return;
+        };
+        if let Err(e) = retry::discard(&dir, &retry::session(generation)) {
+            log(
+                "warn",
+                &format!("could not delete kept failed audio: {e:#}"),
+            );
+        }
+        self.load_kept();
+    }
+    fn discard_kept(&mut self) -> Result<()> {
+        self.kept = None;
+        self.kept_dir.as_deref().map_or(Ok(()), retry::clear)
+    }
+    /// Transcribes the kept dictation's failed parts again, then cleans up and
+    /// delivers like `stop`, to the current focus: never the window it failed in.
+    fn retry(
+        &mut self,
+        full: bool,
+        delivery: Delivery,
+        completion: &mpsc::Sender<Completion>,
+    ) -> Result<()> {
+        if self.active() || self.opening.is_some() || self.delivering || self.reloading {
+            bail!("xflow is busy; retry when the current dictation is done");
+        }
+        let dir = self
+            .kept_dir
+            .clone()
+            .context("no failed dictation is kept")?;
+        let kept = retry::load(&dir)?
+            .filter(|_| self.config.privacy.keep_failed_audio)
+            .context("no failed dictation is kept")?;
+        if let Some(finalize) = self.observing.take() {
+            let _ = finalize.send(());
+        }
+        self.advance();
+        self.retrying = true;
+        self.mode = Mode::Dictation;
+        self.delivery = delivery;
+        self.timings = Timings {
+            audio_ms: kept.audio_ms.min(u64::from(u32::MAX)) as u32,
+            ..Timings::default()
+        };
+        let mut sent = tokio::task::JoinSet::new();
+        let mut delivered = Vec::with_capacity(kept.parts.len());
+        for (index, part) in kept.parts.into_iter().enumerate() {
+            let (stt, config, dir) = (self.services.stt.clone(), self.config.clone(), dir.clone());
+            match part {
+                Part::Text {
+                    text,
+                    delivered: d,
+                    provider,
+                } => {
+                    delivered.push(d);
+                    let transcript = Transcript {
+                        provider,
+                        text,
+                        language: None,
+                    };
+                    sent.spawn(async move { (index, Ok(transcript)) });
+                }
+                Part::Audio { low_energy } => {
+                    delivered.push(false);
+                    sent.spawn(async move {
+                        let audio = tokio::task::spawn_blocking(move || retry::audio(&dir, index))
+                            .await
+                            .unwrap_or_else(|e| Err(e.into()));
+                        let piece = match audio {
+                            Ok(audio) => {
+                                transcribe_segment(&*stt, audio, low_energy, &config).await
+                            }
+                            // An empty clip fails again locally, before any upload.
+                            Err(e) => Err((
+                                e,
+                                AudioClip {
+                                    samples: vec![],
+                                    sample_rate: 16_000,
+                                    channels: 1,
+                                },
+                                low_energy,
+                            )),
+                        };
+                        (index, piece)
+                    });
+                }
+            }
+        }
+        let desktop = self.services.desktop.clone();
+        let task = tokio::spawn(async move {
+            match delivery {
+                Delivery::None => AppContext::default(),
+                _ => desktop.context().await.unwrap_or_default(),
+            }
+        });
+        self.context_abort = Some(task.abort_handle());
+        self.context_job = Some(task);
+        self.set_state(State::Processing, None);
+        let keep = Keep {
+            dir: Some(dir),
+            created_at: kept.created_at,
+            retry: true,
+            delivered,
+            full,
+            #[cfg(test)]
+            hook: self.keep_hook.clone(),
+        };
+        self.transcribe(sent, 0, None, Instant::now(), keep, completion.clone());
+        Ok(())
     }
     fn active(&self) -> bool {
         matches!(self.state, State::Listening | State::Processing)
@@ -488,6 +660,7 @@ impl Engine {
             let _ = finalize.send(());
         }
         self.advance();
+        self.retrying = false;
         self.mode = mode;
         self.delivery = delivery;
         self.started = Some(Instant::now());
@@ -601,7 +774,17 @@ impl Engine {
         self.timings.audio_ms = segments.audio_ms.min(u64::from(u32::MAX)) as u32;
         self.cue(xflow_platform::Cue::Stop);
         self.set_state(State::Processing, None);
-        self.transcribe(segments.sent, live, warning, stopped, completion);
+        let keep = match self.keeping().filter(|_| self.mode == Mode::Dictation) {
+            Some(dir) => Keep {
+                dir: Some(dir.to_owned()),
+                created_at: retry::now(),
+                #[cfg(test)]
+                hook: self.keep_hook.clone(),
+                ..Keep::default()
+            },
+            None => Keep::default(),
+        };
+        self.transcribe(segments.sent, live, warning, stopped, keep, completion);
         Ok(())
     }
     /// Pulls the audio captured so far into the segment pipeline.
@@ -675,6 +858,7 @@ impl Engine {
         live: usize,
         warning: Option<String>,
         stopped: Instant,
+        keep: Keep,
         completion: mpsc::Sender<Completion>,
     ) {
         let services = self.services.clone();
@@ -700,6 +884,8 @@ impl Engine {
                 })
             });
         self.job = Some(tokio::spawn(async move {
+            // A retry with nothing left to transcribe.
+            let mut recovered = false;
             let result = async {
                 let (mut pieces, mut failed) = (Vec::with_capacity(sent.len()), None);
                 while let Some(joined) = sent.join_next().await {
@@ -720,7 +906,9 @@ impl Engine {
                 }
                 let mut providers = Vec::new();
                 let (mut parts, mut language) = (Vec::with_capacity(pieces.len()), None);
-                for (_, piece) in pieces {
+                // Every part in order, while a failure can still keep them (see `retry`).
+                let mut kept = Vec::new();
+                for (index, piece) in pieces {
                     let piece = match piece {
                         Err((error, audio, low_energy)) if segmented && !error.is::<xflow_providers::FailoverExhausted>() => {
                             transcribe_segment(&*services.stt, audio, low_energy, &config).await
@@ -730,23 +918,69 @@ impl Engine {
                     match piece {
                         Ok(transcript) => {
                             let provider = transcript.provider.unwrap_or_else(|| services.stt.name().into());
-                            if !providers.contains(&provider) { providers.push(provider); }
                             language = language.or(transcript.language);
-                            parts.push(transcript.text);
+                            let delivered = keep.delivered.get(index).copied().unwrap_or(false);
+                            if keep.dir.is_some() {
+                                kept.push((Part::Text { text: transcript.text.clone(), delivered, provider: Some(provider.clone()) }, None));
+                            }
+                            // Credit only the providers whose text this session delivers.
+                            if !delivered || keep.full {
+                                if !providers.contains(&provider) { providers.push(provider); }
+                                parts.push(transcript.text);
+                            }
                         }
-                        Err((e, ..)) if segmented => {
+                        Err((e, audio, low_energy)) => {
                             failed.get_or_insert(e);
+                            if keep.dir.is_some() {
+                                kept.push((Part::Audio { low_energy }, Some(audio)));
+                            }
                         }
-                        Err((e, ..)) => return Err(e),
                     }
                 }
                 timings.stt_ms = ms(stopped.elapsed());
                 let raw = join_parts(&parts, language.as_deref().or(config.stt.language.as_deref()));
+                let note = match keep.dir.clone() {
+                    Some(dir) if failed.is_some() => {
+                        let delivering = !raw.is_empty();
+                        let (parts, audio): (Vec<_>, Vec<_>) = kept
+                            .into_iter()
+                            .map(|(part, audio)| match part {
+                                Part::Text { text, delivered, provider } => (Part::Text { text, delivered: delivered || delivering, provider }, audio),
+                                part => (part, audio),
+                            })
+                            .unzip();
+                        let audio = audio.into_iter().flatten().collect();
+                        let (epoch, created_at) = (epoch.clone(), keep.created_at);
+                        #[cfg(test)]
+                        let hook = keep.hook.clone();
+                        let saved = tokio::task::spawn_blocking(move || {
+                            let staged = retry::stage(&dir, retry::session(generation), created_at, parts, audio)?;
+                            #[cfg(test)]
+                            if let Some(hook) = &hook { hook("staged"); }
+                            // A canceled or cleared session keeps nothing.
+                            retry::commit(staged, || epoch.load(Ordering::SeqCst) == generation)?;
+                            #[cfg(test)]
+                            if let Some(hook) = &hook { hook("committed"); }
+                            anyhow::Ok(())
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(e.into()));
+                        match saved {
+                            Ok(()) => "; its audio is kept for 24 h: run xflow retry",
+                            Err(e) => {
+                                log("warn", &format!("could not keep the failed audio: {e:#}"));
+                                ""
+                            }
+                        }
+                    }
+                    _ => "",
+                };
+                recovered = keep.retry && failed.is_none();
                 if raw.len() > 32 * 1024 {
                     bail!("transcript exceeds 32 KiB safety limit");
                 }
                 if raw.is_empty() {
-                    return failed.map_or(Ok(None), Err);
+                    return failed.map_or(Ok(None), |e| Err(anyhow::anyhow!("{e:#}{note}")));
                 }
                 let mut warning = warning;
                 for provider in providers.iter().filter(|id| id.as_str() != services.stt.name()) {
@@ -764,7 +998,7 @@ impl Engine {
                     if session_mode == Mode::Command {
                         return Err(e.context("part of the command could not be transcribed; selection left untouched"));
                     }
-                    add_warning(&mut warning, &format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered"));
+                    add_warning(&mut warning, &format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered{note}"));
                 }
                 let target = if let Some(ref mut job) = context {
                     match tokio::time::timeout(Duration::from_secs(2), &mut *job).await {
@@ -909,6 +1143,15 @@ impl Engine {
                 }))
             }
             .await;
+            // Only once the text is safe in `last` (and history): a later error keeps it.
+            if let Some(dir) = keep.dir.as_deref().filter(|_| recovered && result.is_ok()) {
+                if let Err(e) = retry::clear(dir) {
+                    log(
+                        "warn",
+                        &format!("could not delete kept failed audio: {e:#}"),
+                    );
+                }
+            }
             let _ = completion
                 .send(Completion::Ready { generation, result })
                 .await;
@@ -924,9 +1167,14 @@ impl Engine {
         }
     }
     async fn cancel(&mut self) -> Result<()> {
+        let processing = (self.state == State::Processing).then_some(self.generation);
         self.advance();
         if let Some(job) = self.job.take() {
             job.abort();
+        }
+        // A save the session committed just before the cancel goes with it.
+        if let Some(generation) = processing {
+            self.discard_session(generation);
         }
         self.segments = Segments::default();
         self.abort_context();
@@ -1011,7 +1259,17 @@ impl Engine {
                     return Ok(None);
                 }
             }
-            Request::Cancel => self.cancel().await?,
+            // Canceling a retry discards the kept dictation; shutdown keeps it.
+            Request::Cancel | Request::Retry { discard: true, .. } => {
+                let retrying = self.retrying && self.active();
+                if retrying || matches!(request, Request::Cancel) {
+                    self.cancel().await?;
+                }
+                if retrying || matches!(request, Request::Retry { .. }) {
+                    self.discard_kept()?;
+                }
+            }
+            Request::Retry { full, delivery, .. } => self.retry(full, delivery, completion)?,
             Request::Abandon { session } => {
                 if session == self.generation && self.active() {
                     self.cancel().await?;
@@ -1053,6 +1311,11 @@ impl Engine {
                 tokio::time::Instant::from_std(
                     s + Duration::from_secs(self.config.recording.max_seconds as u64),
                 )
+            });
+            // Kept audio is deleted when it expires, even with no client asking.
+            let expiry = self.kept.as_ref().filter(|_| !self.active()).map(|k| {
+                tokio::time::Instant::now()
+                    + Duration::from_secs((k.expires_at - retry::now()).max(0) as u64 + 1)
             });
             // First the waiting message, then the start grace.
             let opening = self
@@ -1102,6 +1365,7 @@ impl Engine {
                         if matches!(request, Request::ClearHistory) {
                             if self.active() { let _ = self.cancel().await; } else { self.advance(); }
                             self.last = None; self.last_timings = None; pending = None;
+                            if let Err(e) = self.discard_kept() { log("warn", &format!("could not delete kept failed audio: {e:#}")); }
                         }
                         let status = self.status(); let store = self.store.clone(); let desktop = self.services.desktop.clone(); let last = self.last.clone();
                         let desktop_query = is_desktop_query(&request);
@@ -1109,7 +1373,7 @@ impl Engine {
                         if desktop_query { desktop_ops.spawn(work); } else { queries.spawn(work); }
                         continue;
                     }
-                    if matches!(request, Request::Start { .. } | Request::Toggle { .. }) && !self.active() && !desktop_ops.is_empty() { let _ = reply.send(Response::error(self.state, "desktop delivery is busy")); continue; }
+                    if matches!(request, Request::Start { .. } | Request::Toggle { .. } | Request::Retry { discard: false, .. }) && !self.active() && !desktop_ops.is_empty() { let _ = reply.send(Response::error(self.state, "desktop delivery is busy")); continue; }
                     let shutdown = matches!(request, Request::Shutdown);
                     match self.handle(request, &completion_tx).await {
                         Ok(Some(response)) => { let _ = reply.send(response); }
@@ -1124,8 +1388,11 @@ impl Engine {
                     Completion::Opened(result) => self.opened(result).await,
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
+                        if self.keeping().is_some() { self.load_kept(); }
                         match result { Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
+                    // Late, from a canceled session: nothing it kept may stay.
+                    Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
                     Completion::Finished { generation, mut processed, result } => {
                         self.delivering = false;
                         if generation != self.generation { continue; }
@@ -1156,7 +1423,7 @@ impl Engine {
                     Completion::Reloaded { result, reply } => {
                         self.reloading = false;
                         let learned = self.learned_during_reload.take();
-                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys_blind = !self.permissions.as_ref().is_some_and(|p| p.events()); retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
+                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys_blind = !self.permissions.as_ref().is_some_and(|p| p.events()); retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.load_kept(); self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
                     }
                     Completion::Rearmed(result) => {
@@ -1177,7 +1444,6 @@ impl Engine {
                         let mut r = self.status(); r.message = Some(message.clone()); let _ = self.events.send(r);
                         self.notify("XFlow dictionary", &message);
                     }
-                    _ => (),
                 },
                 _ = async {}, if pending.is_some() => {
                     let mut processed = pending.take().unwrap();
@@ -1256,6 +1522,10 @@ impl Engine {
                             }
                         }
                     }
+                }
+                _ = async { if let Some(at) = expiry { tokio::time::sleep_until(at).await; } }, if expiry.is_some() => {
+                    self.load_kept();
+                    self.publish();
                 }
                 _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } }, if deadline.is_some() => {
                     if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
@@ -2076,6 +2346,8 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     );
     engine.config_path = Some(config_path);
     engine.persistence_warning = persistence_warning;
+    engine.kept_dir = Some(crate::paths::data_dir()?.join("failed"));
+    engine.load_kept();
     #[cfg(target_os = "macos")]
     {
         if native {
@@ -3045,6 +3317,61 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn a_retry_gets_smart_spacing_exactly_when_a_dictation_would() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        for (delivery, pasted, copied) in [
+            (Delivery::Inject, Some("Post gres is ready "), None),
+            (Delivery::Clipboard, None, Some("post gres is ready ")),
+        ] {
+            let desktop = Arc::new(RecordingDesktop {
+                around: Some(("Done. ", "")),
+                ..RecordingDesktop::default()
+            });
+            let mut config = Config::default();
+            config.privacy.keep_failed_audio = true;
+            let store = Store::open(std::path::Path::new("unused"), false, 5).unwrap();
+            let (mut engine, tx, rx, mut events, _) = fixture(config, desktop.clone(), store);
+            let clip = AudioClip {
+                samples: vec![0.2; 16_000],
+                sample_rate: 16_000,
+                channels: 1,
+            };
+            let audio = vec![Part::Audio { low_energy: false }];
+            retry::save(&dir, retry::now(), audio, vec![clip]).unwrap();
+            engine.kept_dir = Some(dir.clone());
+            engine.load_kept();
+            let task = tokio::spawn(engine.run(rx));
+            let request = Request::Retry {
+                full: false,
+                delivery,
+                discard: false,
+            };
+            assert_eq!(ask(&tx, request).await.state, State::Processing);
+            success(&mut events).await;
+            assert_eq!(
+                desktop
+                    .injections
+                    .lock()
+                    .unwrap()
+                    .first()
+                    .map(String::as_str),
+                pasted
+            );
+            assert_eq!(
+                desktop.copies.lock().unwrap().first().map(String::as_str),
+                copied
+            );
+            assert_eq!(
+                ask(&tx, Request::Last).await.text.as_deref(),
+                Some("post gres is ready ")
+            );
+            assert!(!dir.exists());
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
     async fn status_and_subscription_report_daemon_permissions_and_tap_evidence() {
         let (mut engine, tx, rx, _, _) = fixture(
             Config::default(),
@@ -3327,10 +3654,13 @@ mod tests {
                 channels: 1,
             }
         }
-        /// Milliseconds into the recording where `clip` starts.
+        /// Milliseconds into the recording where `clip` starts; the nearest sample
+        /// for a clip kept as PCM16 (see `retry`).
         fn position(&self, clip: &AudioClip) -> usize {
             let first = clip.samples[0];
-            self.samples.iter().position(|s| *s == first).unwrap() / 16
+            let nearest = |s: &&f32| ((**s - first).abs() * 1e9) as u64;
+            let sample = self.samples.iter().min_by_key(nearest).unwrap();
+            self.samples.iter().position(|s| s == sample).unwrap() / 16
         }
     }
     #[async_trait]
@@ -3380,10 +3710,13 @@ mod tests {
         failures: usize,
         failed_over: bool,
         calls: AtomicUsize,
-        /// Segments (by start, ms) that fail on every attempt.
+        /// Segments (by start, ms) that fail on every attempt until `healed`.
         broken: Option<fn(usize) -> bool>,
+        healed: AtomicBool,
         hang: bool,
         dropped: Arc<AtomicUsize>,
+        /// Answers come from the backup provider.
+        backup: AtomicBool,
     }
     struct DropCount(Arc<AtomicUsize>);
     impl Drop for DropCount {
@@ -3408,7 +3741,9 @@ mod tests {
             if self.hang {
                 std::future::pending::<()>().await;
             }
-            if self.broken.is_some_and(|broken| broken(start))
+            if self
+                .broken
+                .is_some_and(|broken| broken(start) && !self.healed.load(Ordering::SeqCst))
                 || self.calls.fetch_add(1, Ordering::SeqCst) < self.failures
             {
                 let error = anyhow::anyhow!("provider returned HTTP 500");
@@ -3423,7 +3758,7 @@ mod tests {
             ))
             .await;
             Ok(Transcript {
-                provider: None,
+                provider: self.backup.load(Ordering::SeqCst).then(|| "backup".into()),
                 text: self
                     .words
                     .map_or_else(|| format!("at{start}"), |words| words(start).into()),
@@ -3685,6 +4020,313 @@ mod tests {
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }
+    }
+    type KeptFixture = (
+        Engine,
+        mpsc::Sender<Command>,
+        mpsc::Receiver<Command>,
+        broadcast::Receiver<Response>,
+        Arc<RecordingDesktop>,
+        Arc<SegmentStt>,
+    );
+    /// A segmented dictation whose provider is down; `kept` opts in to keeping it.
+    fn kept_fixture(broken: fn(usize) -> bool, kept: Option<&std::path::Path>) -> KeptFixture {
+        // 100 s: segments start at 0, ~30 and ~60 s.
+        let audio = Arc::new(StreamAudio::ramp(100, 90, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            broken: Some(broken),
+            words: Some(|start| ["one", "two", "three"][(start / 30_000).min(2)]),
+            ..SegmentStt::default()
+        });
+        let (mut engine, tx, rx, events, desktop) = segment_fixture(audio, stt.clone());
+        engine.config.privacy.keep_failed_audio = kept.is_some();
+        engine.kept_dir = kept.map(Into::into);
+        (engine, tx, rx, events, desktop, stt)
+    }
+    async fn dictate(tx: &mpsc::Sender<Command>, stt: &SegmentStt) {
+        let sent = stt.clips.lock().unwrap().len();
+        assert!(ask(tx, Request::start()).await.ok);
+        wait_for(|| stt.clips.lock().unwrap().len() > sent).await;
+        assert!(ask(tx, Request::Stop).await.ok);
+    }
+    fn retry(full: bool) -> Request {
+        Request::Retry {
+            full,
+            delivery: Delivery::Inject,
+            discard: false,
+        }
+    }
+    #[tokio::test]
+    async fn a_failed_dictation_is_kept_only_when_opted_in_and_survives_a_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let down: fn(usize) -> bool = |_| true;
+        // Off by default: nothing reaches the disk.
+        let (engine, tx, rx, mut events, _, stt) = kept_fixture(down, None);
+        let task = tokio::spawn(engine.run(rx));
+        dictate(&tx, &stt).await;
+        let error = timeout_event_error(&mut events).await;
+        assert!(!error.message.unwrap().contains("kept"));
+        assert!(ask(&tx, Request::Status).await.failed_audio.is_none());
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+        assert!(!dir.exists());
+
+        let (engine, tx, rx, mut events, _, stt) = kept_fixture(down, Some(&dir));
+        let task = tokio::spawn(engine.run(rx));
+        dictate(&tx, &stt).await;
+        let error = timeout_event_error(&mut events).await;
+        assert!(error
+            .message
+            .unwrap()
+            .contains("HTTP 500; its audio is kept for 24 h: run xflow retry"));
+        let kept = error.failed_audio.unwrap();
+        assert_eq!((kept.audio_ms, kept.partial), (100_000, false));
+        assert_eq!(kept.expires_at - kept.created_at, 24 * 3600);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+
+        // A restarted daemon offers it; the retry sends only kept audio, in order.
+        let (mut engine, tx, rx, mut events, desktop, stt) = kept_fixture(down, Some(&dir));
+        engine.load_kept();
+        assert_eq!(engine.status().failed_audio, Some(kept));
+        stt.healed.store(true, Ordering::SeqCst);
+        let task = tokio::spawn(engine.run(rx));
+        assert_eq!(ask(&tx, retry(false)).await.state, State::Processing);
+        let done = success(&mut events).await;
+        assert_eq!(done.text.as_deref(), Some("one two three "));
+        assert_eq!(*desktop.injections.lock().unwrap(), ["one two three "]);
+        assert_eq!(stt.clips.lock().unwrap().len(), 3);
+        assert!(done.failed_audio.is_none());
+        assert!(!dir.exists(), "a successful retry deletes the audio");
+        assert!(!ask(&tx, retry(false)).await.ok, "nothing left to retry");
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_partial_retry_delivers_only_the_lost_part_unless_full() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let (engine, tx, rx, mut events, desktop, stt) =
+            kept_fixture(|start| (30_000..31_000).contains(&start), Some(&dir));
+        let task = tokio::spawn(engine.run(rx));
+        dictate(&tx, &stt).await;
+        let done = success(&mut events).await;
+        assert!(done.message.unwrap().contains("its audio is kept for 24 h"));
+        assert!(done.failed_audio.unwrap().partial);
+        let kept = std::fs::read_to_string(dir.join("current/kept.json")).unwrap();
+        assert!(kept.contains("one") && !kept.contains("two"), "{kept}");
+        assert!(dir.join("current/1.wav").exists() && !dir.join("current/0.wav").exists());
+
+        stt.healed.store(true, Ordering::SeqCst);
+        ask(&tx, retry(false)).await;
+        success(&mut events).await;
+        assert_eq!(
+            *desktop.injections.lock().unwrap(),
+            ["one three ", "two "],
+            "the delivered parts are not pasted again"
+        );
+        assert!(!dir.exists());
+
+        // A retry that fails again keeps the dictation and its original expiry.
+        stt.healed.store(false, Ordering::SeqCst);
+        dictate(&tx, &stt).await;
+        let first = success(&mut events).await.failed_audio.unwrap();
+        ask(&tx, retry(false)).await;
+        let again = timeout_event_error(&mut events).await;
+        assert_eq!(again.failed_audio, Some(first));
+        stt.healed.store(true, Ordering::SeqCst);
+        ask(&tx, retry(true)).await;
+        success(&mut events).await;
+        assert_eq!(
+            desktop.injections.lock().unwrap().last().unwrap(),
+            "one two three "
+        );
+        assert!(!dir.exists());
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_cancel_or_clear_during_a_slow_save_leaves_nothing_on_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let left =
+            |dir: &std::path::Path| std::fs::read_dir(dir).map_or(0, |entries| entries.count());
+        for (point, request) in [
+            ("staged", Request::Cancel),
+            ("committed", Request::Cancel),
+            ("staged", Request::ClearHistory),
+            ("committed", Request::ClearHistory),
+        ] {
+            let (mut engine, tx, rx, _, _, stt) = kept_fixture(|_| true, Some(&dir));
+            let (entered, inside) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let released = Mutex::new(released);
+            engine.keep_hook = Some(Arc::new(move |at: &str| {
+                if at == point {
+                    entered.send(()).unwrap();
+                    released.lock().unwrap().recv().unwrap();
+                }
+            }));
+            let task = tokio::spawn(engine.run(rx));
+            dictate(&tx, &stt).await;
+            wait_for(|| inside.try_recv().is_ok()).await;
+            assert!(ask(&tx, request.clone()).await.ok, "{point} {request:?}");
+            release.send(()).unwrap();
+            wait_for(|| left(&dir) == 0).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(left(&dir), 0, "{point} {request:?}");
+            assert!(ask(&tx, Request::Status).await.failed_audio.is_none());
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn a_retry_goes_through_failover_and_credits_only_the_provider_that_answered() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let middle: fn(usize) -> bool = |start| (30_000..31_000).contains(&start);
+        let (mut engine, tx, rx, mut events, desktop, stt) = kept_fixture(middle, Some(&dir));
+        // The whole failover chain already failed: no second attempt at stop.
+        let stt = Arc::new(SegmentStt {
+            audio: stt.audio.clone(),
+            broken: Some(middle),
+            failed_over: true,
+            words: stt.words,
+            ..SegmentStt::default()
+        });
+        engine.services.stt = stt.clone();
+        let task = tokio::spawn(engine.run(rx));
+        dictate(&tx, &stt).await;
+        assert!(success(&mut events).await.failed_audio.unwrap().partial);
+        let audio = stt.audio.as_ref().unwrap();
+        let attempts = || {
+            let clips = stt.clips.lock().unwrap();
+            clips.iter().filter(|c| middle(audio.position(c))).count()
+        };
+        assert_eq!(attempts(), 1);
+        assert!(std::fs::read_to_string(dir.join("current/kept.json"))
+            .unwrap()
+            .contains(r#""provider":"fixture""#));
+        // The retry uses the same failover service; the backup answers.
+        stt.healed.store(true, Ordering::SeqCst);
+        stt.backup.store(true, Ordering::SeqCst);
+        ask(&tx, retry(false)).await;
+        let done = success(&mut events).await;
+        assert_eq!(attempts(), 2);
+        assert_eq!(desktop.injections.lock().unwrap().last().unwrap(), "two ");
+        assert_eq!(done.provider.as_deref(), Some("backup"));
+        assert!(done
+            .message
+            .unwrap()
+            .contains("Transcribed by backup (fixture didn't answer)"));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_retry_that_fails_after_transcribing_keeps_the_audio() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let (mut engine, tx, rx, mut events, desktop, stt) = kept_fixture(|_| true, Some(&dir));
+        // Three segments of 12.5 KB: joined, past the 32 KiB transcript limit.
+        let stt = Arc::new(SegmentStt {
+            audio: stt.audio.clone(),
+            broken: Some(|_| true),
+            words: Some(|_| {
+                static LONG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+                LONG.get_or_init(|| "word ".repeat(2500))
+            }),
+            ..SegmentStt::default()
+        });
+        engine.services.stt = stt.clone();
+        let task = tokio::spawn(engine.run(rx));
+        dictate(&tx, &stt).await;
+        let kept = timeout_event_error(&mut events).await.failed_audio;
+        assert!(kept.is_some());
+        stt.healed.store(true, Ordering::SeqCst);
+        ask(&tx, retry(false)).await;
+        let error = timeout_event_error(&mut events).await;
+        assert!(error.message.unwrap().contains("32 KiB"));
+        assert_eq!(error.failed_audio, kept);
+        assert!(dir.join("current/0.wav").exists());
+        assert!(desktop.injections.lock().unwrap().is_empty());
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn discard_clear_cancel_expiry_and_opting_out_delete_the_kept_audio() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let keep = |created_at| {
+            let clip = AudioClip {
+                samples: vec![0.2; 16_000],
+                sample_rate: 16_000,
+                channels: 1,
+            };
+            retry::save(
+                &dir,
+                created_at,
+                vec![Part::Audio { low_energy: false }],
+                vec![clip],
+            )
+            .unwrap();
+        };
+        let (mut engine, tx, rx, mut events, _, stt) = kept_fixture(|_| false, Some(&dir));
+        keep(retry::now() - retry::TTL_SECS + 1);
+        engine.load_kept();
+        let task = tokio::spawn(engine.run(rx));
+        // Expiry runs on a timer; no request is needed.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while events.recv().await.unwrap().failed_audio.is_some() {}
+        })
+        .await
+        .unwrap();
+        assert!(!dir.exists(), "expired");
+        let removes = [
+            Request::Retry {
+                full: false,
+                delivery: Delivery::Inject,
+                discard: true,
+            },
+            Request::ClearHistory,
+        ];
+        for request in removes {
+            keep(retry::now());
+            assert!(dir.exists());
+            assert!(ask(&tx, request).await.ok);
+            assert!(!dir.exists());
+        }
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+
+        // Shutting down mid-retry keeps it; canceling the retry discards it.
+        keep(retry::now());
+        for cancel in [false, true] {
+            let (mut engine, tx, rx, _, desktop, _) = kept_fixture(|_| false, Some(&dir));
+            engine.services.stt = Arc::new(SegmentStt {
+                hang: true,
+                audio: stt.audio.clone(),
+                ..SegmentStt::default()
+            });
+            engine.load_kept();
+            let task = tokio::spawn(engine.run(rx));
+            assert_eq!(ask(&tx, retry(false)).await.state, State::Processing);
+            if cancel {
+                assert_eq!(ask(&tx, Request::Cancel).await.state, State::Idle);
+            }
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+            assert_eq!(dir.exists(), !cancel);
+            assert!(desktop.injections.lock().unwrap().is_empty());
+        }
+
+        // Turning the setting off deletes it at the next start.
+        let (mut engine, ..) = kept_fixture(|_| false, Some(&dir));
+        keep(retry::now());
+        engine.config.privacy.keep_failed_audio = false;
+        engine.load_kept();
+        assert!(engine.kept.is_none() && !dir.exists());
     }
     #[tokio::test]
     async fn every_segment_gets_dictionary_hints_and_the_joined_text_snaps_once() {

@@ -367,6 +367,8 @@ pub struct PrivacyConfig {
     pub history: bool,
     pub history_limit: usize,
     pub offline: bool,
+    /// Keep a failed dictation's audio (one, private, at most 24 h) for `xflow retry`.
+    pub keep_failed_audio: bool,
 }
 impl Default for PrivacyConfig {
     fn default() -> Self {
@@ -374,6 +376,7 @@ impl Default for PrivacyConfig {
             history: true,
             history_limit: 500,
             offline: false,
+            keep_failed_audio: false,
         }
     }
 }

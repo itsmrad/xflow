@@ -27,6 +27,7 @@ Commands:
   last         Print the last transcript
   copy         Copy the last transcript [alias: copy-last]
   paste        Insert the last transcript into the focused app [alias: paste-last]
+  retry        Transcribe the failed dictation kept by privacy.keep_failed_audio again and print it
   history      Browse, search and export local dictation history
   config       Inspect or edit validated, comment-preserving TOML configuration
   providers    List providers, inspect capabilities and select a default
@@ -280,6 +281,25 @@ Usage: xflow paste [OPTIONS]
 
 Options:
       --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow retry
+
+Transcribe the failed dictation kept by privacy.keep_failed_audio again and print it
+
+```text
+Transcribe the failed dictation kept by privacy.keep_failed_audio again and print it
+
+Usage: xflow retry [OPTIONS]
+
+Options:
+      --full           Also include the parts that were delivered when it failed
+      --json           Emit machine-readable JSON (watch emits one object per event)
+      --discard        Delete the kept audio instead
   -q, --quiet          Suppress confirmations; requested data and errors remain visible
       --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
       --config <PATH>  Read/write an alternate configuration file

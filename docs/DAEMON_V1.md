@@ -103,6 +103,27 @@ There is no idle level polling. Completed capture retrieves buffered audio or
 surfaces the original device error. Session generations prevent canceled results
 or stale context from affecting later sessions.
 
+## Failed audio (`privacy.keep_failed_audio`, off by default)
+
+When opted in, a dictation whose transcription fails (provider 429/5xx, offline)
+keeps the audio of its failed segments as 16 kHz mono PCM16 WAV, plus the text of
+the segments that succeeded, in recording order, in `$XDG_DATA_HOME/xflow/failed`
+(0700 directory, 0600 files, never followed through symlinks). Only one is kept,
+up to 40 MB (the 20-minute recording cap); a new failure replaces it. Command mode
+keeps nothing. `xflow retry`, the TUI's `R` or the `retry` request sends only the
+failed segments through the normal pipeline, to the current focus or clipboard,
+never the window the dictation failed in; a retry pasted there gets
+`injection.smart_spacing` like any dictation. Segments already delivered with a
+partial result are left out unless `--full`, so nothing is pasted twice. The
+kept audio is deleted by a successful retry, canceling a retry, `retry --discard`,
+clear-history, turning the setting off, or 24 hours after the original failure
+(a timer while idle, and at startup); a retry that fails again keeps the first
+expiry; it outlives a retry that fails at any later step, such as the 32 KiB
+transcript limit. A save is staged, then renamed in under a lock only while its
+session is live, so a cancel or clear-history during a save leaves nothing on
+disk; uncommitted leftovers are pruned while idle. Status shows what is kept;
+logs never contain its audio or text. No retry runs in the background.
+
 Once desktop delivery starts, cancel/shutdown lets it finish key release rather
 than aborting it midway. New recording is briefly refused while that delivery
 finishes; stale completion cannot overwrite current state. Shutdown also drains

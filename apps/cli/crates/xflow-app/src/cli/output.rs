@@ -137,6 +137,16 @@ impl Output {
         if let Some(mode) = response.mode {
             rows.push(vec!["Mode".into(), format!("{mode:?}").to_lowercase()]);
         }
+        if let Some(kept) = &response.failed_audio {
+            rows.push(vec![
+                "Failed audio".into(),
+                format!(
+                    "{} s kept until {} (unix); xflow retry",
+                    kept.audio_ms / 1000,
+                    kept.expires_at
+                ),
+            ]);
+        }
         if let Some(timings) = &response.timings {
             rows.push(vec![
                 "Last latency (ms)".into(),

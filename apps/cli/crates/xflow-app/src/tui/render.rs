@@ -329,6 +329,8 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
             };
             if app.page != Page::Home {
                 out.push(("Esc back", Some(Action::Back)));
+            } else if app.status.failed_audio.is_some() {
+                out.push(("R retry", Some(Action::Retry)));
             }
             out.extend([
                 ("Tab next page", None),
