@@ -1536,27 +1536,33 @@ mod tests {
             reply_budget(Some(&text), 300, start),
             Duration::from_millis(2300)
         );
+        // Count receipt polls instead of timing them, so a slow runner cannot race the test.
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let polls = std::sync::Arc::new(AtomicUsize::new(0));
         let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
         let guard = lock.clone().try_lock_owned().unwrap();
         let (reply, replied) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        let (land, landed) = std::sync::mpsc::channel();
+        let counted = polls.clone();
+        let worker = std::thread::spawn(move || {
             let _guard = guard;
             await_paste(
-                || false,
+                || counted.fetch_add(1, SeqCst) > 0 && landed.try_recv().is_ok(),
                 reply_budget(None, 300, start),
-                |confirmed| reply.send((confirmed, start.elapsed())).unwrap(),
+                |confirmed| reply.send((confirmed, counted.load(SeqCst))).unwrap(),
             );
         });
-        let (confirmed, at) = replied.recv().unwrap();
-        assert!(at < Duration::from_millis(200), "{at:?}");
+        let (confirmed, polls_at_reply) = replied.recv().unwrap();
+        assert_eq!(polls_at_reply, 1, "replied after one look, without waiting");
         assert_eq!(
             injection_outcome(Decision::Paste, confirmed),
             InjectionOutcome::Uncertain
         );
-        assert!(
-            lock.try_lock().is_err(),
-            "the pending paste still holds the lock"
-        );
+        // The worker keeps the lock and keeps watching until a late receipt lands.
+        let _ = land.send(());
+        worker.join().unwrap();
+        assert!(polls.load(SeqCst) > 1);
+        drop(lock.blocking_lock());
     }
     #[test]
     fn opaque_paste_is_uncertain_and_unknown_focus_is_copy_only() {
@@ -1641,18 +1647,21 @@ mod tests {
         let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
         let guard = lock.clone().try_lock_owned().unwrap();
         let start = Instant::now();
+        let budget = receipt_budget(config.injection.restore_delay_ms, start);
+        // Leaves the 10 s IPC timeout room for focus checks and clipboard commands.
+        assert!(budget <= Duration::from_secs(4), "{budget:?}");
         let (reply, replied) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _guard = guard;
             await_paste(
                 || false,
-                receipt_budget(config.injection.restore_delay_ms, start),
+                budget,
                 |confirmed| reply.send((confirmed, start.elapsed())).unwrap(),
             );
         });
+        // Lower bounds only: a loaded CI runner may oversleep, never undersleep.
         let (confirmed, at) = replied.recv().unwrap();
-        // Leaves the 10 s IPC timeout room for focus checks and clipboard commands.
-        assert!(!confirmed && at <= Duration::from_millis(4100), "{at:?}");
+        assert!(!confirmed && at >= budget, "{at:?}");
         drop(lock.blocking_lock());
         assert!(start.elapsed() >= PENDING_PASTE);
     }
