@@ -5397,7 +5397,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn terminal_multiline_is_plain_copied_once_and_never_submitted() {
+    async fn terminal_multiline_copies_but_normal_editor_buffers_paste() {
         for (app, terminal_input) in [
             ("com.mitchellh.ghostty", false),
             ("com.microsoft.VSCode", true),
@@ -5443,20 +5443,29 @@ mod tests {
             .await;
             ask(&tx, Request::Stop).await;
             let r = success(&mut events).await;
-            assert_eq!(r.injection, Some(InjectionOutcome::ClipboardOnly));
-            assert!(desktop.injections.lock().unwrap().is_empty());
-            let copied = desktop.copies.lock().unwrap().clone();
-            assert_eq!(copied.len(), 1);
             if terminal_input || app == "com.mitchellh.ghostty" {
+                assert_eq!(r.injection, Some(InjectionOutcome::ClipboardOnly));
+                assert!(desktop.injections.lock().unwrap().is_empty());
                 assert_eq!(
-                    copied[0],
-                    "git status\necho \"$VARS\" `some_fn()`\necho 'userId' ..."
+                    *desktop.copies.lock().unwrap(),
+                    ["git status\necho \"$VARS\" `some_fn()`\necho 'userId' ..."]
                 );
+                assert!(r
+                    .message
+                    .unwrap()
+                    .contains("Terminal paste capability unverified"));
+            } else {
+                assert_eq!(r.injection, Some(InjectionOutcome::Pasted));
+                assert_eq!(
+                    *desktop.injections.lock().unwrap(),
+                    ["git status\necho “$VARS” `some_fn()`\necho ‘userId’ …\n"]
+                );
+                assert!(desktop.copies.lock().unwrap().is_empty());
+                assert!(!r
+                    .message
+                    .unwrap_or_default()
+                    .contains("Terminal paste capability unverified"));
             }
-            assert!(r
-                .message
-                .unwrap()
-                .contains("Terminal paste capability unverified"));
             assert_eq!(desktop.watches.load(Ordering::SeqCst), 0);
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();

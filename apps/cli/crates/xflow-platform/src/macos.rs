@@ -36,6 +36,9 @@ extern "C" {
     fn CFGetTypeID(value: Ref) -> usize;
     fn CFHash(value: Ref) -> usize;
     fn CFStringGetTypeID() -> usize;
+    fn CFArrayGetTypeID() -> usize;
+    fn CFArrayGetCount(array: Ref) -> isize;
+    fn CFArrayGetValueAtIndex(array: Ref, index: isize) -> Ref;
     fn CFStringCreateWithBytes(
         allocator: Ref,
         bytes: *const u8,
@@ -540,7 +543,10 @@ fn focus_waiting(wait: bool) -> Focus {
     focus.context.terminal_input = ["AXTitle", "AXDescription", "AXIdentifier"]
         .iter()
         .filter_map(|name| element.text(name))
-        .any(|label| terminal_input_label(&label));
+        .any(|label| terminal_input_label(&label))
+        || element
+            .attribute("AXDOMClassList")
+            .is_some_and(|classes| terminal_dom_classes(&classes));
     focus.editable = if focus.secure
         || element.flag("AXEnabled") == Some(false)
         || element.flag("AXEditable") == Some(false)
@@ -581,6 +587,22 @@ fn is_secure(role: Option<&str>, subrole: Option<&str>, protected: Option<bool>)
 fn terminal_input_label(label: &str) -> bool {
     let label = label.trim().to_ascii_lowercase();
     label == "terminal input" || label == "terminal-input" || label == "xterm-helper-textarea"
+}
+/// Chromium exposes CSS classes as an array, independently of localized labels.
+fn terminal_dom_classes(classes: &Owned) -> bool {
+    if unsafe { CFGetTypeID(classes.0) != CFArrayGetTypeID() } {
+        return false;
+    }
+    let count = unsafe { CFArrayGetCount(classes.0) };
+    (0..=128).contains(&count)
+        && (0..count).any(|i| {
+            cf_text(unsafe { CFArrayGetValueAtIndex(classes.0, i) }).as_deref()
+                == Some("xterm-helper-textarea")
+        })
+}
+/// Shared by selection, paste receipts and the caret/correction reader.
+fn text_reads_allowed(focus: &Focus) -> bool {
+    !focus.secure && !terminal_context(&focus.context)
 }
 fn is_container(role: &str) -> bool {
     matches!(
@@ -835,16 +857,11 @@ impl Desktop for MacDesktop {
     async fn selection(&self) -> Result<Option<String>> {
         tokio::task::spawn_blocking(|| {
             let focus = focus();
-            Ok(
-                if focus.secure
-                    || terminal_context(&focus.context)
-                    || crate::desktop::integrated_editor(focus.context.app_id.as_deref())
-                {
-                    None
-                } else {
-                    focus.element.and_then(|e| e.text("AXSelectedText"))
-                },
-            )
+            Ok(if !text_reads_allowed(&focus) {
+                None
+            } else {
+                focus.element.and_then(|e| e.text("AXSelectedText"))
+            })
         })
         .await?
     }
@@ -932,10 +949,7 @@ impl Desktop for MacDesktop {
             let field = current
                 .element
                 .as_ref()
-                .filter(|_| {
-                    !terminal_context(&current.context)
-                        && !crate::desktop::integrated_editor(current.context.app_id.as_deref())
-                })
+                .filter(|_| text_reads_allowed(&current))
                 .map(|f| (f, snapshot(f)))
                 .filter(|(_, before)| before.0.is_some() || before.1.is_some());
             if let Err(e) = send_keys(&text_owned, action == Decision::Type) {
@@ -1241,7 +1255,6 @@ mod tests {
     }
     extern "C" {
         fn PasteboardCopyItemFlavors(pasteboard: Ref, item: Ref, flavors: *mut Ref) -> i32;
-        fn CFArrayGetCount(array: Ref) -> isize;
     }
     /// Whether the first item lists any flavor, without fetching (and so
     /// without resolving) a promise.
@@ -1690,6 +1703,36 @@ mod tests {
         assert!(receipt_budget(10_000, waited) <= Duration::from_secs(3));
         let waited = Instant::now() - Duration::from_secs(9);
         assert_eq!(receipt_budget(10_000, waited), Duration::ZERO);
+    }
+    #[test]
+    fn terminal_dom_class_list_detects_localized_xterm_input() {
+        #[link(name = "CoreFoundation", kind = "framework")]
+        extern "C" {
+            fn CFArrayCreate(
+                allocator: Ref,
+                values: *const Ref,
+                count: isize,
+                callbacks: Ref,
+            ) -> Ref;
+        }
+        // Null callbacks: these strings stay alive until the borrowed array is dropped.
+        let contains = |values: &[&str]| {
+            let strings: Vec<_> = values.iter().map(|s| Owned::string(s)).collect();
+            let refs: Vec<_> = strings.iter().map(|s| s.0).collect();
+            let array = Owned::new(unsafe {
+                CFArrayCreate(ptr::null(), refs.as_ptr(), refs.len() as isize, ptr::null())
+            })
+            .unwrap();
+            terminal_dom_classes(&array)
+        };
+        assert!(contains(&["input", "xterm-helper-textarea", "focused"]));
+        assert!(contains(&["xterm-helper-textarea"]));
+        assert!(!contains(&[]));
+        assert!(!contains(&["editor", "xterm-helper-textarea-other"]));
+        assert!(!contains(&["editor xterm-helper-textarea"]));
+        assert!(!terminal_dom_classes(&Owned::string(
+            "xterm-helper-textarea"
+        )));
     }
     #[test]
     fn terminal_input_labels_and_password_prompt_refusal() {
