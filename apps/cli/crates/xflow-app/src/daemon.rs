@@ -5531,17 +5531,24 @@ mod tests {
     }
     #[tokio::test]
     async fn scratch_that_alone_discards_without_cleanup_or_paste() {
-        // The parser's outcome decides, not the raw words (#107 review).
-        for said in [
-            "Um, scratch that.",
-            "Bring notes. Scratch, that.",
-            "Scratch\nthat.",
+        // The parser's outcome decides, not the raw words (#107 review), in an
+        // editor and in a guarded terminal (#112) alike.
+        for (said, app) in [
+            ("Um, scratch that.", None),
+            ("Bring notes. Scratch, that.", None),
+            ("Scratch\nthat.", None),
+            ("Bring notes. Scratch that.", Some("com.mitchellh.ghostty")),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
             // Smart spacing (#109) has a field to read: a discard still pastes nothing.
             let desktop = Arc::new(RecordingDesktop {
                 around: Some(("Done.", "")),
+                context: app.map(|app| AppContext {
+                    app_id: Some(app.into()),
+                    ..Default::default()
+                }),
+                guard_terminal: app.is_some(),
                 ..RecordingDesktop::default()
             });
             let mut config = Config::default();

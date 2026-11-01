@@ -68,7 +68,9 @@ edit, and so does a cue left over after the repairs or seen before one: the
 text stays whole. A value with a sign, currency or sigil ("-4", "€400",
 "@Mike", or spaced "- 4") is never swapped. Fillers before "scratch that" ("Um,
 scratch that.", "You know, scratch that.") belong to the cancel; any other
-words before it, with a sentence before them, leave the scope unclear. "Scratch that" or "never mind" as
+words before it, with a sentence before them, leave the scope unclear, and a
+sentence-final cancel that isn't applied always goes to model cleanup. An edit
+that would unbalance brackets or quotes is not made. "Scratch that" or "never mind" as
 its own clause deletes the sentence before it (a full stop after "Mr." ends no
 sentence, and an unsure one such as "p.m.", "St." or "etc." refuses the edit);
 after a full stop it is always a cancel, even after "said" or "that"; at the end of a dictation it

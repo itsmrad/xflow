@@ -131,9 +131,13 @@ pub fn apply(text: &str) -> (String, Outcome) {
             }
             (None, ambiguous) => {
                 let ambiguous = ambiguous || doubt;
-                // A cue left over after a repair ("buy 3 apples, I mean 4, no, 5"):
-                // the edit is only partial, so nothing is edited.
-                if edited != text && (ambiguous || Ctx::new(&edited).any_cue()) {
+                // A cue left over after a repair ("buy 3 apples, I mean 4, no, 5"),
+                // or brackets and quotes the edit left unbalanced: nothing is edited.
+                if edited != text
+                    && (ambiguous
+                        || Ctx::new(&edited).any_cue()
+                        || balanced(text) && !balanced(&edited))
+                {
                     return (text.to_owned(), Outcome::Ambiguous);
                 }
                 let outcome = if ambiguous {
@@ -156,6 +160,30 @@ pub fn ambiguous(text: &str) -> bool {
     apply(text).1 == Outcome::Ambiguous
 }
 
+/// Brackets close in order, and straight quotes and backticks pair up.
+fn balanced(text: &str) -> bool {
+    let mut open = Vec::new();
+    for c in text.chars() {
+        match c {
+            '(' | '[' | '{' | '“' => open.push(c),
+            ')' | ']' | '}' | '”' => {
+                let want = match c {
+                    ')' => '(',
+                    ']' => '[',
+                    '}' => '{',
+                    _ => '“',
+                };
+                if open.pop() != Some(want) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    open.is_empty()
+        && text.matches('"').count().is_multiple_of(2)
+        && text.matches('`').count().is_multiple_of(2)
+}
 /// A quote mark, or a possessive that may be one; an apostrophe inside a word
 /// ("o'clock", "don’t") isn't. An edit never spans one.
 fn quote_mark(text: &str, at: usize, c: char) -> bool {
@@ -507,6 +535,15 @@ fn pass(text: &str) -> (Option<String>, bool) {
     let mut i = 0;
     while i < c.t.len() {
         let Some(end) = c.cue(i) else {
+            // A sentence ending in a refused cancel ("He called. Just scratch that.")
+            // goes to the model, unless it is quoted or mentioned ("the phrase …").
+            if let Some((end, ["scratch", "that"] | ["never", "mind"])) = c.phrase(i) {
+                let mention = i > 0
+                    && !c.initial(i)
+                    && (MENTIONS.contains(&c.lower(i - 1))
+                        || DETERMINERS.contains(&c.lower(i - 1)));
+                ambiguous |= !c.quoted[i] && !mention && (end == c.t.len() || c.initial(end));
+            }
             // Skip only the refused phrase: "Sorry, scratch that." still cancels.
             i = c.phrase(i).map_or(i + 1, |(end, _)| end);
             continue;
@@ -583,6 +620,14 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
             .take_while(|&k| j + k < i && end + k < c.t.len() && c.same(j + k, end + k))
             .count();
         let content = (0..m).all(|k| !FUNCTION.contains(&c.lower(j + k)));
+        // Only plain punctuation between the cue and the restart: "no no (we …" stays.
+        let plain = c
+            .gap(end)
+            .chars()
+            .all(|g| g.is_whitespace() || ",.;:!?—".contains(g));
+        if (m >= 3 || m == 2 && content) && !plain {
+            return None;
+        }
         if m >= 3 || m == 2 && content {
             // The opening said more than once ("it is a problem, it is a problem,
             // no no, it is …"): which one is retracted isn't certain.
@@ -880,6 +925,14 @@ mod tests {
             ("He called. Right then, scratch that. Bring notes.", "He called. Right then, scratch that. Bring notes.", Ambiguous),
             // A frame longer than the words before the old value never underflows.
             ("three, actually make it five", "three, actually make it five", Ambiguous),
+            // Ninth review: a refused cancel ending a sentence goes to the model.
+            ("He called. Just scratch that.", "He called. Just scratch that.", Ambiguous),
+            ("He called. Just never mind.", "He called. Just never mind.", Ambiguous),
+            // A restart never drops opening punctuation or a sigil.
+            ("We should call Alice, no no (we should call Bob).", "We should call Alice, no no (we should call Bob).", Ambiguous),
+            ("We should call Alice, no no ( we should call Bob ).", "We should call Alice, no no ( we should call Bob ).", Ambiguous),
+            ("I will use the old setting, no no @ I will use the new setting.", "I will use the old setting, no no @ I will use the new setting.", Ambiguous),
+            ("Meet at noon (bring notes. Scratch that. Call me).", "Meet at noon (bring notes. Scratch that. Call me).", Ambiguous),
         ] {
             assert_eq!(apply(input), (output.to_owned(), outcome), "{input}");
             assert_eq!(ambiguous(input), outcome == Ambiguous, "{input}");

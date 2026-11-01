@@ -1667,6 +1667,8 @@ mod tests {
         assert!(cleanup_can_help("Tuesday, no wait, check first"));
         assert!(!cleanup_can_help("Sorry, I mean Monday."));
         assert!(!cleanup_can_help("I actually agree."));
+        // A sentence-final "scratch that" the local pass refused is never pasted as is.
+        assert!(cleanup_can_help("He called. Just scratch that."));
         assert!(cleanup_can_help("one two three four five six seven"));
         // Mostly code: nothing for a model to improve.
         assert!(!cleanup_can_help(
