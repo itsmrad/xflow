@@ -91,7 +91,25 @@ specific Fn gesture). No permission polling runs at idle. The integrated daemon 
 
 Rust platform code prefers `org.xflow.Shell.Inject` when the name has an owner and falls back to
 `wl-copy` + `ydotool` (Wayland) or `xclip` + `xdotool` (X11). The terminal list and multiline-terminal
-safety check stay in Rust (`safe_target`).
+safety check stay in Rust (`safe_target`). macOS uses that same terminal list.
+
+`AppContext.terminal_input` is an additive bool (serde default false) identifying
+an integrated terminal from focused AX element metadata. It is not a capability
+claim. macOS checks `AXTitle`, `AXDescription`, and `AXIdentifier` for known terminal
+input labels; it never reads terminal contents to classify focus. Missing/localized
+labels in VS Code/Cursor/Zed/JetBrains cannot bypass the control-character guard:
+multiline/control input in these apps copies only, including editor buffers.
+Changed terminal-input classification also copies only. Single-line behavior is
+unchanged; native secure/protected fields refuse injection. Shell password prompts
+that are not exposed as secure AX fields remain an unverified limitation.
+
+No live bracketed-paste capability is yet proven, so terminal newlines, tabs,
+carriage returns, ESC/framing bytes and other controls still copy only. Process
+names (`claude`, `codex`, `aider`) never grant a capability. Never wrap clipboard
+text in raw `ESC[200~`/`ESC[201~`: the terminal must own that framing after its
+foreground program enables mode 2004. Automatic Enter/send-it remains deferred.
+No IPC version bump: the optional context field leaves existing enum variants
+and requests unchanged, and the delivery adapter always rechecks live focus.
 
 ## Traits (`xflow-core`)
 

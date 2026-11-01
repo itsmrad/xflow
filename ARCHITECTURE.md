@@ -50,7 +50,7 @@ transient sibling `xflow overlay-pill` helper, with AppKit loaded dynamically in
 that helper only. Its bounded stdin contains state/level, never transcript text.
 Linux retains the GNOME extension and its existing D-Bus path.
 
-`AppContext` contains optional app/window identifiers and selected text. An empty context is an honest capability limitation, not proof of context discovery. The MVP's combined `Desktop` trait is intentionally small; split clipboard/context/injection interfaces only when a real second implementation requires independent ownership.
+`AppContext` contains optional app/window identifiers and selected text, plus a default-false `terminal_input` hint for focused integrated terminals. The hint never establishes bracketed-paste capability. An empty context is an honest capability limitation, not proof of context discovery. The MVP's combined `Desktop` trait is intentionally small; split clipboard/context/injection interfaces only when a real second implementation requires independent ownership.
 
 `supports_streaming` currently distinguishes batch from streaming, but cannot on its own expose language, vocabulary, selection, hotkey-release or overlay support. Future adapters should add tested capability descriptions and typed unsupported/permission errors. Until then, diagnostics and returned errors must make missing capability visible; do not set a flag just because a protocol-shaped method exists.
 

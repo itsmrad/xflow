@@ -1,4 +1,5 @@
 //! Accessibility and CGEvent delivery without NSApplication or an AppKit run loop.
+use crate::desktop::{is_terminal, terminal_context, terminal_controls};
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use std::{
@@ -536,6 +537,10 @@ fn focus_waiting(wait: bool) -> Focus {
     };
     let role = role.unwrap_or_default();
     focus.secure = secure(&element);
+    focus.context.terminal_input = ["AXTitle", "AXDescription", "AXIdentifier"]
+        .iter()
+        .filter_map(|name| element.text(name))
+        .any(|label| terminal_input_label(&label));
     focus.editable = if focus.secure
         || element.flag("AXEnabled") == Some(false)
         || element.flag("AXEditable") == Some(false)
@@ -572,26 +577,16 @@ fn is_secure(role: Option<&str>, subrole: Option<&str>, protected: Option<bool>)
         || subrole == Some("AXSecureTextField")
         || protected == Some(true)
 }
+/// Labels, never AXValue: terminal contents may include secrets.
+fn terminal_input_label(label: &str) -> bool {
+    let label = label.trim().to_ascii_lowercase();
+    label == "terminal input" || label == "terminal-input" || label == "xterm-helper-textarea"
+}
 fn is_container(role: &str) -> bool {
     matches!(
         role,
         "" | "AXWebArea" | "AXGroup" | "AXWindow" | "AXScrollArea" | "AXUnknown" | "AXApplication"
     )
-}
-fn is_terminal(app: Option<&str>) -> bool {
-    let app = app.unwrap_or_default().to_ascii_lowercase();
-    [
-        "terminal",
-        "iterm",
-        "ghostty",
-        "warp",
-        "kitty",
-        "alacritty",
-        "wezterm",
-        "hyper",
-    ]
-    .iter()
-    .any(|t| app.contains(t))
 }
 #[derive(Debug, PartialEq)]
 enum Decision {
@@ -616,7 +611,8 @@ fn decision(text: &str, method: InjectionMethod, target: &AppContext, current: &
         || target.window_id != current.context.window_id
         || current.editable != Some(true)
         // Terminal control characters can submit commands; leave them on the clipboard.
-        || (is_terminal(current.context.app_id.as_deref()) && text.chars().any(char::is_control))
+        || terminal_controls(text, &current.context)
+        || target.terminal_input != current.context.terminal_input
     {
         return Decision::Copy;
     }
@@ -839,11 +835,16 @@ impl Desktop for MacDesktop {
     async fn selection(&self) -> Result<Option<String>> {
         tokio::task::spawn_blocking(|| {
             let focus = focus();
-            Ok(if focus.secure {
-                None
-            } else {
-                focus.element.and_then(|e| e.text("AXSelectedText"))
-            })
+            Ok(
+                if focus.secure
+                    || terminal_context(&focus.context)
+                    || crate::desktop::integrated_editor(focus.context.app_id.as_deref())
+                {
+                    None
+                } else {
+                    focus.element.and_then(|e| e.text("AXSelectedText"))
+                },
+            )
         })
         .await?
     }
@@ -931,6 +932,10 @@ impl Desktop for MacDesktop {
             let field = current
                 .element
                 .as_ref()
+                .filter(|_| {
+                    !terminal_context(&current.context)
+                        && !crate::desktop::integrated_editor(current.context.app_id.as_deref())
+                })
                 .map(|f| (f, snapshot(f)))
                 .filter(|(_, before)| before.0.is_some() || before.1.is_some());
             if let Err(e) = send_keys(&text_owned, action == Decision::Type) {
@@ -1382,6 +1387,7 @@ mod tests {
             app_id: Some("app".into()),
             window_id: Some("1:2".into()),
             selected_text: None,
+            terminal_input: false,
         };
         for (editable, expected) in [
             (Some(true), Decision::Paste),
@@ -1686,6 +1692,52 @@ mod tests {
         assert_eq!(receipt_budget(10_000, waited), Duration::ZERO);
     }
     #[test]
+    fn terminal_input_labels_and_password_prompt_refusal() {
+        for label in [
+            "Terminal input",
+            " Terminal Input ",
+            "terminal-input",
+            "xterm-helper-textarea",
+        ] {
+            assert!(terminal_input_label(label), "{label}");
+        }
+        for label in ["", "Editor", "terminal.rs", "claude", "codex", "aider"] {
+            assert!(!terminal_input_label(label), "{label}");
+        }
+        let context = AppContext {
+            app_id: Some("com.microsoft.VSCode".into()),
+            window_id: Some("1:2".into()),
+            terminal_input: true,
+            ..Default::default()
+        };
+        let mut current = Focus {
+            context: context.clone(),
+            editable: Some(true),
+            ..Default::default()
+        };
+        for method in [InjectionMethod::Paste, InjectionMethod::Type] {
+            for text in [
+                "line one\nline two",
+                "\u{1b}[200~prompt\u{1b}[201~",
+                "\r",
+                "\0",
+            ] {
+                assert_eq!(decision(text, method, &context, &current), Decision::Copy);
+            }
+            current.secure = true;
+            assert_eq!(
+                decision("password", method, &context, &current),
+                Decision::Refuse
+            );
+            current.secure = false;
+        }
+        current.context.terminal_input = false;
+        assert_eq!(
+            decision("prompt", InjectionMethod::Paste, &context, &current),
+            Decision::Copy
+        );
+    }
+    #[test]
     fn delivery_requires_same_window_nonsecure_focus_and_safe_terminal_input() {
         use Decision::*;
         use InjectionMethod::{Clipboard, Paste as P, Type as T};
@@ -1693,6 +1745,7 @@ mod tests {
             app_id: Some("com.apple.TextEdit".into()),
             window_id: Some("1:2".into()),
             selected_text: None,
+            terminal_input: false,
         };
         let mut current = Focus {
             context: target.clone(),

@@ -67,6 +67,9 @@ pub struct AppContext {
     pub app_id: Option<String>,
     pub window_id: Option<String>,
     pub selected_text: Option<String>,
+    /// Focused terminal input inside an editor; not proof of bracketed-paste support.
+    #[serde(default)]
+    pub terminal_input: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

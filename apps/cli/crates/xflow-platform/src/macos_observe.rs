@@ -4,7 +4,7 @@
 //! request and never leaves the daemon. Also reads the few characters around
 //! the caret that smart spacing needs.
 use super::{
-    cf_text, focus, focus_waiting, is_terminal, secure, AXUIElementCreateApplication,
+    cf_text, focus, focus_waiting, secure, AXUIElementCreateApplication,
     AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementSetMessagingTimeout, CFGetTypeID,
     CFRelease, Focus, Owned, Ref,
 };
@@ -98,7 +98,10 @@ pub(super) fn watch(target: &AppContext) -> Option<Watch> {
 }
 /// Only known-editable fields are read: never secure fields, terminals or unknown elements.
 fn readable(focus: &Focus) -> bool {
-    focus.editable == Some(true) && !focus.secure && !is_terminal(focus.context.app_id.as_deref())
+    focus.editable == Some(true)
+        && !focus.secure
+        && !crate::terminal_context(&focus.context)
+        && !crate::desktop::integrated_editor(focus.context.app_id.as_deref())
 }
 /// Observe `element` of app `pid`; a watch without notifications when the app
 /// refuses an observer, so reads still work.
@@ -358,6 +361,11 @@ mod tests {
             ..Focus::default()
         };
         assert!(readable(&field("com.apple.TextEdit", Some(true), false)));
+        assert!(!readable(&field("org.tabby", Some(true), false)));
+        assert!(!readable(&field("com.microsoft.VSCode", Some(true), false)));
+        let mut integrated = field("org.example.Editor", Some(true), false);
+        integrated.context.terminal_input = true;
+        assert!(!readable(&integrated));
         assert!(!readable(&field("com.apple.TextEdit", Some(true), true)));
         assert!(!readable(&field("com.apple.TextEdit", None, false)));
         assert!(!readable(&field("com.apple.TextEdit", Some(false), false)));

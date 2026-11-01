@@ -1015,7 +1015,7 @@ impl Engine {
                 if selection.len() > MAX_MESSAGE_BYTES {
                     bail!("selected text exceeds safety limit");
                 }
-                let terminal = xflow_platform::is_terminal(target.app_id.as_deref());
+                let terminal = xflow_platform::terminal_context(&target);
                 let local = xflow_core::text::before_cleanup(&raw, &config, terminal);
                 let style = xflow_core::text::style(&config, target.app_id.as_deref());
                 let mode = style.and_then(|s| s.mode).unwrap_or(config.cleanup.mode);
@@ -1096,6 +1096,11 @@ impl Engine {
                     local
                 };
                 let text = xflow_core::text::after_cleanup(&text, &config);
+                let text = if terminal {
+                    xflow_core::text::terminal_plain(&text)
+                } else {
+                    text
+                };
                 if text.trim().is_empty() {
                     bail!("no speech recognized after formatting");
                 }
@@ -1400,6 +1405,10 @@ impl Engine {
                         match result {
                             Ok(outcome) => {
                                 if outcome == Some(InjectionOutcome::ClipboardOnly) { self.notify("XFlow transcript copied", "Paste manually to insert your dictation."); }
+                                if outcome == Some(InjectionOutcome::ClipboardOnly)
+                                    && xflow_platform::terminal_controls(&processed.text, &processed.target) {
+                                    add_warning(&mut processed.warning, "Terminal paste capability unverified");
+                                }
                                 let message = delivery_message(processed.warning.take(), outcome);
                                 // One final success event: subscribers can trust its complete payload.
                                 self.last_timings = Some(processed.timings.clone());
@@ -3063,6 +3072,8 @@ mod tests {
     #[derive(Default)]
     struct RecordingDesktop {
         contexts: AtomicUsize,
+        context: Option<AppContext>,
+        guard_terminal: bool,
         copies: Mutex<Vec<String>>,
         injections: Mutex<Vec<String>>,
         block_context: Option<Arc<Notify>>,
@@ -3112,10 +3123,10 @@ mod tests {
             if let Some(block) = &self.block_context {
                 block.notified().await;
             }
-            Ok(AppContext {
+            Ok(self.context.clone().unwrap_or_else(|| AppContext {
                 app_id: Some("Org.Editor".into()),
                 ..AppContext::default()
-            })
+            }))
         }
         async fn selection(&self) -> Result<Option<String>> {
             Ok((!self.empty_selection).then(|| "selected draft".into()))
@@ -3124,7 +3135,11 @@ mod tests {
             self.copies.lock().unwrap().push(text.into());
             Ok(())
         }
-        async fn inject(&self, text: &str, _: &AppContext) -> Result<InjectionOutcome> {
+        async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome> {
+            if self.guard_terminal && xflow_platform::terminal_controls(text, target) {
+                self.copy(text).await?;
+                return Ok(InjectionOutcome::ClipboardOnly);
+            }
             self.injections.lock().unwrap().push(text.into());
             if let Some(field) = self.field.lock().unwrap().as_mut() {
                 field.push_str(text);
@@ -5377,6 +5392,72 @@ mod tests {
                     .is_some_and(|m| m.contains("Cleanup changed too much")),
                 rejected
             );
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn terminal_multiline_is_plain_copied_once_and_never_submitted() {
+        for (app, terminal_input) in [
+            ("com.mitchellh.ghostty", false),
+            ("com.microsoft.VSCode", true),
+            ("com.microsoft.VSCode", false),
+        ] {
+            let context = AppContext {
+                app_id: Some(app.into()),
+                window_id: Some("scratch".into()),
+                terminal_input,
+                ..Default::default()
+            };
+            let desktop = Arc::new(RecordingDesktop {
+                context: Some(context),
+                guard_terminal: true,
+                ..Default::default()
+            });
+            let mut config = Config::default();
+            config.cleanup.mode = CleanupMode::Light;
+            config.snippets.push(xflow_core::config::Snippet {
+                trigger: "terminal fixture".into(),
+                text: "git status\necho “$VARS” `some_fn()`\necho ‘userId’ …\n".into(),
+            });
+            let (mut engine, tx, rx, mut events, _) = fixture(
+                config,
+                desktop.clone(),
+                Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+            );
+            engine.services.stt = Arc::new(ImmediateStt {
+                calls: Arc::default(),
+                text: "terminal fixture",
+            });
+            let task = tokio::spawn(engine.run(rx));
+            ask(
+                &tx,
+                Request::Start {
+                    mode: Mode::Dictation,
+                    context: None,
+                    t0_us: None,
+                    delivery: Delivery::Inject,
+                    hold: false,
+                },
+            )
+            .await;
+            ask(&tx, Request::Stop).await;
+            let r = success(&mut events).await;
+            assert_eq!(r.injection, Some(InjectionOutcome::ClipboardOnly));
+            assert!(desktop.injections.lock().unwrap().is_empty());
+            let copied = desktop.copies.lock().unwrap().clone();
+            assert_eq!(copied.len(), 1);
+            if terminal_input || app == "com.mitchellh.ghostty" {
+                assert_eq!(
+                    copied[0],
+                    "git status\necho \"$VARS\" `some_fn()`\necho 'userId' ..."
+                );
+            }
+            assert!(r
+                .message
+                .unwrap()
+                .contains("Terminal paste capability unverified"));
+            assert_eq!(desktop.watches.load(Ordering::SeqCst), 0);
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }

@@ -144,6 +144,28 @@ pub fn is_terminal(app: Option<&str>) -> bool {
         || app == "st"
 }
 
+/// An integrated terminal identified by the focused element, or a terminal app.
+pub fn terminal_context(context: &AppContext) -> bool {
+    context.terminal_input || is_terminal(context.app_id.as_deref())
+}
+
+/// These editors can focus a terminal without exposing a recognizable AX label.
+/// Until that focus is verified, control characters must not bypass the guard.
+pub(crate) fn integrated_editor(app: Option<&str>) -> bool {
+    let app = app.unwrap_or_default().to_ascii_lowercase();
+    matches!(app.as_str(), "code" | "code-insiders" | "cursor" | "zed")
+        || app.starts_with("com.microsoft.vscode")
+        || app == "com.todesktop.230313mzl4w4u92"
+        || app == "dev.zed.zed"
+        || app.starts_with("com.jetbrains.")
+}
+
+/// Control characters requiring manual paste in terminal or ambiguous editor focus.
+pub fn terminal_controls(text: &str, context: &AppContext) -> bool {
+    (terminal_context(context) || integrated_editor(context.app_id.as_deref()))
+        && text.chars().any(char::is_control)
+}
+
 fn paste_shortcut(app: Option<&str>) -> &'static str {
     let app_lower = app.unwrap_or_default().to_ascii_lowercase();
     // xterm/rxvt traditionally paste PRIMARY with Shift+Insert. xclip fills
@@ -166,17 +188,18 @@ fn safe_target(text: &str, target: &AppContext, current: &AppContext) -> bool {
         || target.app_id.as_deref().is_none_or(str::is_empty)
         || target.window_id != current.window_id
         || target.app_id != current.app_id
+        || target.terminal_input != current.terminal_input
     {
         return false;
     }
     // Terminal control characters can submit commands even without a newline.
-    !(is_terminal(current.app_id.as_deref()) && text.chars().any(char::is_control))
+    !terminal_controls(text, current)
 }
 
 fn injection_options(config: &InjectionConfig, target: &AppContext) -> serde_json::Value {
     serde_json::json!({
         "method": if config.effective_method() == InjectionMethod::Type { "type" } else { "paste" },
-        "terminal": is_terminal(target.app_id.as_deref()),
+        "terminal": terminal_context(target),
         "restore_clipboard": config.restore_clipboard,
         "restore_delay_ms": config.restore_delay_ms,
         "target": {"app_id": target.app_id, "window_id": target.window_id},
@@ -353,6 +376,7 @@ fn sway_focus(value: &serde_json::Value) -> Option<AppContext> {
                 .map(str::to_owned),
             window_id: value["id"].as_u64().map(|id| id.to_string()),
             selected_text: None,
+            terminal_input: false,
         });
     }
     ["nodes", "floating_nodes"]
@@ -402,6 +426,7 @@ impl Desktop for LinuxDesktop {
             app_id: app,
             window_id: Some(window),
             selected_text: None,
+            terminal_input: false,
         })
     }
 
@@ -536,6 +561,7 @@ mod tests {
             app_id: app.map(str::to_owned),
             window_id: window.map(str::to_owned),
             selected_text: None,
+            terminal_input: false,
         }
     }
     #[test]
@@ -574,6 +600,10 @@ mod tests {
     #[test]
     fn terminal_shortcuts_and_multiline_guard() {
         for app in [
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "dev.warp.Warp-Stable",
+            "co.zeit.hyper",
             "org.gnome.Terminal",
             "org.gnome.Console",
             "org.gnome.Ptyxis",
@@ -597,7 +627,7 @@ mod tests {
         for app in ["xterm", "urxvt", "st"] {
             assert_eq!(paste_shortcut(Some(app)), "shift+Insert");
         }
-        let editor = target(Some("code"), Some("2"));
+        let editor = target(Some("org.example.Editor"), Some("2"));
         assert!(safe_target("line one\nline two", &editor, &editor));
         assert_eq!(paste_shortcut(Some("code")), "ctrl+v");
         // The daemon's list guard uses the same check on macOS bundle ids.
@@ -605,6 +635,43 @@ mod tests {
             assert!(is_terminal(Some(app)), "{app}");
         }
         assert!(!is_terminal(Some("com.tinyspeck.slackmacgap")));
+    }
+    #[test]
+    fn terminal_control_payloads_and_unverified_editor_terminals_copy_only() {
+        for app in [
+            "com.microsoft.VSCode",
+            "com.microsoft.VSCodeInsiders",
+            "com.todesktop.230313mzl4w4u92",
+            "dev.zed.Zed",
+            "com.jetbrains.intellij",
+            "code",
+            "cursor",
+            "zed",
+        ] {
+            let context = target(Some(app), Some("1"));
+            // A missing/localized terminal label cannot grant multiline capability.
+            for text in [
+                "line one\nline two",
+                "\r",
+                "\t",
+                "\u{1b}[200~prompt\u{1b}[201~",
+                "\u{1b}[201~\necho unsafe",
+                "\0",
+                "\u{7f}",
+            ] {
+                assert!(!safe_target(text, &context, &context), "{app}: {text:?}");
+            }
+        }
+        let mut context = target(Some("org.example.Editor"), Some("1"));
+        context.terminal_input = true;
+        assert!(terminal_context(&context));
+        assert!(!safe_target("prompt\nnext line", &context, &context));
+        let mut changed = context.clone();
+        changed.terminal_input = false;
+        assert!(!safe_target("prompt", &context, &changed));
+        assert!(!is_terminal(Some("claude")));
+        assert!(!is_terminal(Some("codex")));
+        assert!(!is_terminal(Some("aider")));
     }
     #[test]
     fn injection_options_and_outcomes_follow_contract() {
