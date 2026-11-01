@@ -406,7 +406,9 @@ mod tests {
     async fn app_matrix() {
         let pid: i32 = std::env::var("XFLOW_OBSERVE_PID").unwrap().parse().unwrap();
         let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) }).unwrap();
-        app.enable("AXManualAccessibility");
+        let _accessibility = super::super::AccessibilityGuard::enable(
+            Owned::new(unsafe { AXUIElementCreateApplication(pid) }).unwrap(),
+        );
         std::thread::sleep(Duration::from_millis(500));
         let focused = || {
             app.attribute("AXFocusedUIElement")
