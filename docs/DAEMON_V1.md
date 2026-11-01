@@ -112,7 +112,8 @@ the segments that succeeded, in recording order, in `$XDG_DATA_HOME/xflow/failed
 up to 40 MB (the 20-minute recording cap); a new failure replaces it. Command mode
 keeps nothing. `xflow retry`, the TUI's `R` or the `retry` request sends only the
 failed segments through the normal pipeline, to the current focus or clipboard,
-never the window the dictation failed in. Segments already delivered with a
+never the window the dictation failed in; a retry pasted there gets
+`injection.smart_spacing` like any dictation. Segments already delivered with a
 partial result are left out unless `--full`, so nothing is pasted twice. The
 kept audio is deleted by a successful retry, canceling a retry, `retry --discard`,
 clear-history, turning the setting off, or 24 hours after the original failure

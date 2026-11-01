@@ -3317,6 +3317,61 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn a_retry_gets_smart_spacing_exactly_when_a_dictation_would() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        for (delivery, pasted, copied) in [
+            (Delivery::Inject, Some("Post gres is ready "), None),
+            (Delivery::Clipboard, None, Some("post gres is ready ")),
+        ] {
+            let desktop = Arc::new(RecordingDesktop {
+                around: Some(("Done. ", "")),
+                ..RecordingDesktop::default()
+            });
+            let mut config = Config::default();
+            config.privacy.keep_failed_audio = true;
+            let store = Store::open(std::path::Path::new("unused"), false, 5).unwrap();
+            let (mut engine, tx, rx, mut events, _) = fixture(config, desktop.clone(), store);
+            let clip = AudioClip {
+                samples: vec![0.2; 16_000],
+                sample_rate: 16_000,
+                channels: 1,
+            };
+            let audio = vec![Part::Audio { low_energy: false }];
+            retry::save(&dir, retry::now(), audio, vec![clip]).unwrap();
+            engine.kept_dir = Some(dir.clone());
+            engine.load_kept();
+            let task = tokio::spawn(engine.run(rx));
+            let request = Request::Retry {
+                full: false,
+                delivery,
+                discard: false,
+            };
+            assert_eq!(ask(&tx, request).await.state, State::Processing);
+            success(&mut events).await;
+            assert_eq!(
+                desktop
+                    .injections
+                    .lock()
+                    .unwrap()
+                    .first()
+                    .map(String::as_str),
+                pasted
+            );
+            assert_eq!(
+                desktop.copies.lock().unwrap().first().map(String::as_str),
+                copied
+            );
+            assert_eq!(
+                ask(&tx, Request::Last).await.text.as_deref(),
+                Some("post gres is ready ")
+            );
+            assert!(!dir.exists());
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
     async fn status_and_subscription_report_daemon_permissions_and_tap_evidence() {
         let (mut engine, tx, rx, _, _) = fixture(
             Config::default(),
