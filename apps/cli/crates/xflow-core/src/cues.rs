@@ -11,6 +11,7 @@ struct Cue {
     right: &'static str,
     block_left: &'static str,
     block_right: &'static str,
+    after_left: &'static str,
 }
 
 fn entries() -> &'static [Cue] {
@@ -33,6 +34,7 @@ fn entries() -> &'static [Cue] {
                     right: fields[3],
                     block_left: fields[4],
                     block_right: fields[5],
+                    after_left: fields[6],
                 });
             }
         }
@@ -108,6 +110,10 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool) -> String {
     let (mut cursor, mut i) = (0, 0);
     let mut out = String::with_capacity(text.len());
     while i < tokens.len() {
+        if !tokens[i].eligible {
+            i += 1;
+            continue;
+        }
         let found = entries().iter().find_map(|cue| {
             if !cue.heard.starts_with(tokens[i].text) {
                 return None;
@@ -121,10 +127,15 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool) -> String {
         });
         // A blocked longer phrase must not fall back to a partial correction.
         let found = found.and_then(|(cue, end)| {
+            let after = lower[tokens[end - 1].end..].trim_start();
+            let boundary = after.is_empty() || after.starts_with([',', '.', ':', ';', '!', '?']);
+            let left = neighbour(&lower, &tokens, i, cue.left, true)
+                && (cue.after_left.is_empty()
+                    || boundary
+                    || neighbour(&lower, &tokens, end, cue.after_left, false));
             if neighbour(&lower, &tokens, i, cue.block_left, true)
                 || neighbour(&lower, &tokens, end, cue.block_right, false)
-                || !(neighbour(&lower, &tokens, i, cue.left, true)
-                    || neighbour(&lower, &tokens, end, cue.right, false))
+                || !(left || neighbour(&lower, &tokens, end, cue.right, false))
             {
                 return None;
             }
@@ -160,7 +171,12 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool) -> String {
         });
         if let Some((end, term)) = found {
             out.push_str(&text[cursor..tokens[i].start]);
-            out.push_str(term);
+            let input = &text[tokens[i].start..tokens[end - 1].end];
+            if input.chars().any(char::is_uppercase) && !input.chars().any(char::is_lowercase) {
+                out.push_str(&term.to_ascii_uppercase());
+            } else {
+                out.push_str(term);
+            }
             cursor = tokens[end - 1].end;
             i = end;
         } else {
@@ -270,6 +286,87 @@ mod tests {
     }
 
     #[test]
+    fn review_cloud_prose_is_unchanged() {
+        eprintln!("cue tests source: {}", env!("CARGO_MANIFEST_DIR"));
+        let config = Config::default();
+        for input in [
+            "ask cloud providers for a quote",
+            "ask cloud vendors",
+            "ask cloud support to help",
+            "tell cloud engineers to scale",
+            "ask cloud architects",
+            "ask cloud native folks",
+            "hey cloud team, any update",
+            "the bug is in cloud code not client code",
+            "try cloud code for vs code",
+            "use cloud code to debug kubernetes",
+            "we deploy with cloud code generation",
+            "ask cloud code reviewers",
+            "cloud code generation",
+            "cloud code reviewers",
+            "we need an open ai model that anyone can run",
+            "an anthropic model of cosmology",
+            "a codecs review",
+        ] {
+            assert_eq!(before_cleanup(input, &config, false), input, "{input}");
+        }
+    }
+
+    #[test]
+    fn addressing_cues_need_a_safe_continuation() {
+        let config = Config::default();
+        for (input, expected) in [
+            ("ask cloud to review", "ask Claude to review"),
+            ("ask cloud about this", "ask Claude about this"),
+            ("ask cloud for help", "ask Claude for help"),
+            ("ask cloud opus", "ask Claude opus"),
+            ("hey cloud", "hey Claude"),
+            ("hey cloud!", "hey Claude!"),
+            ("hey cloud, review this", "hey Claude, review this"),
+            ("hey cloud code", "hey Claude Code"),
+            ("ask cloud code to review", "ask Claude Code to review"),
+            ("tell cloud code about this", "tell Claude Code about this"),
+            ("ask cloud code for help", "ask Claude Code for help"),
+            ("hey cloud code!", "hey Claude Code!"),
+        ] {
+            assert_eq!(before_cleanup(input, &config, false), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn all_caps_corrections_keep_the_speakers_case() {
+        let config = Config::default();
+        for (input, expected) in [
+            ("ASK CLOUD TO REVIEW", "ASK CLAUDE TO REVIEW"),
+            ("HEY CLOUD CODE", "HEY CLAUDE CODE"),
+        ] {
+            assert_eq!(before_cleanup(input, &config, false), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn dictionary_phrases_protect_overlapping_cue_words() {
+        let mut config = Config::default();
+        for term in ["Google Cloud", "VS Code"] {
+            config.dictionary.words = vec![term.into()];
+            assert_eq!(
+                before_cleanup("hey cloud code", &config, false),
+                "hey cloud code"
+            );
+        }
+    }
+
+    #[test]
+    fn punctuation_tokens_skip_the_cue_search() {
+        let text = "... ".repeat(10_000);
+        let start = std::time::Instant::now();
+        assert_eq!(apply(&text, &Config::default(), false), text);
+        let elapsed = start.elapsed();
+        eprintln!("punctuation-only 40KB: {elapsed:?}");
+        assert!(elapsed.as_millis() < if cfg!(debug_assertions) { 100 } else { 20 });
+    }
+
+    #[test]
     fn controls_and_user_spellings_win() {
         let mut config = Config::default();
         config.formatting.snap_to_dictionary = false;
@@ -366,7 +463,7 @@ mod tests {
                 .split('\t')
                 .map(|field| if field == "-" { "" } else { field })
                 .collect();
-            assert_eq!(fields.len(), 6, "{line}");
+            assert_eq!(fields.len(), 7, "{line}");
             assert!(terms.insert(fields[0].to_ascii_lowercase()));
             assert!(!fields[2].is_empty() || !fields[3].is_empty(), "{line}");
             for form in fields[1].split('|') {

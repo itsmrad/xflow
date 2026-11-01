@@ -1,38 +1,38 @@
-# v1: canonical<TAB>heard forms (|)<TAB>left cues (|)<TAB>right cues (|)<TAB>left blockers (|)<TAB>right blockers (|); - = none
-# A neighbouring cue on either side is required; blockers always win. Longest heard form wins.
-Claude Code	cloud code|claude code	ask|hey|tell|use|try|with|in	-	google|the|aws|azure	storage|provider|computing
-Claude	cloud|claud|claude	ask|hey|tell	opus|sonnet	google|the|aws|azure|on	storage|provider|computing|flare|front|cover|formation|service|services
-Codex	codecs|codex	ask	cli|agent|review	video|audio|media	video|audio|compression
-Cursor	cursor	-	editor|ide	mouse|text|database	position|pointer|blink|blinks|blinking
-kubectl	cube cuddle|cube control|kube ctl|kube control|kubectl	run|use	get|apply|delete|describe|logs|version	-	-
-PostgreSQL	post gre sql|post gress sql|postgresql	use|install	server|database|query	-	-
-Postgres	post gres|post gress|postgres	use|install	server|database|query	-	-
-Next.js	next js|nextjs	use|using|with	app|application|framework|project	-	-
-Vercel	versal|vercel	-	deploy|deployment|hosting|dashboard	-	-
-Supabase	super base|supa base|supabase	-	auth|database|client|project	-	-
-npm	n p m|npm	run|use	install|run|test|package	-	-
-pnpm	p n p m|pnpm	run|use	install|run|test|workspace	-	-
-GitHub	git hub|github	-	pull request|actions|repository|repo	-	-
-GitLab	git lab|gitlab	-	merge request|ci|repository|repo	-	-
-OAuth	o auth|oh auth|oauth	-	token|flow|login|callback	-	-
-JSON	j son|jason|json	-	payload|schema|object|parser	-	bourne|derulo
-YAML	yammel|yamel|yaml	-	config|configuration|file|parser	-	-
-nginx	engine x|nginx	-	proxy|server|config|configuration	-	-
-SQLite	sql lite|sequel lite|sqlite	-	database|query|connection	-	-
-Redis	reddis|redis	-	cache|server|cluster	-	-
-Kafka	kafka	-	topic|broker|cluster	franz	novel|story|book
-Terraform	terra form|terraform	-	plan|apply|state|module	-	planet|mars
-Anthropic	anthropic|anthro pic	-	api|model|claude	-	-
-OpenAI	open ai|openai	-	api|model|sdk	-	-
-Gemini	gemini	-	api|model|cli	-	zodiac|constellation|sign|twins
-Llama	llama	-	model|weights|inference	-	animal|farm|wool
-Ollama	o llama|oh llama|ollama	-	serve|pull|model|server	-	-
-Hugging Face	hugging face|huggingface	-	model|hub|dataset	-	-
-PyTorch	pie torch|pytorch	-	model|tensor|training	-	-
-TypeScript	type script|typescript	-	compiler|types|project	-	-
-Tailwind	tail wind|tailwind	-	css|classes|config	-	-
-shadcn	shad cn|shad c n|shadcn	-	ui|component|components	-	-
-tRPC	t r p c|trpc	-	router|client|procedure	-	-
-gRPC	g r p c|grpc	-	service|client|server	-	-
-WebSocket	web socket|websocket	-	connection|server|client	-	-
-Docker	dogger|docker	-	container|containers|compose|daemon|dockerfile	-	bank|boat|fisherman
+# v1: canonical<TAB>heard forms (|)<TAB>left cues (|)<TAB>right cues (|)<TAB>left blockers (|)<TAB>right blockers (|); - = none<TAB>right after left cue (or punctuation/end; - = unrestricted)
+# A neighbouring cue is required; left cues may also require a right continuation. Blockers win; longest heard form wins.
+Claude Code	cloud code|claude code	ask|hey|tell	-	google|the|aws|azure	storage|provider|computing	to|about|for
+Claude	cloud|claud|claude	ask|hey|tell	opus|sonnet	google|the|aws|azure|on	storage|provider|computing|flare|front|cover|formation|service|services	to|about|for|opus|sonnet
+Codex	codecs|codex	ask	cli|agent	video|audio|media	video|audio|compression	to|about|for
+Cursor	cursor	-	editor|ide	mouse|text|database	position|pointer|blink|blinks|blinking	-
+kubectl	cube cuddle|cube control|kube ctl|kube control|kubectl	run|use	get|apply|delete|describe|logs|version	-	-	-
+PostgreSQL	post gre sql|post gress sql|postgresql	use|install	server|database|query	-	-	-
+Postgres	post gres|post gress|postgres	use|install	server|database|query	-	-	-
+Next.js	next js|nextjs	use|using|with	app|application|framework|project	-	-	-
+Vercel	versal|vercel	-	deploy|deployment|hosting|dashboard	-	-	-
+Supabase	super base|supa base|supabase	-	auth|database|client|project	-	-	-
+npm	n p m|npm	run|use	install|run|test|package	-	-	-
+pnpm	p n p m|pnpm	run|use	install|run|test|workspace	-	-	-
+GitHub	git hub|github	-	pull request|actions|repository|repo	-	-	-
+GitLab	git lab|gitlab	-	merge request|ci|repository|repo	-	-	-
+OAuth	o auth|oh auth|oauth	-	token|flow|login|callback	-	-	-
+JSON	j son|jason|json	-	payload|schema|object|parser	-	bourne|derulo	-
+YAML	yammel|yamel|yaml	-	config|configuration|file|parser	-	-	-
+nginx	engine x|nginx	-	proxy|server|config|configuration	-	-	-
+SQLite	sql lite|sequel lite|sqlite	-	database|query|connection	-	-	-
+Redis	reddis|redis	-	cache|server|cluster	-	-	-
+Kafka	kafka	-	topic|broker|cluster	franz	novel|story|book	-
+Terraform	terra form|terraform	-	plan|apply|state|module	-	planet|mars	-
+Anthropic	anthropic|anthro pic	-	api|claude	-	-	-
+OpenAI	open ai|openai	-	api|sdk	-	-	-
+Gemini	gemini	-	api|model|cli	-	zodiac|constellation|sign|twins	-
+Llama	llama	-	model|weights|inference	-	animal|farm|wool	-
+Ollama	o llama|oh llama|ollama	-	serve|pull|model|server	-	-	-
+Hugging Face	hugging face|huggingface	-	model|hub|dataset	-	-	-
+PyTorch	pie torch|pytorch	-	model|tensor|training	-	-	-
+TypeScript	type script|typescript	-	compiler|types|project	-	-	-
+Tailwind	tail wind|tailwind	-	css|classes|config	-	-	-
+shadcn	shad cn|shad c n|shadcn	-	ui|component|components	-	-	-
+tRPC	t r p c|trpc	-	router|client|procedure	-	-	-
+gRPC	g r p c|grpc	-	service|client|server	-	-	-
+WebSocket	web socket|websocket	-	connection|server|client	-	-	-
+Docker	dogger|docker	-	container|containers|compose|daemon|dockerfile	-	bank|boat|fisherman	-

@@ -100,10 +100,17 @@ cargo test --manifest-path apps/cli/Cargo.toml --locked --release -p xflow-core 
 ```
 
 The shipped `cues.txt` contains exact heard forms and adjacent left/right cues;
-either side may enable a correction, while either blocker prevents it. Matching
-stops at punctuation, line breaks, paths and identifiers. The same
+either side may enable a correction, while either blocker prevents it. Addressing
+Claude or Claude Code also requires a positive continuation (such as "to", "about"
+or "for"), punctuation, or the end of the text after a left addressing cue.
+Claude Code only accepts addressing cues such as "ask", "hey" and "tell".
+Phrase matching stops at punctuation, line breaks, paths and identifiers. The same
 `formatting.snap_to_dictionary` switch disables the shipped corrector. User
 spellings, blocked terms and explicit replacements outrank the shipped cues.
+Dictionary phrases conservatively protect every overlapping cue word: adding
+"Google Cloud" suppresses the cloud cue, and "VS Code" suppresses cloud code,
+even when the full dictionary phrase is absent. All-caps input keeps all-caps
+corrections.
 No app lookup, fuzzy index, new provider call, download or additional model is
 involved. Shipped prompt hints are deferred: the current Whisper fallback retains
 a second copy of encoded audio whenever hints are present.
