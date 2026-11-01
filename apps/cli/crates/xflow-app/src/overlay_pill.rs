@@ -76,7 +76,11 @@ pub async fn run(mut events: broadcast::Receiver<DesktopEvent>, config: std::pat
             if let Some(child) = &mut helper {
                 let _ = send(child, event).await;
             }
-            close(&mut helper, event.copied || event.uncertain || event.discarded).await;
+            close(
+                &mut helper,
+                event.copied || event.uncertain || event.discarded,
+            )
+            .await;
             session_active = false;
             continue;
         }

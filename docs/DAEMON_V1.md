@@ -61,9 +61,10 @@ no no I will do the meeting at 5 pm"), or, within one sentence, a cue set off by
 commas followed by nothing but a new value of the same kind, a number,
 day or month, or name ("send it to John,
 sorry, to Mike"; "buy 3 apples, I mean 4"); only the value right before the cue
-is replaced. "Scratch that" or "never mind" as
-its own clause deletes the sentence before it (a full stop after "Mr." or "p.m."
-ends no sentence, and an unsure one such as "etc." refuses the edit); at the end of a dictation it
+is replaced, never one inside a list, range or alternative ("2 or 3, no, 4"). "Scratch that" or "never mind" as
+its own clause deletes the sentence before it (a full stop after "Mr." ends no
+sentence, and an unsure one such as "p.m.", "St." or "etc." refuses the edit);
+after a full stop it is always a cancel, even after "said" or "that"; at the end of a dictation it
 discards all of it: nothing is cleaned or pasted, the status and the macOS pill
 say "Discarded", and history records `cleanup: discarded`. Emphasis, apologies,
 negation ("no, no one came"), quoted or backticked text, flags and mentions ("the

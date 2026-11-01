@@ -4141,6 +4141,51 @@ mod tests {
         task.await.unwrap();
     }
     #[tokio::test]
+    async fn a_discarded_dictation_keeps_no_failed_audio_and_pastes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        // The first segment fails, so its audio would be kept; the rest takes it all back.
+        let audio = Arc::new(StreamAudio::ramp(100, 90, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            broken: Some(|start| start < 30_000),
+            words: Some(|start| {
+                ["Meet at noon.", "Bring notes.", "Scratch that."][(start / 30_000).min(2)]
+            }),
+            ..SegmentStt::default()
+        });
+        let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio, stt.clone());
+        engine.config.privacy.keep_failed_audio = true;
+        engine.kept_dir = Some(dir.clone());
+        let task = tokio::spawn(engine.run(rx));
+        dictate(&tx, &stt).await;
+        let idle = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let r = events.recv().await.unwrap();
+                assert!(
+                    !matches!(r.state, State::Success | State::Error),
+                    "{:?}",
+                    r.message
+                );
+                if r.state == State::Idle && r.message.is_some() {
+                    return r;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(idle.message.as_deref(), Some(DISCARDED));
+        assert!(idle.failed_audio.is_none());
+        assert!(desktop.injections.lock().unwrap().is_empty());
+        assert!(ask(&tx, Request::Status).await.failed_audio.is_none());
+        assert!(
+            retry::load(&dir).ok().flatten().is_none(),
+            "nothing kept to retry"
+        );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
     async fn a_partial_retry_delivers_only_the_lost_part_unless_full() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("failed");
