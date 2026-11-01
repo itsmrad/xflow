@@ -149,3 +149,19 @@ Please check Nginx and BentoML and tcpdump in the project.	Nginx|BentoML|tcpdump
 Please check HAProxy and MLflow and tshark in the project.	HAProxy|MLflow|tshark
 Please check Varnish and Kubeflow and wireshark in the project.	Varnish|Kubeflow|wireshark
 Please check Squid and Metaflow and mitmproxy in the project.	Squid|Metaflow|mitmproxy
+# Claude/cloud homophones: keep this appended group separate from the original 150 phrases.
+Ask Claude to review the pull request.	Claude
+Hey Claude Code, review this change.	Claude Code
+Tell Claude to explain the error.	Claude
+Use Claude Opus for the review.	Claude|Opus
+Use Claude Sonnet for this task.	Claude|Sonnet
+Cloud storage holds the backups.	Cloud
+Put the backups in the cloud.	cloud
+Google Cloud Code is an IDE extension.	Google Cloud Code
+Deploy to the cloud in Cursor.	cloud|Cursor
+The cloud provider is ready.	cloud
+We use cloud computing.	cloud
+Ask about cloud storage.	cloud
+The cloud cover is thick.	cloud
+The AWS cloud service is ready.	AWS|cloud
+Use Claude Code with a cloud database.	Claude Code|cloud

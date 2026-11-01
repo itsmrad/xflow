@@ -48,7 +48,9 @@ trailing_space = true
 spoken_code = true           # "camel case user id" -> userId; "main dot rs" -> main.rs
 # Snapping runs before dictionary.replacements, so a replacement's `from` must
 # match the snapped spelling ("xflow", not "x flow", when xflow is saved).
-snap_to_dictionary = true    # restore dictionary/vocabulary spellings locally; false disables snapping
+# Dictionary phrases protect overlapping cue words: "Google Cloud" blocks cloud,
+# and "VS Code" blocks cloud code, even outside those dictionary phrases.
+snap_to_dictionary = true    # restore user spellings and context-gated dev terms; false disables both
 remove_fillers = true
 fillers = ["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]
 spoken_punctuation = false   # "comma", "period", "new line", ... become punctuation
