@@ -233,6 +233,7 @@ impl std::fmt::Display for ConfigFile {
 fn parse(doc: &DocumentMut) -> Result<Config> {
     let config: Config = toml::from_str(&doc.to_string())?;
     config.validate()?;
+    xflow_providers::validate_fallback(&config.stt, config.privacy.offline)?;
     Ok(config)
 }
 
@@ -335,6 +336,20 @@ mod tests {
         let missing = dir.path().join("none.toml");
         assert!(!migrate_recording_limit(&missing, &dir.path().join("m2")).unwrap());
         assert!(!missing.exists() && dir.path().join("m2").exists());
+    }
+
+    #[test]
+    fn backup_validation_rejects_remote_offline_and_unknown_routes() {
+        for text in [
+            "[stt]\nfallback = [\"openai\"]\n[privacy]\noffline = true\n",
+            "[stt]\nfallback = [\"missing-provider\"]\n",
+            "[stt]\nfallback = [\"groq\"]\n",
+            "[stt]\nfallback = [\"openai\", \"deepgram\"]\n",
+        ] {
+            let (_dir, path) = temp_config(text);
+            let error = ConfigFile::load(&path).unwrap().config().unwrap_err();
+            assert!(format!("{error:#}").contains("fallback"), "{error:#}");
+        }
     }
 
     #[test]

@@ -32,6 +32,8 @@ pub struct TranscriptionOptions {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transcript {
+    #[serde(default)]
+    pub provider: Option<String>,
     pub text: String,
     pub language: Option<String>,
 }

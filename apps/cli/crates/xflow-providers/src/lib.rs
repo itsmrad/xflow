@@ -18,7 +18,9 @@ mod check;
 pub use check::{check_cleanup, CheckReport};
 use check::{check_request, probe_url};
 mod stt;
-pub use stt::{build_stt, check_stt, hint_fit, transcribe_file};
+pub use stt::{
+    backup_providers, build_stt, check_stt, hint_fit, transcribe_file, validate_fallback,
+};
 mod audio;
 mod catalog;
 pub mod keystore;
@@ -436,6 +438,11 @@ impl Credentials {
     async fn read<T: serde::de::DeserializeOwned>(&self, response: Response) -> Result<T> {
         if matches!(response.status().as_u16(), 401 | 403) {
             self.invalidate().await;
+            bail!(
+                "{} rejected the key (HTTP {})",
+                self.provider,
+                response.status().as_u16()
+            );
         }
         read_response(response).await
     }
@@ -663,21 +670,37 @@ pub fn check_keystore() -> Result<bool> {
     keystore::Store::open()?.check()
 }
 
+/// Classified without retaining a URL, response body, or credential.
+#[derive(Debug)]
+enum ProviderFailure {
+    Timeout,
+    Connect,
+    Status(u16),
+}
+impl std::fmt::Display for ProviderFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout => f.write_str("provider request timed out; it was not retried"),
+            Self::Connect => f.write_str("could not connect to provider"),
+            Self::Status(status) => {
+                write!(f, "provider returned HTTP {status}; response body omitted")
+            }
+        }
+    }
+}
+impl std::error::Error for ProviderFailure {}
 fn http_error(error: reqwest::Error) -> anyhow::Error {
     if error.is_timeout() {
-        anyhow!("provider request timed out; it was not retried")
+        ProviderFailure::Timeout.into()
     } else if error.is_connect() {
-        anyhow!("could not connect to provider")
+        ProviderFailure::Connect.into()
     } else {
         anyhow!("provider HTTP request failed; it was not retried")
     }
 }
 async fn read_bytes(mut response: Response, strict: bool) -> Result<Vec<u8>> {
     if strict && !response.status().is_success() {
-        bail!(
-            "provider returned HTTP {}; response body omitted",
-            response.status().as_u16()
-        );
+        return Err(ProviderFailure::Status(response.status().as_u16()).into());
     }
     if response
         .content_length()

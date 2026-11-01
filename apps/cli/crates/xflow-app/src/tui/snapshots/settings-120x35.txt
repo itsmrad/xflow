@@ -2,13 +2,14 @@
 ╭────────────────╮╭ Settings ───────────────────────────────────────────────╮╭ About ──────────────────────────────────╮
 │ 1  Home        ││› Start     Guided setup          Run again              ││ Start · Guided setup                    │
 │ 2  History     ││  Speech    Service               Groq — fast, with a fre││ Run again                               │
-│ 3  Dictionary  ││            Model                 Recommended            ││                                         │
-│ 4  Snippets    ││            API key               Added                  ││ Walk through the speech service, key,   │
-│ 5  Styles      ││            Language              Automatic              ││ microphone and shortcut again.          │
-│ 6  Settings    ││            Microphone            System default         ││                                         │
-│ 7  Pill        ││            Ignore speaker sound  Off                    ││ Enter to open.                          │
-│ 8  Your stats  ││            Check connection      Run check              ││                                         │
-│ 9  Check-up    ││  Shortcut  Key                   Fn (Globe)             ││                                         │
+│ 3  Dictionary  ││            Backup provider       None                   ││                                         │
+│ 4  Snippets    ││            Model                 Recommended            ││ Walk through the speech service, key,   │
+│ 5  Styles      ││            API key               Added                  ││ microphone and shortcut again.          │
+│ 6  Settings    ││            Language              Automatic              ││                                         │
+│ 7  Pill        ││            Microphone            System default         ││ Enter to open.                          │
+│ 8  Your stats  ││            Ignore speaker sound  Off                    ││                                         │
+│ 9  Check-up    ││            Check connection      Run check              ││                                         │
+│                ││  Shortcut  Key                   Fn (Globe)             ││                                         │
 │                ││            Shortcut              On                     ││                                         │
 │                ││            Double-tap speed      500 ms                 ││                                         │
 │                ││            Hold delay            500 ms                 ││                                         │
@@ -29,7 +30,6 @@
 │                ││            Keep last             500 dictations         ││                                         │
 │                ││            Local services only   Off                    ││                                         │
 │                ││            Share app name        Off                    ││                                         │
-│                ││  Look      Theme                 Paper                  ││                                         │
 ╰────────────────╯╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────╯
 
  ↑↓ move · Enter change · Esc back · Tab next page · ? help · q quit

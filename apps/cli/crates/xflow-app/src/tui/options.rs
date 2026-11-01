@@ -10,6 +10,7 @@ pub type Row = (&'static str, &'static str, &'static str, &'static str);
 pub const SETTINGS: &[Row] = &[
     ("action.setup", "Start", "Guided setup", "Walk through the speech service, key, microphone and shortcut again."),
     ("stt.provider", "Speech", "Service", "The service that turns your voice into text. Changing it picks that service's recommended model."),
+    ("stt.fallback", "Speech", "Backup provider", "Used only when the first fails. Sends the same audio once to a second service, using its recommended model and stored key."),
     ("stt.model", "Speech", "Model", "Models offered by the speech service you chose."),
     ("action.stt_key", "Speech", "API key", "Your key for the speech service. xflow stores it encrypted on this computer, never in your settings file."),
     ("stt.language", "Speech", "Language", "Automatic works for most people. Pick a language if words come out in the wrong one."),
@@ -265,6 +266,14 @@ pub fn value_text(key: &str, value: &str) -> String {
         _ if value == "true" => "On".into(),
         _ if value == "false" => "Off".into(),
         "recording.device" if unset => "System default".into(),
+        "stt.fallback" if unset || value == "[]" => "None".into(),
+        "stt.fallback" => provider_name(
+            value
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .trim()
+                .trim_matches('"'),
+        ),
         "stt.language" => LANGUAGES
             .iter()
             .find(|(code, _)| *code == value)

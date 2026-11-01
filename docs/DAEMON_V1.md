@@ -177,3 +177,9 @@ must handle transport failure. Cancellation cannot undo already-started desktop
 delivery. Clearing SQLite rows/WAL is not secure erasure of filesystem snapshots
 or backups. Real device capture, GNOME focus/selection/paste behavior, feedback
 and cloud model quality remain manual integration checks for the orchestrator.
+
+With `stt.fallback` enabled, the providers wrapper owns bounded failover and the
+60-second primary breaker. The daemon does not retry failed segments again in
+this mode. It joins successful segments and injects once, reports every serving
+provider in history and final events, and keeps the backup warning in the
+delivery message. With no backup, segment retry behavior remains unchanged.
