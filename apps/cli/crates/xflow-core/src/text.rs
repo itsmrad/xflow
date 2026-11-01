@@ -197,7 +197,7 @@ fn closing(c: char) -> bool {
 /// A period after these doesn't end a sentence.
 const ABBREVIATIONS: &[&str] = &[
     "approx", "ave", "capt", "co", "col", "dept", "dr", "etc", "fig", "gen", "gov", "inc", "jr",
-    "lt", "ltd", "mr", "mrs", "ms", "mt", "no", "prof", "rev", "sgt", "sr", "st", "vs",
+    "lt", "ltd", "mr", "mrs", "ms", "mt", "prof", "rev", "sgt", "sr", "st", "vs",
 ];
 /// Function words, which never start a name, so mid-sentence they are lowercased.
 /// SCOWL's common list can't decide this: "john", "notes", "ok" and "smith" are on it.
@@ -392,11 +392,15 @@ pub fn adjust(before: &str, after: &str, text: &str, keep: &[String]) -> String 
         return text.to_owned();
     };
     // Inside a word: insert exactly what was said.
-    if prev.is_some_and(word_char) && next.is_some_and(word_char) {
+    let latin = |c: char| word_char(c) && !unspaced(c);
+    if prev.is_some_and(latin) && next.is_some_and(latin) {
         return body.to_owned();
     }
+    // Next to CJK, spacing stays as dictated: those scripts mix with Latin either way.
+    let cjk = prev.is_some_and(unspaced) || next.is_some_and(unspaced);
     let mut out = String::with_capacity(text.len() + 2);
-    if prev.is_some_and(|p| space_after(p, before))
+    if !cjk
+        && prev.is_some_and(|p| space_after(p, before))
         && !first.is_whitespace()
         && !closing(first)
         && !unspaced(first)
@@ -409,14 +413,18 @@ pub fn adjust(before: &str, after: &str, text: &str, keep: &[String]) -> String 
     let capitalize = match trimmed.chars().next_back() {
         None | Some('!' | '?' | '。' | '！' | '？') => Some(true),
         Some(c) if line_break(c) => Some(true),
-        // "done. " ends a sentence; "Dr. ", "e.g. ", "example.com" and "v1." don't.
-        Some('.') => (trimmed.len() < before.len() && {
-            let token = trimmed[..trimmed.len() - 1]
+        // "done. ", "don't. " and "done... " end a sentence; "Dr. ", "e.g. ",
+        // "example.com" and "v1." don't.
+        Some('.' | '…') => (trimmed.len() < before.len() && {
+            let token = trimmed
+                .trim_end_matches(['.', '…'])
                 .rsplit(char::is_whitespace)
                 .next()
                 .unwrap_or_default();
-            token.chars().count() >= 2
-                && token.chars().all(char::is_alphabetic)
+            token.chars().filter(|c| c.is_alphabetic()).count() >= 2
+                && token
+                    .chars()
+                    .all(|c| c.is_alphabetic() || matches!(c, '\'' | '’'))
                 && !ABBREVIATIONS.contains(&token.to_lowercase().as_str())
         })
         .then_some(true),
@@ -452,10 +460,10 @@ pub fn adjust(before: &str, after: &str, text: &str, keep: &[String]) -> String 
         None => out.push_str(body),
     }
     match next {
-        Some(c) if word_char(c) && !unspaced(c) && !out.ends_with(unspaced) => out.push(' '),
-        // Whitespace or punctuation follows; field end keeps `trailing_space`.
-        Some(_) => {}
-        None => out.push_str(&text[body.len()..]),
+        Some(c) if !cjk && word_char(c) && !out.ends_with(unspaced) => out.push(' '),
+        // Whitespace or punctuation follows; field end and CJK keep `trailing_space`.
+        Some(_) if !cjk => {}
+        _ => out.push_str(&text[body.len()..]),
     }
     out
 }
@@ -639,11 +647,22 @@ mod tests {
             ("", "", "xflow rocks", "xflow rocks"),
             ("", "", "userId is", "userId is"),
             ("", "", "main.rs", "main.rs"),
+            // "No." is not an abbreviation; contractions and ellipses end sentences.
+            ("No. ", "", "we left ", "We left "),
+            ("Don't. ", "", "hello ", "Hello "),
+            ("done... ", "", "hello ", "Hello "),
+            ("done… ", "", "hello", "Hello"),
+            ("etc... ", "", "and more", "and more"),
+            ("Wait...", "", "and more", " and more"),
             // CJK: no spaces, no case changes after ideographs.
             ("我们使用", "", "数据库", "数据库"),
             ("我们使用", "", "Postgres", "Postgres"),
             ("完成。", "", "hello", "Hello"),
             ("and", "", "数据库", "数据库"),
+            // A CJK neighbour leaves spacing as dictated.
+            ("使用", "Postgres", "和 ", "和 "),
+            ("hello", "数据", "World ", "World "),
+            ("使用", " Postgres", "和", "和"),
             // Emoji and surrogate pairs on either side.
             ("Great 🎉", "", "Thanks", " Thanks"),
             ("😀", "😀", "hi", " hi"),
