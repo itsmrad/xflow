@@ -64,6 +64,10 @@ const MENTIONS: [&str; 10] = [
 ];
 /// A full stop after these never ends a sentence.
 const TITLES: [&str; 4] = ["mr", "mrs", "ms", "prof"];
+/// Words of a list, range or alternative: "2 or 3", "from 2 to 3".
+const LISTS: [&str; 7] = ["or", "and", "through", "between", "from", "either", "vs"];
+/// A negated value isn't retracted by "no": "it's not 3, no, 4".
+const NEGATIONS: [&str; 5] = ["not", "never", "no", "without", "none"];
 /// A day or month is a time slot, never a person: "Ask John, sorry, Friday." stays.
 const DATES: [&str; 19] = [
     "monday",
@@ -504,7 +508,14 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
             .count();
         let content = (0..m).all(|k| !FUNCTION.contains(&c.lower(j + k)));
         if m >= 3 || m == 2 && content {
-            return cut(j, c.t[end].start, &text[c.t[end].start..]);
+            // The opening said more than once ("it is a problem, it is a problem,
+            // no no, it is …"): which one is retracted isn't certain.
+            let openings = (window..i)
+                .filter(|&p| p + 1 < i && c.same(p, end) && c.same(p + 1, end + 1))
+                .count();
+            return (openings == 1)
+                .then(|| cut(j, c.t[end].start, &text[c.t[end].start..]))
+                .flatten();
         }
     }
     // Same slot, only when the repair is set off by commas, is nothing but a new
@@ -543,16 +554,24 @@ fn repair(c: &Ctx, i: usize, end: usize) -> Option<String> {
             || matches!(c.lower(old - 1), "a" | "an")
             || c.lower(old - 1) == "and" && old >= 2 && c.number(old - 2));
     let unsure = kind == 1 && (c.val[old].is_none() != c.val[new].is_none() || compound);
-    // One value of a list, range or alternative ("2 or 3", "from 2 to 3",
-    // "John or Mike"): which one is retracted isn't certain.
-    let near = old.saturating_sub(3).max(start)..old;
-    let alternative = near.clone().any(|o| c.slot(o) == kind)
-        || near.clone().any(|o| {
-            ["or", "and", "through", "between", "from", "either", "vs"].contains(&c.lower(o))
+    // Any doubt earlier in the sentence: another value of that kind ("the budget
+    // is 3, the budget is 4, no, 5"), the frame again ("to Lee, send it to Lee,
+    // sorry, to Ann"), or in the old value's clause a list or range ("2 or maybe
+    // 3", "from 2 to 3") or a negation ("we don't need 3, no, 4").
+    let clause = (start..old)
+        .rev()
+        .find(|&o| c.gap(o + 1).contains([',', ';', ':']))
+        .map_or(start, |o| o + 1);
+    let doubt = (start..old).any(|o| c.slot(o) == kind)
+        || k > 0
+            && (start..old - k).any(|o| (0..k).all(|f| o + f < old - k && c.same(o + f, end + f)))
+        || (clause..old).any(|o| {
+            let w = c.lower(o);
+            LISTS.contains(&w) || NEGATIONS.contains(&w) || w.ends_with("n't")
         })
         || c.gap(old).contains(['-', '–'])
         || c.lower(old + 1) == "or";
-    if alternative {
+    if doubt {
         return None;
     }
     if !boundary || unsure || c.same(old, new) {
@@ -703,6 +722,23 @@ mod tests {
             ("Pages 2-3, no, 4.", "Pages 2-3, no, 4.", Ambiguous),
             // "St." may end a sentence: never retract across it.
             ("Meet on Main St. Bring notes. Scratch that. Call me.", "Meet on Main St. Bring notes. Scratch that. Call me.", Ambiguous),
+            // Fifth review: a repeated opening or frame, an earlier value, a list
+            // anywhere in the clause, or a negation makes it unclear.
+            ("it is a problem, it is a problem, no no, it is a solution", "it is a problem, it is a problem, no no, it is a solution", Ambiguous),
+            ("go to the store, go to the park, no no, go to the beach", "go to the store, go to the park, no no, go to the beach", Ambiguous),
+            ("I will be late I will be late, no no I will be early", "I will be late I will be late, no no I will be early", Ambiguous),
+            ("Send it to Lee, send it to Lee, sorry, to Ann", "Send it to Lee, send it to Lee, sorry, to Ann", Ambiguous),
+            ("the budget is 3, the budget is 4, no, 5", "the budget is 3, the budget is 4, no, 5", Ambiguous),
+            ("Meet at the cafe at 3, meet at the cafe at 4, no no, meet at the cafe at 5", "Meet at the cafe at 3, meet at the cafe at 4, no no, meet at the cafe at 5", Ambiguous),
+            ("We need 2 or maybe even about 3, no, 4.", "We need 2 or maybe even about 3, no, 4.", Ambiguous),
+            ("It's not 3, no, 4.", "It's not 3, no, 4.", Ambiguous),
+            ("We don't need 3, no, 4.", "We don't need 3, no, 4.", Ambiguous),
+            ("never 3, no, 4", "never 3, no, 4", Ambiguous),
+            // …while the clear ones still apply.
+            ("Use Postgres, actually, use MySQL, actually, use SQLite", "Use SQLite", Edited),
+            ("Park on Main St. The cafe opens at 3, no, 4.", "Park on Main St. The cafe opens at 4.", Edited),
+            ("buy 3 apples, no, 4", "buy 3 apples, no, 4", Unchanged),
+            ("He said, scratch that.", "He said, scratch that.", Unchanged),
         ] {
             assert_eq!(apply(input), (output.to_owned(), outcome), "{input}");
             assert_eq!(ambiguous(input), outcome == Ambiguous, "{input}");
