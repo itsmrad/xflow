@@ -1,0 +1,10 @@
+xflow vocabulary packs (dev.tsv, corp.tsv, sheet.tsv, finance.tsv)
+
+Written by hand for xflow. Each row is a product, company, function or term
+name (a short fact), how speech-to-text mis-hears it, and neighbouring words.
+No source file was imported, and no documentation text, descriptions, glossary
+definitions or taxonomy labels were copied. The IFRS and US GAAP XBRL
+taxonomies were not used.
+
+Everyday-word and name checks in the tests use SCOWL; see ../SCOWL-LICENSE.txt.
+Product and company names are trademarks of their owners.

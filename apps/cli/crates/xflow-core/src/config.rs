@@ -36,6 +36,7 @@ pub struct Config {
     pub injection: InjectionConfig,
     pub formatting: FormattingConfig,
     pub dictionary: DictionaryConfig,
+    pub vocab: VocabConfig,
     pub sounds: SoundsConfig,
     pub notifications: NotificationsConfig,
     pub privacy: PrivacyConfig,
@@ -309,6 +310,29 @@ impl Default for DictionaryConfig {
             auto_learn: true,
             learned: vec![],
             never_learn: vec![],
+        }
+    }
+}
+/// Shipped term packs that fix mis-heard terms locally (`formatting.snap_to_dictionary`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct VocabConfig {
+    /// Developer and AI terms everywhere; always on in terminals and editors.
+    pub dev: bool,
+    /// Business and SaaS terms.
+    pub corp: bool,
+    /// Spreadsheet functions everywhere; always on in Excel, Numbers and Calc.
+    pub sheet: bool,
+    /// Banking and accounting terms.
+    pub finance: bool,
+}
+impl Default for VocabConfig {
+    fn default() -> Self {
+        Self {
+            dev: true,
+            corp: true,
+            sheet: false,
+            finance: false,
         }
     }
 }

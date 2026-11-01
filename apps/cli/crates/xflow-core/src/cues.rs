@@ -1,46 +1,105 @@
-//! Small, exact heard forms with local context; never part of snap's fuzzy index.
+//! Shipped term packs: exact heard forms with local context; never part of
+//! snap's fuzzy index. See vocab/NOTICE.
 use crate::config::Config;
-use std::sync::OnceLock;
+use std::{collections::HashMap, sync::OnceLock};
 
-const DATA: &str = include_str!("cues.txt");
+/// (data, focused-app substrings that turn the pack on). The first pack wins a
+/// heard form two active packs share.
+const PACKS: [(&str, &[&str]); 4] = [
+    (
+        include_str!("vocab/dev.tsv"),
+        &[
+            "vscode",
+            "vscodium",
+            "cursor",
+            "todesktop",
+            "zed",
+            "xcode",
+            "jetbrains",
+            "sublime",
+            "windsurf",
+            "neovide",
+        ],
+    ),
+    (include_str!("vocab/corp.tsv"), &[]),
+    (
+        include_str!("vocab/sheet.tsv"),
+        &["excel", "numbers", "calc"],
+    ),
+    (include_str!("vocab/finance.tsv"), &[]),
+];
 
-struct Cue {
-    term: &'static str,
-    heard: &'static str,
-    left: &'static str,
-    right: &'static str,
-    block_left: &'static str,
-    block_right: &'static str,
-    after_left: &'static str,
+type Fields = [&'static str; 8];
+
+/// Fields: canonical, safe heard forms, cued heard forms, left cues, right cues,
+/// left blockers, right blockers, continuations after a left cue. Trailing
+/// fields may be omitted and `-` means none.
+fn fields(line: &'static str) -> Fields {
+    let mut fields = [""; 8];
+    for (slot, field) in fields.iter_mut().zip(line.split('\t')) {
+        *slot = if field == "-" { "" } else { field };
+    }
+    fields
 }
 
-fn entries() -> &'static [Cue] {
-    static CUES: OnceLock<Vec<Cue>> = OnceLock::new();
-    CUES.get_or_init(|| {
-        let mut cues = Vec::new();
-        for line in DATA
-            .lines()
+/// (pack, row) for every shipped row.
+fn lines() -> impl Iterator<Item = (usize, &'static str)> {
+    PACKS.iter().enumerate().flat_map(|(pack, (data, _))| {
+        data.lines()
             .filter(|l| !l.starts_with('#') && !l.is_empty())
-        {
-            let fields: Vec<_> = line
-                .split('\t')
-                .map(|field| if field == "-" { "" } else { field })
-                .collect();
-            for heard in fields[1].split('|') {
-                cues.push(Cue {
-                    term: fields[0],
-                    heard,
-                    left: fields[2],
-                    right: fields[3],
-                    block_left: fields[4],
-                    block_right: fields[5],
-                    after_left: fields[6],
-                });
+            .map(move |line| (pack, line))
+    })
+}
+
+/// (heard form, needs a cue) for one row.
+fn heard(f: &Fields) -> impl Iterator<Item = (&'static str, bool)> {
+    let forms = |field: &'static str, cued| {
+        field
+            .split('|')
+            .filter(|s| !s.is_empty())
+            .map(move |s| (s, cued))
+    };
+    forms(f[1], false).chain(forms(f[2], true))
+}
+
+fn words(form: &str) -> usize {
+    form.split(' ').count()
+}
+
+/// First heard word -> (heard form, row, needs a cue), most words first. Rows
+/// stay unsplit lines until one of their forms matches.
+type Forms = HashMap<&'static str, Vec<(&'static str, u32, bool)>>;
+
+fn index() -> &'static (Vec<(usize, &'static str)>, Forms) {
+    static INDEX: OnceLock<(Vec<(usize, &'static str)>, Forms)> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let rows: Vec<_> = lines().collect();
+        let mut forms = Forms::new();
+        for (row, &(_, line)) in rows.iter().enumerate() {
+            for (form, cued) in heard(&fields(line)) {
+                let first = form.split(' ').next().unwrap_or_default();
+                forms
+                    .entry(first)
+                    .or_default()
+                    .push((form, row as u32, cued));
             }
         }
-        cues.sort_by_key(|c| std::cmp::Reverse(c.heard.len()));
-        cues
+        for list in forms.values_mut() {
+            list.sort_by_key(|&(form, _, _)| std::cmp::Reverse(words(form)));
+        }
+        (rows, forms)
     })
+}
+
+fn active(config: &Config, terminal: bool, app: Option<&str>) -> [bool; 4] {
+    let app = app.unwrap_or_default().to_lowercase();
+    let on = [
+        config.vocab.dev || terminal,
+        config.vocab.corp,
+        config.vocab.sheet,
+        config.vocab.finance,
+    ];
+    std::array::from_fn(|i| on[i] || PACKS[i].1.iter().any(|a| app.contains(a)))
 }
 
 // Conservatively protect a whole user phrase when a shorter shipped form overlaps it.
@@ -86,10 +145,12 @@ fn matches(text: &str, tokens: &[Token<'_>], phrase: &str) -> bool {
 }
 
 /// Blocked terms and explicit user spellings always outrank shipped corrections.
-pub(crate) fn apply(text: &str, config: &Config, terminal: bool) -> String {
+pub(crate) fn apply(text: &str, config: &Config, terminal: bool, app: Option<&str>) -> String {
     if !config.formatting.snap_to_dictionary {
         return text.to_owned();
     }
+    let active = active(config, terminal, app);
+    let (rows, forms) = index();
     let lower = text.to_ascii_lowercase();
     let tokens: Vec<_> = lower
         .split_whitespace()
@@ -107,73 +168,51 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool) -> String {
             }
         })
         .collect();
+    // Shouted text keeps shouting; an "IOS" inside normal text becomes "iOS".
+    let shouting = !text.chars().any(char::is_lowercase);
     let (mut cursor, mut i) = (0, 0);
     let mut out = String::with_capacity(text.len());
     while i < tokens.len() {
-        if !tokens[i].eligible {
-            i += 1;
-            continue;
+        let list = match forms.get(tokens[i].text) {
+            Some(list) if tokens[i].eligible => list,
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        // The longest matching form decides: a blocked longer phrase must not
+        // fall back to a partial correction, but a same-length form of another
+        // term or pack may still pass its own cues.
+        let mut longest = 0;
+        let mut found = None;
+        for &(form, row, cued) in list {
+            let count = words(form);
+            if count < longest {
+                break;
+            }
+            let ((pack, line), end) = (rows[row as usize], i + count);
+            if !active[pack] || end > tokens.len() || !matches(&lower, &tokens[i..end], form) {
+                continue;
+            }
+            longest = count;
+            let row = fields(line);
+            if let Some(term) = allowed(
+                text,
+                &lower,
+                &tokens,
+                (i, end, cued),
+                &row,
+                config,
+                terminal,
+            ) {
+                found = Some((end, term));
+                break;
+            }
         }
-        let found = entries().iter().find_map(|cue| {
-            if !cue.heard.starts_with(tokens[i].text) {
-                return None;
-            }
-            let count = cue.heard.split_whitespace().count();
-            let end = i + count;
-            if end > tokens.len() || !matches(&lower, &tokens[i..end], cue.heard) {
-                return None;
-            }
-            Some((cue, end))
-        });
-        // A blocked longer phrase must not fall back to a partial correction.
-        let found = found.and_then(|(cue, end)| {
-            let after = lower[tokens[end - 1].end..].trim_start();
-            let boundary = after.is_empty() || after.starts_with([',', '.', ':', ';', '!', '?']);
-            let left = neighbour(&lower, &tokens, i, cue.left, true)
-                && (cue.after_left.is_empty()
-                    || boundary
-                    || neighbour(&lower, &tokens, end, cue.after_left, false));
-            if neighbour(&lower, &tokens, i, cue.block_left, true)
-                || neighbour(&lower, &tokens, end, cue.block_right, false)
-                || !(left || neighbour(&lower, &tokens, end, cue.right, false))
-            {
-                return None;
-            }
-            let input = &text[tokens[i].start..tokens[end - 1].end];
-            let target = config
-                .dictionary
-                .words
-                .iter()
-                .chain(&config.stt.vocabulary)
-                .find(|w| w.eq_ignore_ascii_case(cue.term))
-                .map_or(cue.term, String::as_str);
-            if terminal && input.eq_ignore_ascii_case(target)
-                || config
-                    .dictionary
-                    .never_learn
-                    .iter()
-                    .any(|w| overlaps(cue.term, w) || overlaps(input, w))
-                || config
-                    .dictionary
-                    .words
-                    .iter()
-                    .chain(&config.stt.vocabulary)
-                    .any(|w| overlaps(input, w))
-                || config
-                    .dictionary
-                    .replacements
-                    .iter()
-                    .any(|r| overlaps(input, &r.from))
-            {
-                return None;
-            }
-            Some((end, target))
-        });
         if let Some((end, term)) = found {
             out.push_str(&text[cursor..tokens[i].start]);
-            let input = &text[tokens[i].start..tokens[end - 1].end];
-            if input.chars().any(char::is_uppercase) && !input.chars().any(char::is_lowercase) {
-                out.push_str(&term.to_ascii_uppercase());
+            if shouting {
+                out.push_str(&term.to_uppercase());
             } else {
                 out.push_str(term);
             }
@@ -185,6 +224,51 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool) -> String {
     }
     out.push_str(&text[cursor..]);
     out
+}
+
+/// The spelling to write for `tokens[i..end]`, or None when cues, blockers or
+/// the user's own dictionary say no. A cued form is everyday English and needs
+/// a neighbouring cue; a safe form needs none.
+fn allowed<'a>(
+    text: &str,
+    lower: &str,
+    tokens: &[Token<'_>],
+    (i, end, cued): (usize, usize, bool),
+    row: &Fields,
+    config: &'a Config,
+    terminal: bool,
+) -> Option<&'a str> {
+    let after = lower[tokens[end - 1].end..].trim_start();
+    let boundary = after.is_empty() || after.starts_with([',', '.', ':', ';', '!', '?']);
+    let left = neighbour(lower, tokens, i, row[3], true)
+        && (row[7].is_empty() || boundary || neighbour(lower, tokens, end, row[7], false));
+    if cued && !(left || neighbour(lower, tokens, end, row[4], false))
+        || neighbour(lower, tokens, i, row[5], true)
+        || neighbour(lower, tokens, end, row[6], false)
+    {
+        return None;
+    }
+    let input = &text[tokens[i].start..tokens[end - 1].end];
+    let words = || config.dictionary.words.iter().chain(&config.stt.vocabulary);
+    let target = words()
+        .find(|w| w.eq_ignore_ascii_case(row[0]))
+        .map_or(row[0], String::as_str);
+    if terminal && input.eq_ignore_ascii_case(target)
+        || config
+            .dictionary
+            .never_learn
+            .iter()
+            .any(|w| overlaps(row[0], w) || overlaps(input, w))
+        || words().any(|w| overlaps(input, w))
+        || config
+            .dictionary
+            .replacements
+            .iter()
+            .any(|r| overlaps(input, &r.from))
+    {
+        return None;
+    }
+    Some(target)
 }
 
 #[cfg(test)]
@@ -222,15 +306,18 @@ mod tests {
             ("reddis cache", "Redis cache"),
             ("kafka topic", "Kafka topic"),
             ("terra form plan", "Terraform plan"),
-            ("anthro pic api", "Anthropic api"),
-            ("open ai sdk", "OpenAI sdk"),
+            ("anthro pic api", "Anthropic API"),
+            ("open ai sdk", "OpenAI SDK"),
             ("gemini model", "Gemini model"),
             ("llama weights", "Llama weights"),
             ("oh llama serve", "Ollama serve"),
             ("hugging face hub", "Hugging Face hub"),
             ("pie torch tensor", "PyTorch tensor"),
             ("type script compiler", "TypeScript compiler"),
-            ("tail wind css", "Tailwind css"),
+            ("tail wind css", "Tailwind CSS"),
+            ("tail wind classes", "Tailwind classes"),
+            ("my web socket is broken", "my WebSocket is broken"),
+            ("pie torch café", "PyTorch café"),
             ("shad cn components", "shadcn components"),
             ("t r p c router", "tRPC router"),
             ("g r p c service", "gRPC service"),
@@ -241,9 +328,16 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(before_cleanup(input, &config, false), expected, "{input}");
         }
-        // Every shipped alias needs a cue, even uncommon spellings.
-        for cue in entries() {
-            assert_eq!(apply(cue.heard, &config, false), cue.heard, "{}", cue.heard);
+        // A cued form alone never becomes its term; only safe forms do.
+        let all = all_packs();
+        for (_, line) in lines() {
+            let f = fields(line);
+            for (form, cued) in heard(&f) {
+                if cued {
+                    let out = apply(form, &all, false, None);
+                    assert!(!out.contains(f[0]), "{form} -> {out}");
+                }
+            }
         }
         for input in [
             "cloud storage",
@@ -277,8 +371,6 @@ mod tests {
             "ask. cloud to review",
             "next. js app",
             "post, gress database",
-            "my web socket is broken",
-            "pie torch café",
             "école cloud storage",
         ] {
             assert_eq!(before_cleanup(input, &config, false), input, "{input}");
@@ -289,6 +381,16 @@ mod tests {
     fn review_cloud_prose_is_unchanged() {
         eprintln!("cue tests source: {}", env!("CARGO_MANIFEST_DIR"));
         let config = Config::default();
+        // Other shipped terms may still be fixed; cloud never becomes Claude here.
+        for (input, expected) in [
+            ("try cloud code for vs code", "try cloud code for VS Code"),
+            (
+                "use cloud code to debug kubernetes",
+                "use cloud code to debug Kubernetes",
+            ),
+        ] {
+            assert_eq!(before_cleanup(input, &config, false), expected, "{input}");
+        }
         for input in [
             "ask cloud providers for a quote",
             "ask cloud vendors",
@@ -298,8 +400,6 @@ mod tests {
             "ask cloud native folks",
             "hey cloud team, any update",
             "the bug is in cloud code not client code",
-            "try cloud code for vs code",
-            "use cloud code to debug kubernetes",
             "we deploy with cloud code generation",
             "ask cloud code reviewers",
             "cloud code generation",
@@ -360,7 +460,7 @@ mod tests {
     fn punctuation_tokens_skip_the_cue_search() {
         let text = "... ".repeat(10_000);
         let start = std::time::Instant::now();
-        assert_eq!(apply(&text, &Config::default(), false), text);
+        assert_eq!(apply(&text, &all_packs(), false, None), text);
         let elapsed = start.elapsed();
         eprintln!("punctuation-only 40KB: {elapsed:?}");
         assert!(elapsed.as_millis() < if cfg!(debug_assertions) { 100 } else { 20 });
@@ -449,39 +549,329 @@ mod tests {
         );
     }
 
+    fn all_packs() -> Config {
+        let mut config = Config::default();
+        config.vocab.sheet = true;
+        config.vocab.finance = true;
+        config
+    }
+
     #[test]
     fn shipped_data_is_small_unique_and_gated() {
-        use std::collections::BTreeSet;
-        assert!(DATA.len() < 8 * 1024);
-        let mut terms = BTreeSet::new();
-        let mut forms = BTreeSet::new();
-        for line in DATA
-            .lines()
-            .filter(|l| !l.starts_with('#') && !l.is_empty())
-        {
-            let fields: Vec<_> = line
-                .split('\t')
-                .map(|field| if field == "-" { "" } else { field })
-                .collect();
-            assert_eq!(fields.len(), 7, "{line}");
-            assert!(terms.insert(fields[0].to_ascii_lowercase()));
-            assert!(!fields[2].is_empty() || !fields[3].is_empty(), "{line}");
-            for form in fields[1].split('|') {
-                assert!(!form.is_empty() && form.is_ascii());
-                assert_eq!(form, form.to_ascii_lowercase());
-                assert!(forms.insert(form), "duplicate: {form}");
+        use crate::words::{common, name};
+        use std::collections::{HashMap, HashSet};
+        let everyday = |w: &str| common(w) || name(w);
+        let bytes: usize = PACKS.iter().map(|(data, _)| data.len()).sum();
+        eprintln!("vocab packs: {bytes} bytes");
+        assert!(bytes < 400_000);
+        let mut counts = [0; 4];
+        let mut terms = HashSet::new();
+        let mut packs_forms: Vec<HashMap<&str, &str>> = vec![HashMap::new(); 4];
+        // heard form -> (canonical, cued) across packs
+        let mut shared: HashMap<&str, Vec<(&str, bool)>> = HashMap::new();
+        for (pack, line) in lines() {
+            let f = fields(line);
+            assert!(line.split('\t').count() <= 8, "{line}");
+            counts[pack] += 1;
+            assert!(f[0].is_ascii() && !f[0].starts_with('#'), "{line}");
+            assert!(
+                terms.insert((pack, f[0].to_lowercase())),
+                "duplicate: {line}"
+            );
+            let cued = heard(&f).any(|(_, cued)| cued);
+            let cues = !f[3].is_empty() || !f[4].is_empty();
+            // A cued form needs a cue to ever fire; a cue without one is dead data.
+            assert_eq!(cued, cues, "{line}");
+            assert!(heard(&f).next().is_some(), "{line}");
+            for (form, cued) in heard(&f) {
+                assert!(
+                    form.split(' ').all(|w| !w.is_empty()
+                        && w.bytes()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())),
+                    "{line}"
+                );
+                assert_ne!(form, f[0], "{line}");
+                // Everyday English or a name is never a safe form; a canonical
+                // that is everyday English ("cursor", "react") needs a cue.
+                assert!(
+                    cued || form.contains(' ') || !everyday(form),
+                    "{form}: {line}"
+                );
+                assert!(
+                    packs_forms[pack].insert(form, f[0]).is_none(),
+                    "duplicate {form}: {line}"
+                );
+                shared.entry(form).or_default().push((f[0], cued));
             }
         }
-        assert_eq!(terms.len(), 36);
-        assert!(entries().len() < 100);
+        // Packs may share a form for the same spelling; different spellings
+        // ("Swift" and "SWIFT") must both wait for their cues.
+        for (form, owners) in shared {
+            let spellings: HashSet<_> = owners.iter().map(|(t, _)| *t).collect();
+            assert!(
+                spellings.len() == 1 || owners.iter().all(|(_, cued)| *cued),
+                "{form}: {owners:?}"
+            );
+        }
+        eprintln!("vocab rows dev/corp/sheet/finance: {counts:?}");
+        for (count, range) in counts
+            .into_iter()
+            .zip([600..=1000, 150..=250, 150..=250, 200..=300])
+        {
+            assert!(range.contains(&count), "{count} rows");
+        }
     }
 
     #[test]
     fn prose_control_is_unchanged() {
-        let config = Config::default();
-        for text in include_str!("snap-prose.txt").lines() {
-            assert_eq!(apply(text, &config, false), text);
+        let changed: Vec<_> = include_str!("snap-prose.txt")
+            .lines()
+            .filter(|text| apply(text, &all_packs(), false, None) != *text)
+            .collect();
+        assert!(changed.is_empty(), "{changed:#?}");
+    }
+
+    #[test]
+    fn packs_fix_terms_only_in_context() {
+        let config = all_packs();
+        let fixed = [
+            // dev
+            (
+                "deploy the kubernetes cluster with cube control",
+                "deploy the Kubernetes cluster with kubectl",
+            ),
+            (
+                "we moved from my sequel database to post gress",
+                "we moved from MySQL database to Postgres",
+            ),
+            (
+                "the react component re-renders",
+                "the React component re-renders",
+            ),
+            ("written in rust", "written in Rust"),
+            ("the rust compiler is slow", "the Rust compiler is slow"),
+            ("a swift ui view", "a SwiftUI view"),
+            ("swift package manager", "Swift package manager"),
+            ("ask chat gpt and open a i", "ask ChatGPT and OpenAI"),
+            (
+                "the github copilot extension",
+                "the GitHub Copilot extension",
+            ),
+            ("run it in java script", "run it in JavaScript"),
+            ("java class loader", "Java class loader"),
+            ("go routines leak", "Go routines leak"),
+            (
+                "deep seek and mistral models",
+                "DeepSeek and Mistral models",
+            ),
+            ("a w s and g c p", "AWS and GCP"),
+            (
+                "the cloud front distribution",
+                "the CloudFront distribution",
+            ),
+            ("cursor agent mode", "Cursor agent mode"),
+            (
+                "vercel and super base project",
+                "Vercel and Supabase project",
+            ),
+            ("python script", "Python script"),
+            ("the next js app router", "the Next.js app router"),
+            ("open it in vs code", "open it in VS Code"),
+            ("i asked grok cloud", "i asked GroqCloud"),
+            // Seen from Groq Whisper on synthetic speech.
+            ("rewrote it with shadkin", "rewrote it with shadcn"),
+            ("use zlookup with sumifs", "use XLOOKUP with SUMIFS"),
+            ("the SWIFT code and EBAN", "the SWIFT code and IBAN"),
+            ("We passed SOC 2 Type 2", "We passed SOC 2 Type II"),
+            // corp
+            ("our arr grew", "our ARR grew"),
+            ("hit 2 million arr this year", "hit 2 million ARR this year"),
+            ("the o k rs and k p is", "the OKRs and KPIs"),
+            ("we passed sock 2 type 2", "we passed SOC 2 Type II"),
+            ("our soc 2 report", "our SOC 2 report"),
+            ("log it in sales force crm", "log it in Salesforce CRM"),
+            ("post in the slack channel", "post in the Slack channel"),
+            ("a jira ticket in hub spot", "a Jira ticket in HubSpot"),
+            ("send the n d a and s o w", "send the NDA and SOW"),
+            // sheet
+            ("use a v lookup or x lookup", "use a VLOOKUP or XLOOKUP"),
+            ("try sum ifs with count ifs", "try SUMIFS with COUNTIFS"),
+            ("wrap it in the sum function", "wrap it in the SUM function"),
+            ("a nested if statement", "a nested IF statement"),
+            ("index match beats it", "INDEX MATCH beats it"),
+            ("open the power query editor", "open the Power Query editor"),
+            ("freeze pains on row one", "freeze panes on row one"),
+            // finance
+            ("e bit da margin", "EBITDA margin"),
+            ("under gap accounting", "under GAAP accounting"),
+            ("non gap earnings", "non-GAAP earnings"),
+            ("k y c and a m l checks", "KYC and AML checks"),
+            ("the swift code and iban", "the SWIFT code and IBAN"),
+            ("send the swift message", "send the SWIFT message"),
+            ("the annual ten k filing", "the annual 10-K filing"),
+            ("our cogs ratio", "our COGS ratio"),
+            ("the p and l and capex", "the P&L and CapEx"),
+            ("five year kagger", "five year CAGR"),
+            ("the whack rate", "the WACC rate"),
+            ("a cruel basis", "accrual basis"),
+            ("term sofa rate", "term SOFR rate"),
+        ];
+        let wrong: Vec<_> = fixed
+            .iter()
+            .map(|(input, expected)| (before_cleanup(input, &config, false), *expected))
+            .filter(|(got, expected)| got != expected)
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+        let changed: Vec<_> = [
+            "cloud storage",
+            "the swift river",
+            "a swift response",
+            "taylor swift tickets",
+            "a pivot in strategy",
+            "a pivot table",
+            "react to news",
+            "they react quickly",
+            "cursor position",
+            "go home",
+            "let's go now",
+            "rust on the car",
+            "a rust stain",
+            "java coffee",
+            "a cup of java",
+            "arr matey",
+            "a python snake",
+            "the slack in the rope",
+            "cut me some slack",
+            "zoom in on the map",
+            "our teams meeting",
+            "a notion of fairness",
+            "a linear function",
+            "the sum of the parts",
+            "count if you can",
+            "mind the gap",
+            "a gap analysis",
+            "I ran a ten k",
+            "a cruel joke",
+            "a sofa bed",
+            "a whack on the head",
+            "cogs in the machine",
+            "excel at math",
+            "students who excel in class",
+            "the index of the book",
+            "the text before this",
+            "a quick book",
+            "a black rock",
+            "sales force of fifty",
+            "the clerk at the desk",
+            "a stripe of paint",
+            "a long chain",
+            "keep an open eye",
+            "the model's weights and biases",
+            "a raspberry pie",
+            "watched a series a while ago",
+        ]
+        .into_iter()
+        .map(|input| (input, before_cleanup(input, &config, false)))
+        .filter(|(input, got)| input != got)
+        .collect();
+        assert!(changed.is_empty(), "{changed:#?}");
+    }
+
+    #[test]
+    fn packs_follow_the_focused_app_and_config() {
+        let mut config = Config::default();
+        let run = |config: &Config, terminal, app| {
+            crate::text::prepare("v lookup and e bit da in cube control", config, terminal, app).0
+        };
+        // Defaults: dev and corp everywhere; sheet in spreadsheet apps; finance off.
+        assert_eq!(
+            run(&config, false, None),
+            "v lookup and e bit da in kubectl"
+        );
+        for app in [
+            "com.microsoft.Excel",
+            "com.apple.iWork.Numbers",
+            "libreoffice-calc",
+        ] {
+            assert_eq!(
+                run(&config, false, Some(app)),
+                "VLOOKUP and e bit da in kubectl",
+                "{app}"
+            );
         }
+        config.vocab.finance = true;
+        assert_eq!(run(&config, false, None), "v lookup and EBITDA in kubectl");
+        config.vocab.sheet = true;
+        assert_eq!(run(&config, false, None), "VLOOKUP and EBITDA in kubectl");
+        // dev off still applies in terminals and editors.
+        config.vocab.dev = false;
+        assert_eq!(
+            run(&config, false, Some("com.tinyspeck.slackmacgap")),
+            "VLOOKUP and EBITDA in cube control"
+        );
+        assert_eq!(
+            run(&config, true, Some("com.apple.Terminal")),
+            "VLOOKUP and EBITDA in kubectl"
+        );
+        assert_eq!(
+            run(&config, false, Some("com.microsoft.VSCode")),
+            "VLOOKUP and EBITDA in kubectl"
+        );
+        assert_eq!(
+            run(&config, false, Some("com.todesktop.230313mzl4w4u92")),
+            "VLOOKUP and EBITDA in kubectl"
+        );
+        config.vocab.corp = false;
+        assert_eq!(
+            before_cleanup("our sock 2 report", &config, false),
+            "our sock 2 report"
+        );
+        config.vocab.corp = true;
+        assert_eq!(
+            before_cleanup("our sock 2 report", &config, false),
+            "our SOC 2 report"
+        );
+        // The master switch turns every pack off.
+        config.formatting.snap_to_dictionary = false;
+        assert_eq!(
+            run(&config, true, Some("com.microsoft.Excel")),
+            "v lookup and e bit da in cube control"
+        );
+        // A [vocab] table round-trips through TOML with partial keys.
+        let parsed: Config = toml::from_str("[vocab]\nfinance = true").unwrap();
+        assert!(
+            parsed.vocab.finance && parsed.vocab.dev && parsed.vocab.corp && !parsed.vocab.sheet
+        );
+    }
+
+    #[test]
+    fn user_dictionary_outranks_packs() {
+        let mut config = all_packs();
+        config.dictionary.never_learn = vec!["vlookup".into()];
+        assert_eq!(
+            before_cleanup("use v lookup", &config, false),
+            "use v lookup"
+        );
+        config.dictionary.never_learn.clear();
+        config.dictionary.words = vec!["VLookup".into()];
+        assert_eq!(
+            before_cleanup("use v lookup", &config, false),
+            "use VLookup"
+        );
+        config.dictionary.words = vec!["sock".into()];
+        assert_eq!(
+            before_cleanup("our sock 2 report", &config, false),
+            "our sock 2 report"
+        );
+        config.dictionary.words.clear();
+        config.dictionary.replacements = vec![Replacement {
+            from: "ebitda".into(),
+            to: "earnings".into(),
+        }];
+        assert_eq!(
+            before_cleanup("e bit da margin", &config, false),
+            "earnings margin"
+        );
     }
 
     #[test]
@@ -490,24 +880,38 @@ mod tests {
             hint::black_box,
             time::{Duration, Instant},
         };
-        let config = Config::default();
+        let config = all_packs();
+        // One-time parse on the first dictation (near zero if another test ran first).
+        let start = Instant::now();
+        black_box(index());
+        eprintln!("pack index build: {:?}", start.elapsed());
         let text =
             "ask cloud to review the pull request with next js app and post gress database. "
                 .repeat(26);
+        // Dense with pack terms: every sentence has ten corrections.
+        let packed = "the e bit da and v lookup in sock 2 deck for cooper netties on a w s with \
+                      chat gpt using x lookup and k p is from the g a a p filing. "
+            .repeat(16);
         for (label, text) in [
             ("short", "ask cloud to review the pull request"),
             ("2k", text.as_str()),
+            ("2k packed", packed.as_str()),
         ] {
             let mut samples = Vec::new();
+            let mut packs = Vec::new();
             for _ in 0..200 {
                 let start = Instant::now();
                 black_box(before_cleanup(black_box(text), &config, false));
                 samples.push(start.elapsed());
+                let start = Instant::now();
+                black_box(apply(black_box(text), &config, false, None));
+                packs.push(start.elapsed());
             }
             samples.sort_unstable();
+            packs.sort_unstable();
             eprintln!(
-                "before_cleanup {label}: p50 {:?}, p95 {:?}",
-                samples[100], samples[190]
+                "before_cleanup {label}: p50 {:?}, p95 {:?}; packs alone p50 {:?}",
+                samples[100], samples[190], packs[100]
             );
             assert!(
                 samples[100]

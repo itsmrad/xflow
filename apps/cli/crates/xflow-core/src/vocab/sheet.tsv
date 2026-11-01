@@ -1,0 +1,202 @@
+# xflow sheet pack: spreadsheet functions and features (function names only). Same format as dev.tsv.
+VLOOKUP	v lookup|v look up|vee lookup|vee look up|vlookup|v lookups|vlook up
+XLOOKUP	zlookup|x lookup|x look up|ex lookup|ex look up|xlookup|x lookups|xlook up
+HLOOKUP	h lookup|h look up|aitch lookup|hlookup|hlook up
+LOOKUP	-	lookup	-	function|formula
+INDEX MATCH	index match|index and match|index slash match
+INDEX	-	index	-	function|formula|functions|formulas
+MATCH	-	match	-	function|formula
+XMATCH	x match|ex match|xmatch
+SUMIFS	sum ifs|sumifs|sum if s|sum iffs
+SUMIF	sumif|sum iff	sum if	-	function|formula|functions|formulas|statement
+COUNTIFS	count ifs|countifs|count if s|count iffs
+COUNTIF	countif|count iff	count if	-	function|formula|functions|formulas
+AVERAGEIFS	average ifs|averageifs|average if s
+AVERAGEIF	averageif	average if	-	function|formula
+MAXIFS	max ifs|maxifs|max if s
+MINIFS	min ifs|minifs|min if s
+SUMPRODUCT	sum product|sumproduct
+COUNTA	counta	count a	-	function|formula
+COUNTBLANK	countblank	count blank	-	function|formula
+IFERROR	iferror	if error	-	function|formula|wrapper
+IFNA	if n a|ifna|if na
+IFS	-	ifs	-	function|formula|statement
+IF statement	-	if statement	nested|excel
+SUM	-	sum	-	function|formula|functions|formulas
+AVERAGE	-	average	-	function|formula
+COUNT	-	count	-	function|formula
+MAX	-	max	-	function|formula
+MIN	-	min	-	function|formula
+ROUND	-	round	-	function|formula
+ROUNDUP	-	round up|roundup	-	function|formula
+ROUNDDOWN	rounddown	round down	-	function|formula
+MROUND	m round|mround
+CEILING	-	ceiling	-	function|formula
+FLOOR	-	floor	-	function|formula
+TRUNC	trunc
+ABS	-	abs	-	function|formula
+MOD	-	mod	-	function|formula
+RAND	-	rand	-	function|formula
+RANDBETWEEN	rand between|randbetween
+RANDARRAY	rand array|randarray
+SEQUENCE	-	sequence	-	function|formula
+FILTER	-	filter	-	function|formula
+SORT	-	sort	-	function|formula
+SORTBY	sortby	sort by	-	function|formula
+UNIQUE	-	unique	-	function|formula
+LET	-	let	-	function
+LAMBDA	-	lambda	excel	function|functions|formula
+TRANSPOSE	-	transpose	-	function|formula
+OFFSET	-	offset	-	function|formula
+INDIRECT	-	indirect	-	function|formula
+CHOOSE	-	choose	-	function|formula
+SWITCH	-	switch	-	function|formula
+VSTACK	v stack|vstack|vee stack
+HSTACK	h stack|hstack|aitch stack
+TOCOL	to col|tocol
+TOROW	torow
+CHOOSECOLS	choose cols|choosecols
+CHOOSEROWS	chooserows
+TAKE	-	take	-	function|formula
+DROP	-	drop	-	function|formula
+WRAPROWS	wraprows	wrap rows	-	function|formula|functions|formulas
+WRAPCOLS	wrapcols	wrap cols	-	function|formula|functions|formulas
+EXPAND	-	expand	-	function|formula
+TEXTSPLIT	textsplit	text split	-	function|formula
+TEXTBEFORE	textbefore	text before	-	function|formula|functions|formulas
+TEXTAFTER	textafter	text after	-	function|formula|functions|formulas
+TEXTJOIN	textjoin	text join	-	function|formula|functions|formulas
+CONCAT	-	concat	-	function|formula
+CONCATENATE	-	concatenate	-	function|formula
+TEXT	-	text	-	function
+VALUE	-	value	-	function
+LEFT	-	left	-	function|formula
+RIGHT	-	right	-	function|formula
+MID	-	mid	-	function|formula
+LEN	-	len	-	function|formula
+TRIM	-	trim	-	function|formula
+CLEAN	-	clean	-	function|formula
+PROPER	-	proper	-	function|formula
+UPPER	-	upper	-	function|formula
+LOWER	-	lower	-	function|formula
+SUBSTITUTE	-	substitute	-	function|formula
+REPLACE	-	replace	-	function|formula
+FIND	-	find	-	function|formula
+SEARCH	-	search	-	function|formula
+EXACT	-	exact	-	function|formula
+CHAR	-	char	-	function|formula
+UNICHAR	uni char|unichar
+HYPERLINK	-	hyperlink|hyper link	-	function|formula
+ISBLANK	isblank	is blank	-	formula
+ISNUMBER	isnumber	is number	-	function|formula
+ISERROR	iserror	is error	-	function|formula
+ISTEXT	istext	is text	-	function|formula
+NA	-	n a	-	function
+AND	-	and	-	function
+OR	-	or	-	function
+NOT	-	not	-	function
+XOR	xor
+TODAY	-	today	-	function|formula
+NOW	-	now	-	function|formula
+DATE	-	date	-	function
+DATEVALUE	datevalue	date value	-	function|formula
+TIMEVALUE	timevalue	time value	-	function|formula
+DATEDIF	date dif|datedif|date diff
+EDATE	e date|edate|ee date
+EOMONTH	e o month|eomonth|eo month|e omonth
+NETWORKDAYS	networkdays	network days	-	function|formula
+WORKDAY	-	workday	-	function|formula
+WEEKDAY	-	weekday	-	function|formula
+WEEKNUM	week num|weeknum
+ISOWEEKNUM	iso week num|isoweeknum|iso weeknum
+YEARFRAC	year frac|yearfrac
+DAYS	-	days	-	function
+YEAR	-	year	-	function
+MONTH	-	month	-	function
+PMT	p m t|pmt
+IPMT	i p m t|ipmt|i pmt
+PPMT	p p m t|ppmt|p pmt
+NPV	n p v|npv
+XNPV	x n p v|xnpv|x npv|ex npv
+IRR	i r r|irr
+XIRR	x i r r|xirr|x irr|ex irr
+MIRR	m i r r|mirr|m irr
+FV	f v|fv
+PV	-	p v	-	function|formula
+NPER	n per|nper|en per
+RATE	-	rate	-	function
+SLN	s l n|sln
+DDB	d d b|ddb
+STDEV	st dev|stdev|s t dev
+STDEV.S	stdev s|st dev s|stdev dot s|st dev dot s
+STDEV.P	stdev p|st dev p|stdev dot p|st dev dot p
+VAR.S	var s|var dot s
+MEDIAN	-	median	-	function
+MODE	-	mode	-	function
+PERCENTILE	-	percentile	-	function
+QUARTILE	-	quartile	-	function
+RANK	-	rank	-	function
+LARGE	-	large	-	function
+SMALL	-	small	-	function
+CORREL	correl|correll
+FORECAST	-	forecast	-	function
+FORECAST.LINEAR	forecast dot linear	forecast linear	-	function|formula|functions|formulas
+TREND	-	trend	-	function
+SUBTOTAL	-	subtotal|sub total	-	function|formula
+AGGREGATE	-	aggregate	-	function|formula
+ROWS	-	rows	-	function
+COLUMNS	-	columns	-	function
+ADDRESS	-	address	-	function
+GETPIVOTDATA	get pivot data|getpivotdata
+IMPORTRANGE	importrange	import range	-	function|formula|functions|formulas
+IMPORTXML	import xml|importxml|import x m l
+IMPORTHTML	import html|importhtml|import h t m l
+QUERY	-	query	-	function|formula
+ARRAYFORMULA	arrayformula	array formula	-	function|wrapper
+GOOGLEFINANCE	googlefinance	google finance	-	function|formula
+GOOGLETRANSLATE	googletranslate	google translate	-	function|formula
+SPARKLINE	-	sparkline|spark line	-	function|formula
+REGEXMATCH	regex match|regexmatch|reg ex match
+REGEXEXTRACT	regex extract|regexextract|reg ex extract
+REGEXREPLACE	regex replace|regexreplace|reg ex replace
+SPLIT	-	split	-	function|formula
+JOIN	-	join	-	function|formula
+PIVOTBY	pivotby	pivot by	-	function|formula|functions|formulas
+GROUPBY	groupby	group by	-	function|formula
+Power Query	powerquery	power query	in|using|use|with|open|the	editor|query|queries|step|steps|connection|connections|transform|transformation|m|load
+Power Pivot	powerpivot	power pivot	in|using|use|with|the	model|data|table|tables|measure|measures|window|add
+Power BI Desktop	power bi desktop|power b i desktop
+Power Automate	power automate|powerautomate
+Office Scripts	office scripts|office script
+VBA	v b a|vba|vee b a
+VBA macro	v b a macro|vba macro
+DAX	d a x|dax
+DAX measure	dax measure|d a x measure|dax measures
+M code	-	m code	power|query
+PivotTable	pivottable
+PivotChart	pivot chart|pivotchart
+XLSX	x l s x|xlsx|ex l s x
+XLSM	x l s m|xlsm
+XLS	x l s|xls
+Excel	-	excel	in|into|from|microsoft|open	spreadsheet|spreadsheets|file|files|sheet|sheets|workbook|workbooks|formula|formulas|macro|macros|table|tables|chart|charts|model|online|desktop|add|function|functions	-	at|in|with
+Microsoft Excel	microsoft excel|ms excel
+Excel Online	excel online
+Apple Numbers	apple numbers
+LibreOffice Calc	libreoffice calc|libre office calc
+Smartsheet	smart sheet|smartsheet
+Airtable base	air table base|airtable base
+Flash Fill	flashfill	flash fill	use|using|the|with
+Goal Seek	goalseek	goal seek	use|using|the|with|run
+What-If Analysis	what if analysis
+Data Validation	-	data validation	excel	dropdown|list|rule|rules
+freeze panes	freeze pains|freeze pain
+Text to Columns	-	text to columns	use|using|the|with|run
+Find and Replace	-	find and replace	use|using|the|with|run	dialog|box
+Ctrl+Shift+Enter	control shift enter|ctrl shift enter|control shift and enter
+Ctrl+Z	control z|ctrl z|control zed
+Ctrl+C	control c|ctrl c
+Ctrl+V	control v|ctrl v
+Cmd+Shift+Enter	command shift enter|cmd shift enter
+A1 notation	a 1 notation|a one notation
+R1C1	r 1 c 1|r one c one|r1 c1|r1c1
+CSV export	c s v export|csv export

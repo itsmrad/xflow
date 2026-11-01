@@ -99,8 +99,12 @@ cargo test --manifest-path apps/cli/Cargo.toml --locked -p xflow-core cues
 cargo test --manifest-path apps/cli/Cargo.toml --locked --release -p xflow-core cues::tests::pipeline_latency -- --nocapture
 ```
 
-The shipped `cues.txt` contains exact heard forms and adjacent left/right cues;
-either side may enable a correction, while either blocker prevents it. Addressing
+The shipped packs (`apps/cli/crates/xflow-core/src/vocab/{dev,corp,sheet,finance}.tsv`)
+contain exact heard forms and adjacent left/right cues. A safe form ("cube cuddle",
+"v lookup") is never everyday English and corrects on its own; a cued form ("cloud",
+"swift", "arr") needs a cue on either side, while either blocker prevents it.
+`[vocab]` selects packs: dev and corp everywhere, dev always in terminals and
+editors, sheet in Excel, Numbers and Calc, finance only when enabled. Addressing
 Claude or Claude Code also requires a positive continuation (such as "to", "about"
 or "for"), punctuation, or the end of the text after a left addressing cue.
 Claude Code only accepts addressing cues such as "ask", "hey" and "tell".
@@ -111,6 +115,6 @@ Dictionary phrases conservatively protect every overlapping cue word: adding
 "Google Cloud" suppresses the cloud cue, and "VS Code" suppresses cloud code,
 even when the full dictionary phrase is absent. All-caps input keeps all-caps
 corrections.
-No app lookup, fuzzy index, new provider call, download or additional model is
-involved. Shipped prompt hints are deferred: the current Whisper fallback retains
+Pack selection reuses the focused app id the daemon already reads; no fuzzy
+index, new provider call, download or additional model is involved. Shipped prompt hints are deferred: the current Whisper fallback retains
 a second copy of encoded audio whenever hints are present.
