@@ -45,11 +45,13 @@ keep_warm_secs = 0           # keep the mic open N s after a recording (0 = off)
 ignore_speakers = false      # opt in to cancelling speaker sound (macOS, system default mic)
 
 [injection]
+# Terminal control characters/multiline are copied for manual paste until
+# bracketed-paste capability is verified. No automatic Enter/send-it support.
 method = "paste"             # paste | type | clipboard
 clipboard_only = false       # deprecated: use method = "clipboard"
 restore_clipboard = true     # put your previous clipboard text back after pasting
 restore_delay_ms = 300
-trailing_space = true
+trailing_space = true        # terminal mode strips trailing spaces/newlines and normalizes curly quotes/ellipsis
 smart_spacing = true         # match spacing and capitalization to the text around the cursor (macOS; read locally, never uploaded)
 
 [formatting]

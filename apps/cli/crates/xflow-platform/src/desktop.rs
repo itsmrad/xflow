@@ -117,6 +117,34 @@ impl LinuxDesktop {
 /// Whether the app id names a terminal emulator, where a newline can run a command.
 pub fn is_terminal(app: Option<&str>) -> bool {
     let app = app.unwrap_or_default().to_ascii_lowercase();
+    // macOS bundle IDs are identities, not Linux WM_CLASS substrings (Console is a log viewer).
+    if cfg!(target_os = "macos") {
+        return matches!(
+            app.as_str(),
+            "com.apple.terminal"
+                | "com.googlecode.iterm2"
+                | "dev.warp.warp-stable"
+                | "dev.warp.warp-preview"
+                | "net.kovidgoyal.kitty"
+                | "org.alacritty"
+                | "com.github.wez.wezterm"
+                | "com.mitchellh.ghostty"
+                | "co.zeit.hyper"
+                | "org.tabby"
+                | "com.raphaelamorim.rio"
+                | "terminal"
+                | "iterm"
+                | "iterm2"
+                | "warp"
+                | "kitty"
+                | "alacritty"
+                | "wezterm"
+                | "ghostty"
+                | "hyper"
+                | "tabby"
+                | "rio"
+        );
+    }
     [
         "terminal",
         "iterm",
@@ -144,6 +172,16 @@ pub fn is_terminal(app: Option<&str>) -> bool {
         || app == "st"
 }
 
+/// An integrated terminal identified by the focused element, or a terminal app.
+pub fn terminal_context(context: &AppContext) -> bool {
+    context.terminal_input || is_terminal(context.app_id.as_deref())
+}
+
+/// Control characters requiring manual paste in positively identified terminal input.
+pub fn terminal_controls(text: &str, context: &AppContext) -> bool {
+    terminal_context(context) && text.chars().any(char::is_control)
+}
+
 fn paste_shortcut(app: Option<&str>) -> &'static str {
     let app_lower = app.unwrap_or_default().to_ascii_lowercase();
     // xterm/rxvt traditionally paste PRIMARY with Shift+Insert. xclip fills
@@ -166,17 +204,18 @@ fn safe_target(text: &str, target: &AppContext, current: &AppContext) -> bool {
         || target.app_id.as_deref().is_none_or(str::is_empty)
         || target.window_id != current.window_id
         || target.app_id != current.app_id
+        || target.terminal_input != current.terminal_input
     {
         return false;
     }
     // Terminal control characters can submit commands even without a newline.
-    !(is_terminal(current.app_id.as_deref()) && text.chars().any(char::is_control))
+    !terminal_controls(text, current)
 }
 
 fn injection_options(config: &InjectionConfig, target: &AppContext) -> serde_json::Value {
     serde_json::json!({
         "method": if config.effective_method() == InjectionMethod::Type { "type" } else { "paste" },
-        "terminal": is_terminal(target.app_id.as_deref()),
+        "terminal": terminal_context(target),
         "restore_clipboard": config.restore_clipboard,
         "restore_delay_ms": config.restore_delay_ms,
         "target": {"app_id": target.app_id, "window_id": target.window_id},
@@ -353,6 +392,7 @@ fn sway_focus(value: &serde_json::Value) -> Option<AppContext> {
                 .map(str::to_owned),
             window_id: value["id"].as_u64().map(|id| id.to_string()),
             selected_text: None,
+            terminal_input: false,
         });
     }
     ["nodes", "floating_nodes"]
@@ -402,6 +442,7 @@ impl Desktop for LinuxDesktop {
             app_id: app,
             window_id: Some(window),
             selected_text: None,
+            terminal_input: false,
         })
     }
 
@@ -536,6 +577,7 @@ mod tests {
             app_id: app.map(str::to_owned),
             window_id: window.map(str::to_owned),
             selected_text: None,
+            terminal_input: false,
         }
     }
     #[test]
@@ -574,15 +616,26 @@ mod tests {
     #[test]
     fn terminal_shortcuts_and_multiline_guard() {
         for app in [
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "dev.warp.Warp-Stable",
+            "dev.warp.Warp-Preview",
+            "co.zeit.hyper",
+            #[cfg(not(target_os = "macos"))]
             "org.gnome.Terminal",
+            #[cfg(not(target_os = "macos"))]
             "org.gnome.Console",
+            #[cfg(not(target_os = "macos"))]
             "org.gnome.Ptyxis",
+            #[cfg(not(target_os = "macos"))]
             "kgx",
             "kitty",
+            #[cfg(not(target_os = "macos"))]
             "foot",
+            #[cfg(not(target_os = "macos"))]
             "konsole",
             "alacritty",
-            "org.wezfurlong.wezterm",
+            "com.github.wez.wezterm",
             "ghostty",
             "org.tabby",
             "com.raphaelamorim.rio",
@@ -607,6 +660,83 @@ mod tests {
         assert!(!is_terminal(Some("com.tinyspeck.slackmacgap")));
     }
     #[test]
+    fn terminal_controls_copy_only_for_identified_terminal_input() {
+        for app in [
+            "com.microsoft.VSCode",
+            "com.microsoft.VSCodeInsiders",
+            "com.todesktop.230313mzl4w4u92",
+            "dev.zed.Zed",
+            "com.jetbrains.intellij",
+            "code",
+            "cursor",
+            "zed",
+        ] {
+            let mut context = target(Some(app), Some("1"));
+            // Ordinary buffers keep normal delivery; the same editor's terminal copies controls.
+            for text in [
+                "line one\nline two",
+                "\r",
+                "\t",
+                "\u{1b}[200~prompt\u{1b}[201~",
+                "\u{1b}[201~\necho unsafe",
+                "\0",
+                "\u{7f}",
+            ] {
+                assert!(
+                    safe_target(text, &context, &context),
+                    "buffer {app}: {text:?}"
+                );
+                context.terminal_input = true;
+                assert!(
+                    !safe_target(text, &context, &context),
+                    "terminal {app}: {text:?}"
+                );
+                context.terminal_input = false;
+            }
+        }
+        let mut context = target(Some("org.example.Editor"), Some("1"));
+        context.terminal_input = true;
+        assert!(terminal_context(&context));
+        assert!(!safe_target("prompt\nnext line", &context, &context));
+        let mut changed = context.clone();
+        changed.terminal_input = false;
+        assert!(!safe_target("prompt", &context, &changed));
+        assert!(!is_terminal(Some("claude")));
+        assert!(!is_terminal(Some("codex")));
+        assert!(!is_terminal(Some("aider")));
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_terminal_bundle_ids_are_exact() {
+        for app in [
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "dev.warp.Warp-Stable",
+            "dev.warp.Warp-Preview",
+            "DEV.WARP.WARP-PREVIEW",
+            "net.kovidgoyal.kitty",
+            "org.alacritty",
+            "com.github.wez.wezterm",
+            "com.mitchellh.ghostty",
+            "co.zeit.hyper",
+            "org.tabby",
+            "com.raphaelamorim.rio",
+        ] {
+            assert!(is_terminal(Some(app)), "{app}");
+        }
+        for app in [
+            "com.apple.Console",
+            "console",
+            "com.example.Footnotes",
+            "football",
+            "com.example.TerminalNotes",
+            "com.microsoft.VSCode",
+            "dev.zed.Zed",
+        ] {
+            assert!(!is_terminal(Some(app)), "{app}");
+        }
+    }
+    #[test]
     fn injection_options_and_outcomes_follow_contract() {
         let config = InjectionConfig {
             method: InjectionMethod::Type,
@@ -614,11 +744,11 @@ mod tests {
             restore_delay_ms: 123,
             ..Default::default()
         };
-        let context = target(Some("org.gnome.Ptyxis"), Some("42"));
+        let context = target(Some("com.apple.Terminal"), Some("42"));
         let options = injection_options(&config, &context);
         assert_eq!(
             options,
-            serde_json::json!({"method":"type", "terminal":true, "restore_clipboard":false, "restore_delay_ms":123, "target":{"app_id":"org.gnome.Ptyxis", "window_id":"42"}})
+            serde_json::json!({"method":"type", "terminal":true, "restore_clipboard":false, "restore_delay_ms":123, "target":{"app_id":"com.apple.Terminal", "window_id":"42"}})
         );
         for (name, expected) in [
             ("pasted", InjectionOutcome::Pasted),

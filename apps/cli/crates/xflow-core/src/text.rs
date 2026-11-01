@@ -184,6 +184,14 @@ pub fn after_cleanup(text: &str, config: &Config) -> String {
     }
     text
 }
+/// Apply after cleanup and snippets too: neither may introduce shell typography.
+/// Keep case and identifiers literal. Submission is always a separate user action.
+pub fn terminal_plain(text: &str) -> String {
+    text.trim_end_matches(['\r', '\n', ' '])
+        .replace(['‘', '’', '‚', '‛'], "'")
+        .replace(['“', '”', '„', '‟'], "\"")
+        .replace('…', "...")
+}
 /// Scripts written without spaces between words (CJK, kana, fullwidth forms, Thai).
 fn unspaced(c: char) -> bool {
     matches!(c as u32, 0x0e00..=0x0e7f | 0x3000..=0x30ff | 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff | 0xff00..=0xffef | 0x20000..=0x3ffff)
@@ -700,5 +708,41 @@ mod tests {
         };
         assert_eq!(style(&c, Some("Org.EDITOR")).unwrap().name, "first");
         assert!(style(&c, None).is_none());
+    }
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_plain_quotes_identifiers_and_no_implicit_enter() {
+        assert_eq!(
+            terminal_plain("git commit -m “fix userId”\n\r\n"),
+            "git commit -m \"fix userId\""
+        );
+        assert_eq!(
+            terminal_plain("‘$VARS’ `some_fn()` …\n  "),
+            "'$VARS' `some_fn()` ..."
+        );
+        assert_eq!(
+            terminal_plain("first\nsecond\nthird"),
+            "first\nsecond\nthird"
+        );
+        for phrase in ["press enter", "submit", "send it"] {
+            assert_eq!(
+                terminal_plain(phrase),
+                phrase,
+                "spoken submit is not enabled"
+            );
+        }
+    }
+
+    #[test]
+    fn old_app_context_defaults_to_no_integrated_terminal_claim() {
+        let context: crate::AppContext =
+            serde_json::from_str(r#"{"app_id":"editor","window_id":"1","selected_text":null}"#)
+                .unwrap();
+        assert!(!context.terminal_input);
     }
 }

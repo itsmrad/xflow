@@ -91,7 +91,37 @@ specific Fn gesture). No permission polling runs at idle. The integrated daemon 
 
 Rust platform code prefers `org.xflow.Shell.Inject` when the name has an owner and falls back to
 `wl-copy` + `ydotool` (Wayland) or `xclip` + `xdotool` (X11). The terminal list and multiline-terminal
-safety check stay in Rust (`safe_target`).
+safety check stay in Rust (`safe_target`). macOS and Linux share the classifier:
+macOS matches exact terminal bundle IDs/names; Linux retains WM_CLASS substrings.
+macOS Console and unrelated app names containing `foot` are not terminals.
+
+`AppContext.terminal_input` is an additive bool (serde default false) identifying
+an integrated terminal from focused AX element metadata. It is not a capability
+claim. macOS checks `AXTitle`, `AXDescription`, and `AXIdentifier` for known terminal
+input labels, plus the `xterm-helper-textarea` entry in Chromium's `AXDOMClassList`
+array (independent of localized labels); it never reads terminal contents to
+classify focus. Only positively identified terminal input gets terminal guards
+and read restrictions. Normal VS Code/Cursor/Zed/JetBrains buffers retain multiline
+paste, selected-text commands, smart spacing, learning and paste confirmation.
+Changed terminal-input classification copies only. Unrecognized integrated
+terminals (including JetBrains/Zed or localized VS Code without the DOM class)
+remain a #32 follow-up and retain ordinary-editor behavior. Native secure/protected
+fields refuse injection; shell password prompts not exposed as secure AX fields
+remain an unverified limitation.
+
+Identified terminals skip the paste receipt read. A dispatched terminal paste
+therefore reports `Uncertain`, keeps the dictation on the clipboard (no automatic
+restoration), and holds the delivery lock up to `PENDING_PASTE` (currently 5 s).
+This applies to terminal pastes that pass the input guard; control-character
+payloads take the immediate copy-only path instead.
+
+No live bracketed-paste capability is yet proven, so terminal newlines, tabs,
+carriage returns, ESC/framing bytes and other controls still copy only. Process
+names (`claude`, `codex`, `aider`) never grant a capability. Never wrap clipboard
+text in raw `ESC[200~`/`ESC[201~`: the terminal must own that framing after its
+foreground program enables mode 2004. Automatic Enter/send-it remains deferred.
+No IPC version bump: the optional context field leaves existing enum variants
+and requests unchanged, and the delivery adapter always rechecks live focus.
 
 ## Traits (`xflow-core`)
 

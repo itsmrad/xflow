@@ -76,6 +76,35 @@ added ~107 ms p50 to a Groq cleanup. Dictation cleanup gets 3 s plus
 25 ms per word (capped by `cleanup.timeout_secs`); a slower answer is dropped and
 the local text pasted.
 
+Terminal mode runs a final plain-text pass after cleanup and snippet expansion:
+curly quotes become straight quotes, ellipsis becomes three dots, and trailing
+spaces/newlines are removed. Case and identifiers are left alone. Detected
+integrated terminal input gets the same list/cleanup policy as terminal apps.
+Terminal input is positively identified by known AX labels or Chromium's
+`AXDOMClassList` containing `xterm-helper-textarea`, so localized xterm labels
+can still be recognized. A copied control-character payload in identified
+terminal input adds "Terminal paste capability unverified" to the pill; `last`
+and history retain the final plain text. Selection, receipt, smart-spacing and
+correction-learning reads skip only positively identified terminals (and secure
+fields). Normal editor buffers keep multiline paste, selected-text commands,
+spacing, learning, receipt confirmation and clipboard restoration. Unrecognized
+integrated terminals, including JetBrains/Zed or localized VS Code without the
+DOM class, retain ordinary-editor behavior and remain a #32 follow-up.
+
+Identified terminals skip receipt reads, so a dispatched terminal paste reports
+`Uncertain`, retains the dictation on the clipboard instead of restoring it, and
+holds the delivery lock up to `PENDING_PASTE` (currently 5 s). Control-character
+payloads return copy-only immediately without dispatching paste keys.
+
+This is S1 of #32, not multiline enablement. A future delivery path must prove
+mode 2004 for the *focused pane*, recheck focus, reject escape/control injection
+and password prompts, and pass ten 3–15-line metacharacter prompts per agent and
+terminal before enabling insertion. No process-name/title inference, raw framing
+around clipboard text, or automatic Enter. macOS native secure fields are refused;
+plain-shell password-prompt recognition is not yet proven. Linux shares the
+terminal-context guard but uses WM_CLASS detection; integrated-focus detection
+and the GNOME Terminal agent matrix remain follow-up work.
+
 Command mode captures the selection concurrently with context after audio opens.
 The spoken instruction is locally corrected, then passed as `command`, with the
 selection as transformer input. An empty selection requests generation. A missing
