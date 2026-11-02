@@ -151,7 +151,12 @@ provider warm-up. Slow context lookup cannot delay stop/cancel. Processing waits
 at most two seconds for context before using an unknown target, leaving desktop
 safety checks to the platform. Network and SQLite work run outside the actor.
 
-Clips shorter than `recording.min_ms` are discarded before upload. Listening ticks
+Clips shorter than `recording.min_ms` are discarded before upload. Silence before
+the first voiced frame and after the last is trimmed to 400 ms before upload (never
+below `recording.min_ms`). Those edges are frames over half of
+`recording.silence_threshold`, so soft first words and endings stay; the speech
+gate itself still uses the full threshold. Pauses inside the dictation and the cuts
+between long dictation segments are kept, and kept failed audio is the trimmed clip. Listening ticks
 at 25 Hz publish levels, reset continuous-silence time on speech, and stop on the
 silence deadline, maximum recording deadline, or capture's `finished()` flag.
 There is no idle level polling. Completed capture retrieves buffered audio or
