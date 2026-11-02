@@ -227,14 +227,10 @@ fn resolve_device(devices: &[Candidate], config: &RecordingConfig) -> Result<Dev
         .as_ref()
         .and_then(|name| devices.iter().position(|d| &d.name == name));
     let duplicate = |name: &str| devices.iter().filter(|d| d.name == name).count() > 1;
-    let mut ambiguous = false;
+    let mut ambiguous = named.is_some_and(|index| duplicate(&devices[index].name));
+    let named = named.filter(|_| !ambiguous);
     let (index, selected) = if let Some(index) = named {
-        if duplicate(&devices[index].name) {
-            ambiguous = true;
-            (None, default)
-        } else {
-            (Some(index), &devices[index])
-        }
+        (Some(index), &devices[index])
     } else {
         let avoid = matches!(default.transport, Transport::Virtual | Transport::Aggregate)
             || (config.avoid_bluetooth
@@ -254,7 +250,7 @@ fn resolve_device(devices: &[Candidate], config: &RecordingConfig) -> Result<Dev
                 (Some(index), device)
             }
         } else {
-            ambiguous = duplicate(&default.name);
+            ambiguous |= duplicate(&default.name);
             (None, default)
         }
     };
@@ -266,14 +262,14 @@ fn resolve_device(devices: &[Candidate], config: &RecordingConfig) -> Result<Dev
         ));
     }
     if let Some(name) = &config.device {
-        if named.is_none() {
+        if named.is_none() && !ambiguous {
             notices.push(format!(
                 "recording.device {name:?} not found — using {}",
                 selected.name
             ));
         }
     }
-    if !selected.is_default && named.is_none() && !ambiguous && default.is_default {
+    if !selected.is_default && named.is_none() && default.is_default {
         if matches!(
             default.transport,
             Transport::Bluetooth | Transport::BluetoothLe
@@ -397,27 +393,85 @@ fn inspect_input(id: u32, default_id: Option<u32>) -> Result<Option<Candidate>> 
     }))
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn stable_inputs<D>(
+    mut read: impl FnMut() -> Result<Option<Vec<NativeInput<D>>>>,
+    default: impl FnOnce() -> Result<NativeInput<D>>,
+) -> Result<Vec<NativeInput<D>>> {
+    for _ in 0..2 {
+        match read() {
+            Ok(Some(inputs)) => return Ok(inputs),
+            Ok(None) => {}
+            Err(error) => tracing::debug!(%error, "microphone inventory unavailable"),
+        }
+    }
+    tracing::debug!("audio device inventory changed; using the system default");
+    Ok(vec![default()?])
+}
+
+#[cfg(target_os = "macos")]
+fn current_default(host: &cpal::Host) -> Result<(u32, cpal::Device)> {
+    use coreaudio::audio_unit::macos_helpers;
+    let id = macos_helpers::get_default_device_id(true).context("no default microphone")?;
+    let device = host
+        .default_input_device()
+        .context("no default microphone")?;
+    if macos_helpers::get_default_device_id(true) != Some(id) {
+        bail!("default microphone changed during enumeration");
+    }
+    Ok((id, device))
+}
+
 #[cfg(target_os = "macos")]
 fn mac_inputs() -> Result<Vec<NativeInput<cpal::Device>>> {
     use coreaudio::audio_unit::macos_helpers;
     let host = cpal::default_host();
     // CPAL 0.15.3 devices() preserves kAudioHardwarePropertyDevices order, but hides IDs.
     // Verify the surrounding snapshots so a topology change cannot pair the wrong devices.
-    for _ in 0..2 {
-        let ids = macos_helpers::get_audio_device_ids()?;
-        let devices: Vec<_> = host
-            .devices()
-            .context("cannot enumerate audio devices")?
-            .collect();
-        if ids != macos_helpers::get_audio_device_ids()? || ids.len() != devices.len() {
-            continue;
+    stable_inputs(
+        || {
+            let ids = macos_helpers::get_audio_device_ids()?;
+            let devices: Vec<_> = host
+                .devices()
+                .context("cannot enumerate audio devices")?
+                .collect();
+            if ids != macos_helpers::get_audio_device_ids()? || ids.len() != devices.len() {
+                return Ok(None);
+            }
+            let default_id = macos_helpers::get_default_device_id(true);
+            Ok(Some(usable_inputs(ids.into_iter().zip(devices), |id| {
+                inspect_input(id, default_id)
+            })?))
+        },
+        || {
+            let (id, device) = current_default(&host)?;
+            let candidate =
+                inspect_input(id, Some(id))?.context("default microphone has no input streams")?;
+            Ok(NativeInput {
+                id,
+                device,
+                candidate,
+            })
+        },
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn prefer_default_handle<D>(
+    (mut device, mut choice): (D, DeviceChoice),
+    default: Option<(u32, D)>,
+    config: &RecordingConfig,
+) -> (D, DeviceChoice) {
+    match default {
+        Some((id, default)) if choice.device_id == Some(id) => device = default,
+        _ => {
+            if choice.is_default && config.ignore_speakers && config.device.is_none() {
+                choice.echo_unavailable();
+            }
+            choice.is_default = false;
         }
-        let default_id = macos_helpers::get_default_device_id(true);
-        return usable_inputs(ids.into_iter().zip(devices), |id| {
-            inspect_input(id, default_id)
-        });
     }
-    bail!("no stable microphone inventory; audio devices changed during enumeration, try again")
+    (device, choice)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -449,6 +503,12 @@ fn choose_input<D>(
 fn select_device(config: &RecordingConfig) -> Result<(cpal::Device, DeviceChoice)> {
     let started = Instant::now();
     let selected = choose_input(mac_inputs()?, config)?;
+    // CPAL's default handle avoids its disconnect-listener reference cycle.
+    let selected = prefer_default_handle(
+        selected,
+        current_default(&cpal::default_host()).ok(),
+        config,
+    );
     tracing::debug!(resolution_us = started.elapsed().as_micros() as u64, device_id = ?selected.1.device_id, "microphone resolved");
     Ok(selected)
 }
@@ -579,9 +639,22 @@ impl CaptureBuffer {
     }
 }
 
+#[cfg(target_os = "macos")]
+struct PauseOnDrop<S: StreamTrait>(S);
+
+#[cfg(target_os = "macos")]
+impl<S: StreamTrait> Drop for PauseOnDrop<S> {
+    fn drop(&mut self) {
+        // shortcut: CPAL 0.15.3 retains non-default streams; pause stops audio until its listener uses Weak.
+        if let Err(error) = self.0.pause() {
+            tracing::warn!(%error, "cannot stop microphone stream");
+        }
+    }
+}
+
 struct OpenStream {
     // Keep the stream (cpal or the macOS voice unit) on its owner thread.
-    // Dropping closes capture immediately.
+    // The CPAL guard explicitly pauses before releasing a potentially retained stream.
     _stream: Box<dyn std::any::Any>,
     buffer: Arc<CaptureBuffer>,
     sample_rate: u32,
@@ -589,6 +662,14 @@ struct OpenStream {
     generation: u64,
     microphone: String,
     device_id: Option<u32>,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for OpenStream {
+    fn drop(&mut self) {
+        // CPAL's retained callback must not retain a cancelled recording's sample buffer.
+        let _ = self.buffer.take();
+    }
 }
 
 fn warm_deadline(config: &RecordingConfig, has_stream: bool, now: Instant) -> Option<Instant> {
@@ -657,9 +738,19 @@ impl CpalCapture {
                                 }
                                 thread_finished.store(false, Ordering::Release);
                                 let opened = Instant::now();
-                                let selected = resolve_on_start(stream.is_some())
-                                    .then(|| select_device(&config))
-                                    .transpose()?;
+                                #[cfg(target_os = "macos")]
+                                let selected = if resolve_on_start(stream.is_some()) {
+                                    match select_device(&config) {
+                                        Ok(selected) => Some(selected),
+                                        Err(error) if stream.is_some() => {
+                                            tracing::debug!(%error, "microphone selection unavailable; reusing warm stream");
+                                            None
+                                        }
+                                        Err(error) => return Err(error),
+                                    }
+                                } else { None };
+                                #[cfg(not(target_os = "macos"))]
+                                let selected = resolve_on_start(stream.is_some()).then(|| select_device(&config)).transpose()?;
                                 if stream.as_ref().zip(selected.as_ref()).is_some_and(
                                     |(open, (_, choice))| open.device_id != choice.device_id,
                                 ) {
@@ -858,6 +949,11 @@ fn open_stream(
         cpal::SampleFormat::U64 => build!(u64),
         other => bail!("unsupported microphone sample format {other}"),
     }?;
+    #[cfg(target_os = "macos")]
+    let stream = PauseOnDrop(stream);
+    #[cfg(target_os = "macos")]
+    stream.0.play().context("cannot start microphone")?;
+    #[cfg(not(target_os = "macos"))]
     stream.play().context("cannot start microphone")?;
     Ok(OpenStream {
         _stream: Box::new(stream),
@@ -1124,6 +1220,121 @@ impl Drop for CpalCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn plain_stream_stop_and_cancel_pause_before_releasing_the_handle() {
+        struct FakeStream(Arc<Mutex<Vec<&'static str>>>);
+        impl StreamTrait for FakeStream {
+            fn play(&self) -> std::result::Result<(), cpal::PlayStreamError> {
+                Ok(())
+            }
+            fn pause(&self) -> std::result::Result<(), cpal::PauseStreamError> {
+                self.0.lock().unwrap().push("pause/AudioUnit stop");
+                Ok(())
+            }
+        }
+        impl Drop for FakeStream {
+            fn drop(&mut self) {
+                self.0.lock().unwrap().push("release handle");
+            }
+        }
+        for stop in [true, false] {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let buffer = CaptureBuffer::open(
+                8_000,
+                1,
+                &RecordingConfig::default(),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            // Models the callback retained by CPAL's non-default disconnect listener.
+            let retained_buffer = buffer.clone();
+            let open = OpenStream {
+                _stream: Box::new(PauseOnDrop(FakeStream(events.clone()))),
+                buffer,
+                sample_rate: 8_000,
+                channels: 1,
+                generation: 1,
+                microphone: "Built-in fallback".into(),
+                device_id: Some(2),
+            };
+            if stop {
+                let _ = open.buffer.take().unwrap().unwrap().finish().unwrap();
+            }
+            drop(open);
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["pause/AudioUnit stop", "release handle"]
+            );
+            assert!(!retained_buffer.active.load(Ordering::Acquire));
+            assert!(retained_buffer.recording.lock().unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn selected_default_uses_default_handle_and_other_inputs_keep_their_identity() {
+        let choice = || DeviceChoice {
+            index: None,
+            device_id: Some(2),
+            name: "Built-in".into(),
+            is_default: true,
+            notice: None,
+        };
+        let (handle, chosen) = prefer_default_handle(
+            ("enumerated", choice()),
+            Some((2, "default API")),
+            &RecordingConfig::default(),
+        );
+        assert_eq!(handle, "default API");
+        assert!(chosen.is_default);
+        let (handle, chosen) = prefer_default_handle(
+            ("enumerated", choice()),
+            Some((3, "new default API")),
+            &RecordingConfig {
+                ignore_speakers: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(handle, "enumerated");
+        assert_eq!(chosen.device_id, Some(2));
+        assert!(
+            !chosen.is_default,
+            "VPIO must not follow a different default"
+        );
+        assert!(chosen.description().contains("Echo cancellation is off"));
+    }
+
+    #[test]
+    fn inventory_churn_and_read_errors_fall_back_to_default_after_two_attempts() {
+        let mut attempts = 0;
+        let inputs = stable_inputs(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(anyhow!("CoreAudio inventory changed"))
+                } else {
+                    Ok(None)
+                }
+            },
+            || {
+                Ok(NativeInput {
+                    id: 2,
+                    device: "default API",
+                    candidate: Candidate {
+                        name: "Built-in".into(),
+                        transport: Transport::BuiltIn,
+                        is_default: true,
+                    },
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(attempts, 2);
+        let (handle, choice) = choose_input(inputs, &RecordingConfig::default()).unwrap();
+        assert_eq!(handle, "default API");
+        assert_eq!(choice.device_id, Some(2));
+    }
+
     #[test]
     fn microphone_inventory_skips_failed_reads_and_uses_a_surviving_input() {
         let inputs = usable_inputs((1..=5_u32).map(|id| (id, id)), |id| match id {
@@ -1397,10 +1608,11 @@ mod tests {
                     ("AirPods", Bluetooth, true),
                     ("Same", Other, false),
                     ("Same", Other, false),
+                    ("Built-in", BuiltIn, false),
                 ],
                 Some("Same"),
                 true,
-                "AirPods",
+                "Built-in",
                 Some("duplicate"),
             ),
         ];
@@ -1427,9 +1639,6 @@ mod tests {
                     choice.description()
                 ),
                 None => assert!(choice.notice.is_none(), "{label}"),
-            }
-            if notice == Some("duplicate") {
-                assert_eq!(choice.index, None, "use actual default object");
             }
         }
     }

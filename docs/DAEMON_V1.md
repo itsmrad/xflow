@@ -169,12 +169,15 @@ or virtual inputs); a missing name falls back with a notice. Otherwise the syste
 default wins, except Bluetooth/Bluetooth LE defaults with `recording.avoid_bluetooth = true`
 (the default), and virtual/aggregate defaults: these prefer built-in input when
 available. Without built-in input the default is retained, including Bluetooth.
-Only a duplicate of the name being selected causes fallback to the system default;
-unrelated duplicates do not affect a pinned mic or the built-in pick. Inputs are matched
+An ambiguous pinned name uses automatic selection, including built-in preference
+over Bluetooth. Unrelated duplicates do not affect a pinned mic or built-in pick.
+Inputs are matched
 to CPAL by CoreAudio device ID/order, excluding output-only name collisions. A device
 whose input/name/transport property fails is skipped with a debug log. If the default
 cannot be inspected, a surviving built-in input is preferred, then another available
-input. Capture fails only when no usable input or stable inventory remains.
+input. Two unstable inventory snapshots fall back to the verified system default;
+a failed refresh reuses an existing warm stream. Capture fails only if neither a
+usable/default input nor a reusable warm stream is available.
 `xflow config set recording.avoid_bluetooth false` allows Bluetooth defaults;
 `xflow config set recording.device '"AirPods"'` pins that exact name. `xflow devices`
 lists names without opening inputs. No ranked lists or UIDs are configured.
@@ -183,8 +186,10 @@ Voice processing (`ignore_speakers`) only opens the system default input when no
 name is pinned. If resolution chooses built-in input instead, capture uses the
 plain microphone and reports that echo cancellation is off, also when VPIO fails to
 open. Plain macOS warm streams re-resolve at the next start and reopen when the selected
-device ID changes. Automatic-input echo cancellation closes at every stop even with
-`keep_warm_secs` enabled: the unpinned VPIO unit could otherwise follow an AirPods
+device ID changes. With `ignore_speakers` on and no named input, `keep_warm_secs`
+keeps neither VPIO nor its plain fallback warm: every start pays the microphone open
+(and VPIO open attempt). Both close at every stop because the unpinned VPIO unit
+could otherwise follow an AirPods
 default appearing in the warm window. VPIO can still follow a default change during
 an active dictation; input pinning needs hardware validation. Linux warm streams reuse
 the open device without enumerating/probing other ALSA PCMs. Status names the last
@@ -193,9 +198,19 @@ that mic, or a read-only preview labelled "Next recording" before the first capt
 Linux retains existing exact-name/default selection; Bluetooth profile handling
 and automatic fallback on Linux are outside this change.
 
+Plain CPAL streams explicitly pause (AudioUnit stop) before handle release, including
+stop, cancel, error, idle timeout and shutdown. The default ID uses CPAL's default
+handle to avoid its disconnect-listener cycle. Non-default streams in CPAL 0.15.3
+still retain their stopped AudioUnit/listener allocation per open; a `shortcut:`
+note tracks the upstream cycle. Cancelled sample buffers are cleared before release.
+No CPAL dependency update is included.
+
 Manual acceptance still needs AirPods and a USB mic: play music with AirPods as
 default input, make ten dictations with `ignore_speakers` off and on, and inspect
 `system_profiler SPAudioDataType` before/during/after for 48 kHz stereo output.
+With the built-in fallback active and keep-warm off, confirm the orange microphone
+indicator turns off after every stop/cancel and repeated dictations leave no active
+audio units. Repeat with echo cancellation on.
 Unplug a pinned USB mic and confirm the next dictation succeeds with the notice.
 Repeat with Bluetooth explicitly named and with `avoid_bluetooth = false`.
 Collect 30 before/after key-down→first-sample measurements (including built-in vs
