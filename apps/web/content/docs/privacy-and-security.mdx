@@ -9,7 +9,7 @@ xflow is open source under the MIT license. Everything below can be checked in t
 
 - **Audio goes only to the speech provider you chose** — or nowhere, with a [local server and offline mode](/docs/providers/local-and-offline).
 - **Text goes to your cleanup provider** only if you turned cleanup on. With `cleanup.app_context` (the default), it also gets the focused app's id. Never window contents.
-- **Window titles never leave.** With `privacy.window_terms` (off by default), the focused editor or terminal app's title is read on your machine to spell file and project names. The title is never sent, saved or logged; a name you dictate becomes part of your text like any other word.
+- **Window titles never leave.** With `privacy.window_terms` (off by default; macOS only for now), the focused editor or terminal app's title is read on your machine to spell file and project names. The title is never sent, saved or logged; a name you dictate becomes part of your text like any other word.
 - **No telemetry.** The daemon makes no network calls except to your providers.
 
 ## What is stored

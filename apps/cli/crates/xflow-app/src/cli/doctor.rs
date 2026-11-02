@@ -124,7 +124,8 @@ fn checks(
             "Cloud transcription uploads audio to the configured provider"
         }
         .to_owned();
-        if config.privacy.window_terms {
+        // Only macOS reads titles today.
+        if config.privacy.window_terms && cfg!(target_os = "macos") {
             detail +=
                 "; editor and terminal window titles are read locally for names (never uploaded)";
         }

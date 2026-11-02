@@ -65,10 +65,16 @@ pub fn terms(title: &str) -> Vec<String> {
     out
 }
 
+/// A name after these is a noun phrase ("the new login flow"), not an identifier.
+const DETERMINERS: [&str; 11] = [
+    "the", "a", "an", "this", "that", "these", "those", "my", "our", "your", "their",
+];
+
 /// camelCase title names said as their parts: "use task store" -> `useTaskStore`.
-/// Exact words and three or more humps only: no sound-alikes, case-only or partial
-/// matches, so prose ("the release notes", "read me") never changes. Snake, kebab
-/// and file names need "dot ext" (`code::known_file`).
+/// Exact words and three or more humps only, never right after "the", "a", "my"…:
+/// no sound-alikes, case-only or partial matches, so prose ("the release notes",
+/// "read me") never changes. Snake, kebab and file names need "dot ext"
+/// (`code::known_file`).
 pub fn apply(text: &str, config: &crate::config::Config) -> String {
     let humps: Vec<(Vec<String>, &str)> = (config.title_terms.iter())
         .filter(|_| config.formatting.snap_to_dictionary)
@@ -108,6 +114,13 @@ pub fn apply(text: &str, config: &crate::config::Config) -> String {
                     !gap.is_empty() && gap.chars().all(|c| c == ' ' || c == '\t')
                 })
                 && edge(text[..start].chars().next_back())
+                && !(i > 0
+                    && text[w[i - 1].end..start]
+                        .chars()
+                        .all(|c| c == ' ' || c == '\t')
+                    && DETERMINERS
+                        .iter()
+                        .any(|d| w[i - 1].text.eq_ignore_ascii_case(d)))
                 && match after.next() {
                     Some('.') => !after.next().is_some_and(char::is_alphanumeric),
                     c => edge(c),
@@ -237,13 +250,20 @@ mod tests {
             ("useTaskStore.ts", "use task store.ts"),
             ("useTaskStore.ts", "use task"),
             ("useTaskStore.ts", "task store use"),
+            // After a determiner it's a noun phrase, not the identifier.
+            ("newLoginFlow.ts", "the new login flow is confusing"),
+            ("userServiceTeam.ts", "ask the user service team"),
+            ("useTaskStore.ts", "open the use task store"),
+            ("useTaskStore.ts", "fix their use task store"),
         ] {
             assert_eq!(said(text, title), said(text, ""), "{title}: {text}");
         }
     }
 
     /// The PR #115 review probe: everyday sentences under real-looking titles.
-    const PROBE_TITLES: [&str; 16] = [
+    const PROBE_TITLES: [&str; 18] = [
+        "newLoginFlow.ts — app",
+        "userServiceTeam.ts — app",
         "README.md — notes",
         "meeting-notes.md — docs",
         "grocery-list.txt — home",
@@ -261,7 +281,9 @@ mod tests {
         "NewLoginFlow.tsx — app",
         "useTaskStore.ts user_id getUserName — myapp",
     ];
-    const PROBE_SENTENCES: [&str; 16] = [
+    const PROBE_SENTENCES: [&str; 18] = [
+        "a new login flow for our user service team",
+        "my use task store notes",
         "can you read me the list again",
         "I took meeting notes",
         "add milk to the grocery list",
