@@ -246,6 +246,20 @@ fn echo_check(device: Option<&str>, default: &str, sources: &str) -> Check {
         &hint,
     )
 }
+fn microphone_check(used: Option<&str>, next: anyhow::Result<String>) -> Check {
+    let detail = match used {
+        Some(name) => Ok(format!("Last used: {name}")),
+        None => next.map(|name| format!("Next recording: {name}")),
+    };
+    check(
+        "Microphone",
+        detail.is_ok(),
+        true,
+        detail.unwrap_or_else(|e| format!("{e:#}")),
+        "Run xflow devices; choose recording.device or connect a microphone",
+    )
+}
+
 pub fn run(path: &Path, out: &Output) -> Result<()> {
     let status = super::ipc::request(&xflow_core::ipc::Request::Status);
     let daemon = status
@@ -273,6 +287,13 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
         ));
     }
     if let Ok(cfg) = super::config::load(path).and_then(|f| f.config().map_err(Error::config)) {
+        let used = status.as_ref().ok().and_then(|r| r.microphone.as_deref());
+        let next = if used.is_none() {
+            xflow_platform::selected_microphone(&cfg.recording)
+        } else {
+            Ok(String::new())
+        };
+        checks.push(microphone_check(used, next));
         let known = super::provider::info(&cfg.stt.provider);
         checks.push(check(
             "provider",
@@ -391,6 +412,24 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn microphone_doctor_distinguishes_last_used_from_next_and_errors() {
+        let used = microphone_check(
+            Some("Built-in (Bluetooth headphones kept in high quality)"),
+            Ok("USB".into()),
+        );
+        assert!(used.ok && used.detail.starts_with("Last used: Built-in"));
+        assert!(used.detail.contains("headphones kept in high quality"));
+        let next = microphone_check(
+            None,
+            Ok("Built-in (recording.device \"USB\" not found — using Built-in)".into()),
+        );
+        assert!(next.ok && next.detail.starts_with("Next recording: Built-in"));
+        assert!(next.detail.contains("not found"));
+        let missing = microphone_check(None, Err(anyhow::anyhow!("no default microphone")));
+        assert!(!missing.ok && missing.detail.contains("no default microphone"));
+    }
+
     #[test]
     fn echo_diagnostic_checks_the_input_and_never_recommends_a_monitor() {
         let sources = "1\techo_cancel.monitor\tdriver\n2\techo_cancel.source\tdriver";

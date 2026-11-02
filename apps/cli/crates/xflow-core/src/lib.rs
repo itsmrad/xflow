@@ -179,6 +179,10 @@ pub trait AudioCapture: Send + Sync {
     async fn stop(&self) -> Result<AudioClip>;
     async fn cancel(&self) -> Result<()>;
     fn level(&self) -> f32;
+    /// Last successfully opened microphone and any selection notice. No device I/O.
+    fn microphone(&self) -> Option<String> {
+        None
+    }
     /// Capture reached its device/buffer limit or failed. The daemon calls
     /// stop() to retrieve the buffered clip or original error. No idle polling.
     fn finished(&self) -> bool {

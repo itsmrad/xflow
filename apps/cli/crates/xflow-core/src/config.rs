@@ -226,8 +226,11 @@ impl Default for CleanupConfig {
 pub struct RecordingConfig {
     pub max_seconds: u32,
     pub silence_threshold: f32,
-    /// Input device name (see `xflow devices`); unset uses the system default.
+    /// Exact input name (see `xflow devices`); macOS falls back when missing.
     pub device: Option<String>,
+    /// macOS: prefer built-in input over an automatic Bluetooth default.
+    /// Explicit device names override this; ignored elsewhere.
+    pub avoid_bluetooth: bool,
     /// Shorter recordings are discarded without upload (accidental taps).
     pub min_ms: u32,
     /// Stop automatically after this many seconds of continuous silence; 0 = off.
@@ -246,6 +249,7 @@ impl Default for RecordingConfig {
             max_seconds: MAX_RECORDING_SECS,
             silence_threshold: 0.005,
             device: None,
+            avoid_bluetooth: true,
             min_ms: 300,
             auto_stop_secs: 0,
             keep_warm_secs: 0,
@@ -629,6 +633,17 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn microphone_config_defaults_and_explicit_bluetooth_override() {
+        let defaults: Config = toml::from_str("").unwrap();
+        assert!(defaults.recording.avoid_bluetooth);
+        let config: Config =
+            toml::from_str("[recording]\navoid_bluetooth = false\ndevice = \"AirPods\"").unwrap();
+        assert!(!config.recording.avoid_bluetooth);
+        assert_eq!(config.recording.device.as_deref(), Some("AirPods"));
+        assert!(toml::from_str::<Config>("[recording]\navoid_bluetooth = \"yes\"").is_err());
+    }
 
     #[test]
     fn snap_switch_round_trips_and_defaults_on() {

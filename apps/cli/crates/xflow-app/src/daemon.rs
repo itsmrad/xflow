@@ -337,6 +337,11 @@ impl Engine {
                 None => warning.clone(),
             }));
         }
+        r.microphone = self
+            .services
+            .audio
+            .microphone()
+            .map(|name| bounded_message(&name));
         r.permissions = self.permissions.clone();
         if let Some(permissions) = &mut r.permissions {
             permissions.keyboard_events = self
@@ -2874,6 +2879,9 @@ mod tests {
             self.0.store(false, Ordering::SeqCst);
             Ok(())
         }
+        fn microphone(&self) -> Option<String> {
+            Some("Fixture mic (Bluetooth headphones kept in high quality)".into())
+        }
         fn level(&self) -> f32 {
             0.2
         }
@@ -3977,6 +3985,10 @@ mod tests {
         let task = tokio::spawn(engine.run(rx));
         for request in [Request::Status, Request::Subscribe] {
             let response = ask(&tx, request).await;
+            assert_eq!(
+                response.microphone.as_deref(),
+                Some("Fixture mic (Bluetooth headphones kept in high quality)")
+            );
             let permissions = response.permissions.unwrap();
             assert!(!permissions.accessibility && !permissions.input_monitoring);
             assert!(response

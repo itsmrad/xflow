@@ -163,6 +163,35 @@ provider warm-up. Slow context lookup cannot delay stop/cancel. Processing waits
 at most two seconds for context before using an unknown target, leaving desktop
 safety checks to the platform. Network and SQLite work run outside the actor.
 
+On macOS each capture start resolves the microphone without opening any device or
+registering property listeners. An exact `recording.device` wins (including Bluetooth
+or virtual inputs); a missing name falls back with a notice. Otherwise the system
+default wins, except Bluetooth/Bluetooth LE defaults with `recording.avoid_bluetooth = true`
+(the default), and virtual/aggregate defaults: these prefer built-in input when
+available. Without built-in input the default is retained, including Bluetooth.
+Duplicate names keep CPAL's actual default device because names cannot identify them
+safely. `xflow config set recording.avoid_bluetooth false` allows Bluetooth defaults;
+`xflow config set recording.device '"AirPods"'` pins that exact name. `xflow devices`
+lists names without opening inputs. No ranked lists or UIDs are configured.
+
+Voice processing (`ignore_speakers`) only opens the system default input when no
+name is pinned. If resolution chooses built-in input instead, capture uses the
+plain microphone and reports that echo cancellation is off. Warm streams re-resolve
+at the next start and reopen when the choice changes. Status names the last
+successfully opened mic (so idle status never probes hardware); doctor reports
+that mic, or a read-only preview labelled "Next recording" before the first capture.
+Linux retains existing exact-name/default selection; Bluetooth profile handling
+and automatic fallback on Linux are outside this change.
+
+Manual acceptance still needs AirPods and a USB mic: play music with AirPods as
+default input, make ten dictations with `ignore_speakers` off and on, and inspect
+`system_profiler SPAudioDataType` before/during/after for 48 kHz stereo output.
+Unplug a pinned USB mic and confirm the next dictation succeeds with the notice.
+Repeat with Bluetooth explicitly named and with `avoid_bluetooth = false`.
+Collect 30 before/after key-down→first-sample measurements (including built-in vs
+AirPods); the read-only ignored enumeration test measures resolution alone and
+cannot establish that latency or the audio-profile acceptance criterion.
+
 Clips shorter than `recording.min_ms` are discarded before upload. Silence before
 the first voiced frame and after the last is trimmed to 400 ms before upload (never
 below `recording.min_ms`). Those edges are frames over half of
