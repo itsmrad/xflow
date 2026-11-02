@@ -50,12 +50,21 @@ never fail a dictation: a term the provider rejects on its own, or one that no
 longer fits the total budget, is skipped (shorter later terms are still sent), and
 `xflow doctor`/config writes warn when words are dropped. OpenRouter rejects
 hints because upstream model support differs; Together Parakeet rejects ignored
-prompts. Whisper prompts are capped at 200 estimated tokens and 896 bytes (the
-model keeps 224 tokens); the estimator never under-counts, and a 400/5xx on a
+prompts. Whisper prompts are `a, b, c.` (the closing period keeps sentence
+punctuation), capped at 200 estimated tokens and 896 bytes (the model keeps 224
+tokens), with shipped domain terms stopping at 100; the estimator never under-counts, and a 400/5xx on a
 prompted upload is retried once without the prompt. Mistral allows 100 terms without spaces/commas; AssemblyAI permits
 100 terms / 8000 bytes; Deepgram uses a conservative 500-byte budget. ElevenLabs
 allows up to 1000 terms, each under 50 characters / five words without reserved
-characters; its documented keyterm surcharge applies.
+characters; its documented keyterm surcharge applies. Shipped domain terms
+(`TranscriptionOptions::domain`, `xflow_core::hints`) are pushed after the
+request hints under the same budget: up to 100 Whisper prompt tokens, or 30
+keyword-protocol terms (OpenAI `keywords[]`, Gemini, Mistral) until those
+limits are documented; never to ElevenLabs, Deepgram or AssemblyAI, which bill
+keyterms extra. A 400/413/422 on a request carrying shipped terms is retried
+once with the user's hints only. The merge is memoized
+per provider (about 2-5 us when config and focus are unchanged), and the
+prompt-free retry shares the upload buffer instead of copying it.
 
 ## API and caller integration
 

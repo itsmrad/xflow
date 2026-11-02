@@ -622,15 +622,14 @@ async fn processing_cancel_discards_late_result_and_allows_next_session() {
 
 #[tokio::test]
 async fn provider_500_is_redacted_and_next_session_recovers() {
-    let mut mock = MockStt::start(vec![
-        Plan {
-            status: 500,
-            text: "",
-            gate: None,
-        },
-        Plan::success("recovered"),
-    ])
-    .await;
+    // Default domain hints prompt every upload, so a 500 gets the one
+    // prompt-free retry; both fail here.
+    let failure = || Plan {
+        status: 500,
+        text: "",
+        gate: None,
+    };
+    let mut mock = MockStt::start(vec![failure(), failure(), Plan::success("recovered")]).await;
     let mut daemon = Daemon::spawn(&mock.endpoint, "voice", false);
     daemon.ready().await;
     let mut events = daemon.events().await;
@@ -644,7 +643,11 @@ async fn provider_500_is_redacted_and_next_session_recovers() {
     assert!(daemon.history().await.history.is_empty());
     assert!(!daemon.sink().exists());
     dictate(&daemon, &mut events).await;
-    mock.upload().await;
+    let prompted = mock.upload().await;
+    assert!(
+        String::from_utf8_lossy(&prompted).contains("name=\"prompt\"\r\n\r\nClaude, Salesforce")
+    );
+    assert!(!String::from_utf8_lossy(&mock.upload().await).contains("name=\"prompt\""));
     mock.upload().await;
     assert_eq!(fs::read_to_string(daemon.sink()).unwrap(), "recovered");
     assert_eq!(daemon.history().await.history.len(), 1);

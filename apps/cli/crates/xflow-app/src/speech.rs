@@ -80,7 +80,10 @@ pub fn trim(
     start..end
 }
 
-pub fn suspect(text: &str, config: &Config) -> bool {
+/// `domain`: the shipped terms offered with the upload, which Whisper can echo
+/// too. They count only whole ("Claude Code", "Next.js"): a near-silent "Next."
+/// or "Code" stays unless the user's own hints contain that word.
+pub fn suspect(text: &str, config: &Config, domain: &[&str]) -> bool {
     let words = |text: &str| -> Vec<String> {
         text.split(|c: char| !c.is_alphanumeric())
             .filter(|s| !s.is_empty())
@@ -92,9 +95,22 @@ pub fn suspect(text: &str, config: &Config) -> bool {
         .stt
         .vocabulary
         .iter()
-        .chain(&config.dictionary.words)
-        .flat_map(|hint| words(hint))
+        .map(String::as_str)
+        .chain(config.dictionary.words.iter().map(String::as_str))
+        .flat_map(words)
         .collect();
+    let terms: Vec<Vec<String>> = domain.iter().map(|term| words(term)).collect();
+    // echo[i]: the first i words are all user hint words or whole shipped terms.
+    let mut echo = vec![false; text.len() + 1];
+    echo[0] = true;
+    for i in 0..text.len() {
+        if echo[i] {
+            echo[i + 1] |= hint_words.contains(&text[i]);
+            for term in terms.iter().filter(|t| text[i..].starts_with(t)) {
+                echo[i + term.len()] = true;
+            }
+        }
+    }
     text.is_empty()
         || text.len() == 1 && text[0].chars().count() <= 2
         || matches!(
@@ -105,7 +121,7 @@ pub fn suspect(text: &str, config: &Config) -> bool {
                 | "fox jumps over the lazy dog"
                 | "the quick brown fox jumps over the lazy dog"
         )
-        || text.iter().all(|word| hint_words.contains(word))
+        || echo[text.len()]
 }
 
 /// Long dictations are transcribed in segments while recording continues. A
@@ -401,9 +417,22 @@ mod tests {
             .collect();
         assert_eq!(thumps.len(), 6);
         for case in thumps {
-            assert!(suspect(case["text"].as_str().unwrap(), &config), "{case}");
+            assert!(
+                suspect(case["text"].as_str().unwrap(), &config, &[]),
+                "{case}"
+            );
         }
-        assert!(suspect("OpenResty, ZenML.", &config));
-        assert!(!suspect("OpenResty is ready", &config));
+        assert!(suspect("OpenResty, ZenML.", &config, &[]));
+        assert!(!suspect("OpenResty is ready", &config, &[]));
+        // Shipped domain hints are echoes too.
+        let domain = xflow_core::hints::select(&Config::default(), true, None);
+        assert!(!suspect("Supabase, Vercel.", &config, &[]));
+        assert!(suspect("Supabase, Vercel.", &config, &domain));
+        assert!(!suspect("Supabase is ready", &config, &domain));
+        assert!(suspect("Claude Code, Next.js, Supabase.", &config, &domain));
+        // Everyday words inside shipped terms are not echoes on their own.
+        for heard in ["Next.", "Code", "Monday", "Teams", "Power", "Microsoft"] {
+            assert!(!suspect(heard, &config, &domain), "{heard}");
+        }
     }
 }

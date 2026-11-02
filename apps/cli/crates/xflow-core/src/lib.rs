@@ -7,6 +7,7 @@ pub mod backtrack;
 pub mod code;
 pub mod config;
 mod cues;
+pub mod hints;
 pub mod ipc;
 pub mod learn;
 pub mod lists;
@@ -27,10 +28,15 @@ pub struct AudioClip {
     pub channels: u16,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionOptions {
     pub language: Option<String>,
     pub vocabulary: Vec<String>,
+    /// Shipped domain terms (`hints::select`), sent after `vocabulary` within
+    /// the provider's budget. After the provider's merge: the ones it sends,
+    /// which end `vocabulary`.
+    #[serde(skip)]
+    pub domain: Vec<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

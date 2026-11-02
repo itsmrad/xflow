@@ -1,0 +1,72 @@
+EBITDA
+GAAP
+IFRS
+P&L
+capex
+opex
+SG&A
+EBIT
+amortization
+accruals
+FP&A
+DCF
+NPV
+IRR
+WACC
+CAGR
+ROI
+ROIC
+EPS
+YoY
+QoQ
+LBO
+M&A
+IPO
+ESOP
+RSU
+409A
+cap table
+KYC
+AML
+IBAN
+ACH
+NEFT
+RTGS
+UPI
+IFSC
+GST
+TDS
+SEBI
+RBI
+IRDAI
+NSE
+BSE
+NASDAQ
+NYSE
+S&P 500
+SOFR
+bps
+forex
+ETF
+NAV
+AUM
+10-K
+10-Q
+XBRL
+ASC 606
+ASC 842
+Ind AS
+SOX
+general ledger
+FIFO
+LIFO
+CFA
+CPA
+ACCA
+Moody's
+Fitch
+Bloomberg
+FactSet
+PitchBook
+reinsurance
+actuarial

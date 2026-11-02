@@ -1411,6 +1411,7 @@ mod tests {
                 TranscriptionOptions {
                     language: Some("fr".into()),
                     vocabulary: vec!["Rust".into()],
+                    ..Default::default()
                 },
             )
             .await
@@ -1452,6 +1453,7 @@ mod tests {
                 TranscriptionOptions {
                     language: Some("ja".into()),
                     vocabulary: vec![],
+                    ..Default::default()
                 },
             )
             .await

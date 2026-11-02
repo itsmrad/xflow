@@ -108,22 +108,24 @@ fn index() -> &'static (Vec<(usize, &'static str)>, Forms) {
     })
 }
 
-fn active(config: &Config, terminal: bool, app: Option<&str>) -> [bool; 4] {
+/// Packs the focused app turns on, [dev, corp, sheet, finance]: dev in
+/// terminals and editors, sheet in spreadsheets. Shared with `hints`.
+pub(crate) fn focused(terminal: bool, app: Option<&str>) -> [bool; 4] {
     let app = app.unwrap_or_default().to_lowercase();
     let app = app.strip_suffix(".desktop").unwrap_or(&app);
-    let on = [
-        config.vocab.dev || terminal,
-        config.vocab.corp,
-        config.vocab.sheet,
-        config.vocab.finance,
-    ];
     std::array::from_fn(|i| {
-        on[i]
+        (i == 0 && terminal)
             || PACKS[i].1.iter().any(|id| match id.strip_prefix('=') {
                 Some(id) => app == id,
                 None => app.contains(id),
             })
     })
+}
+
+fn active(config: &Config, terminal: bool, app: Option<&str>) -> [bool; 4] {
+    let (v, focus) = (&config.vocab, focused(terminal, app));
+    let on = [v.dev, v.corp, v.sheet, v.finance];
+    std::array::from_fn(|i| on[i] || focus[i])
 }
 
 // Conservatively protect a whole user phrase when a shorter shipped form overlaps it.

@@ -839,7 +839,7 @@ async fn whisper_prompt_fallback_preserves_audio_and_retries_once() {
             assert_eq!(requests.len(), 2);
             let first = String::from_utf8_lossy(&requests[0]);
             let second = String::from_utf8_lossy(&requests[1]);
-            assert!(first.contains("name=\"prompt\"\r\n\r\nReact, PostgreSQL\r\n"));
+            assert!(first.contains("name=\"prompt\"\r\n\r\nReact, PostgreSQL.\r\n"));
             assert!(!second.contains("name=\"prompt\""));
             for bytes in requests {
                 let request = String::from_utf8_lossy(&bytes);
@@ -850,6 +850,96 @@ async fn whisper_prompt_fallback_preserves_audio_and_retries_once() {
             }
             std::env::remove_var(env);
         }
+    }
+}
+
+#[tokio::test]
+async fn rejected_shipped_terms_are_retried_once_without_them() {
+    let domain = xflow_core::hints::select(&xflow_core::config::Config::default(), true, None);
+    let options = |domain: Vec<&'static str>| TranscriptionOptions {
+        vocabulary: vec!["Zorblax".into()],
+        domain,
+        ..Default::default()
+    };
+    let gemini =
+        json!({"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]});
+    for (id, model, status, ok) in [
+        (
+            "openai",
+            Some("gpt-transcribe"),
+            "400 Bad Request",
+            json!({"text":"ok"}),
+        ),
+        (
+            "mistral",
+            None,
+            "422 Unprocessable Entity",
+            json!({"text":"ok"}),
+        ),
+        ("gemini", None, "413 Payload Too Large", gemini.clone()),
+        (
+            "gemini",
+            Some("gemini-3.5-transcribe"),
+            "400 Bad Request",
+            gemini,
+        ),
+    ] {
+        let (url, task) = scripted(
+            vec![
+                (status, json!({"error":"too many keywords"})),
+                ("200 OK", ok),
+            ],
+            "/transcribe",
+        )
+        .await;
+        let mut cfg = config(id, url);
+        cfg.model = model.map(Into::into);
+        let env = set_test_key(&mut cfg);
+        let result = build_stt(&cfg, true)
+            .unwrap()
+            .transcribe(clip(), options(domain.clone()))
+            .await
+            .unwrap();
+        assert_eq!(result.text, "ok", "{id}");
+        let requests = task.await.unwrap();
+        assert_eq!(requests.len(), 2, "{id} {model:?}");
+        let first = String::from_utf8_lossy(&requests[0]);
+        let second = String::from_utf8_lossy(&requests[1]);
+        assert!(
+            first.contains("Zorblax") && first.contains("Claude"),
+            "{id}"
+        );
+        // The user's words stay; only the shipped terms go.
+        assert!(
+            second.contains("Zorblax") && !second.contains("Claude"),
+            "{id}"
+        );
+        std::env::remove_var(env);
+    }
+    // Without shipped terms, or on a status a rejected list doesn't cause, the error stands.
+    for (domain, status) in [
+        (vec![], "422 Unprocessable Entity"),
+        (domain.clone(), "500 Internal Server Error"),
+        (domain, "429 Too Many Requests"),
+    ] {
+        let (url, task) = scripted(
+            vec![
+                (status, json!({"error":"rejected"})),
+                ("200 OK", json!({"text":"ok"})),
+            ],
+            "/transcribe",
+        )
+        .await;
+        let mut cfg = config("openai", url);
+        cfg.model = Some("gpt-transcribe".into());
+        let env = set_test_key(&mut cfg);
+        let result = build_stt(&cfg, true)
+            .unwrap()
+            .transcribe(clip(), options(domain))
+            .await;
+        assert!(result.is_err(), "{status}");
+        task.abort();
+        std::env::remove_var(env);
     }
 }
 
