@@ -1,7 +1,7 @@
 //! Shipped term packs: exact heard forms with local context; never part of
 //! snap's fuzzy index. See vocab/NOTICE.
 use crate::config::Config;
-use std::{collections::HashMap, sync::OnceLock};
+use std::sync::OnceLock;
 
 /// (data, focused app ids that turn the pack on). An entry matches as a
 /// substring of the lowercase app id, or exactly with a leading `=`
@@ -42,9 +42,15 @@ const PACKS: [(&str, &[&str]); 4] = [
 
 type Fields = [&'static str; 8];
 
-/// Fields: canonical, safe heard forms, cued heard forms, left cues, right cues,
-/// left blockers, right blockers, continuations after a left cue. Trailing
-/// fields may be omitted and `-` means none.
+/// Fields (TAB-separated): canonical, safe heard forms, cued heard forms, left
+/// cues, right cues, left blockers, right blockers, continuations after a left
+/// cue. Trailing fields may be omitted and `-` means none. A heard form is how
+/// speech-to-text mis-hears exactly the canonical, in lowercase ASCII words.
+/// Safe forms: every word is not English, not a name, not a digit or single
+/// letter, and the form is more than a case change. Cued forms need an adjacent
+/// non-English cue (an English left cue such as "ask" also needs a continuation
+/// such as "to") and change only lowercase input. `shipped_data_is_small_unique_and_gated`
+/// enforces all of it.
 fn fields(line: &'static str) -> Fields {
     let mut fields = [""; 8];
     for (slot, field) in fields.iter_mut().zip(line.split('\t')) {
@@ -77,9 +83,11 @@ fn words(form: &str) -> usize {
     form.split(' ').count()
 }
 
-/// First heard word -> (heard form, row, needs a cue), most words first. Rows
-/// stay unsplit lines until one of their forms matches.
-type Forms = HashMap<&'static str, Vec<(&'static str, u32, bool)>>;
+/// (first heard word, heard form, row, needs a cue), sorted by first word and
+/// then most words first, for binary search. Rows stay unsplit lines until one
+/// of their forms matches. A sorted `Vec` instead of a `HashMap` keeps the
+/// daemon binary small (the CI scoreboard gate).
+type Forms = Vec<(&'static str, &'static str, u32, bool)>;
 
 fn index() -> &'static (Vec<(usize, &'static str)>, Forms) {
     static INDEX: OnceLock<(Vec<(usize, &'static str)>, Forms)> = OnceLock::new();
@@ -89,15 +97,10 @@ fn index() -> &'static (Vec<(usize, &'static str)>, Forms) {
         for (row, &(_, line)) in rows.iter().enumerate() {
             for (form, cued) in heard(&fields(line)) {
                 let first = form.split(' ').next().unwrap_or_default();
-                forms
-                    .entry(first)
-                    .or_default()
-                    .push((form, row as u32, cued));
+                forms.push((first, form, row as u32, cued));
             }
         }
-        for list in forms.values_mut() {
-            list.sort_by_key(|&(form, _, _)| std::cmp::Reverse(words(form)));
-        }
+        forms.sort_by(|a, b| a.0.cmp(b.0).then(words(b.1).cmp(&words(a.1))));
         (rows, forms)
     })
 }
@@ -191,19 +194,19 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool, app: Option<&st
     let (mut cursor, mut i) = (0, 0);
     let mut out = String::with_capacity(text.len());
     while i < tokens.len() {
-        let list = match forms.get(tokens[i].text) {
-            Some(list) if tokens[i].eligible => list,
-            _ => {
-                i += 1;
-                continue;
-            }
-        };
+        let word = tokens[i].text;
+        let start = forms.partition_point(|f| f.0 < word);
+        let list = &forms[start..start + forms[start..].partition_point(|f| f.0 == word)];
+        if list.is_empty() || !tokens[i].eligible {
+            i += 1;
+            continue;
+        }
         // The longest matching form decides: a blocked longer phrase must not
         // fall back to a partial correction, but a same-length form of another
         // term or pack may still pass its own cues.
         let mut longest = 0;
         let mut found = None;
-        for &(form, row, cued) in list {
+        for &(_, form, row, cued) in list {
             let count = words(form);
             if count < longest {
                 break;
@@ -333,7 +336,7 @@ fn allowed<'a>(
 mod tests {
     use super::*;
     use crate::{config::Replacement, text::before_cleanup};
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn dev_terms_need_neighbouring_evidence() {
