@@ -4471,7 +4471,7 @@ mod tests {
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn discard_clear_cancel_expiry_and_opting_out_delete_the_kept_audio() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("failed");
@@ -4490,8 +4490,12 @@ mod tests {
             .unwrap();
         };
         let (mut engine, tx, rx, mut events, _, stt) = kept_fixture(|_| false, Some(&dir));
-        keep(retry::now() - retry::TTL_SECS + 1);
+        keep(retry::now());
         engine.load_kept();
+        assert!(engine.kept.is_some());
+        // Tokio's paused clock does not advance the persisted wall-clock timestamp.
+        keep(retry::now() - retry::TTL_SECS);
+        engine.kept.as_mut().unwrap().expires_at = retry::now() - 1;
         let task = tokio::spawn(engine.run(rx));
         // Expiry runs on a timer; no request is needed.
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -4980,7 +4984,7 @@ mod tests {
     /// Changes still queued when the watch is finalized count before the final
     /// read: a send counted, then the next message and the next dictation's
     /// start queued together, learns nothing (re-review of 6897db4).
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn changes_queued_behind_finalize_learn_nothing() {
         for (queued, field_after) in [
             // Send counted; the next message queued with finalize.
@@ -4999,28 +5003,33 @@ mod tests {
                 ..RecordingDesktop::default()
             });
             let (finish, finalize) = oneshot::channel();
-            let observed = desktop.clone();
-            let watch = tokio::spawn(async move {
-                watch_edit(&*observed, &AppContext::default(), pasted, finalize).await
-            });
+            let target = AppContext::default();
+            let watch = watch_edit(&*desktop, &target, pasted, finalize);
+            tokio::pin!(watch);
             let set = |text: Option<&str>| {
                 *desktop.field.lock().unwrap() = text.map(str::to_owned);
                 let _ = notify.send(FieldEvent::Changed);
             };
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            // A read 5 ms before the next change: that change is counted, and
-            // its read waits for the 20 ms gap.
+            assert!(futures_util::poll!(&mut watch).is_pending());
+            tokio::time::advance(Duration::from_millis(120)).await;
+            assert!(futures_util::poll!(&mut watch).is_pending());
+            assert_eq!(desktop.watches.load(Ordering::SeqCst), 1);
+            tokio::time::advance(FIELD_READ_GAP).await;
+            // Poll each change explicitly; hold the next read inside its gap.
             if field_after.is_some() {
                 set(Some("post gres is ready now "));
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                assert!(futures_util::poll!(&mut watch).is_pending());
+                tokio::time::advance(Duration::from_millis(5)).await;
                 set(Some(""));
             } else {
                 set(Some("Postgre is ready "));
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                assert!(futures_util::poll!(&mut watch).is_pending());
+                tokio::time::advance(FIELD_SETTLE).await;
+                assert!(futures_util::poll!(&mut watch).is_pending());
                 set(Some("Postgre is ready "));
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            // No yield from here: the queued change and the finalize race.
+            assert!(futures_util::poll!(&mut watch).is_pending());
+            // Hold the watch so finalize wins with an already-counted and a queued change.
             for text in queued {
                 set(Some(text));
             }
@@ -5028,7 +5037,7 @@ mod tests {
                 set(None);
             }
             let _ = finish.send(());
-            assert_eq!(watch.await.unwrap(), Err(Some("unsettled")), "{queued:?}");
+            assert_eq!(watch.await, Err(Some("unsettled")), "{queued:?}");
         }
     }
     #[tokio::test]

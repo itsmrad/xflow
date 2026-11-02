@@ -40,3 +40,6 @@ futures-util = "0.3"
 rpassword = "7"
 # Streams WAV fixtures into the daemon in test-support builds only.
 hound = { version = "3.5", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
