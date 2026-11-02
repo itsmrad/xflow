@@ -15,7 +15,7 @@ pub mod notifications;
 pub mod sounds;
 
 #[cfg(feature = "native-audio")]
-pub use audio::{input_devices, CpalCapture, InputDevice};
+pub use audio::{input_devices, selected_microphone, CpalCapture, InputDevice};
 #[cfg(target_os = "linux")]
 pub use bridge::run_desktop_bridge;
 #[cfg(target_os = "linux")]

@@ -30,6 +30,7 @@ class Daemon:
         self.subscribers = []
         self.protocol = 3
         self.timings = None
+        self.microphone = None
         self.fail = False
         self.start_gate = None
         self.finish_state = "success"
@@ -71,6 +72,8 @@ class Daemon:
                 self.reply(connection, ok=False, message="mock failure")
             elif command == "status":
                 fields = {"timings": self.timings} if self.timings is not None else {}
+                if self.microphone is not None:
+                    fields["microphone"] = self.microphone
                 self.reply(connection, protocol=self.protocol, version=VERSION, provider="local", model="test", **fields)
             elif command == "history":
                 entries = [{"id": 7, "created_at": 42, "provider": "local", "text": 'hello, "you"\nagain'}]
@@ -122,6 +125,9 @@ class Daemon:
 
 
 def main():
+    # `service install` on macOS drives the real launchd gui domain even with a temp HOME.
+    if not sys.platform.startswith("linux"):
+        sys.exit("verify.py is Linux-only: on macOS it would replace the real xflow LaunchAgent")
     binary = Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix="xflow-cli-", dir=os.environ.get("TMPDIR")) as directory:
         root = Path(directory)
@@ -206,12 +212,21 @@ def main():
         try:
             assert json.loads(run("status", "--json").stdout)["protocol"] == daemon.protocol
             assert run("status").stdout == f"FIELD     VALUE\nState     idle\nProvider  local\nModel     test\nDaemon    {VERSION}\nProtocol  {daemon.protocol}\n"
+            daemon.microphone = 'Built-in (recording.device "USB" not found — using Built-in; Bluetooth headphones kept in high quality; Echo cancellation is off while using a selected microphone)'
+            assert json.loads(run("status", "--json").stdout)["microphone"] == daemon.microphone
+            human_mic = run("status").stdout
+            assert "Mic (last used)" in human_mic and daemon.microphone in human_mic
+            print("PASS microphone_status_human_and_json")
             daemon.timings = {"audio_ms": 500, "stt_ms": 40, "total_ms": 45}
             assert json.loads(run("status", "--json").stdout)["timings"] == daemon.timings
             assert "Last latency (ms)" in run("status").stdout
             assert "45 total; 40 STT; 500 audio" in run("status").stdout
             daemon.timings = None
-            assert json.loads(run("doctor", "--json").stdout)["ok"] is True
+            doctor = json.loads(run("doctor", "--json").stdout)
+            assert doctor["ok"] is True
+            mic = next(c for c in doctor["checks"] if c["name"] == "Microphone")
+            assert mic["detail"] == "Last used: " + daemon.microphone
+            print("PASS microphone_doctor_reports_daemon_choice")
             run("toggle", "--quiet")
             run("start", "--command", "--json")
             run("stop")

@@ -28,6 +28,7 @@ pub struct CpalCapture {
     sender: mpsc::SyncSender<Command>,
     level: Arc<AtomicU32>,
     finished: Arc<AtomicBool>,
+    microphone: Arc<Mutex<Option<String>>>,
 }
 
 struct Recording {
@@ -132,7 +133,7 @@ impl Recording {
     }
 }
 
-/// Names reported by the audio host; enumeration never opens a microphone.
+/// Input names; macOS enumeration uses properties only, while ALSA may probe devices.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputDevice {
     pub name: String,
@@ -140,20 +141,435 @@ pub struct InputDevice {
 }
 
 pub fn input_devices() -> Result<Vec<InputDevice>> {
-    let host = cpal::default_host();
-    let default = host.default_input_device().and_then(|d| d.name().ok());
-    host.input_devices()
-        .context("cannot enumerate microphones")?
-        .map(|device| {
-            let name = device.name().context("cannot inspect microphone name")?;
-            Ok(InputDevice {
-                default: default.as_deref() == Some(&name),
-                name,
+    #[cfg(target_os = "macos")]
+    {
+        Ok(mac_inputs()?
+            .into_iter()
+            .map(|input| InputDevice {
+                name: input.candidate.name,
+                default: input.candidate.is_default,
             })
-        })
-        .collect()
+            .collect())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let host = cpal::default_host();
+        let default = host.default_input_device().and_then(|d| d.name().ok());
+        host.input_devices()
+            .context("cannot enumerate microphones")?
+            .map(|device| {
+                let name = device.name().context("cannot inspect microphone name")?;
+                Ok(InputDevice {
+                    default: default.as_ref() == Some(&name),
+                    name,
+                })
+            })
+            .collect()
+    }
 }
 
+struct DeviceChoice {
+    // None selects the inventory's default device by ID.
+    index: Option<usize>,
+    device_id: Option<u32>,
+    name: String,
+    is_default: bool,
+    notice: Option<String>,
+}
+
+impl DeviceChoice {
+    #[cfg(any(target_os = "macos", test))]
+    fn echo_unavailable(&mut self) {
+        let notice = "Echo cancellation is off; voice processing unavailable";
+        self.notice = Some(match self.notice.take() {
+            Some(existing) => format!("{existing}; {notice}"),
+            None => notice.into(),
+        });
+    }
+
+    fn description(&self) -> String {
+        match &self.notice {
+            Some(notice) => format!("{} ({notice})", self.name),
+            None => self.name.clone(),
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Transport {
+    BuiltIn,
+    Bluetooth,
+    BluetoothLe,
+    Virtual,
+    Aggregate,
+    Other,
+}
+
+#[cfg(any(target_os = "macos", test))]
+struct Candidate {
+    name: String,
+    transport: Transport,
+    is_default: bool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn resolve_device(devices: &[Candidate], config: &RecordingConfig) -> Result<DeviceChoice> {
+    let default = devices
+        .iter()
+        .find(|d| d.is_default)
+        .or_else(|| devices.iter().find(|d| d.transport == Transport::BuiltIn))
+        .or_else(|| devices.iter().find(|d| d.transport == Transport::Other))
+        .or_else(|| devices.first())
+        .context("no usable microphone; connect an input or retry after devices settle")?;
+    let named = config
+        .device
+        .as_ref()
+        .and_then(|name| devices.iter().position(|d| &d.name == name));
+    let duplicate = |name: &str| devices.iter().filter(|d| d.name == name).count() > 1;
+    let mut ambiguous = named.is_some_and(|index| duplicate(&devices[index].name));
+    let named = named.filter(|_| !ambiguous);
+    let (index, selected) = if let Some(index) = named {
+        (Some(index), &devices[index])
+    } else {
+        let avoid = matches!(default.transport, Transport::Virtual | Transport::Aggregate)
+            || (config.avoid_bluetooth
+                && matches!(
+                    default.transport,
+                    Transport::Bluetooth | Transport::BluetoothLe
+                ));
+        let builtin = devices
+            .iter()
+            .enumerate()
+            .find(|(_, d)| avoid && d.transport == Transport::BuiltIn);
+        if let Some((index, device)) = builtin {
+            (Some(index), device)
+        } else {
+            ambiguous |= duplicate(&default.name);
+            (None, default)
+        }
+    };
+    let mut notices = Vec::new();
+    if ambiguous {
+        notices.push(format!(
+            "duplicate microphone name; using {}",
+            selected.name
+        ));
+    }
+    if let Some(name) = &config.device {
+        if named.is_none() && !ambiguous {
+            notices.push(format!(
+                "recording.device {name:?} not found — using {}",
+                selected.name
+            ));
+        }
+    }
+    if !selected.is_default && named.is_none() && default.is_default {
+        if matches!(
+            default.transport,
+            Transport::Bluetooth | Transport::BluetoothLe
+        ) {
+            notices.push("Bluetooth headphones kept in high quality".into());
+        } else {
+            notices.push("virtual/aggregate default bypassed".into());
+        }
+    }
+    if !default.is_default && named.is_none() {
+        notices.push(format!(
+            "system default microphone unavailable — using {}",
+            selected.name
+        ));
+    }
+    if config.ignore_speakers && (!selected.is_default || config.device.is_some()) {
+        notices.push("Echo cancellation is off while using a selected microphone".into());
+    }
+    Ok(DeviceChoice {
+        index: index.or_else(|| {
+            (!selected.is_default).then(|| {
+                devices
+                    .iter()
+                    .position(|d| std::ptr::eq(d, selected))
+                    .unwrap()
+            })
+        }),
+        device_id: None,
+        name: selected.name.clone(),
+        is_default: selected.is_default,
+        notice: (!notices.is_empty()).then(|| notices.join("; ")),
+    })
+}
+
+#[cfg(any(target_os = "macos", test))]
+struct NativeInput<D> {
+    id: u32,
+    device: D,
+    candidate: Candidate,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn usable_inputs<D>(
+    devices: impl IntoIterator<Item = (u32, D)>,
+    mut inspect: impl FnMut(u32) -> Result<Option<Candidate>>,
+) -> Result<Vec<NativeInput<D>>> {
+    let inputs: Vec<_> = devices
+        .into_iter()
+        .filter_map(|(id, device)| match inspect(id) {
+            Ok(Some(candidate)) => Some(NativeInput {
+                id,
+                device,
+                candidate,
+            }),
+            Ok(None) => None,
+            Err(error) => {
+                xflow_core::log(
+                    "debug",
+                    &format!("skipping unavailable microphone device_id={id}: {error}"),
+                );
+                None
+            }
+        })
+        .collect();
+    if inputs.is_empty() {
+        bail!("no usable microphone; connect an input or retry after devices settle");
+    }
+    Ok(inputs)
+}
+
+#[cfg(target_os = "macos")]
+fn inspect_input(id: u32, default_id: Option<u32>) -> Result<Option<Candidate>> {
+    use coreaudio::{audio_unit::macos_helpers, sys};
+    // CPAL input_devices() constructs AudioUnits; stream-ID properties do not.
+    let address = sys::AudioObjectPropertyAddress {
+        mSelector: sys::kAudioDevicePropertyStreams,
+        mScope: sys::kAudioObjectPropertyScopeInput,
+        mElement: sys::kAudioObjectPropertyElementMaster,
+    };
+    let mut size = 0;
+    let status = unsafe {
+        sys::AudioObjectGetPropertyDataSize(id, &address, 0, std::ptr::null(), &mut size)
+    };
+    if status != 0 {
+        bail!("cannot inspect input streams: CoreAudio {status}");
+    }
+    if size == 0 {
+        return Ok(None);
+    }
+    // shortcut: coreaudio-rs retains each name CFString; replace its reader when ownership is fixed.
+    let name = macos_helpers::get_device_name(id)?;
+    let address = sys::AudioObjectPropertyAddress {
+        mSelector: sys::kAudioDevicePropertyTransportType,
+        mScope: sys::kAudioObjectPropertyScopeGlobal,
+        mElement: sys::kAudioObjectPropertyElementMaster,
+    };
+    let mut value = 0_u32;
+    let mut size = std::mem::size_of_val(&value) as u32;
+    let status = unsafe {
+        sys::AudioObjectGetPropertyData(
+            id,
+            &address,
+            0,
+            std::ptr::null(),
+            &mut size,
+            (&mut value as *mut u32).cast(),
+        )
+    };
+    if status != 0 {
+        bail!("cannot inspect input transport: CoreAudio {status}");
+    }
+    let transport = match value {
+        sys::kAudioDeviceTransportTypeBuiltIn => Transport::BuiltIn,
+        sys::kAudioDeviceTransportTypeBluetooth => Transport::Bluetooth,
+        sys::kAudioDeviceTransportTypeBluetoothLE => Transport::BluetoothLe,
+        sys::kAudioDeviceTransportTypeVirtual => Transport::Virtual,
+        sys::kAudioDeviceTransportTypeAggregate => Transport::Aggregate,
+        _ => Transport::Other,
+    };
+    Ok(Some(Candidate {
+        name,
+        transport,
+        is_default: default_id == Some(id),
+    }))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn stable_inputs<D>(
+    mut read: impl FnMut() -> Result<Option<Vec<NativeInput<D>>>>,
+    default: impl FnOnce() -> Result<NativeInput<D>>,
+) -> Result<Vec<NativeInput<D>>> {
+    for _ in 0..2 {
+        match read() {
+            Ok(Some(inputs)) => return Ok(inputs),
+            Ok(None) => {}
+            Err(error) => xflow_core::log(
+                "debug",
+                &format!("microphone inventory unavailable: {error}"),
+            ),
+        }
+    }
+    xflow_core::log(
+        "debug",
+        "audio device inventory changed; using the system default",
+    );
+    Ok(vec![default()?])
+}
+
+#[cfg(target_os = "macos")]
+fn current_default(host: &cpal::Host) -> Result<(u32, cpal::Device)> {
+    use coreaudio::audio_unit::macos_helpers;
+    let id = macos_helpers::get_default_device_id(true).context("no default microphone")?;
+    let device = host
+        .default_input_device()
+        .context("no default microphone")?;
+    if macos_helpers::get_default_device_id(true) != Some(id) {
+        bail!("default microphone changed during enumeration");
+    }
+    Ok((id, device))
+}
+
+#[cfg(target_os = "macos")]
+fn mac_inputs() -> Result<Vec<NativeInput<cpal::Device>>> {
+    use coreaudio::audio_unit::macos_helpers;
+    let host = cpal::default_host();
+    // CPAL 0.15.3 devices() preserves kAudioHardwarePropertyDevices order, but hides IDs.
+    // Verify the surrounding snapshots so a topology change cannot pair the wrong devices.
+    stable_inputs(
+        || {
+            let ids = macos_helpers::get_audio_device_ids()?;
+            let devices: Vec<_> = host
+                .devices()
+                .context("cannot enumerate audio devices")?
+                .collect();
+            if ids != macos_helpers::get_audio_device_ids()? || ids.len() != devices.len() {
+                return Ok(None);
+            }
+            let default_id = macos_helpers::get_default_device_id(true);
+            Ok(Some(usable_inputs(ids.into_iter().zip(devices), |id| {
+                inspect_input(id, default_id)
+            })?))
+        },
+        || {
+            let (id, device) = current_default(&host)?;
+            let candidate =
+                inspect_input(id, Some(id))?.context("default microphone has no input streams")?;
+            Ok(NativeInput {
+                id,
+                device,
+                candidate,
+            })
+        },
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn prefer_default_handle<D>(
+    (mut device, mut choice): (D, DeviceChoice),
+    default: Option<(u32, D)>,
+    config: &RecordingConfig,
+) -> (D, DeviceChoice) {
+    match default {
+        Some((id, default)) if choice.device_id == Some(id) => device = default,
+        _ => {
+            if choice.is_default && config.ignore_speakers && config.device.is_none() {
+                choice.echo_unavailable();
+            }
+            choice.is_default = false;
+        }
+    }
+    (device, choice)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn choose_input<D>(
+    inputs: Vec<NativeInput<D>>,
+    config: &RecordingConfig,
+) -> Result<(D, DeviceChoice)> {
+    let ids: Vec<_> = inputs.iter().map(|input| input.id).collect();
+    let (devices, candidates): (Vec<_>, Vec<_>) = inputs
+        .into_iter()
+        .map(|input| (input.device, input.candidate))
+        .unzip();
+    let mut choice = resolve_device(&candidates, config)?;
+    let index = choice
+        .index
+        .or_else(|| candidates.iter().position(|d| d.is_default))
+        .context("no default microphone")?;
+    choice.device_id = Some(ids[index]);
+    Ok((
+        devices
+            .into_iter()
+            .nth(index)
+            .context("microphone disappeared")?,
+        choice,
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn select_device(config: &RecordingConfig) -> Result<(cpal::Device, DeviceChoice)> {
+    let started = Instant::now();
+    let selected = choose_input(mac_inputs()?, config)?;
+    // CPAL's default handle avoids its disconnect-listener reference cycle.
+    let selected = prefer_default_handle(
+        selected,
+        current_default(&cpal::default_host()).ok(),
+        config,
+    );
+    xflow_core::log(
+        "debug",
+        &format!(
+            "microphone resolved resolution_us={} device_id={:?}",
+            started.elapsed().as_micros(),
+            selected.1.device_id
+        ),
+    );
+    Ok(selected)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn select_device(config: &RecordingConfig) -> Result<(cpal::Device, DeviceChoice)> {
+    let host = cpal::default_host();
+    let device = if let Some(name) = &config.device {
+        let devices: Vec<_> = host
+            .input_devices()
+            .context("cannot enumerate microphones")?
+            .collect();
+        let names = devices
+            .iter()
+            .map(|d| d.name())
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        devices
+            .into_iter()
+            .nth(device_index(name, &names)?)
+            .context("microphone disappeared")?
+    } else {
+        host.default_input_device()
+            .context("no default microphone; select recording.device from xflow devices")?
+    };
+    let choice = DeviceChoice {
+        index: None,
+        device_id: None,
+        name: device.name().unwrap_or_else(|_| {
+            config
+                .device
+                .clone()
+                .unwrap_or_else(|| "System default microphone (name unavailable)".into())
+        }),
+        is_default: config.device.is_none(),
+        notice: None,
+    };
+    Ok((device, choice))
+}
+
+fn resolve_on_start(has_stream: bool) -> bool {
+    cfg!(target_os = "macos") || !has_stream
+}
+
+/// Preview of the next capture choice. macOS uses read-only properties;
+/// Linux/ALSA may briefly open devices while enumerating their formats.
+pub fn selected_microphone(config: &RecordingConfig) -> Result<String> {
+    Ok(select_device(config)?.1.description())
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
 fn device_index(requested: &str, names: &[String]) -> Result<usize> {
     names
         .iter()
@@ -170,6 +586,8 @@ struct CaptureBuffer {
     recording: Mutex<Option<Recording>>,
     active: AtomicBool,
     limited: Arc<AtomicBool>,
+    // Per buffer, unlike `limited`: also set when an idle warm stream fails.
+    failed: AtomicBool,
     first_callback_us: AtomicU64,
 }
 
@@ -203,6 +621,7 @@ impl CaptureBuffer {
             recording: Mutex::new(Some(Recording::new(sample_rate, channels, config)?)),
             active: AtomicBool::new(true),
             limited,
+            failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
         }))
     }
@@ -231,26 +650,206 @@ impl CaptureBuffer {
 
     fn fail(&self, error: String) {
         self.active.store(false, Ordering::Release);
-        if let Ok(mut guard) = self.recording.lock() {
-            if let Some(recording) = guard.as_mut() {
-                recording.error = Some(error);
-            }
+        let mut guard = self
+            .recording
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(recording) = guard.as_mut() {
+            recording.error = Some(error);
+            self.limited.store(true, Ordering::Release);
         }
-        self.limited.store(true, Ordering::Release);
+        // Last, so a reader that sees `failed` also sees the recording's error.
+        self.failed.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct PauseOnDrop<S: StreamTrait>(S);
+
+#[cfg(target_os = "macos")]
+impl<S: StreamTrait> Drop for PauseOnDrop<S> {
+    fn drop(&mut self) {
+        // Only default CPAL handles reach this guard; non-default inputs use an owned HAL unit.
+        if let Err(error) = self.0.pause() {
+            xflow_core::log("warn", &format!("cannot stop microphone stream: {error}"));
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+static LIVE_HAL_UNITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(target_os = "macos")]
+struct OwnedHalUnit<U> {
+    unit: Option<U>,
+}
+
+#[cfg(target_os = "macos")]
+impl<U> OwnedHalUnit<U> {
+    fn new(unit: U) -> Self {
+        let live = LIVE_HAL_UNITS.fetch_add(1, Ordering::Relaxed) + 1;
+        xflow_core::log(
+            "debug",
+            &format!("HAL input allocated live_hal_units={live}"),
+        );
+        Self { unit: Some(unit) }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl<U> Drop for OwnedHalUnit<U> {
+    fn drop(&mut self) {
+        // AudioUnit::drop stops, uninitializes, frees callbacks and disposes the instance.
+        drop(self.unit.take());
+        let previous = LIVE_HAL_UNITS.fetch_sub(1, Ordering::Relaxed);
+        debug_assert!(previous > 0);
+        xflow_core::log(
+            "debug",
+            &format!("HAL input disposed live_hal_units={}", previous - 1),
+        );
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn warm_input_present(device_id: Option<u32>, inventory: &[u32]) -> bool {
+    device_id.is_some_and(|id| inventory.contains(&id))
+}
+
+#[cfg(target_os = "macos")]
+fn input_alive(id: u32) -> Result<bool> {
+    use coreaudio::sys;
+    let address = sys::AudioObjectPropertyAddress {
+        mSelector: sys::kAudioDevicePropertyDeviceIsAlive,
+        mScope: sys::kAudioObjectPropertyScopeGlobal,
+        mElement: sys::kAudioObjectPropertyElementMaster,
+    };
+    let mut alive = 0_u32;
+    let mut size = std::mem::size_of_val(&alive) as u32;
+    let status = unsafe {
+        sys::AudioObjectGetPropertyData(
+            id,
+            &address,
+            0,
+            std::ptr::null(),
+            &mut size,
+            (&mut alive as *mut u32).cast(),
+        )
+    };
+    match status {
+        0 => Ok(alive != 0),
+        // '!obj': the device object is gone, so it was unplugged.
+        status if status == i32::from_be_bytes(*b"!obj") => Ok(false),
+        status => bail!("cannot inspect microphone availability: CoreAudio {status}"),
     }
 }
 
 struct OpenStream {
     // Keep the stream (cpal or the macOS voice unit) on its owner thread.
-    // Dropping closes capture immediately.
+    // Non-default macOS inputs own their HAL unit directly, including its callback.
     _stream: Box<dyn std::any::Any>,
     buffer: Arc<CaptureBuffer>,
     sample_rate: u32,
     channels: u16,
     generation: u64,
+    microphone: String,
+    device_id: Option<u32>,
+    // Consecutive drains that saw a HAL render error.
+    #[cfg(target_os = "macos")]
+    render_errors: std::cell::Cell<u8>,
+}
+
+/// A failed status read or one transient render error keeps capturing, like
+/// CPAL ignoring input render errors; a second consecutive error fails.
+#[cfg(any(target_os = "macos", test))]
+fn render_failure(strikes: &std::cell::Cell<u8>, read: Result<i32>) -> Option<String> {
+    match read {
+        Ok(0) => strikes.set(0),
+        Ok(status) => {
+            strikes.set(strikes.get().saturating_add(1));
+            if strikes.get() >= 2 {
+                return Some(format!("microphone render failed: CoreAudio {status}"));
+            }
+            xflow_core::log(
+                "debug",
+                &format!("transient microphone render error: CoreAudio {status}"),
+            );
+        }
+        Err(error) => xflow_core::log(
+            "debug",
+            &format!("cannot read microphone render status: {error}"),
+        ),
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+impl OpenStream {
+    fn check_input(&self) {
+        let error = (|| {
+            let Some(id) = self.device_id else {
+                return Some("microphone ID unavailable".to_string());
+            };
+            match input_alive(id) {
+                Ok(false) => return Some("microphone disconnected".to_string()),
+                Ok(true) => {}
+                Err(error) => xflow_core::log(
+                    "debug",
+                    &format!("cannot read microphone availability: {error}"),
+                ),
+            }
+            let owned = self
+                ._stream
+                .downcast_ref::<OwnedHalUnit<coreaudio::audio_unit::AudioUnit>>()?;
+            use coreaudio::{
+                audio_unit::{Element, Scope},
+                sys,
+            };
+            let read = owned.unit.as_ref()?.get_property(
+                sys::kAudioUnitProperty_LastRenderError,
+                Scope::Global,
+                Element::Output,
+            );
+            render_failure(&self.render_errors, read.map_err(Into::into))
+        })();
+        if let Some(error) = error {
+            self.buffer.fail(error);
+        }
+    }
+}
+
+/// Drops a warm stream whose device is gone (or unreadable) before reuse.
+#[cfg(target_os = "macos")]
+fn retire_dead_warm(stream: &mut Option<OpenStream>) -> Result<()> {
+    let Some(open) = stream.as_ref() else {
+        return Ok(());
+    };
+    let alive = open
+        .device_id
+        .context("microphone ID unavailable")
+        .and_then(input_alive);
+    if !matches!(alive, Ok(true)) {
+        *stream = None;
+    }
+    if !alive? {
+        bail!("warm microphone disconnected");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for OpenStream {
+    fn drop(&mut self) {
+        // Quiesce the buffer before stopping and disposing the native unit.
+        let _ = self.buffer.take();
+    }
 }
 
 fn warm_deadline(config: &RecordingConfig, has_stream: bool, now: Instant) -> Option<Instant> {
+    // shortcut: VPIO follows default input; close at stop until input pinning is hardware-validated.
+    #[cfg(target_os = "macos")]
+    if voice_processing(config) {
+        return None;
+    }
     (has_stream && config.keep_warm_secs > 0)
         .then(|| now + Duration::from_secs(u64::from(config.keep_warm_secs)))
 }
@@ -270,6 +869,8 @@ impl CpalCapture {
         let thread_level = level.clone();
         let finished = Arc::new(AtomicBool::new(false));
         let thread_finished = finished.clone();
+        let microphone = Arc::new(Mutex::new(None));
+        let thread_microphone = microphone.clone();
         let config = config.clone();
         std::thread::Builder::new()
             .name("xflow-audio".into())
@@ -296,6 +897,19 @@ impl CpalCapture {
                             Err(_) => break,
                         },
                     };
+                    // Before any command uses the stream: if the bounded wake queue was
+                    // full, the next command still observes the limit/failure flag. A
+                    // failed idle warm stream has no recording but must not be reused.
+                    if stream.as_ref().is_some_and(|s| {
+                        s.buffer.limited.load(Ordering::Acquire)
+                            || s.buffer.failed.load(Ordering::Acquire)
+                    }) {
+                        if let Some(open) = stream.take() {
+                            completed = open.buffer.take().ok().flatten();
+                        }
+                        deadline = None;
+                        thread_level.store(0, Ordering::Relaxed);
+                    }
                     match command {
                         Command::Start(reply) => {
                             let result = (|| {
@@ -308,26 +922,65 @@ impl CpalCapture {
                                     bail!("already recording");
                                 }
                                 thread_finished.store(false, Ordering::Release);
-                                if let Some(open) = &stream {
+                                let opened = Instant::now();
+                                #[cfg(target_os = "macos")]
+                                let selected = if resolve_on_start(stream.is_some()) {
+                                    match select_device(&config) {
+                                        Ok(selected) => Some(selected),
+                                        Err(error) if stream.is_some() => {
+                                            let id = stream.as_ref().and_then(|open| open.device_id);
+                                            let present = coreaudio::audio_unit::macos_helpers::get_audio_device_ids()
+                                                .is_ok_and(|ids| warm_input_present(id, &ids))
+                                                && id.is_some_and(|id| input_alive(id).unwrap_or(false));
+                                            if !present {
+                                                stream = None;
+                                                return Err(error.context("warm microphone is unavailable"));
+                                            }
+                                            xflow_core::log("debug", &format!("microphone selection unavailable; reusing present warm stream: {error:#}"));
+                                            None
+                                        }
+                                        Err(error) => return Err(error),
+                                    }
+                                } else { None };
+                                #[cfg(not(target_os = "macos"))]
+                                let selected = resolve_on_start(stream.is_some()).then(|| select_device(&config)).transpose()?;
+                                if stream.as_ref().zip(selected.as_ref()).is_some_and(
+                                    |(open, (_, choice))| open.device_id != choice.device_id,
+                                ) {
+                                    stream = None;
+                                }
+                                #[cfg(target_os = "macos")]
+                                retire_dead_warm(&mut stream)?;
+                                if let Some(open) = &mut stream {
+                                    if let Some((_, choice)) = &selected {
+                                        open.microphone = choice.description();
+                                    }
                                     let started = Instant::now();
                                     open.buffer.begin(Recording::new(
                                         open.sample_rate,
                                         open.channels,
                                         &config,
                                     )?)?;
-                                    tracing::debug!(
-                                        warm_start_us = started.elapsed().as_micros() as u64,
-                                        "microphone warm stream activated"
-                                    );
+                                    xflow_core::log("debug", &format!(
+                                        "microphone warm stream activated warm_start_us={}",
+                                        started.elapsed().as_micros()
+                                    ));
                                 } else {
                                     generation = generation.wrapping_add(1);
                                     stream = Some(open_stream(
                                         &config,
+                                        selected.context("microphone was not resolved")?,
                                         callback_sender.clone(),
                                         thread_level.clone(),
                                         generation,
                                         thread_finished.clone(),
+                                        opened,
                                     )?);
+                                }
+                                if let Some(open) = &stream {
+                                    *thread_microphone.lock().map_err(|_| {
+                                        anyhow!("microphone status lock poisoned")
+                                    })? = Some(open.microphone.clone());
                                 }
                                 deadline = None;
                                 Ok(())
@@ -341,11 +994,12 @@ impl CpalCapture {
                         }
                         Command::Stop(reply) => {
                             let buffer = if let Some(open) = &stream {
+                                #[cfg(target_os = "macos")]
+                                open.check_input();
                                 let us = open.buffer.first_callback_us.load(Ordering::Relaxed);
-                                tracing::debug!(
-                                    open_to_first_callback_us = us,
-                                    "microphone startup latency"
-                                );
+                                xflow_core::log("debug", &format!(
+                                    "microphone startup latency open_to_first_callback_us={us}"
+                                ));
                                 let result = open.buffer.take();
                                 open.buffer.limited.store(false, Ordering::Release);
                                 result
@@ -382,7 +1036,11 @@ impl CpalCapture {
                             // it survives; stop() then only reports the error. Idle
                             // streams hold no recording and return nothing.
                             let result = match (&stream, completed.as_mut()) {
-                                (Some(open), _) => open.buffer.drain(),
+                                (Some(open), _) => {
+                                    #[cfg(target_os = "macos")]
+                                    open.check_input();
+                                    open.buffer.drain()
+                                },
                                 (None, Some(done)) if !done.samples.is_empty() => {
                                     Ok(Some(done.drain(Vec::new())))
                                 }
@@ -403,19 +1061,6 @@ impl CpalCapture {
                         }
                         Command::Shutdown => break,
                     }
-                    // If the bounded wake queue was full, any queued command also
-                    // observes the limit/failure flag and closes the stream.
-                    if stream
-                        .as_ref()
-                        .is_some_and(|s| s.buffer.limited.load(Ordering::Acquire))
-                    {
-                        // Stop already owns the buffer if it was just requested.
-                        if let Some(open) = stream.take() {
-                            completed = open.buffer.take().ok().flatten();
-                        }
-                        deadline = None;
-                        thread_level.store(0, Ordering::Relaxed);
-                    }
                 }
             })
             .context("cannot start audio thread")?;
@@ -423,48 +1068,56 @@ impl CpalCapture {
             sender,
             level,
             finished,
+            microphone,
         })
     }
 }
 
 fn open_stream(
     config: &RecordingConfig,
+    selected: (cpal::Device, DeviceChoice),
     sender: mpsc::SyncSender<Command>,
     level: Arc<AtomicU32>,
     generation: u64,
     finished: Arc<AtomicBool>,
+    opened: Instant,
 ) -> Result<OpenStream> {
-    let opened = Instant::now();
+    let (device, choice) = selected;
+    xflow_core::log(
+        "debug",
+        &format!(
+            "opening resolved microphone device_index={:?} device_id={:?} system_default={}",
+            choice.index, choice.device_id, choice.is_default
+        ),
+    );
     #[cfg(target_os = "macos")]
-    if voice_processing(config) {
+    let mut choice = choice;
+    #[cfg(target_os = "macos")]
+    if voice_processing(config) && choice.is_default {
         match open_voice_unit(config, &sender, &level, generation, &finished, opened) {
-            Ok(open) => return Ok(open),
+            Ok(mut open) => {
+                open.microphone = choice.description();
+                open.device_id = choice.device_id;
+                return Ok(open);
+            }
             Err(error) => {
+                choice.echo_unavailable();
                 static FALLBACK: std::sync::Once = std::sync::Once::new();
                 FALLBACK.call_once(|| {
-                    tracing::warn!(%error, "voice processing unavailable; using the plain microphone")
+                    xflow_core::log(
+                        "warn",
+                        &format!(
+                            "voice processing unavailable; using the plain microphone: {error:#}"
+                        ),
+                    )
                 });
             }
         }
     }
-    let host = cpal::default_host();
-    let device = if let Some(requested) = &config.device {
-        let devices: Vec<_> = host
-            .input_devices()
-            .context("cannot enumerate microphones")?
-            .collect();
-        let names = devices
-            .iter()
-            .map(|d| d.name())
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        devices
-            .into_iter()
-            .nth(device_index(requested, &names)?)
-            .context("microphone disappeared")?
-    } else {
-        host.default_input_device()
-            .context("no default microphone; select recording.device from xflow devices")?
-    };
+    #[cfg(target_os = "macos")]
+    if !choice.is_default {
+        return open_hal_input(config, &choice, sender, level, generation, finished, opened);
+    }
     let supported = device
         .default_input_config()
         .context("cannot inspect microphone")?;
@@ -498,6 +1151,11 @@ fn open_stream(
         cpal::SampleFormat::U64 => build!(u64),
         other => bail!("unsupported microphone sample format {other}"),
     }?;
+    #[cfg(target_os = "macos")]
+    let stream = PauseOnDrop(stream);
+    #[cfg(target_os = "macos")]
+    stream.0.play().context("cannot start microphone")?;
+    #[cfg(not(target_os = "macos"))]
     stream.play().context("cannot start microphone")?;
     Ok(OpenStream {
         _stream: Box::new(stream),
@@ -505,6 +1163,10 @@ fn open_stream(
         sample_rate,
         channels,
         generation,
+        microphone: choice.description(),
+        device_id: choice.device_id,
+        #[cfg(target_os = "macos")]
+        render_errors: Default::default(),
     })
 }
 
@@ -592,9 +1254,111 @@ where
         .context("cannot open microphone stream")
 }
 
+#[cfg(target_os = "macos")]
+fn hal_input_format(
+    sample_rate: f64,
+    channels: u32,
+) -> Result<coreaudio::audio_unit::StreamFormat> {
+    use coreaudio::audio_unit::{audio_format::LinearPcmFlags, SampleFormat, StreamFormat};
+    if !sample_rate.is_finite() || !(1.0..=f64::from(u32::MAX)).contains(&sample_rate) {
+        bail!("invalid HAL input sample rate");
+    }
+    let channels = u16::try_from(channels).context("invalid HAL input channel count")?;
+    if channels == 0 {
+        bail!("invalid HAL input channel count");
+    }
+    Ok(StreamFormat {
+        sample_rate,
+        sample_format: SampleFormat::F32,
+        flags: LinearPcmFlags::IS_FLOAT | LinearPcmFlags::IS_PACKED,
+        channels: u32::from(channels),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn open_hal_input(
+    config: &RecordingConfig,
+    choice: &DeviceChoice,
+    sender: mpsc::SyncSender<Command>,
+    level: Arc<AtomicU32>,
+    generation: u64,
+    finished: Arc<AtomicBool>,
+    opened: Instant,
+) -> Result<OpenStream> {
+    use coreaudio::{
+        audio_unit::{
+            render_callback::{data, Args},
+            AudioUnit, Element, IOType, Scope,
+        },
+        sys,
+    };
+    let id = choice.device_id.context("microphone ID unavailable")?;
+    let mut owned = OwnedHalUnit::new(AudioUnit::new(IOType::HalOutput)?);
+    let unit = owned.unit.as_mut().unwrap();
+    unit.uninitialize()?;
+    unit.set_property(
+        sys::kAudioOutputUnitProperty_EnableIO,
+        Scope::Input,
+        Element::Input,
+        Some(&1_u32),
+    )?;
+    unit.set_property(
+        sys::kAudioOutputUnitProperty_EnableIO,
+        Scope::Output,
+        Element::Output,
+        Some(&0_u32),
+    )?;
+    unit.set_property(
+        sys::kAudioOutputUnitProperty_CurrentDevice,
+        Scope::Global,
+        Element::Output,
+        Some(&id),
+    )?;
+    let hardware: sys::AudioStreamBasicDescription = unit.get_property(
+        sys::kAudioUnitProperty_StreamFormat,
+        Scope::Input,
+        Element::Input,
+    )?;
+    let format = hal_input_format(hardware.mSampleRate, hardware.mChannelsPerFrame)?;
+    let sample_rate = format.sample_rate as u32;
+    let channels = format.channels as u16;
+    let format = format.to_asbd();
+    unit.set_property(
+        sys::kAudioUnitProperty_StreamFormat,
+        Scope::Output,
+        Element::Input,
+        Some(&format),
+    )?;
+    let buffer = CaptureBuffer::open(sample_rate, channels, config, finished)?;
+    let mut handle = input_handler::<f32>(
+        buffer.clone(),
+        sender,
+        level,
+        generation,
+        opened,
+        sample_rate as f32 * f32::from(channels),
+    );
+    unit.set_input_callback(move |args: Args<data::Interleaved<f32>>| {
+        handle(args.data.buffer);
+        Ok(())
+    })?;
+    unit.initialize()?;
+    unit.start()?;
+    Ok(OpenStream {
+        _stream: Box::new(owned),
+        buffer,
+        sample_rate,
+        channels,
+        generation,
+        microphone: choice.description(),
+        device_id: Some(id),
+        render_errors: Default::default(),
+    })
+}
+
 /// Echo cancellation follows the system default input and output; a chosen
 /// device keeps the plain microphone.
-// ponytail: default device only; set kAudioOutputUnitProperty_CurrentDevice when someone needs both.
+// shortcut: default device only; pin VPIO input when a chosen mic needs echo cancellation.
 #[cfg(any(target_os = "macos", test))]
 fn voice_processing(config: &RecordingConfig) -> bool {
     config.ignore_speakers && config.device.is_none()
@@ -698,7 +1462,10 @@ fn open_voice_unit(
             level: 10,
         }),
     ) {
-        tracing::debug!(%error, "voice processing keeps default ducking");
+        xflow_core::log(
+            "debug",
+            &format!("voice processing keeps default ducking: {error}"),
+        );
     }
     unit.start()?;
     Ok(OpenStream {
@@ -707,6 +1474,9 @@ fn open_voice_unit(
         sample_rate,
         channels: 1,
         generation,
+        microphone: String::new(),
+        device_id: None,
+        render_errors: Default::default(),
     })
 }
 
@@ -740,6 +1510,9 @@ impl AudioCapture for CpalCapture {
             .context("audio thread stopped")?;
         receive.await.context("audio thread stopped")?
     }
+    fn microphone(&self) -> Option<String> {
+        self.microphone.lock().ok()?.clone()
+    }
     fn level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
@@ -757,6 +1530,689 @@ impl Drop for CpalCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn owned_hal_units_are_disposed_after_each_stop_or_cancel() {
+        struct Unit {
+            callback_buffer: Arc<CaptureBuffer>,
+            disposed: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl Drop for Unit {
+            fn drop(&mut self) {
+                assert!(!self.callback_buffer.active.load(Ordering::Acquire));
+                self.disposed.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let baseline = LIVE_HAL_UNITS.load(Ordering::Relaxed);
+        let disposed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for cycle in 0..50 {
+            let buffer = CaptureBuffer::open(
+                8_000,
+                1,
+                &RecordingConfig::default(),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            let callback = Arc::downgrade(&buffer);
+            let unit = OwnedHalUnit::new(Unit {
+                callback_buffer: buffer.clone(),
+                disposed: disposed.clone(),
+            });
+            assert_eq!(LIVE_HAL_UNITS.load(Ordering::Relaxed), baseline + 1);
+            let open = OpenStream {
+                _stream: Box::new(unit),
+                buffer,
+                sample_rate: 8_000,
+                channels: 1,
+                generation: cycle,
+                microphone: "Built-in fallback".into(),
+                device_id: Some(2),
+                render_errors: Default::default(),
+            };
+            if cycle % 2 == 0 {
+                open.buffer.take().unwrap().unwrap().finish().unwrap();
+            }
+            drop(open);
+            assert!(
+                callback.upgrade().is_none(),
+                "unit callback must be disposed"
+            );
+            assert_eq!(LIVE_HAL_UNITS.load(Ordering::Relaxed), baseline);
+        }
+        assert_eq!(disposed.load(Ordering::Relaxed), 50);
+    }
+
+    #[test]
+    fn retired_microphone_errors_cannot_finish_a_new_dictation() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let old =
+            CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished.clone()).unwrap();
+        old.take().unwrap();
+        let current =
+            CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished.clone()).unwrap();
+        old.fail("late error from an earlier device".into());
+        assert!(!finished.load(Ordering::Acquire));
+        assert!(current.active.load(Ordering::Acquire));
+        current.fail("current device failed".into());
+        assert!(finished.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn poisoned_active_buffer_still_signals_capture_failure() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let buffer =
+            CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished.clone()).unwrap();
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = buffer.recording.lock().unwrap();
+            panic!("fixture: poison recording buffer");
+        });
+        buffer.fail("capture failed".into());
+        assert!(finished.load(Ordering::Acquire));
+        assert!(!buffer.active.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn render_errors_fail_only_when_they_persist_and_failed_reads_are_ignored() {
+        let strikes = std::cell::Cell::new(0);
+        assert_eq!(
+            render_failure(&strikes, Err(anyhow!("property unsupported"))),
+            None
+        );
+        assert_eq!(render_failure(&strikes, Ok(-10863)), None);
+        assert_eq!(render_failure(&strikes, Ok(0)), None);
+        assert_eq!(render_failure(&strikes, Ok(-10863)), None);
+        assert_eq!(
+            render_failure(&strikes, Err(anyhow!("transient read"))),
+            None
+        );
+        assert_eq!(
+            render_failure(&strikes, Ok(-10863)).as_deref(),
+            Some("microphone render failed: CoreAudio -10863")
+        );
+    }
+
+    #[test]
+    fn idle_warm_stream_failure_is_flagged_for_retirement() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let idle =
+            CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished.clone()).unwrap();
+        idle.take().unwrap();
+        idle.fail("device lost while warm".into());
+        assert!(idle.failed.load(Ordering::Acquire));
+        assert!(!finished.load(Ordering::Acquire));
+        let recording =
+            CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished.clone()).unwrap();
+        assert!(!recording.failed.load(Ordering::Acquire));
+        recording.fail("device lost while recording".into());
+        assert!(recording.failed.load(Ordering::Acquire) && finished.load(Ordering::Acquire));
+        let error = recording.take().unwrap().unwrap().finish().unwrap_err();
+        assert!(error.to_string().contains("device lost while recording"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dead_warm_microphone_is_released_before_reporting_disconnect() {
+        // Read-only query of an ID no device uses; CoreAudio answers '!obj'.
+        assert!(!input_alive(0x7FFF_FF00).unwrap());
+        let buffer = CaptureBuffer::open(
+            8_000,
+            1,
+            &RecordingConfig::default(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        buffer.take().unwrap();
+        let mut stream = Some(OpenStream {
+            _stream: Box::new(()),
+            buffer,
+            sample_rate: 8_000,
+            channels: 1,
+            generation: 1,
+            microphone: "Unplugged USB mic".into(),
+            device_id: Some(0x7FFF_FF00),
+            render_errors: Default::default(),
+        });
+        let error = retire_dead_warm(&mut stream).unwrap_err();
+        assert_eq!(error.to_string(), "warm microphone disconnected");
+        assert!(stream.is_none());
+        assert!(retire_dead_warm(&mut stream).is_ok());
+    }
+
+    #[test]
+    fn warm_reuse_requires_the_same_device_id_in_the_inventory() {
+        assert!(warm_input_present(Some(2), &[1, 2]));
+        assert!(!warm_input_present(Some(2), &[1, 3]));
+        assert!(!warm_input_present(Some(2), &[]));
+        assert!(!warm_input_present(None, &[1, 2]));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hal_input_format_preserves_hardware_rate_and_channels() {
+        let format = hal_input_format(44_100.0, 2).unwrap();
+        assert_eq!(format.sample_rate, 44_100.0);
+        assert_eq!(format.channels, 2);
+        for (rate, channels) in [
+            (f64::NAN, 1),
+            (f64::INFINITY, 1),
+            (0.0, 1),
+            (48_000.0, 0),
+            (48_000.0, 65_536),
+        ] {
+            assert!(hal_input_format(rate, channels).is_err());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn plain_stream_stop_and_cancel_pause_before_releasing_the_handle() {
+        struct FakeStream(Arc<Mutex<Vec<&'static str>>>);
+        impl StreamTrait for FakeStream {
+            fn play(&self) -> std::result::Result<(), cpal::PlayStreamError> {
+                Ok(())
+            }
+            fn pause(&self) -> std::result::Result<(), cpal::PauseStreamError> {
+                self.0.lock().unwrap().push("pause/AudioUnit stop");
+                Ok(())
+            }
+        }
+        impl Drop for FakeStream {
+            fn drop(&mut self) {
+                self.0.lock().unwrap().push("release handle");
+            }
+        }
+        for stop in [true, false] {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let buffer = CaptureBuffer::open(
+                8_000,
+                1,
+                &RecordingConfig::default(),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            // Models the callback retained by CPAL's non-default disconnect listener.
+            let retained_buffer = buffer.clone();
+            let open = OpenStream {
+                _stream: Box::new(PauseOnDrop(FakeStream(events.clone()))),
+                buffer,
+                sample_rate: 8_000,
+                channels: 1,
+                generation: 1,
+                microphone: "Built-in fallback".into(),
+                device_id: Some(2),
+                render_errors: Default::default(),
+            };
+            if stop {
+                let _ = open.buffer.take().unwrap().unwrap().finish().unwrap();
+            }
+            drop(open);
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["pause/AudioUnit stop", "release handle"]
+            );
+            assert!(!retained_buffer.active.load(Ordering::Acquire));
+            assert!(retained_buffer.recording.lock().unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn selected_default_uses_default_handle_and_other_inputs_keep_their_identity() {
+        let choice = || DeviceChoice {
+            index: None,
+            device_id: Some(2),
+            name: "Built-in".into(),
+            is_default: true,
+            notice: None,
+        };
+        let (handle, chosen) = prefer_default_handle(
+            ("enumerated", choice()),
+            Some((2, "default API")),
+            &RecordingConfig::default(),
+        );
+        assert_eq!(handle, "default API");
+        assert!(chosen.is_default);
+        let (handle, chosen) = prefer_default_handle(
+            ("enumerated", choice()),
+            Some((3, "new default API")),
+            &RecordingConfig {
+                ignore_speakers: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(handle, "enumerated");
+        assert_eq!(chosen.device_id, Some(2));
+        assert!(
+            !chosen.is_default,
+            "VPIO must not follow a different default"
+        );
+        assert!(chosen.description().contains("Echo cancellation is off"));
+    }
+
+    #[test]
+    fn inventory_churn_and_read_errors_fall_back_to_default_after_two_attempts() {
+        let mut attempts = 0;
+        let inputs = stable_inputs(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(anyhow!("CoreAudio inventory changed"))
+                } else {
+                    Ok(None)
+                }
+            },
+            || {
+                Ok(NativeInput {
+                    id: 2,
+                    device: "default API",
+                    candidate: Candidate {
+                        name: "Built-in".into(),
+                        transport: Transport::BuiltIn,
+                        is_default: true,
+                    },
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(attempts, 2);
+        let (handle, choice) = choose_input(inputs, &RecordingConfig::default()).unwrap();
+        assert_eq!(handle, "default API");
+        assert_eq!(choice.device_id, Some(2));
+    }
+
+    #[test]
+    fn microphone_inventory_skips_failed_reads_and_uses_a_surviving_input() {
+        let inputs = usable_inputs((1..=5_u32).map(|id| (id, id)), |id| match id {
+            1 => Err(anyhow!("stream property failed during unplug")),
+            2 => Err(anyhow!("name is too long for the library reader")),
+            3 => Err(anyhow!("transport property failed during teardown")),
+            4 => Ok(None),
+            _ => Ok(Some(Candidate {
+                name: "Built-in".into(),
+                transport: Transport::BuiltIn,
+                is_default: false,
+            })),
+        })
+        .unwrap();
+        let (handle, choice) = choose_input(inputs, &RecordingConfig::default()).unwrap();
+        assert_eq!(handle, 5);
+        assert_eq!(choice.device_id, Some(5));
+        assert!(choice
+            .description()
+            .contains("system default microphone unavailable"));
+        let none = usable_inputs([(1, ())], |_| Err(anyhow!("gone")));
+        assert!(none
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("no usable microphone"));
+    }
+
+    #[test]
+    fn microphone_inventory_excludes_output_name_collisions_by_id() {
+        let inputs = usable_inputs([(10, "output-only"), (20, "input")], |id| {
+            Ok((id == 20).then(|| Candidate {
+                name: "Same USB name".into(),
+                transport: Transport::Other,
+                is_default: true,
+            }))
+        })
+        .unwrap();
+        let config = RecordingConfig {
+            device: Some("Same USB name".into()),
+            ..Default::default()
+        };
+        let (handle, choice) = choose_input(inputs, &config).unwrap();
+        assert_eq!(handle, "input");
+        assert_eq!(choice.device_id, Some(20));
+        assert!(choice.notice.is_none());
+    }
+
+    #[test]
+    fn warm_microphone_resolution_preserves_linux_exclusive_streams() {
+        assert!(resolve_on_start(false));
+        assert_eq!(resolve_on_start(true), cfg!(target_os = "macos"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn automatic_echo_cancellation_closes_the_stream_at_stop() {
+        let config = RecordingConfig {
+            ignore_speakers: true,
+            keep_warm_secs: 2,
+            ..Default::default()
+        };
+        assert_eq!(warm_deadline(&config, true, Instant::now()), None);
+    }
+
+    #[test]
+    fn voice_processing_failure_reports_echo_cancellation_off() {
+        let devices = [Candidate {
+            name: "Built-in".into(),
+            transport: Transport::BuiltIn,
+            is_default: true,
+        }];
+        let mut choice = resolve_device(&devices, &RecordingConfig::default()).unwrap();
+        choice.echo_unavailable();
+        assert!(choice
+            .description()
+            .contains("Echo cancellation is off; voice processing unavailable"));
+    }
+
+    #[test]
+    fn microphone_resolver_table() {
+        use Transport::*;
+        // (label, devices, named, avoid Bluetooth, expected, notice substring)
+        let rows = [
+            (
+                "named USB",
+                vec![
+                    ("USB", Other, false),
+                    ("AirPods", Bluetooth, true),
+                    ("Built-in", BuiltIn, false),
+                ],
+                Some("USB"),
+                true,
+                "USB",
+                None,
+            ),
+            (
+                "named Bluetooth",
+                vec![("AirPods", Bluetooth, true), ("Built-in", BuiltIn, false)],
+                Some("AirPods"),
+                true,
+                "AirPods",
+                None,
+            ),
+            (
+                "named virtual",
+                vec![("Virtual", Virtual, false), ("Built-in", BuiltIn, true)],
+                Some("Virtual"),
+                true,
+                "Virtual",
+                None,
+            ),
+            (
+                "missing USB",
+                vec![("AirPods", Bluetooth, true), ("Built-in", BuiltIn, false)],
+                Some("USB"),
+                true,
+                "Built-in",
+                Some("recording.device \"USB\" not found — using Built-in"),
+            ),
+            (
+                "missing USB wired default",
+                vec![("Built-in", BuiltIn, true)],
+                Some("USB"),
+                true,
+                "Built-in",
+                Some("not found"),
+            ),
+            (
+                "Bluetooth",
+                vec![
+                    ("AirPods", Bluetooth, true),
+                    ("USB", Other, false),
+                    ("Built-in", BuiltIn, false),
+                ],
+                None,
+                true,
+                "Built-in",
+                Some("headphones kept in high quality"),
+            ),
+            (
+                "lid closed",
+                vec![("AirPods", Bluetooth, true)],
+                None,
+                true,
+                "AirPods",
+                None,
+            ),
+            (
+                "Bluetooth LE",
+                vec![("AirPods", BluetoothLe, true), ("Built-in", BuiltIn, false)],
+                None,
+                true,
+                "Built-in",
+                Some("headphones kept in high quality"),
+            ),
+            (
+                "allow Bluetooth",
+                vec![("AirPods", Bluetooth, true), ("Built-in", BuiltIn, false)],
+                None,
+                false,
+                "AirPods",
+                None,
+            ),
+            (
+                "virtual default",
+                vec![("Virtual", Virtual, true), ("Built-in", BuiltIn, false)],
+                None,
+                false,
+                "Built-in",
+                Some("virtual/aggregate"),
+            ),
+            (
+                "aggregate default",
+                vec![("Aggregate", Aggregate, true), ("Built-in", BuiltIn, false)],
+                None,
+                true,
+                "Built-in",
+                Some("virtual/aggregate"),
+            ),
+            (
+                "virtual only",
+                vec![("Virtual", Virtual, true)],
+                None,
+                true,
+                "Virtual",
+                None,
+            ),
+            (
+                "wired default",
+                vec![("USB", Other, true), ("Built-in", BuiltIn, false)],
+                None,
+                true,
+                "USB",
+                None,
+            ),
+            (
+                "unrelated duplicate with pinned Yeti",
+                vec![
+                    ("AirPods", Bluetooth, true),
+                    ("Yeti", Other, false),
+                    ("USB Audio Device", Other, false),
+                    ("USB Audio Device", Other, false),
+                ],
+                Some("Yeti"),
+                true,
+                "Yeti",
+                None,
+            ),
+            (
+                "unrelated duplicate with built-in fallback",
+                vec![
+                    ("AirPods", Bluetooth, true),
+                    ("Built-in", BuiltIn, false),
+                    ("USB Audio Device", Other, false),
+                    ("USB Audio Device", Other, false),
+                ],
+                None,
+                true,
+                "Built-in",
+                Some("headphones kept in high quality"),
+            ),
+            (
+                "unrelated duplicate with missing pin",
+                vec![
+                    ("AirPods", Bluetooth, true),
+                    ("Built-in", BuiltIn, false),
+                    ("USB", Other, false),
+                    ("USB", Other, false),
+                ],
+                Some("Missing"),
+                true,
+                "Built-in",
+                Some("not found"),
+            ),
+            (
+                "duplicate default with unique built-in",
+                vec![
+                    ("Same", Bluetooth, true),
+                    ("Same", Bluetooth, false),
+                    ("Built-in", BuiltIn, false),
+                ],
+                None,
+                true,
+                "Built-in",
+                Some("headphones kept in high quality"),
+            ),
+            (
+                "duplicate built-in pick",
+                vec![
+                    ("AirPods", Bluetooth, true),
+                    ("Same", BuiltIn, false),
+                    ("Same", BuiltIn, false),
+                ],
+                None,
+                true,
+                "Same",
+                Some("headphones kept in high quality"),
+            ),
+            (
+                "duplicate CPAL names",
+                vec![("Same", Bluetooth, true), ("Same", BuiltIn, false)],
+                Some("Same"),
+                true,
+                "Same",
+                Some("duplicate"),
+            ),
+            (
+                "duplicate CoreAudio names",
+                vec![
+                    ("AirPods", Bluetooth, true),
+                    ("Same", Other, false),
+                    ("Same", Other, false),
+                    ("Built-in", BuiltIn, false),
+                ],
+                Some("Same"),
+                true,
+                "Built-in",
+                Some("duplicate"),
+            ),
+        ];
+        for (label, devices, named, avoid_bluetooth, expected, notice) in rows {
+            let candidates: Vec<_> = devices
+                .into_iter()
+                .map(|(name, transport, is_default)| Candidate {
+                    name: name.into(),
+                    transport,
+                    is_default,
+                })
+                .collect();
+            let config = RecordingConfig {
+                device: named.map(String::from),
+                avoid_bluetooth,
+                ..Default::default()
+            };
+            let choice = resolve_device(&candidates, &config).unwrap();
+            assert_eq!(choice.name, expected, "{label}");
+            if label == "duplicate built-in pick" || label == "duplicate CPAL names" {
+                assert_eq!(
+                    choice.index,
+                    Some(1),
+                    "built-in chosen by ID, regardless of name"
+                );
+            }
+            match notice {
+                Some(notice) => assert!(
+                    choice.description().contains(notice),
+                    "{label}: {}",
+                    choice.description()
+                ),
+                None => assert!(choice.notice.is_none(), "{label}"),
+            }
+        }
+    }
+
+    #[test]
+    fn microphone_resolver_empty_errors_and_missing_default_falls_back() {
+        assert!(resolve_device(&[], &RecordingConfig::default())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("no usable microphone"));
+        let devices = [Candidate {
+            name: "USB".into(),
+            transport: Transport::Other,
+            is_default: false,
+        }];
+        assert_eq!(
+            resolve_device(&devices, &RecordingConfig::default())
+                .unwrap()
+                .name,
+            "USB"
+        );
+        let config = RecordingConfig {
+            device: Some("USB".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_device(&devices, &config).unwrap().name, "USB");
+    }
+
+    #[test]
+    fn bluetooth_fallback_disables_voice_processing_before_any_mic_opens() {
+        let devices = [
+            Candidate {
+                name: "AirPods".into(),
+                transport: Transport::Bluetooth,
+                is_default: true,
+            },
+            Candidate {
+                name: "Built-in".into(),
+                transport: Transport::BuiltIn,
+                is_default: false,
+            },
+        ];
+        let config = RecordingConfig {
+            ignore_speakers: true,
+            ..Default::default()
+        };
+        let choice = resolve_device(&devices, &config).unwrap();
+        assert!(!(voice_processing(&config) && choice.is_default));
+        assert!(choice.description().contains("Echo cancellation is off"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "read-only hardware enumeration; never opens a microphone"]
+    fn enumerate_microphones_without_opening_streams() {
+        let devices = input_devices().unwrap();
+        let inputs = mac_inputs().unwrap();
+        for device in devices {
+            eprintln!(
+                "input {:?}, default={}, transport={:?}",
+                device.name,
+                device.default,
+                inputs
+                    .iter()
+                    .filter(|input| input.candidate.name == device.name)
+                    .map(|input| (input.id, input.candidate.transport))
+                    .collect::<Vec<_>>()
+            );
+        }
+        let mut timings = Vec::new();
+        for _ in 0..30 {
+            let start = Instant::now();
+            let choice = selected_microphone(&RecordingConfig::default()).unwrap();
+            timings.push(start.elapsed().as_micros());
+            if timings.len() == 1 {
+                eprintln!("next recording: {choice}");
+            }
+        }
+        timings.sort();
+        eprintln!("read-only device resolution, 30 runs: p50={} us, p95={} us (not key-down→first sample)", timings[14], timings[28]);
+    }
+
     #[test]
     fn device_matching_is_exact_and_lists_available_names() {
         let names = vec!["Default".into(), "USB Microphone".into()];
@@ -771,6 +2227,7 @@ mod tests {
             recording: Mutex::new(None),
             active: AtomicBool::new(false),
             limited: Arc::new(AtomicBool::new(false)),
+            failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
         };
         assert!(buffer.take().unwrap().is_none());
@@ -871,6 +2328,7 @@ mod tests {
             )),
             active: AtomicBool::new(true),
             limited: Arc::new(AtomicBool::new(false)),
+            failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
         };
         buffer
@@ -985,6 +2443,7 @@ mod tests {
             recording: Mutex::new(None),
             active: AtomicBool::new(false),
             limited: finished.clone(),
+            failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
         };
         let (sender, _receiver) = mpsc::sync_channel(16);
@@ -992,6 +2451,7 @@ mod tests {
             sender,
             level: Arc::new(AtomicU32::new(0)),
             finished,
+            microphone: Arc::new(Mutex::new(None)),
         };
         buffer
             .begin(Recording::new(2, 1, &RecordingConfig::default()).unwrap())

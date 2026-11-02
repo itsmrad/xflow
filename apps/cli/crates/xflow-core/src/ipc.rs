@@ -336,6 +336,9 @@ pub struct Response {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub injection: Option<InjectionOutcome>,
     pub level: f32,
+    /// Last successfully opened microphone, including selection notices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microphone: Option<String>,
     /// Daemon version; on Status and the Subscribe snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -397,6 +400,18 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn microphone_status_is_optional_and_round_trips() {
+        let old: Response =
+            serde_json::from_str(r#"{"ok":true,"state":"idle","level":0.0}"#).unwrap();
+        assert!(old.microphone.is_none());
+        let mut response = old;
+        response.microphone = Some("Built-in (Bluetooth headphones kept in high quality)".into());
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: Response = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.microphone, response.microphone);
+    }
 
     #[test]
     fn v1_clients_and_extension_requests_still_parse() {

@@ -625,7 +625,7 @@ fn errors_become_one_plain_sentence() {
     assert_eq!(options::value_text("stt.language", ""), "Automatic");
     assert_eq!(
         options::value_text("recording.device", "(unset)"),
-        "System default"
+        "Automatic"
     );
     assert_eq!(options::value_text("sounds.volume", "0.5"), "50%");
     assert_eq!(options::ago(0, 125), "2 min ago");

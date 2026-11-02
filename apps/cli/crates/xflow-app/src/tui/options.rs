@@ -15,8 +15,8 @@ pub const SETTINGS: &[Row] = &[
     ("action.stt_key", "Speech", "API key", "Your key for the speech service. xflow stores it encrypted on this computer, never in your settings file."),
     ("stt.languages", "Speech", "Preferred languages", "Up to three languages you mix when speaking."),
     ("stt.language", "Speech", "Fixed language", "Automatic works for most people. Pick a language if words come out in the wrong one."),
-    ("recording.device", "Speech", "Microphone", "Which microphone to listen to. System default follows your computer's sound settings."),
-    ("recording.ignore_speakers", "Speech", "Ignore speaker sound", "Off by default. On macOS, reduce speaker sound with the system default microphone; listening can take longer to start. On Linux, configure an echo-cancel input in Sound settings."),
+    ("recording.device", "Speech", "Microphone", "Which microphone to listen to. On macOS, the automatic choice prefers built-in input over Bluetooth or virtual defaults and falls back if a named mic is missing."),
+    ("recording.ignore_speakers", "Speech", "Ignore speaker sound", "Off by default. On macOS, reduce speaker sound only when using the system default microphone; listening can take longer to start. On Linux, configure an echo-cancel input in Sound settings."),
     ("action.stt_test", "Speech", "Check connection", "Checks your key and connection without recording or using paid credits."),
     ("hotkey.key", "Shortcut", "Key", "Hold this key and speak; let go to finish. Double-tap it for hands-free."),
     ("hotkey.enabled", "Shortcut", "Shortcut", "Turn the global shortcut on or off."),
@@ -268,7 +268,7 @@ pub fn value_text(key: &str, value: &str) -> String {
     match key {
         _ if value == "true" => "On".into(),
         _ if value == "false" => "Off".into(),
-        "recording.device" if unset => "System default".into(),
+        "recording.device" if unset => "Automatic".into(),
         "stt.fallback" if unset || value == "[]" => "None".into(),
         "stt.fallback" => provider_name(
             value

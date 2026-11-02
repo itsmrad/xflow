@@ -137,6 +137,9 @@ impl Output {
         if let Some(mode) = response.mode {
             rows.push(vec!["Mode".into(), format!("{mode:?}").to_lowercase()]);
         }
+        if let Some(microphone) = &response.microphone {
+            rows.push(vec!["Mic (last used)".into(), microphone.clone()]);
+        }
         if let Some(kept) = &response.failed_audio {
             rows.push(vec![
                 "Failed audio".into(),

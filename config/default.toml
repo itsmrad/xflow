@@ -41,11 +41,14 @@ enabled = true
 [recording]
 max_seconds = 1200           # hard stop in seconds (at most 20 minutes)
 silence_threshold = 0.005    # minimum 20 ms frame RMS; speech must last at least 80 ms
-# device = "USB Microphone"  # `xflow devices`; unset = system default input
+# device = "USB Microphone"  # exact name from `xflow devices`; missing names fall back on macOS
+# macOS: use built-in input when the default is Bluetooth; named devices override.
+# Virtual/aggregate defaults also fall back to built-in. No built-in: keep default.
+avoid_bluetooth = true      # ignored on Linux; false allows the Bluetooth default
 min_ms = 300                 # shorter taps are discarded without upload
 auto_stop_secs = 0           # stop after N s of silence (0 = off)
-keep_warm_secs = 0           # keep the mic open N s after a recording (0 = off)
-ignore_speakers = false      # opt in to cancelling speaker sound (macOS, system default mic)
+keep_warm_secs = 0           # keep mic open N s (0 = off); macOS automatic echo cancellation always closes
+ignore_speakers = false      # macOS: echo cancelling only when using the system default mic
 
 [injection]
 # Terminal control characters/multiline are copied for manual paste until
