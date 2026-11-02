@@ -32,11 +32,11 @@ sudo dnf install gcc gcc-c++ pkgconf-pkg-config alsa-lib-devel dbus-devel wl-cli
 cargo build --manifest-path apps/cli/Cargo.toml --release --locked
 install -Dm755 apps/cli/target/release/xflow ~/.local/bin/xflow
 install -Dm755 apps/cli/target/release/xflowd ~/.local/bin/xflowd
-xflow init
-xflow key groq                 # hidden input; encrypted in xflow's keystore, no OS prompt
-# Alternatively set GROQ_API_KEY in the daemon's environment.
-xflowd                        # separate terminal; reads ~/.config/xflow/config.toml
+xflow service install --enable  # starts xflowd as a user service; or run xflowd in another terminal
+xflow                           # guided setup: provider, key, microphone check, test dictation
 ```
+
+Don't run `xflow init` first: plain `xflow` opens the guided setup only when no config exists yet (`xflow setup` reopens it later). To store a key without setup, use `xflow key set groq` (hidden input; encrypted in xflow's keystore, no OS prompt), or set `GROQ_API_KEY` in the daemon's environment.
 
 ```sh
 xflow doctor
@@ -94,7 +94,7 @@ The daemon creates no application windows or NSApplication and runs no Accessibi
 
 See [default configuration](config/default.toml) and [provider contracts](apps/cli/crates/xflow-providers/README.md). Provider keys stay out of TOML; headless usage accepts environment variables. Provider calls require credentials and send recorded audio to the selected endpoint. Smart formatting (Light cleanup: lists, backtracking, numbers, your dictionary spellings) is turned on by setup when the speech key can also run it (Groq today), so the transcript text goes to the same provider that already received the audio; turn it off in Settings → Writing or with `cleanup.mode = "raw"`. Dictations of six words or fewer skip it, and a failed call or an edit that changes too much keeps the original transcript. The focused app id is sent only with `cleanup.app_context = true` (off by default).
 
-For OpenRouter, set `stt.provider = "openrouter"`, store `xflow key openrouter` or supply `OPENROUTER_API_KEY`. OpenRouter uses its documented JSON/base64 audio format; Groq/OpenAI-compatible servers use multipart WAV. Batch adapters also cover OpenAI, Deepgram, AssemblyAI, ElevenLabs, Gemini, Mistral, Together and DeepInfra. Fireworks is a cleanup provider, not an STT adapter. Streaming and arbitrary custom WebSocket protocols remain future work; provider/model quality and live credentials are unvalidated.
+For OpenRouter, set `stt.provider = "openrouter"`, store `xflow key set openrouter` or supply `OPENROUTER_API_KEY`. OpenRouter uses its documented JSON/base64 audio format; Groq/OpenAI-compatible servers use multipart WAV. Batch adapters also cover OpenAI, Deepgram, AssemblyAI, ElevenLabs, Gemini, Mistral, Together and DeepInfra. Fireworks is a cleanup provider, not an STT adapter. Streaming and arbitrary custom WebSocket protocols remain future work; provider/model quality and live credentials are unvalidated.
 
 For a local OpenAI-compatible sidecar, configure `provider = "custom"`, a full endpoint such as `http://127.0.0.1:8080/v1/audio/transcriptions`, and an explicit model. The `local` catalog entry supports a preconfigured local server; `stt.protocol = "whisper-cpp"` selects the whisper.cpp server protocol. Set `privacy.offline = true` to reject non-loopback endpoints, including optional cleanup. A sidecar's own network behavior is outside this guard. No whisper model is bundled or silently downloaded.
 
