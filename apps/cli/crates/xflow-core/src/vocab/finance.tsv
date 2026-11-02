@@ -1,6 +1,5 @@
 # xflow finance pack: banking, accounting and markets. Same format as dev.tsv.
 EBITDA	ebida|ebitba
-GAAP	-	gap|g a a p|g double a p	-	eps	-	between|in|analysis
 10-Q	10q
 FASB	fazby|fazzbee
 AML/KYC	aml kyc
@@ -11,13 +10,11 @@ SEPA	seepa
 CUSIP	kyoosip
 LIBOR	lybor
 EURIBOR	euribore
-bps	bips
 P&L	pnl
 P&Ls	pnls
 SG&A	sgna
-CAGR	kagger|cagger|kaggar
+CAGR	kagger|cagger
 M&A	mna
-FICO	fyco
 HELOC	heelock|helock
 reconciliation	reconcilliation
 FP&A	fpna
@@ -28,5 +25,3 @@ Refinitiv	refinitive|refinitif
 Nasdaq	nasdak
 Sensex	sensecs
 QuickBooks Online	qbo
-Klarna	clarna
-Schwab	schwob|shwab

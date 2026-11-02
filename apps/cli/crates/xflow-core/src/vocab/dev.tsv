@@ -39,7 +39,6 @@ Whisper	-	whisper	openai	v3|cpp	a|in	quietly|softly|sweet
 LangChain	langchane
 CUDA	cooda|kooda
 Nvidia	nvidea|envidea
-Keras	kerras
 scikit-learn	sklearn
 NumPy	numpie
 Kaggle	kaggel
@@ -51,14 +50,13 @@ Replit	replet
 Codeium	codeum
 VS Code	vscode
 Neovim	nvim
-Emacs	emax
 # Languages and formats
 Java	-	java	-	jvm	-	coffee|beans|island|sea|cup|script
 Kotlin	cotlin
 Scala	-	scala	-	sbt	la
-Go	-	go	-	struct|structs|fmt|toolchain
+Go	-	go	-	struct|structs|toolchain
 Rust	-	rust	-	toolchain|async|cli	-	on|stain|stains|proof|removal|belt|colored|bucket|spots|never
-Python	-	python	-	venv|sdk	-	snake|snakes|skin|bite
+Python	-	python	-	sdk	-	snake|snakes|skin|bite
 Ruby on Rails	rubyonrails
 C#	-	c sharp|see sharp	-	dotnet	-	major|minor|chord|note|scale|key
 .NET	-	dot net	-	sdk
@@ -80,7 +78,7 @@ Express	expressjs	express|express js|express j s	-	middleware
 Node.js	nodejs
 Bun	bunjs	bun|bun js	-	lockfile	hot|cinnamon|burger|sweet|honey|sticky
 Electron	-	electron	-	preload|ipc	an|the|one|each|free|valence|single
-Expo	-	expo	-	eas|cli|sdk|prebuild	world|trade|car|art|auto|food|travel
+Expo	-	expo	-	cli|sdk	world|trade|car|art|auto|food|travel
 Zustand	zoostand
 React Query	-	react query	-	devtools
 Prisma	prizma
@@ -95,9 +93,8 @@ Yarn	-	yarn	-	lockfile	-	ball|balls|knit|knitting|shop
 uv	-	u v	-	venv
 Poetry	-	poetry	-	venv	the|of|read|write|wrote|loves|love
 PyPI	pipey
-Cargo	-	cargo	-	toml|clippy|fmt	the|a|air|heavy|of	ship|ships|pants|plane|hold|bay
+Cargo	-	cargo	-	toml	the|a|air|heavy|of	ship|ships|pants|plane|hold|bay
 Elixir	-	elixir	-	genserver	an|the|magic|of
-Haskell	haskil
 Clojure	clojur
 Zig	-	zig	-	toolchain	-	zag
 Wasm	wazzam|wasum
@@ -121,20 +118,18 @@ CloudFormation	-	cloud formation|claude formation	-	changeset
 Redshift	-	redshift|red shift	-	serverless
 Kinesis	kenesis|kinnesis
 Kubernetes	kuber netes|kuber nettys|kuberneties|kubernetties|kubernets|kubernetis
-Helm	-	helm	-	repo	the|at|take|took|taking
 minikube	minicube
 Argo CD	argocd
 Prometheus	-	prometheus	-	alertmanager
 Grafana	grafanna
 New Relic	-	new relic	-	apm	a
 Sentry	-	sentry	-	sdk|dsn	a|the|loyal|lone	duty|box|post
-OpenTelemetry	otel
 Splunk	splunck
 Kibana	kibbana
 OpenSearch	-	open search	-	serverless
 Pulumi	pulumy
 Ansible	ansibel|ansable
-Linux	linnux|linix
+Linux	linnux
 Ubuntu	ubunto
 Red Hat	redhat
 App Store	appstore
@@ -162,8 +157,6 @@ Protobuf	protobuff
 Netlify	nettlify|netlefy
 Heroku	herokku
 DigitalOcean	-	digital ocean	-	kubernetes|vps
-Hetzner	hets ner|hetsner
-Traefik	-	traffic	-	middleware|middlewares
 Apache	-	apache	-	webserver|httpd	-	helicopter|helicopters|tribe|tribes|nation|chief|warrior
 # Safe forms: every word is not English, not a name, not a digit or single letter, and the form is more than a case change. Cued forms need an adjacent non-English cue; an English left cue (ask, hey, tell) also needs a continuation (to, about, for). Cued forms change only lowercase input. See NOTICE.
 Google	-	google	-	colab
@@ -173,20 +166,18 @@ Intel	-	intel	-	cpus|xeon
 Qualcomm	qualcom
 Instagram	instergram
 LinkedIn	-	linked in	-	inmail
-Reddit	-	read it	-	subreddit
 Discord	-	discord	-	webhook
 Shopify	shoppify
-Venmo	vemo|venmoe
+Venmo	venmoe
 Palantir	palanteer|pallantir
 Oracle	-	oracle	-	jdk|erp|netsuite	the|an|of|delphi|delphic
 SAP	-	sap|s a p	-	erp|fiori|abap|ariba
 S/4HANA	s4hana
 Atlassian	atlassien
 Cisco	-	cisco	-	webex|meraki
-Lenovo	lenova
 Adobe	-	adobe	-	xd|indesign	-	house|houses|brick|bricks|walls|hut|huts
-Figma	figmo|figmah
-Canva	kanva|canvah
+Figma	figmah
+Canva	canvah
 Calendly	calendaly|calendlee
 Zapier	zappier
 Auth.js	authjs
@@ -205,6 +196,6 @@ Zod	-	zod|zodd	-	v4
 Immer	immer js
 Rollup	rollup js|rollupjs
 Biome	-	biome	-	js|json
-Xamarin	zamarin|zamaran
+Xamarin	zamarin
 Arduino	ardweeno
 USB-C	usbc

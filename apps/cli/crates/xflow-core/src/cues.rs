@@ -212,14 +212,14 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool, app: Option<&st
             if !active[pack] || end > tokens.len() || !matches(&lower, &tokens[i..end], form) {
                 continue;
             }
-            // Speech-to-text already chose the case of a capitalised word
-            // ("SWIFT code", "Swift code"); only lowercase everyday words change.
-            if cued
-                && !shouting
-                && text[tokens[i].start..tokens[end - 1].end]
-                    .chars()
-                    .any(char::is_uppercase)
-            {
+            // Speech-to-text already chose a capital: a capitalised cued word
+            // ("SWIFT code", "Swift code") or a capitalised safe form inside a
+            // sentence (a name: "the Clara Haskil recordings") stays. A safe form
+            // may still start a sentence: "Kube ctl get pods".
+            let capital = text[tokens[i].start..tokens[end - 1].end]
+                .chars()
+                .any(char::is_uppercase);
+            if capital && !shouting && (cued || !sentence_start(text, tokens[i].start)) {
                 // Like a blocked phrase, it must not fall back to a shorter form.
                 longest = count;
                 continue;
@@ -261,6 +261,22 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool, app: Option<&st
     }
     out.push_str(&text[cursor..]);
     out
+}
+
+/// Whether `start` begins a sentence: the start of the text or a line, or
+/// after `.`, `!` or `?` that does not end an abbreviation ("Ms.").
+fn sentence_start(text: &str, start: usize) -> bool {
+    let before = text[..start].trim_end_matches([' ', '\t']);
+    if before.is_empty() || before.ends_with(['\n', '!', '?']) {
+        return true;
+    }
+    before.strip_suffix('.').is_some_and(|rest| {
+        let word = rest
+            .rsplit(|c: char| !c.is_alphanumeric())
+            .next()
+            .unwrap_or("");
+        !crate::text::ABBREVIATIONS.contains(&word.to_lowercase().as_str())
+    })
 }
 
 /// The spelling to write for `tokens[i..end]`, or None when cues, blockers or
@@ -752,6 +768,7 @@ mod tests {
             // dev
             ("deploy it with kube ctl", "deploy it with kubectl"),
             ("Kube ctl get pods", "Kubectl get pods"),
+            ("It failed. Kube ctl was old", "It failed. Kubectl was old"),
             ("we moved to postgress", "we moved to Postgres"),
             ("the react devtools panel", "the React devtools panel"),
             ("the rust toolchain", "the Rust toolchain"),
@@ -760,7 +777,7 @@ mod tests {
             ("go structs", "Go structs"),
             ("mistral 7b", "Mistral 7b"),
             ("vercell and super base cli", "Vercel and Supabase cli"),
-            ("python venv", "Python venv"),
+            ("python sdk", "Python sdk"),
             ("the nextjs app router", "the Next.js app router"),
             ("ask cloud about this", "ask Claude about this"),
             // Seen from Groq Whisper on synthetic speech.
@@ -778,7 +795,6 @@ mod tests {
             ("the pnl review", "the P&L review"),
             ("five year kagger", "five year CAGR"),
             ("a swift gpi payment", "a SWIFT gpi payment"),
-            ("gap eps", "GAAP eps"),
         ];
         let wrong: Vec<_> = fixed
             .iter()
@@ -839,6 +855,9 @@ mod tests {
             "written in swift code",
             "send it over Slack status",
             "Rust compiler",
+            // A capitalised safe form inside a sentence is a name.
+            "rewrote it with Shadkin",
+            "ask Dr. Kube ctl",
         ]
         .into_iter()
         .map(|input| (input, before_cleanup(input, &config, false)))

@@ -225,7 +225,7 @@ fn closing(c: char) -> bool {
     )
 }
 /// A period after these doesn't end a sentence.
-const ABBREVIATIONS: &[&str] = &[
+pub(crate) const ABBREVIATIONS: &[&str] = &[
     "approx", "ave", "capt", "co", "col", "dept", "dr", "etc", "fig", "gen", "gov", "inc", "jr",
     "lt", "ltd", "mr", "mrs", "ms", "mt", "prof", "rev", "sgt", "sr", "st", "vs",
 ];
