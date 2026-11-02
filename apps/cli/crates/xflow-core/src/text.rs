@@ -83,12 +83,22 @@ fn replace(text: &str, pairs: &[(&str, &str)], punctuation_insensitive: bool) ->
         });
         if let Some((pattern, _, to)) = matched {
             output.push_str(&text[cursor..input[i].start]);
+            // STT punctuates around a spoken "new line": "First line, new line, second line."
+            let line_break = to.contains('\n') && to.trim().is_empty();
+            if line_break {
+                let kept = output.trim_end_matches([' ', '\t', ',', ';', ':']).len();
+                output.truncate(kept);
+            }
             output.push_str(to);
             i += pattern.len();
             cursor = input[i - 1].end;
-            if to.is_empty() {
+            if to.is_empty() || line_break {
                 for (offset, c) in text[cursor..].char_indices() {
-                    if !matches!(c, ',' | ';' | ':') {
+                    // A period that ends the command goes too; ".env" after it stays.
+                    let period = line_break
+                        && c == '.'
+                        && !text[cursor + offset + 1..].starts_with(char::is_alphanumeric);
+                    if !matches!(c, ',' | ';' | ':') && !period {
                         break;
                     }
                     cursor = input[i - 1].end + offset + c.len_utf8();
@@ -563,6 +573,39 @@ mod tests {
             before_cleanup("commander periodical", &c, false),
             "commander periodical"
         );
+    }
+    #[test]
+    fn stt_punctuation_around_a_spoken_line_break_is_dropped() {
+        // Hardware test: "First line, new line, second line." pasted "First line,\n, second line."
+        let mut c = Config::default();
+        c.formatting.spoken_punctuation = true;
+        for (raw, want) in [
+            (
+                "First line, new line, second line.",
+                "First line\nsecond line.",
+            ),
+            (
+                "First line, new line, second line, new line, third line.",
+                "First line\nsecond line\nthird line.",
+            ),
+            (
+                "First line. New line. Second line.",
+                "First line.\nSecond line.",
+            ),
+            ("Intro; new paragraph: body.", "Intro\n\nbody."),
+            ("One, new line, new line, two.", "One\n\ntwo."),
+            ("Done, new line.", "Done"),
+            ("Edit new line .env now", "Edit\n.env now"),
+        ] {
+            // Terminal, editor (VS Code) and prose (TextEdit) targets share this step.
+            for (terminal, app) in [
+                (true, Some("com.apple.Terminal")),
+                (false, Some("com.microsoft.VSCode")),
+                (false, Some("com.apple.TextEdit")),
+            ] {
+                assert_eq!(prepare(raw, &c, terminal, app).0, want, "{raw} in {app:?}");
+            }
+        }
     }
     #[test]
     fn snippets_are_literal_and_not_recursive() {
