@@ -80,11 +80,12 @@ Without the extension, xflow falls back to `wl-copy` and, if a ydotool daemon so
 
 | Session | Clipboard | Automatic paste | Shortcuts and pill |
 | --- | --- | --- | --- |
-| Ubuntu GNOME Wayland | Native; `wl-copy` fallback | Native; guarded `ydotool` fallback | Bundled extension |
-| Fedora GNOME Wayland | Native; `wl-copy` fallback | Same; fallback needs uinput setup | Same extension; validation pending |
+| Ubuntu GNOME Wayland | Native; `wl-copy` fallback | Native; clipboard only without the extension | Bundled extension |
+| Fedora GNOME Wayland | Native; `wl-copy` fallback | Same | Same extension; validation pending |
 | GNOME X11 | Native; `xclip` fallback | Native; guarded `xdotool` fallback | Bundled extension |
 | Other X11 desktops | `xclip` | `xdotool`, original-window guard | Bind CLI commands yourself; no pill yet |
-| wlroots (Sway, …) | `wl-copy` | Clipboard only | Bind CLI commands yourself; no pill yet |
+| Sway | `wl-copy` | `wtype` (or `ydotool` if its socket exists), focused-window guard | Bind CLI commands yourself; no pill yet |
+| Other wlroots compositors | `wl-copy` | Clipboard only | Bind CLI commands yourself; no pill yet |
 | KDE Plasma Wayland | `wl-copy` | Clipboard only | Bind CLI commands yourself; no pill yet |
 
 Elsewhere, bind `xflow start` and `xflow stop` to press and release, or `xflow toggle` to a single key, in your compositor's settings.

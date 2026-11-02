@@ -6,7 +6,7 @@ description: Build xflow from source on macOS or Linux, or package it as a macOS
 xflow is two binaries: `xflow` (the CLI and TUI) and `xflowd` (the daemon). Install them next to each other — the daemon finds helpers such as the recording pill through the `xflow` beside it.
 
 <Callout type="note">
-There is no published release yet. Until there is, build from source. The steps below are the same ones the repository README uses.
+macOS beta packages are on the [Download](/download) page and [GitHub Releases](https://github.com/itsmrad/xflow/releases). They are signed but not notarised. On Linux, build from source; the steps below are the same ones the repository README uses.
 </Callout>
 
 ## Requirements
@@ -24,7 +24,7 @@ cargo build --manifest-path apps/cli/Cargo.toml --release --locked
 scripts/install.sh
 ```
 
-`scripts/install.sh` copies `xflow` and `xflowd` into `~/.local/bin` atomically and prints the next step. Pass `--prefix PATH` or `--bin-dir PATH` to change where they go. Add `~/.local/bin` to your `PATH` if it isn't already.
+`scripts/install.sh` copies `xflow` and `xflowd` into `~/.local/bin` atomically and prints the next step. Pass `--prefix PATH` to install into `PATH/bin` instead, or `--bin-dir PATH` to copy prebuilt binaries from `PATH` instead of the release build directory. Add `~/.local/bin` to your `PATH` if it isn't already.
 
 Then open a terminal and run:
 

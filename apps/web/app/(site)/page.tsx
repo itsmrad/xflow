@@ -264,8 +264,8 @@ export default function Home() {
           <div className="border-t border-line">
             <div className="flex flex-col">
               <div className="cells cells-4 lg:!grid-cols-2">
-                <Fig n={1} value="11 MB" caption="Idle RSS" claim={1} visual={<Bars seed={1} filled={9} />} />
-                <Fig n={2} value="~3 ms" caption="Daemon start, p50 (warm)" claim={2} visual={<Bars seed={2} filled={3} />} />
+                <Fig n={1} value="11 MB" caption="Idle RSS (Linux)" claim={1} visual={<Bars seed={1} filled={9} />} />
+                <Fig n={2} value="~3 ms" caption="Daemon start, p50 (warm, Linux)" claim={2} visual={<Bars seed={2} filled={3} />} />
               </div>
               <p className="t-caption border-t border-line px-[var(--cell-p)] py-4 text-fg-subtle">
                 Measured on Linux (release build). macOS figures come with the signed release.
