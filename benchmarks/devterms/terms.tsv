@@ -1,0 +1,151 @@
+# section	spoken text	expected terms (|)	same-section context terms (|)
+aws	Next we should move AWS behind EBS this sprint.	AWS|EBS	EBS snapshot|Amazon EKS
+aws	Can you check whether EC2 still works with OpenSearch?	EC2|OpenSearch	Amazon ECS|Amazon SQS
+aws	I set up DynamoDB yesterday and then tried WAF.	DynamoDB|WAF	Amazon SNS|Elastic IP
+aws	The team asked about CloudWatch and Inferentia in the review.	CloudWatch|Inferentia	Amazon Route 53|Amazon CloudFront
+aws	Let us compare VPC with Strands Agents before we decide.	VPC|Strands Agents	Amazon API Gateway|CIDR block
+aws	Next we should move ECS behind Aurora Serverless this sprint.	ECS|Aurora Serverless	Amazon Aurora|public subnet
+aws	Can you check whether SNS still works with Amazon Timestream?	SNS|Amazon Timestream	AWS Fargate|private subnet
+aws	I set up CloudFront yesterday and then tried Amazon DataZone.	CloudFront|Amazon DataZone	Amazon Bedrock|VPC peering
+aws	The team asked about Fargate and SageMaker Canvas in the review.	Fargate|SageMaker Canvas	Amazon SageMaker|VPC endpoint
+aws	Let us compare KMS with SageMaker Autopilot before we decide.	KMS|SageMaker Autopilot	AWS Secrets Manager|VPC Lattice
+aws	Next we should move Cognito behind us-east-1 this sprint.	Cognito|us-east-1	Amazon Cognito|PrivateLink
+aws	Can you check whether Step Functions still works with network ACL?	Step Functions|network ACL	Amazon EventBridge|Site-to-Site VPN
+aws	I set up CDK yesterday and then tried MFA.	CDK|MFA	AWS Step Functions|AWS Cloud WAN
+aws	The team asked about Systems Manager and Amazon Web Services in the review.	Systems Manager|Amazon Web Services	Amazon Kinesis|Global Accelerator
+aws	Let us compare ELB with Amazon DynamoDB before we decide.	ELB|Amazon DynamoDB	Amazon Redshift|S3 bucket
+gcp	Next we should move Google Cloud behind Cloud Shell this sprint.	Google Cloud|Cloud Shell	Private Google Access|Serverless VPC Access
+gcp	Can you check whether GCP still works with Persistent Disk?	GCP|Persistent Disk	VPC Network Peering|VPC Flow Logs
+gcp	I set up Google Cloud CLI yesterday and then tried Memorystore for Redis.	Google Cloud CLI|Memorystore for Redis	IAP|Security Command Center
+gcp	The team asked about Google Kubernetes Engine and Google AI Studio in the review.	Google Kubernetes Engine|Google AI Studio	reCAPTCHA Enterprise|reCAPTCHA
+gcp	Let us compare Cloud Run with Cloud DNS before we decide.	Cloud Run|Cloud DNS	Cloud Identity|Resource Manager
+gcp	Next we should move Artifact Registry behind Identity-Aware Proxy this sprint.	Artifact Registry|Identity-Aware Proxy	Eventarc|Cloud Trace
+gcp	Can you check whether Cloud SQL still works with Apigee?	Cloud SQL|Apigee	Error Reporting|Cloud Operations
+gcp	I set up Firestore yesterday and then tried Firebase CLI.	Firestore|Firebase CLI	Stackdriver|Logs Explorer
+gcp	The team asked about Dataflow and Google Cloud SDK in the review.	Dataflow|Google Cloud SDK	Cloud Billing|Firebase App Hosting
+gcp	Let us compare Vertex AI with Instance Templates before we decide.	Vertex AI|Instance Templates	Firebase Storage|Firebase Remote Config
+gcp	Next we should move Cloud Storage behind Anthos this sprint.	Cloud Storage|Anthos	Remote Config|Firebase App Check
+gcp	Can you check whether Cloud Logging still works with Apache Beam?	Cloud Logging|Apache Beam	firebase-tools|Firestore Security Rules
+gcp	I set up Firebase Authentication yesterday and then tried Vertex AI Search.	Firebase Authentication|Vertex AI Search	Google Maps Platform|Google Apps Script
+gcp	The team asked about gsutil and ADK in the review.	gsutil|ADK	OAuth consent screen|Android Studio
+gcp	Let us compare Cloud Console with Filestore before we decide.	Cloud Console|Filestore	Jetpack Compose|ADC
+azure	Next we should move Microsoft Entra ID behind Event Grid this sprint.	Microsoft Entra ID|Event Grid	Azure NetApp Files|Azure Elastic SAN
+azure	Can you check whether Azure Kubernetes Service still works with Microsoft Fabric?	Azure Kubernetes Service|Microsoft Fabric	Azure Container Storage|Azure Managed Lustre
+azure	I set up Azure CLI yesterday and then tried Azure Cognitive Services.	Azure CLI|Azure Cognitive Services	Azure Data Explorer|Azure HDInsight
+azure	The team asked about Azure Functions and Azure Bot Service in the review.	Azure Functions|Azure Bot Service	HDInsight|Azure Stream Analytics
+azure	Let us compare Azure Virtual Machines with Prompt Flow before we decide.	Azure Virtual Machines|Prompt Flow	Azure Analysis Services|Azure Data Share
+azure	Next we should move Azure Cosmos DB behind Private Link this sprint.	Azure Cosmos DB|Private Link	Azure Purview|Microsoft Purview
+azure	Can you check whether Azure SQL still works with Azure ExpressRoute?	Azure SQL|Azure ExpressRoute	Azure Web PubSub|Azure SignalR Service
+azure	I set up Key Vault yesterday and then tried Azure Route Server.	Key Vault|Azure Route Server	SignalR|Azure Notification Hubs
+azure	The team asked about Application Insights and Azure Local in the review.	Application Insights|Azure Local	Azure Relay|Azure Spring Apps
+azure	Let us compare KQL with Azure Migrate before we decide.	KQL|Azure Migrate	Azure Batch|Azure CycleCloud
+azure	Next we should move Azure Container Registry behind Azure Resource Graph this sprint.	Azure Container Registry|Azure Resource Graph	Azure Service Fabric|Service Fabric
+azure	Can you check whether Application Gateway still works with Azure Resource Health?	Application Gateway|Azure Resource Health	Azure Dedicated Host|Azure Image Builder
+azure	I set up Azure API Management yesterday and then tried Microsoft Dev Box.	Azure API Management|Microsoft Dev Box	Azure Virtual Desktop|Windows 365
+azure	The team asked about Event Hubs and Azure Cloud Shell in the review.	Event Hubs|Azure Cloud Shell	Azure Hybrid Benefit|func
+azure	Let us compare Service Bus with Azure Files before we decide.	Service Bus|Azure Files	Kudu|Azure Web Apps
+cloud	Next we should move Apache Kafka behind Procfile this sprint.	Apache Kafka|Procfile	Render Key Value|Snowflake Native Apps
+cloud	Can you check whether Databricks still works with v0?	Databricks|v0	Snowflake Openflow|SoYouStart
+cloud	I set up Heroku yesterday and then tried AI Gateway.	Heroku|AI Gateway	Speed Insights|Tableflow
+cloud	The team asked about R2 and Confluent Platform in the review.	R2|Confluent Platform	Turbonomic|Vercel Firewall
+cloud	Let us compare Akamai with Heroku CLI before we decide.	Akamai|Heroku CLI	Vercel Flags|Workers for Platforms
+cloud	Next we should move Apache Spark behind MongoDB Compass this sprint.	Apache Spark|MongoDB Compass	Vercel Flags|Workers for Platforms
+cloud	Can you check whether Cloudflare Pages still works with Snowpark?	Cloudflare Pages|Snowpark	Vercel Flags|Workers for Platforms
+cloud	I set up Confluent yesterday and then tried Vectorize.	Confluent|Vectorize	Vercel Flags|Workers for Platforms
+cloud	The team asked about D1 and Cloudflare Images in the review.	D1|Cloudflare Images	Vercel Flags|Workers for Platforms
+cloud	Let us compare flyctl with Fivetran before we decide.	flyctl|Fivetran	Vercel Flags|Workers for Platforms
+cloud	Next we should move Hetzner behind Instana this sprint.	Hetzner|Instana	Vercel Flags|Workers for Platforms
+cloud	Can you check whether Kafka Connect still works with pscale?	Kafka Connect|pscale	Vercel Flags|Workers for Platforms
+cloud	I set up Linode yesterday and then tried Vercel Sandbox.	Linode|Vercel Sandbox	Vercel Flags|Workers for Platforms
+cloud	The team asked about Netlify Functions and Cluster Linking in the review.	Netlify Functions|Cluster Linking	Vercel Flags|Workers for Platforms
+cloud	Let us compare OVH with Kora before we decide.	OVH|Kora	Vercel Flags|Workers for Platforms
+devops	Next we should move Ansible behind Cilium this sprint.	Ansible|Cilium	OrbStack|PersistentVolume
+devops	Can you check whether ConfigMap still works with Dapr?	ConfigMap|Dapr	PersistentVolumeClaim|PodDisruptionBudget
+devops	I set up Docker Compose yesterday and then tried Fluent Bit.	Docker Compose|Fluent Bit	Portainer|Pulumi Cloud
+devops	The team asked about etcd and Jenkins Pipeline in the review.	etcd|Jenkins Pipeline	Quay.io|Rego
+devops	Let us compare GitHub Actions workflow with Keycloak before we decide.	GitHub Actions workflow|Keycloak	RoleBinding|SaltStack
+devops	Next we should move GitLab CI/CD behind LaunchDarkly this sprint.	GitLab CI/CD|LaunchDarkly	Sealed Secrets|SELinux
+devops	Can you check whether HashiCorp still works with OpenShift?	HashiCorp|OpenShift	Semgrep|Sigstore
+devops	I set up Istio yesterday and then tried Snyk.	Istio|Snyk	SonarQube|Sonatype Nexus
+devops	The team asked about k8s and ACME in the review.	k8s|ACME	SOPS|Spinnaker
+devops	Let us compare OpenTofu with cgroups before we decide.	OpenTofu|cgroups	StorageClass|tailnet
+devops	Next we should move systemd behind Cosign this sprint.	systemd|Cosign	taints and tolerations|TeamCity
+devops	Can you check whether .gitlab-ci.yml still works with GitHub Packages?	.gitlab-ci.yml|GitHub Packages	Tekton|Terraform Registry
+devops	I set up Apache Airflow yesterday and then tried journald.	Apache Airflow|journald	Terragrunt|Travis CI
+devops	The team asked about Azure Pipelines and Kubeflow in the review.	Azure Pipelines|Kubeflow	trunk-based development|Turbopack
+devops	Let us compare Buildkite with nftables before we decide.	Buildkite|nftables	Velero|Anchore
+sysdesign	Next we should move CAP theorem behind Service mesh this sprint.	CAP theorem|Service mesh	Content delivery network|Edge computing
+sysdesign	Can you check whether Strong consistency still works with Cache invalidation?	Strong consistency|Cache invalidation	Anycast|Read-through
+sysdesign	I set up Paxos yesterday and then tried HyperLogLog.	Paxos|HyperLogLog	Time to live|LFU
+sysdesign	The team asked about Leader election and Two-phase commit in the review.	Leader election|Two-phase commit	Least recently used|Cache hit ratio
+sysdesign	Let us compare Shard with Batch processing before we decide.	Shard|Batch processing	Cache miss|Cold start
+sysdesign	Next we should move Leader-follower behind RPS this sprint.	Leader-follower|RPS	Skip list|Logical clock
+sysdesign	Can you check whether Failover still works with Availability zone?	Failover|Availability zone	Happens-before|TrueTime
+sysdesign	I set up Idempotent yesterday and then tried Rolling update.	Idempotent|Rolling update	Clock skew|2PC
+sysdesign	The team asked about Backpressure and Docker in the review.	Backpressure|Docker	Pessimistic locking|Optimistic locking
+sysdesign	Let us compare Rate limiter with Linearizable before we decide.	Rate limiter|Linearizable	Actor model|Publish-subscribe
+sysdesign	Next we should move Leaky bucket behind Repeatable read this sprint.	Leaky bucket|Repeatable read	Event streaming|MapReduce
+sysdesign	Can you check whether Exponential backoff still works with Range partitioning?	Exponential backoff|Range partitioning	Fan-out|Long polling
+sysdesign	I set up Dead letter queue yesterday and then tried Synchronous replication.	Dead letter queue|Synchronous replication	Apache Pulsar|Pulsar
+sysdesign	The team asked about CQRS and Cache stampede in the review.	CQRS|Cache stampede	Rate limit|p50
+sysdesign	Let us compare Microservices with Control plane before we decide.	Microservices|Control plane	TPS|IOPS
+db	Next we should move WAL behind TiDB this sprint.	WAL|TiDB	Data mart|PITR
+db	Can you check whether LSM tree still works with Protocol Buffers?	LSM tree|Protocol Buffers	Page cache|Autovacuum
+db	I set up Inverted index yesterday and then tried Secondary index.	Inverted index|Secondary index	Stored procedure|Surrogate key
+db	The team asked about ACID and N+1 in the review.	ACID|N+1	Composite key|TSDB
+db	Let us compare OLAP with Binlog before we decide.	OLAP|Binlog	IVF|Solr
+db	Next we should move Lakehouse behind Denormalization this sprint.	Lakehouse|Denormalization	Meilisearch|Typesense
+db	Can you check whether Data pipeline still works with Zero-downtime migration?	Data pipeline|Zero-downtime migration	Apache Druid|Apache Pinot
+db	I set up ELT yesterday and then tried HNSW.	ELT|HNSW	Apache Doris|StarRocks
+db	The team asked about Change data capture and MariaDB in the review.	Change data capture|MariaDB	KeyDB|Memcache
+db	Let us compare Primary key with Mongo before we decide.	Primary key|Mongo	Hazelcast|Aerospike
+db	Next we should move NoSQL behind HBase this sprint.	NoSQL|HBase	Apache ZooKeeper|JanusGraph
+db	Can you check whether Key-value store still works with Delta Lake?	Key-value store|Delta Lake	Apache HBase|Citus
+db	I set up Vector database yesterday and then tried Polars.	Vector database|Polars	QuestDB|Couchbase
+db	The team asked about MySQL and Multi-tenancy in the review.	MySQL|Multi-tenancy	CouchDB|RethinkDB
+db	Let us compare ScyllaDB with Partial index before we decide.	ScyllaDB|Partial index	ArangoDB|SurrealDB
+dsa	Next we should move tuple behind Rabin-Karp this sprint.	tuple|Rabin-Karp	bitonic sort|bogosort
+dsa	Can you check whether min-heap still works with 0/1 knapsack?	min-heap|0/1 knapsack	Gaussian elimination|Strassen's algorithm
+dsa	I set up BST yesterday and then tried Big O notation.	BST|Big O notation	Karatsuba algorithm|Miller-Rabin
+dsa	The team asked about red-black tree and NP in the review.	red-black tree|NP	Sprague-Grundy|HackerRank
+dsa	Let us compare trie with k-d tree before we decide.	trie|k-d tree	Codeforces|LCA
+dsa	Next we should move union-find behind Ford-Fulkerson this sprint.	union-find|Ford-Fulkerson	Word Ladder|Catalan number
+dsa	Can you check whether MST still works with N-Queens?	MST|N-Queens	Pascal's triangle|Josephus problem
+dsa	I set up BFS yesterday and then tried maximum subarray.	BFS|maximum subarray	linearithmic|pseudo-polynomial
+dsa	The team asked about DFS and FFT in the review.	DFS|FFT	NP-intermediate|co-NP
+dsa	Let us compare inorder traversal with Lowest Common Ancestor before we decide.	inorder traversal|Lowest Common Ancestor	PSPACE|EXPTIME
+dsa	Next we should move Dijkstra behind P versus NP this sprint.	Dijkstra|P versus NP	Cook-Levin theorem|3-SAT
+dsa	Can you check whether Floyd-Warshall still works with Fibonacci heap?	Floyd-Warshall|Fibonacci heap	boolean satisfiability|SAT solver
+dsa	I set up A* search yesterday and then tried cartesian tree.	A* search|cartesian tree	decidable|computable
+dsa	The team asked about Kruskal's algorithm and Dinic's algorithm in the review.	Kruskal's algorithm|Dinic's algorithm	universal Turing machine|Rice's theorem
+dsa	Let us compare KMP with run-length encoding before we decide.	KMP|run-length encoding	combinatorics|Cartesian product
+cs	Next we should move JIT behind OS this sprint.	JIT|OS	Backus-Naur form|EBNF
+cs	Can you check whether lexer still works with Unix?	lexer|Unix	SSA|CLR
+cs	I set up GCC yesterday and then tried UTF-8.	GCC|UTF-8	ELF|breakpoint
+cs	The team asked about JVM and regex in the review.	JVM|regex	GDB|stop-the-world
+cs	Let us compare GC with iterator before we decide.	GC|iterator	read-write lock|non-blocking
+cs	Next we should move malloc behind DRY this sprint.	malloc|DRY	ABA problem|preemption
+cs	Can you check whether semaphore still works with context-free grammar?	semaphore|context-free grammar	kqueue|io_uring
+cs	I set up CAS yesterday and then tried copy-on-write.	CAS|copy-on-write	libuv|STM
+cs	The team asked about coroutine and producer-consumer in the review.	coroutine|producer-consumer	RCU|fork-join
+cs	Let us compare async/await with IPC before we decide.	async/await|IPC	memory-mapped file|memory-mapped I/O
+cs	Next we should move callback behind bitwise this sprint.	callback|bitwise	NUMA|MESI
+cs	Can you check whether multithreading still works with float32?	multithreading|float32	L1 cache|out-of-order execution
+cs	I set up TLB yesterday and then tried first-class function.	TLB|first-class function	superscalar|AVX
+cs	The team asked about SIMD and MVVM in the review.	SIMD|MVVM	NEON|FPGA
+cs	Let us compare CPU with LL parser before we decide.	CPU|LL parser	ASIC|OpenCL
+ml	Next we should move ML behind LoRA this sprint.	ML|LoRA	nonlinearity|feedforward
+ml	Can you check whether backpropagation still works with ASR?	backpropagation|ASR	L1 regularization|L2 regularization
+ml	I set up cross-entropy yesterday and then tried few-shot learning.	cross-entropy|few-shot learning	RMSNorm|RMSprop
+ml	The team asked about sigmoid and tanh in the review.	sigmoid|tanh	Adagrad|Muon optimizer
+ml	Let us compare hyperparameter with underfitting before we decide.	hyperparameter|underfitting	L-BFGS|Newton's method
+ml	Next we should move regularization behind FlashAttention this sprint.	regularization|FlashAttention	Hessian|Jacobian
+ml	Can you check whether Adam still works with VAE?	Adam|VAE	grouped-query attention|GQA
+ml	I set up multi-head attention yesterday and then tried BPE.	multi-head attention|BPE	encoder-only|seq2seq
+ml	The team asked about LSTM and vLLM in the review.	LSTM|vLLM	Mamba|variational autoencoder
+ml	Let us compare GAN with 8-bit before we decide.	GAN|8-bit	DDPM|denoising
+ml	Next we should move GPT behind Model Context Protocol this sprint.	GPT|Model Context Protocol	U-Net|ControlNet
+ml	Can you check whether LLaMA still works with LightGBM?	LLaMA|LightGBM	T5|Mixtral
+ml	I set up embeddings yesterday and then tried VRAM.	embeddings|VRAM	GloVe|Euclidean distance
+ml	The team asked about tokenizer and on-device in the review.	tokenizer|on-device	Chroma|BM25
+ml	Let us compare fine-tuning with one-shot learning before we decide.	fine-tuning|one-shot learning	TF-IDF|logprobs

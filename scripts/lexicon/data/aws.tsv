@@ -1,0 +1,759 @@
+# canonical	domain	rank	english	source_url	confirmed_by (scripts/lexicon/build.py import)
+AWS	aws	1	0	https://aws.amazon.com/	index
+S3	aws	2	0	https://aws.amazon.com/s3/	index
+EC2	aws	3	0	https://aws.amazon.com/ec2/	index
+Lambda	aws	4	1	https://aws.amazon.com/lambda/	index
+IAM	aws	5	0	https://aws.amazon.com/iam/	index
+DynamoDB	aws	6	0	https://aws.amazon.com/dynamodb/	index
+CloudFormation	aws	7	0	https://aws.amazon.com/cloudformation/	index
+CloudWatch	aws	8	0	https://aws.amazon.com/cloudwatch/	index
+RDS	aws	9	0	https://aws.amazon.com/rds/	index
+VPC	aws	10	0	https://aws.amazon.com/vpc/	index
+EKS	aws	11	0	https://aws.amazon.com/eks/	index
+ECS	aws	12	0	https://aws.amazon.com/ecs/	index
+SQS	aws	13	0	https://aws.amazon.com/sqs/	index
+SNS	aws	14	0	https://aws.amazon.com/sns/	index
+Route 53	aws	15	0	https://aws.amazon.com/route53/	index
+CloudFront	aws	16	0	https://aws.amazon.com/cloudfront/	index
+API Gateway	aws	17	0	https://aws.amazon.com/api-gateway/	index
+Aurora	aws	18	1	https://aws.amazon.com/rds/aurora/	index
+Fargate	aws	19	0	https://aws.amazon.com/fargate/	index
+Bedrock	aws	20	1	https://aws.amazon.com/bedrock/	index
+SageMaker	aws	21	0	https://aws.amazon.com/sagemaker/	index
+KMS	aws	22	0	https://aws.amazon.com/kms/	index
+Secrets Manager	aws	23	1	https://aws.amazon.com/secrets-manager/	index
+Cognito	aws	24	0	https://aws.amazon.com/cognito/	index
+EventBridge	aws	25	0	https://aws.amazon.com/eventbridge/	index
+Step Functions	aws	26	1	https://aws.amazon.com/step-functions/	index
+Kinesis	aws	27	0	https://aws.amazon.com/kinesis/	index
+Redshift	aws	28	1	https://aws.amazon.com/redshift/	index
+Athena	aws	29	1	https://aws.amazon.com/athena/	index
+Glue	aws	30	1	https://aws.amazon.com/glue/	index
+CDK	aws	31	0	https://aws.amazon.com/cdk/	index
+AWS CLI	aws	32	0	https://aws.amazon.com/cli/	index
+Systems Manager	aws	33	1	https://aws.amazon.com/systems-manager/	index
+CloudTrail	aws	34	0	https://aws.amazon.com/cloudtrail/	index
+ELB	aws	35	0	https://aws.amazon.com/elasticloadbalancing/	index
+Application Load Balancer	aws	36	1	https://aws.amazon.com/elasticloadbalancing/application-load-balancer/	index
+Network Load Balancer	aws	37	1	https://aws.amazon.com/elasticloadbalancing/network-load-balancer/	page
+EBS	aws	38	0	https://aws.amazon.com/ebs/	index
+EFS	aws	39	0	https://aws.amazon.com/efs/	index
+ECR	aws	40	0	https://aws.amazon.com/ecr/	index
+ElastiCache	aws	41	0	https://aws.amazon.com/elasticache/	index
+Cost Explorer	aws	42	1	https://aws.amazon.com/aws-cost-management/aws-cost-explorer/	index
+Organizations	aws	43	1	https://aws.amazon.com/organizations/	index
+IAM Identity Center	aws	44	0	https://aws.amazon.com/iam/identity-center/	index
+OpenSearch	aws	45	0	https://aws.amazon.com/opensearch-service/	index
+Amazon Q Developer	aws	46	0	https://aws.amazon.com/q/developer/	index
+AWS Amplify	aws	47	1	https://aws.amazon.com/amplify/	index
+AppSync	aws	48	0	https://aws.amazon.com/appsync/	index
+SES	aws	49	0	https://aws.amazon.com/ses/	index
+GuardDuty	aws	50	0	https://aws.amazon.com/guardduty/	index
+WAF	aws	51	0	https://aws.amazon.com/waf/	index
+Transit Gateway	aws	52	1	https://aws.amazon.com/transit-gateway/	index
+NAT Gateway	aws	53	0	https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html	index
+Direct Connect	aws	54	1	https://aws.amazon.com/directconnect/	index
+Graviton	aws	55	0	https://aws.amazon.com/ec2/graviton/	page
+Nitro	aws	56	1	https://aws.amazon.com/ec2/nitro/	index
+Lightsail	aws	57	1	https://aws.amazon.com/lightsail/	index
+Elastic Beanstalk	aws	58	1	https://aws.amazon.com/elasticbeanstalk/	index
+Outposts	aws	59	1	https://aws.amazon.com/outposts/	index
+Snowball	aws	60	1	https://aws.amazon.com/snowball/	index
+Inferentia	aws	61	0	https://aws.amazon.com/machine-learning/inferentia/	index
+Trainium	aws	62	0	https://aws.amazon.com/machine-learning/trainium/	index
+Amazon Nova	aws	63	1	https://aws.amazon.com/nova/	index
+Amazon Titan	aws	64	1	https://aws.amazon.com/bedrock/titan/	index
+Bedrock AgentCore	aws	65	0	https://aws.amazon.com/bedrock/agentcore/	index
+Amazon Bedrock Agents	aws	66	0	https://aws.amazon.com/bedrock/agents/	index
+Amazon Bedrock Knowledge Bases	aws	67	0	https://aws.amazon.com/bedrock/knowledge-bases/	index
+Amazon Bedrock Guardrails	aws	68	0	https://aws.amazon.com/bedrock/guardrails/	index
+Strands Agents	aws	69	0	https://strandsagents.com/	page
+Kiro	aws	70	0	https://kiro.dev/	index
+Amazon QuickSight	aws	72	0	https://aws.amazon.com/quicksight/	index
+AWS Transform	aws	73	1	https://aws.amazon.com/transform/	index
+Amazon S3 Vectors	aws	74	0	https://aws.amazon.com/s3/features/vectors/	index
+Amazon Aurora DSQL	aws	75	0	https://aws.amazon.com/rds/aurora/dsql/	index
+Aurora Serverless	aws	76	0	https://aws.amazon.com/rds/aurora/serverless/	index
+Amazon RDS Proxy	aws	77	0	https://aws.amazon.com/rds/proxy/	page
+Amazon MemoryDB	aws	78	0	https://aws.amazon.com/memorydb/	index
+Amazon DocumentDB	aws	79	0	https://aws.amazon.com/documentdb/	index
+Amazon Neptune	aws	80	1	https://aws.amazon.com/neptune/	index
+Amazon Keyspaces	aws	81	0	https://aws.amazon.com/keyspaces/	index
+Amazon Timestream	aws	82	1	https://aws.amazon.com/timestream/	index
+Amazon EMR	aws	83	0	https://aws.amazon.com/emr/	index
+Amazon MSK	aws	84	0	https://aws.amazon.com/msk/	index
+Amazon Data Firehose	aws	85	1	https://aws.amazon.com/firehose/	index
+Kinesis Data Streams	aws	86	0	https://aws.amazon.com/kinesis/data-streams/	index
+Amazon Managed Service for Apache Flink	aws	87	0	https://aws.amazon.com/managed-service-apache-flink/	index
+Lake Formation	aws	88	1	https://aws.amazon.com/lake-formation/	index
+Amazon DataZone	aws	89	0	https://aws.amazon.com/datazone/	index
+SageMaker Unified Studio	aws	90	0	https://aws.amazon.com/sagemaker/unified-studio/	index
+SageMaker AI	aws	91	0	https://aws.amazon.com/sagemaker/	index
+SageMaker JumpStart	aws	92	0	https://aws.amazon.com/sagemaker/jumpstart/	page
+SageMaker Studio	aws	93	0	https://aws.amazon.com/sagemaker/studio/	index
+SageMaker HyperPod	aws	94	0	https://aws.amazon.com/sagemaker/hyperpod/	index
+SageMaker Canvas	aws	95	0	https://aws.amazon.com/sagemaker/canvas/	index
+SageMaker Ground Truth	aws	96	0	https://aws.amazon.com/sagemaker/groundtruth/	index
+SageMaker Pipelines	aws	97	0	https://aws.amazon.com/sagemaker/pipelines/	page
+SageMaker Feature Store	aws	98	0	https://aws.amazon.com/sagemaker/feature-store/	page
+SageMaker Model Monitor	aws	99	0	https://aws.amazon.com/sagemaker/model-monitor/	page
+SageMaker Clarify	aws	100	0	https://aws.amazon.com/sagemaker/clarify/	index
+SageMaker Autopilot	aws	101	0	https://aws.amazon.com/sagemaker/autopilot/	page
+SageMaker Data Wrangler	aws	102	0	https://aws.amazon.com/sagemaker/data-wrangler/	page
+SageMaker Lakehouse	aws	103	0	https://aws.amazon.com/sagemaker/lakehouse/	page
+Rekognition	aws	104	0	https://aws.amazon.com/rekognition/	index
+Textract	aws	105	0	https://aws.amazon.com/textract/	index
+Comprehend	aws	106	1	https://aws.amazon.com/comprehend/	index
+Transcribe	aws	107	1	https://aws.amazon.com/transcribe/	index
+Polly	aws	108	1	https://aws.amazon.com/polly/	index
+Translate	aws	109	1	https://aws.amazon.com/translate/	index
+Lex	aws	110	1	https://aws.amazon.com/lex/	index
+Kendra	aws	111	1	https://aws.amazon.com/kendra/	index
+Personalize	aws	112	1	https://aws.amazon.com/personalize/	index
+Amazon Connect	aws	113	1	https://aws.amazon.com/connect/	index
+region	aws	114	1	https://docs.aws.amazon.com/	index
+availability zone	aws	115	1	https://docs.aws.amazon.com/	index
+edge location	aws	116	1	https://docs.aws.amazon.com/	index
+us-east-1	aws	119	0	https://docs.aws.amazon.com/	index
+us-west-2	aws	120	0	https://docs.aws.amazon.com/	index
+eu-west-1	aws	121	0	https://docs.aws.amazon.com/	index
+eu-central-1	aws	122	0	https://docs.aws.amazon.com/	index
+ap-southeast-1	aws	123	0	https://docs.aws.amazon.com/	index
+ap-south-1	aws	124	0	https://docs.aws.amazon.com/	index
+security group	aws	125	1	https://docs.aws.amazon.com/	index
+network ACL	aws	126	0	https://docs.aws.amazon.com/	index
+IAM role	aws	127	1	https://docs.aws.amazon.com/	index
+IAM policy	aws	128	1	https://docs.aws.amazon.com/	index
+IAM user	aws	129	1	https://docs.aws.amazon.com/	index
+IAM group	aws	130	1	https://docs.aws.amazon.com/	index
+instance profile	aws	131	1	https://docs.aws.amazon.com/	index
+trust policy	aws	132	1	https://docs.aws.amazon.com/	index
+STS	aws	134	0	https://docs.aws.amazon.com/	index
+access key	aws	135	1	https://docs.aws.amazon.com/	index
+secret access key	aws	136	1	https://docs.aws.amazon.com/	index
+service control policy	aws	137	0	https://docs.aws.amazon.com/	index
+MFA	aws	140	0	https://docs.aws.amazon.com/	index
+root user	aws	141	1	https://docs.aws.amazon.com/	wikipedia-title
+IAM Access Analyzer	aws	142	0	https://docs.aws.amazon.com/	index
+spot instance	aws	143	1	https://aws.amazon.com/ec2/spot/	index
+on-demand instance	aws	144	1	https://docs.aws.amazon.com/	index
+reserved instance	aws	145	1	https://docs.aws.amazon.com/	index
+Savings Plans	aws	146	1	https://aws.amazon.com/savingsplans/	index
+Dedicated Host	aws	147	1	https://docs.aws.amazon.com/	index
+AMI	aws	149	0	https://docs.aws.amazon.com/	index
+Amazon Web Services	aws	150	0	https://aws.amazon.com/	index
+Amazon Linux	aws	151	0	https://docs.aws.amazon.com/	index
+user data	aws	152	1	https://docs.aws.amazon.com/	index
+Amazon S3	aws	153	0	https://aws.amazon.com/s3/	index
+Amazon Simple Storage Service	aws	154	0	https://aws.amazon.com/s3/	index
+key pair	aws	155	1	https://docs.aws.amazon.com/	index
+Amazon EC2	aws	156	0	https://aws.amazon.com/ec2/	index
+Amazon Elastic Compute Cloud	aws	157	0	https://aws.amazon.com/ec2/	index
+placement group	aws	158	1	https://docs.aws.amazon.com/	index
+AWS Lambda	aws	159	1	https://aws.amazon.com/lambda/	index
+Auto Scaling group	aws	160	1	https://docs.aws.amazon.com/	index
+AWS Identity and Access Management	aws	161	0	https://aws.amazon.com/iam/	index
+Amazon DynamoDB	aws	163	0	https://aws.amazon.com/dynamodb/	index
+target group	aws	164	1	https://docs.aws.amazon.com/	wikipedia-title
+AWS CloudFormation	aws	165	0	https://aws.amazon.com/cloudformation/	index
+Amazon CloudWatch	aws	167	0	https://aws.amazon.com/cloudwatch/	index
+instance store	aws	168	1	https://docs.aws.amazon.com/	index
+Amazon RDS	aws	169	0	https://aws.amazon.com/rds/	index
+Amazon Relational Database Service	aws	170	0	https://aws.amazon.com/rds/	index
+EBS volume	aws	171	1	https://docs.aws.amazon.com/	index
+Amazon VPC	aws	172	0	https://aws.amazon.com/vpc/	index
+Amazon Virtual Private Cloud	aws	173	0	https://aws.amazon.com/vpc/	index
+EBS snapshot	aws	174	1	https://docs.aws.amazon.com/	index
+Amazon EKS	aws	175	0	https://aws.amazon.com/eks/	index
+Amazon Elastic Kubernetes Service	aws	176	0	https://aws.amazon.com/eks/	index
+Amazon ECS	aws	178	0	https://aws.amazon.com/ecs/	index
+Amazon Elastic Container Service	aws	179	0	https://aws.amazon.com/ecs/	index
+Amazon SQS	aws	181	0	https://aws.amazon.com/sqs/	index
+Amazon Simple Queue Service	aws	182	0	https://aws.amazon.com/sqs/	index
+Amazon SNS	aws	184	0	https://aws.amazon.com/sns/	index
+Amazon Simple Notification Service	aws	185	0	https://aws.amazon.com/sns/	index
+Elastic IP	aws	186	1	https://docs.aws.amazon.com/	index
+Amazon Route 53	aws	187	0	https://aws.amazon.com/route53/	index
+Amazon CloudFront	aws	189	0	https://aws.amazon.com/cloudfront/	index
+route table	aws	190	1	https://docs.aws.amazon.com/	index
+Amazon API Gateway	aws	191	0	https://aws.amazon.com/api-gateway/	index
+CIDR block	aws	192	1	https://docs.aws.amazon.com/	index
+Amazon Aurora	aws	193	1	https://aws.amazon.com/rds/aurora/	index
+public subnet	aws	194	1	https://docs.aws.amazon.com/	index
+AWS Fargate	aws	195	0	https://aws.amazon.com/fargate/	index
+private subnet	aws	196	1	https://docs.aws.amazon.com/	index
+Amazon Bedrock	aws	197	1	https://aws.amazon.com/bedrock/	index
+VPC peering	aws	198	1	https://docs.aws.amazon.com/	index
+Amazon SageMaker	aws	199	0	https://aws.amazon.com/sagemaker/	index
+VPC endpoint	aws	200	1	https://docs.aws.amazon.com/	index
+AWS Key Management Service	aws	201	0	https://aws.amazon.com/kms/	index
+AWS Secrets Manager	aws	203	1	https://aws.amazon.com/secrets-manager/	index
+VPC Lattice	aws	204	1	https://aws.amazon.com/vpc/lattice/	index
+Amazon Cognito	aws	205	0	https://aws.amazon.com/cognito/	index
+PrivateLink	aws	206	1	https://aws.amazon.com/privatelink/	index
+Amazon EventBridge	aws	207	0	https://aws.amazon.com/eventbridge/	index
+Site-to-Site VPN	aws	208	1	https://aws.amazon.com/vpn/	index
+AWS Step Functions	aws	209	1	https://aws.amazon.com/step-functions/	index
+AWS Cloud WAN	aws	210	1	https://aws.amazon.com/cloud-wan/	index
+Amazon Kinesis	aws	211	0	https://aws.amazon.com/kinesis/	index
+Global Accelerator	aws	212	1	https://aws.amazon.com/global-accelerator/	index
+Amazon Redshift	aws	213	1	https://aws.amazon.com/redshift/	index
+S3 bucket	aws	214	1	https://docs.aws.amazon.com/	index
+Amazon Athena	aws	215	1	https://aws.amazon.com/athena/	index
+S3 object	aws	216	1	https://docs.aws.amazon.com/	index
+AWS Glue	aws	217	1	https://aws.amazon.com/glue/	index
+AWS CDK	aws	219	0	https://aws.amazon.com/cdk/	index
+AWS Cloud Development Kit	aws	220	0	https://aws.amazon.com/cdk/	index
+presigned URL	aws	221	1	https://docs.aws.amazon.com/	index
+AWS Command Line Interface	aws	222	0	https://aws.amazon.com/cli/	index
+AWS Systems Manager	aws	224	1	https://aws.amazon.com/systems-manager/	index
+AWS CloudTrail	aws	226	0	https://aws.amazon.com/cloudtrail/	index
+Elastic Load Balancing	aws	228	0	https://aws.amazon.com/elasticloadbalancing/	index
+ALB	aws	230	1	https://aws.amazon.com/elasticloadbalancing/application-load-balancer/	page
+Amazon EBS	aws	234	0	https://aws.amazon.com/ebs/	index
+Amazon Elastic Block Store	aws	235	0	https://aws.amazon.com/ebs/	index
+S3 Glacier	aws	236	1	https://aws.amazon.com/s3/storage-classes/glacier/	index
+Amazon EFS	aws	237	0	https://aws.amazon.com/efs/	index
+Amazon Elastic File System	aws	238	0	https://aws.amazon.com/efs/	index
+S3 Express One Zone	aws	239	1	https://aws.amazon.com/s3/storage-classes/express-one-zone/	index
+Amazon ECR	aws	240	0	https://aws.amazon.com/ecr/	index
+Amazon Elastic Container Registry	aws	241	0	https://aws.amazon.com/ecr/	index
+storage class	aws	242	1	https://docs.aws.amazon.com/	wikipedia-title
+Amazon ElastiCache	aws	243	0	https://aws.amazon.com/elasticache/	index
+multipart upload	aws	244	1	https://docs.aws.amazon.com/	index
+AWS Cost Explorer	aws	245	1	https://aws.amazon.com/aws-cost-management/aws-cost-explorer/	index
+AWS Organizations	aws	247	1	https://aws.amazon.com/organizations/	index
+AWS IAM Identity Center	aws	249	0	https://aws.amazon.com/iam/identity-center/	index
+Amazon OpenSearch Service	aws	251	0	https://aws.amazon.com/opensearch-service/	index
+Q Developer	aws	253	0	https://aws.amazon.com/q/developer/	index
+Amplify	aws	255	1	https://aws.amazon.com/amplify/	index
+AWS AppSync	aws	257	0	https://aws.amazon.com/appsync/	index
+Amazon SES	aws	259	0	https://aws.amazon.com/ses/	index
+Amazon Simple Email Service	aws	260	0	https://aws.amazon.com/ses/	index
+Amazon GuardDuty	aws	262	0	https://aws.amazon.com/guardduty/	index
+AWS WAF	aws	264	0	https://aws.amazon.com/waf/	index
+AWS Transit Gateway	aws	266	1	https://aws.amazon.com/transit-gateway/	index
+AWS Direct Connect	aws	269	1	https://aws.amazon.com/directconnect/	index
+AWS Graviton	aws	271	0	https://aws.amazon.com/ec2/graviton/	page
+AWS Nitro System	aws	273	1	https://aws.amazon.com/ec2/nitro/	index
+Lambda SnapStart	aws	274	1	https://aws.amazon.com/blogs/aws/new-accelerate-your-lambda-functions-with-lambda-snapstart/	index
+Amazon Lightsail	aws	275	1	https://aws.amazon.com/lightsail/	index
+AWS Elastic Beanstalk	aws	277	1	https://aws.amazon.com/elasticbeanstalk/	index
+AWS Outposts	aws	279	1	https://aws.amazon.com/outposts/	index
+AWS Snowball	aws	281	1	https://aws.amazon.com/snowball/	index
+AWS Snow Family	aws	282	1	https://aws.amazon.com/snowball/	index
+visibility timeout	aws	283	1	https://docs.aws.amazon.com/	index
+AWS Inferentia	aws	284	0	https://aws.amazon.com/machine-learning/inferentia/	index
+AWS Trainium	aws	286	0	https://aws.amazon.com/machine-learning/trainium/	page
+Nova	aws	288	1	https://aws.amazon.com/nova/	index
+long polling	aws	289	1	https://docs.aws.amazon.com/	wikipedia-title
+Titan	aws	290	1	https://aws.amazon.com/bedrock/titan/	index
+SNS topic	aws	291	1	https://docs.aws.amazon.com/	index
+Amazon Bedrock AgentCore	aws	292	0	https://aws.amazon.com/bedrock/agentcore/	index
+AgentCore	aws	293	0	https://aws.amazon.com/bedrock/agentcore/	index
+EventBridge Scheduler	aws	294	1	https://docs.aws.amazon.com/	index
+Bedrock Agents	aws	295	0	https://aws.amazon.com/bedrock/agents/	index
+EventBridge Pipes	aws	296	1	https://docs.aws.amazon.com/	index
+partition key	aws	302	1	https://docs.aws.amazon.com/	index
+sort key	aws	304	1	https://docs.aws.amazon.com/	index
+QuickSight	aws	305	0	https://aws.amazon.com/quicksight/	index
+global secondary index	aws	306	0	https://docs.aws.amazon.com/	index
+Transform	aws	307	1	https://aws.amazon.com/transform/	index
+local secondary index	aws	308	0	https://docs.aws.amazon.com/	index
+S3 Vectors	aws	309	0	https://aws.amazon.com/s3/features/vectors/	index
+DynamoDB Streams	aws	310	1	https://docs.aws.amazon.com/	index
+Aurora DSQL	aws	311	0	https://aws.amazon.com/rds/aurora/dsql/	index
+DSQL	aws	312	0	https://aws.amazon.com/rds/aurora/dsql/	index
+DAX	aws	313	0	https://docs.aws.amazon.com/	index
+RDS Proxy	aws	315	0	https://aws.amazon.com/rds/proxy/	page
+on-demand capacity	aws	316	1	https://docs.aws.amazon.com/	index
+MemoryDB	aws	317	0	https://aws.amazon.com/memorydb/	index
+provisioned capacity	aws	318	1	https://docs.aws.amazon.com/	wikipedia-title
+DocumentDB	aws	319	0	https://aws.amazon.com/documentdb/	index
+Neptune	aws	321	1	https://aws.amazon.com/neptune/	index
+Keyspaces	aws	323	0	https://aws.amazon.com/keyspaces/	index
+Timestream	aws	325	1	https://aws.amazon.com/timestream/	index
+Multi-AZ	aws	326	0	https://docs.aws.amazon.com/	index
+EMR	aws	327	0	https://aws.amazon.com/emr/	index
+read replica	aws	328	1	https://docs.aws.amazon.com/	index
+Amazon Managed Streaming for Apache Kafka	aws	329	0	https://aws.amazon.com/msk/	index
+MSK	aws	330	0	https://aws.amazon.com/msk/	index
+parameter group	aws	331	1	https://docs.aws.amazon.com/	index
+Firehose	aws	333	1	https://aws.amazon.com/firehose/	index
+Amazon Kinesis Data Streams	aws	335	0	https://aws.amazon.com/kinesis/data-streams/	index
+Parameter Store	aws	336	1	https://docs.aws.amazon.com/	index
+Managed Service for Apache Flink	aws	337	0	https://aws.amazon.com/managed-service-apache-flink/	index
+AWS Lake Formation	aws	339	1	https://aws.amazon.com/lake-formation/	index
+Session Manager	aws	340	1	https://docs.aws.amazon.com/	index
+DataZone	aws	341	0	https://aws.amazon.com/datazone/	index
+ARN	aws	342	0	https://docs.aws.amazon.com/	index
+account ID	aws	343	1	https://docs.aws.amazon.com/	index
+Amazon SageMaker AI	aws	344	0	https://aws.amazon.com/sagemaker/	index
+tag	aws	345	1	https://docs.aws.amazon.com/	index
+CloudWatch Logs	aws	346	1	https://docs.aws.amazon.com/	index
+CloudWatch alarm	aws	350	1	https://docs.aws.amazon.com/	index
+CloudWatch Application Signals	aws	354	1	https://docs.aws.amazon.com/	index
+AWS Well-Architected Framework	aws	356	1	https://aws.amazon.com/architecture/well-architected/	page
+shared responsibility model	aws	357	1	https://docs.aws.amazon.com/	wikipedia-title
+Amazon Rekognition	aws	358	0	https://aws.amazon.com/rekognition/	index
+AWS Free Tier	aws	359	1	https://aws.amazon.com/free/	index
+Amazon Textract	aws	360	0	https://aws.amazon.com/textract/	index
+consolidated billing	aws	361	1	https://docs.aws.amazon.com/	index
+Amazon Comprehend	aws	362	1	https://aws.amazon.com/comprehend/	index
+organizational unit	aws	363	0	https://docs.aws.amazon.com/	index
+Amazon Transcribe	aws	364	1	https://aws.amazon.com/transcribe/	index
+management account	aws	365	1	https://docs.aws.amazon.com/	index
+Amazon Polly	aws	366	1	https://aws.amazon.com/polly/	index
+landing zone	aws	367	1	https://docs.aws.amazon.com/	index
+Amazon Translate	aws	368	1	https://aws.amazon.com/translate/	index
+infrastructure as code	aws	369	1	https://docs.aws.amazon.com/	index
+Amazon Lex	aws	370	1	https://aws.amazon.com/lex/	index
+CloudFormation stack	aws	371	1	https://docs.aws.amazon.com/	index
+Amazon Kendra	aws	372	1	https://aws.amazon.com/kendra/	index
+CloudFormation template	aws	373	1	https://docs.aws.amazon.com/	index
+Amazon Personalize	aws	374	1	https://aws.amazon.com/personalize/	index
+Connect	aws	376	1	https://aws.amazon.com/connect/	index
+drift detection	aws	377	1	https://docs.aws.amazon.com/	wikipedia-title
+AWS Region	aws	379	1	https://docs.aws.amazon.com/	index
+Availability Zone	aws	382	1	https://docs.aws.amazon.com/	index
+AWS Local Zones	aws	385	1	https://docs.aws.amazon.com/	index
+AWS Wavelength	aws	387	1	https://docs.aws.amazon.com/	index
+aws-cdk	aws	391	0	https://docs.aws.amazon.com/	page
+SAM	aws	393	0	https://aws.amazon.com/serverless/sam/	index
+NACL	aws	396	0	https://docs.aws.amazon.com/	wikipedia-title
+boto3	aws	397	0	https://docs.aws.amazon.com/	index
+Boto3	aws	399	0	https://docs.aws.amazon.com/	index
+AWS SDK for JavaScript	aws	400	0	https://docs.aws.amazon.com/	index
+AWS SDK for Go	aws	401	0	https://docs.aws.amazon.com/	index
+AWS SDK	aws	402	0	https://docs.aws.amazon.com/	index
+AWS STS	aws	406	0	https://docs.aws.amazon.com/	index
+AWS Security Token Service	aws	407	0	https://docs.aws.amazon.com/	index
+SCP	aws	411	0	https://docs.aws.amazon.com/	index
+root account	aws	416	1	https://docs.aws.amazon.com/	wikipedia-title
+Spot Instances	aws	419	1	https://aws.amazon.com/ec2/spot/	index
+EC2 Spot	aws	420	1	https://aws.amazon.com/ec2/spot/	index
+IRSA	aws	421	0	https://docs.aws.amazon.com/	wikipedia-title
+Reserved Instances	aws	423	1	https://docs.aws.amazon.com/	index
+Savings Plan	aws	425	1	https://aws.amazon.com/savingsplans/	index
+EKS Auto Mode	aws	428	1	https://aws.amazon.com/eks/auto-mode/	index
+Amazon Machine Image	aws	429	0	https://docs.aws.amazon.com/	index
+EKS Anywhere	aws	430	1	https://aws.amazon.com/eks/eks-anywhere/	index
+task definition	aws	433	1	https://docs.aws.amazon.com/	index
+foundation model	aws	441	1	https://docs.aws.amazon.com/	wikipedia-title
+IGW	aws	452	1	https://docs.aws.amazon.com/	wikipedia-title
+retrieval augmented generation	aws	453	0	https://docs.aws.amazon.com/	wikipedia-title
+Graviton2	aws	454	0	https://docs.aws.amazon.com/	wikipedia-title
+c5	aws	462	0	https://docs.aws.amazon.com/	index
+Amazon VPC Lattice	aws	463	1	https://aws.amazon.com/vpc/lattice/	index
+AWS PrivateLink	aws	465	1	https://aws.amazon.com/privatelink/	index
+AWS VPN	aws	467	1	https://aws.amazon.com/vpn/	index
+Client VPN	aws	468	1	https://aws.amazon.com/vpn/	index
+Inf2	aws	469	0	https://docs.aws.amazon.com/	index
+EC2 Instance Connect	aws	470	1	https://docs.aws.amazon.com/	index
+AWS Global Accelerator	aws	471	1	https://aws.amazon.com/global-accelerator/	index
+EC2 Image Builder	aws	472	1	https://aws.amazon.com/image-builder/	index
+Nitro Enclaves	aws	474	1	https://docs.aws.amazon.com/	index
+object key	aws	475	1	https://docs.aws.amazon.com/	index
+Elastic Network Adapter	aws	478	0	https://docs.aws.amazon.com/	wikipedia-title
+Traffic Mirroring	aws	482	1	https://docs.aws.amazon.com/	index
+virtual private gateway	aws	484	1	https://docs.aws.amazon.com/	index
+hosted zone	aws	486	1	https://docs.aws.amazon.com/	index
+Glacier Deep Archive	aws	487	1	https://aws.amazon.com/s3/storage-classes/glacier/	page
+Glacier Flexible Retrieval	aws	488	1	https://aws.amazon.com/s3/storage-classes/glacier/	page
+Route 53 Resolver	aws	490	1	https://docs.aws.amazon.com/	index
+health check	aws	491	1	https://docs.aws.amazon.com/	index
+CloudFront distribution	aws	492	1	https://docs.aws.amazon.com/	index
+cache invalidation	aws	495	1	https://docs.aws.amazon.com/	wikipedia-title
+ACM	aws	500	0	https://aws.amazon.com/certificate-manager/	index
+envelope encryption	aws	502	1	https://docs.aws.amazon.com/	index
+data key	aws	505	1	https://docs.aws.amazon.com/	index
+server-side encryption	aws	506	1	https://docs.aws.amazon.com/	index
+Shield Advanced	aws	507	1	https://aws.amazon.com/shield/	index
+AWS Firewall Manager	aws	508	1	https://aws.amazon.com/firewall-manager/	index
+AWS Network Firewall	aws	509	1	https://aws.amazon.com/network-firewall/	index
+Security Hub	aws	510	1	https://aws.amazon.com/security-hub/	index
+SnapStart	aws	511	1	https://aws.amazon.com/blogs/aws/new-accelerate-your-lambda-functions-with-lambda-snapstart/	index
+Amazon Inspector	aws	512	1	https://aws.amazon.com/inspector/	index
+Amazon Macie	aws	513	1	https://aws.amazon.com/macie/	index
+Amazon Detective	aws	514	1	https://aws.amazon.com/detective/	index
+DLQ	aws	515	1	https://docs.aws.amazon.com/	wikipedia-title
+Amazon Security Lake	aws	516	1	https://aws.amazon.com/security-lake/	index
+AWS Batch	aws	517	1	https://aws.amazon.com/batch/	index
+AWS App Runner	aws	518	1	https://aws.amazon.com/apprunner/	index
+AWS Elastic Beanstalk environment	aws	519	1	https://aws.amazon.com/products/	index
+AWS Serverless Application Repository	aws	520	1	https://aws.amazon.com/serverless/serverlessrepo/	index
+AWS Compute Optimizer	aws	521	1	https://aws.amazon.com/compute-optimizer/	index
+AWS Auto Scaling	aws	522	1	https://aws.amazon.com/autoscaling/	index
+state machine	aws	523	1	https://docs.aws.amazon.com/	wikipedia-title
+Amazon EC2 Auto Scaling	aws	524	1	https://aws.amazon.com/ec2/autoscaling/	index
+ASL	aws	525	0	https://docs.aws.amazon.com/	wikipedia-title
+AWS ParallelCluster	aws	526	0	https://aws.amazon.com/hpc/parallelcluster/	index
+AWS Parallel Computing Service	aws	527	0	https://aws.amazon.com/pcs/	index
+AWS Elastic VMware Service	aws	528	1	https://aws.amazon.com/products/	index
+VMware Cloud on AWS	aws	530	1	https://aws.amazon.com/vmware/	index
+Red Hat OpenShift Service on AWS	aws	532	0	https://aws.amazon.com/rosa/	index
+AWS App2Container	aws	533	0	https://aws.amazon.com/app2container/	index
+DynamoDB Accelerator	aws	534	0	https://docs.aws.amazon.com/	index
+AWS Outposts rack	aws	535	1	https://aws.amazon.com/outposts/	page
+AWS Snowcone	aws	536	1	https://aws.amazon.com/snowcone/	index
+AWS Snowmobile	aws	538	1	https://aws.amazon.com/snowmobile/	index
+AWS Lambda SnapStart	aws	539	1	https://aws.amazon.com/products/	index
+Amazon S3 Glacier	aws	540	1	https://aws.amazon.com/glacier/	index
+Amazon S3 Tables	aws	541	1	https://aws.amazon.com/s3/features/tables/	index
+Amazon S3 Metadata	aws	542	1	https://aws.amazon.com/s3/features/metadata/	index
+Amazon FSx	aws	544	0	https://aws.amazon.com/fsx/	index
+Amazon FSx for Lustre	aws	546	0	https://aws.amazon.com/fsx/lustre/	index
+Amazon FSx for NetApp ONTAP	aws	547	0	https://aws.amazon.com/fsx/netapp-ontap/	index
+Amazon Resource Name	aws	548	0	https://docs.aws.amazon.com/	index
+Amazon FSx for OpenZFS	aws	549	0	https://aws.amazon.com/fsx/openzfs/	index
+Amazon FSx for Windows File Server	aws	551	0	https://aws.amazon.com/fsx/windows/	index
+Amazon File Cache	aws	553	1	https://aws.amazon.com/filecache/	page
+AWS Storage Gateway	aws	554	1	https://aws.amazon.com/storagegateway/	index
+AWS Backup	aws	555	1	https://aws.amazon.com/backup/	index
+AWS DataSync	aws	556	0	https://aws.amazon.com/datasync/	index
+AWS Transfer Family	aws	557	1	https://aws.amazon.com/aws-transfer-family/	index
+AWS Elastic Disaster Recovery	aws	558	0	https://aws.amazon.com/disaster-recovery/	index
+AWS Application Migration Service	aws	559	0	https://aws.amazon.com/application-migration-service/	index
+AWS Database Migration Service	aws	560	0	https://aws.amazon.com/dms/	index
+AWS Schema Conversion Tool	aws	561	0	https://aws.amazon.com/dms/	index
+AWS Migration Hub	aws	562	1	https://aws.amazon.com/migration-hub/	index
+AWS Application Discovery Service	aws	563	1	https://aws.amazon.com/application-discovery/	index
+Well-Architected	aws	564	1	https://aws.amazon.com/architecture/well-architected/	index
+Migration Evaluator	aws	565	1	https://aws.amazon.com/migration-evaluator/	index
+AWS Mainframe Modernization	aws	566	1	https://aws.amazon.com/mainframe-modernization/	index
+AWS Data Transfer Terminal	aws	567	1	https://aws.amazon.com/data-transfer-terminal/	index
+OU	aws	568	0	https://docs.aws.amazon.com/	index
+Amazon Redshift Serverless	aws	569	1	https://aws.amazon.com/redshift/redshift-serverless/	index
+Amazon Aurora PostgreSQL	aws	571	1	https://aws.amazon.com/products/	index
+IaC	aws	572	1	https://docs.aws.amazon.com/	wikipedia-title
+Amazon RDS for SQL Server	aws	574	1	https://aws.amazon.com/rds/	index
+Amazon RDS Custom	aws	575	1	https://aws.amazon.com/rds/custom/	index
+Amazon RDS on Outposts	aws	576	1	https://aws.amazon.com/rds/outposts/	page
+Amazon ElastiCache for Redis	aws	577	0	https://aws.amazon.com/elasticache/	page
+Amazon Neptune Analytics	aws	578	1	https://aws.amazon.com/neptune/	index
+Amazon QLDB	aws	579	0	https://aws.amazon.com/qldb/	index
+Amazon Managed Blockchain	aws	580	1	https://aws.amazon.com/managed-blockchain/	index
+Amazon CloudSearch	aws	581	1	https://aws.amazon.com/cloudsearch/	index
+Amazon OpenSearch Serverless	aws	582	1	https://aws.amazon.com/opensearch-service/features/serverless/	index
+AWS Glue DataBrew	aws	586	1	https://aws.amazon.com/glue/features/databrew/	index
+AWS SAM	aws	588	0	https://aws.amazon.com/serverless/sam/	index
+AWS Serverless Application Model	aws	589	0	https://aws.amazon.com/serverless/sam/	index
+AWS Glue Data Quality	aws	590	1	https://aws.amazon.com/glue/features/data-quality/	index
+AWS Copilot	aws	592	1	https://aws.amazon.com/containers/copilot/	index
+Amazon EMR Serverless	aws	593	1	https://aws.amazon.com/emr/serverless/	index
+Amazon EMR on EKS	aws	594	0	https://aws.amazon.com/emr/features/eks/	index
+Amazon Managed Workflows for Apache Airflow	aws	595	0	https://aws.amazon.com/managed-workflows-for-apache-airflow/	index
+AWS SDK for Python	aws	596	0	https://docs.aws.amazon.com/	index
+Boto	aws	597	0	https://docs.aws.amazon.com/	wikipedia-title
+Amazon AppFlow	aws	598	1	https://aws.amazon.com/appflow/	index
+aws-sdk	aws	599	0	https://docs.aws.amazon.com/	page
+AWS Data Pipeline	aws	600	1	https://aws.amazon.com/datapipeline/	index
+AWS SDK for Java	aws	601	0	https://docs.aws.amazon.com/	index
+AWS SDK for .NET	aws	602	0	https://docs.aws.amazon.com/	index
+AWS SDK for Rust	aws	603	0	https://docs.aws.amazon.com/	index
+AWS Data Exchange	aws	604	1	https://aws.amazon.com/data-exchange/	index
+AWS Clean Rooms	aws	605	1	https://aws.amazon.com/clean-rooms/	index
+AWS Entity Resolution	aws	606	1	https://aws.amazon.com/entity-resolution/	index
+Amazon FinSpace	aws	607	0	https://aws.amazon.com/finspace/	index
+Amazon Managed Grafana	aws	608	1	https://aws.amazon.com/grafana/	index
+Amazon Managed Service for Prometheus	aws	610	0	https://aws.amazon.com/prometheus/	index
+AWS Distro for OpenTelemetry	aws	611	0	https://aws.amazon.com/otel/	index
+AWS X-Ray	aws	612	1	https://aws.amazon.com/xray/	index
+Amazon MQ	aws	615	0	https://aws.amazon.com/amazon-mq/	index
+AWS AppFabric	aws	620	1	https://aws.amazon.com/appfabric/	index
+AWS App Studio	aws	622	1	https://aws.amazon.com/appstudio/	index
+AWS App Mesh	aws	624	1	https://aws.amazon.com/app-mesh/	index
+AWS Cloud Map	aws	625	1	https://aws.amazon.com/cloud-map/	index
+AWS Application Composer	aws	626	1	https://aws.amazon.com/application-composer/	index
+AWS Cloud Control API	aws	627	1	https://aws.amazon.com/cloudcontrolapi/	index
+AWS Service Catalog	aws	629	1	https://aws.amazon.com/servicecatalog/	index
+AWS Proton	aws	631	1	https://aws.amazon.com/proton/	index
+AWS Launch Wizard	aws	632	1	https://aws.amazon.com/launchwizard/	index
+AWS License Manager	aws	634	1	https://aws.amazon.com/license-manager/	index
+AWS Control Tower	aws	635	1	https://aws.amazon.com/controltower/	index
+AWS Config	aws	636	1	https://aws.amazon.com/config/	index
+AWS Trusted Advisor	aws	637	1	https://aws.amazon.com/premiumsupport/technology/trusted-advisor/	index
+AWS Health Dashboard	aws	640	1	https://aws.amazon.com/premiumsupport/technology/aws-health/	index
+Service Quotas	aws	641	1	https://aws.amazon.com/products/	index
+AWS Budgets	aws	642	1	https://aws.amazon.com/aws-cost-management/aws-budgets/	index
+AWS Cost and Usage Report	aws	643	0	https://aws.amazon.com/aws-cost-management/aws-cost-and-usage-reporting/	index
+AWS Cost Anomaly Detection	aws	644	1	https://aws.amazon.com/aws-cost-management/aws-cost-anomaly-detection/	page
+AWS Billing Conductor	aws	645	1	https://aws.amazon.com/aws-cost-management/aws-billing-conductor/	index
+AWS Marketplace	aws	647	1	https://aws.amazon.com/marketplace/	index
+AWS Management Console	aws	649	1	https://aws.amazon.com/console/	index
+Titan Text Embeddings	aws	650	1	https://docs.aws.amazon.com/	index
+AWS Management Console Mobile Application	aws	651	1	https://aws.amazon.com/console/mobile/	index
+AWS CloudShell	aws	653	1	https://aws.amazon.com/cloudshell/	index
+RAG	aws	654	0	https://docs.aws.amazon.com/	index
+AWS Resource Explorer	aws	655	1	https://aws.amazon.com/resourceexplorer/	index
+Graviton3	aws	656	0	https://docs.aws.amazon.com/	index
+AWS Resource Groups	aws	658	1	https://aws.amazon.com/products/	index
+AWS Resource Access Manager	aws	659	0	https://aws.amazon.com/ram/	index
+AWS Resilience Hub	aws	660	1	https://aws.amazon.com/resilience-hub/	index
+AWS Fault Injection Service	aws	662	0	https://aws.amazon.com/fis/	index
+AWS Support	aws	664	1	https://aws.amazon.com/premiumsupport/	index
+AWS Managed Services	aws	667	1	https://aws.amazon.com/managed-services/	index
+c7g	aws	669	0	https://docs.aws.amazon.com/	index
+p5	aws	674	0	https://docs.aws.amazon.com/	index
+AWS Chatbot	aws	677	1	https://aws.amazon.com/chatbot/	index
+Trn1	aws	678	0	https://docs.aws.amazon.com/	index
+AWS User Notifications	aws	680	1	https://aws.amazon.com/notifications/	index
+AWS Well-Architected Tool	aws	681	1	https://aws.amazon.com/well-architected-tool/	index
+Image Builder	aws	682	1	https://aws.amazon.com/image-builder/	index
+AWS CodeCommit	aws	683	0	https://aws.amazon.com/codecommit/	index
+AWS CodeBuild	aws	684	0	https://aws.amazon.com/codebuild/	index
+AWS CodeDeploy	aws	686	0	https://aws.amazon.com/codedeploy/	index
+AWS CodePipeline	aws	688	0	https://aws.amazon.com/codepipeline/	index
+AWS CodeArtifact	aws	689	0	https://aws.amazon.com/codeartifact/	index
+AWS CodeStar	aws	691	0	https://aws.amazon.com/codestar/	index
+Amazon CodeCatalyst	aws	692	0	https://aws.amazon.com/codecatalyst/	index
+Amazon CodeGuru	aws	693	0	https://aws.amazon.com/codeguru/	index
+customer gateway	aws	694	1	https://docs.aws.amazon.com/	index
+Amazon CodeWhisperer	aws	695	0	https://aws.amazon.com/codewhisperer/	index
+AWS Cloud9	aws	696	1	https://aws.amazon.com/cloud9/	index
+AWS Device Farm	aws	699	1	https://aws.amazon.com/device-farm/	index
+AWS Amplify Hosting	aws	700	1	https://aws.amazon.com/amplify/hosting/	index
+AWS Amplify Studio	aws	702	1	https://aws.amazon.com/amplify/studio/	index
+OAI	aws	703	0	https://docs.aws.amazon.com/	index
+AWS Mobile SDK	aws	705	0	https://aws.amazon.com/products/	index
+signed cookies	aws	706	1	https://docs.aws.amazon.com/	index
+AWS Certificate Manager	aws	707	0	https://aws.amazon.com/certificate-manager/	index
+AWS Verified Access	aws	708	1	https://aws.amazon.com/verified-access/	index
+CMK	aws	709	0	https://docs.aws.amazon.com/	index
+Gateway Load Balancer	aws	712	0	https://aws.amazon.com/elasticloadbalancing/gateway-load-balancer/	page
+SSE-S3	aws	713	1	https://docs.aws.amazon.com/	index
+SSE-KMS	aws	714	1	https://docs.aws.amazon.com/	index
+Classic Load Balancer	aws	715	1	https://aws.amazon.com/elasticloadbalancing/classic-load-balancer/	page
+AWS Shield	aws	716	1	https://aws.amazon.com/shield/	index
+AWS Private 5G	aws	718	0	https://aws.amazon.com/private5g/	index
+AWS Ground Station	aws	719	1	https://aws.amazon.com/ground-station/	index
+AWS Security Hub	aws	720	1	https://aws.amazon.com/security-hub/	index
+AWS Artifact	aws	721	1	https://aws.amazon.com/artifact/	index
+AWS Audit Manager	aws	722	1	https://aws.amazon.com/audit-manager/	index
+AWS CloudHSM	aws	723	0	https://aws.amazon.com/cloudhsm/	index
+AWS Payment Cryptography	aws	724	1	https://aws.amazon.com/payment-cryptography/	index
+AWS Private Certificate Authority	aws	725	1	https://aws.amazon.com/private-ca/	index
+AWS Signer	aws	726	1	https://aws.amazon.com/products/	index
+AWS Directory Service	aws	727	1	https://aws.amazon.com/directoryservice/	index
+App Runner	aws	728	1	https://aws.amazon.com/apprunner/	index
+AWS Managed Microsoft AD	aws	729	0	https://aws.amazon.com/products/	index
+Amazon Verified Permissions	aws	731	1	https://aws.amazon.com/verified-permissions/	index
+AWS Security Incident Response	aws	733	1	https://aws.amazon.com/security-incident-response/	index
+AWS Wickr	aws	735	1	https://aws.amazon.com/wickr/	index
+AWS PCS	aws	736	0	https://aws.amazon.com/pcs/	index
+AWS Shield Advanced	aws	737	1	https://aws.amazon.com/shield/	index
+Amazon Augmented AI	aws	738	0	https://aws.amazon.com/augmented-ai/	index
+ROSA	aws	739	0	https://aws.amazon.com/rosa/	page
+Amazon Comprehend Medical	aws	740	1	https://aws.amazon.com/comprehend/medical/	index
+Amazon Transcribe Medical	aws	741	1	https://aws.amazon.com/products/	index
+Amazon Forecast	aws	742	1	https://aws.amazon.com/forecast/	index
+Amazon Fraud Detector	aws	743	1	https://aws.amazon.com/fraud-detector/	index
+Outposts servers	aws	744	1	https://aws.amazon.com/outposts/	index
+Amazon Lookout for Equipment	aws	745	1	https://aws.amazon.com/lookout-for-equipment/	index
+Amazon Monitron	aws	746	0	https://aws.amazon.com/monitron/	index
+Amazon HealthLake	aws	747	0	https://aws.amazon.com/healthlake/	index
+AWS HealthOmics	aws	748	0	https://aws.amazon.com/omics/	index
+AWS HealthScribe	aws	749	0	https://aws.amazon.com/healthscribe/	index
+AWS Panorama	aws	750	1	https://aws.amazon.com/panorama/	index
+AWS DeepRacer	aws	751	1	https://aws.amazon.com/deepracer/	index
+AWS DeepLens	aws	752	0	https://aws.amazon.com/deeplens/	index
+AWS DeepComposer	aws	753	0	https://aws.amazon.com/deepcomposer/	index
+FSx	aws	754	0	https://aws.amazon.com/fsx/	index
+Amazon Elastic Inference	aws	755	1	https://aws.amazon.com/machine-learning/elastic-inference/	index
+FSx for Lustre	aws	756	0	https://aws.amazon.com/fsx/lustre/	index
+AWS Deep Learning AMIs	aws	757	1	https://aws.amazon.com/products/	index
+FSx for ONTAP	aws	758	0	https://aws.amazon.com/fsx/netapp-ontap/	page
+AWS Neuron	aws	759	0	https://aws.amazon.com/machine-learning/neuron/	page
+FSx for OpenZFS	aws	760	0	https://aws.amazon.com/fsx/openzfs/	index
+Amazon Q	aws	761	0	https://aws.amazon.com/q/	index
+FSx for Windows	aws	762	0	https://aws.amazon.com/fsx/windows/	index
+Amazon Q Business	aws	763	0	https://aws.amazon.com/q/business/	index
+Amazon Q in Connect	aws	764	0	https://aws.amazon.com/products/	index
+Nova Act	aws	765	0	https://aws.amazon.com/nova/	index
+Nova Sonic	aws	766	0	https://aws.amazon.com/nova/	index
+Nova Micro	aws	768	1	https://aws.amazon.com/nova/	index
+DRS	aws	769	0	https://aws.amazon.com/disaster-recovery/	index
+MGN	aws	771	0	https://aws.amazon.com/application-migration-service/	index
+DMS	aws	773	0	https://aws.amazon.com/dms/	index
+SCT	aws	775	0	https://aws.amazon.com/dms/	index
+AWS Trainium2	aws	777	0	https://aws.amazon.com/ec2/instance-types/trn2/	index
+PyTorch on AWS	aws	778	0	https://aws.amazon.com/products/	index
+Amazon WorkSpaces	aws	779	1	https://aws.amazon.com/workspaces/	index
+Amazon WorkSpaces Thin Client	aws	780	1	https://aws.amazon.com/workspaces/thin-client/	index
+Amazon AppStream 2.0	aws	781	0	https://aws.amazon.com/appstream2/	index
+Amazon WorkDocs	aws	782	1	https://aws.amazon.com/workdocs/	index
+Amazon WorkMail	aws	783	1	https://aws.amazon.com/workmail/	index
+Aurora MySQL	aws	784	1	https://aws.amazon.com/products/	index
+Amazon Chime	aws	785	1	https://aws.amazon.com/chime/	index
+RDS for MySQL	aws	786	1	https://aws.amazon.com/products/	index
+Amazon Pinpoint	aws	788	1	https://aws.amazon.com/pinpoint/	index
+RDS for Oracle	aws	789	1	https://aws.amazon.com/rds/	index
+RDS for Db2	aws	790	1	https://aws.amazon.com/rds/	index
+AWS End User Messaging	aws	791	1	https://aws.amazon.com/end-user-messaging/	index
+Amazon Connect Contact Lens	aws	792	1	https://aws.amazon.com/connect/contact-lens/	page
+AWS Supply Chain	aws	795	1	https://aws.amazon.com/aws-supply-chain/	index
+AWS B2B Data Interchange	aws	796	1	https://aws.amazon.com/b2b-data-interchange/	index
+Amazon Honeycode	aws	797	1	https://aws.amazon.com/honeycode/	index
+Alexa for Business	aws	798	1	https://aws.amazon.com/alexaforbusiness/	index
+Amazon Location Service	aws	799	1	https://aws.amazon.com/location/	index
+Amazon Braket	aws	800	0	https://aws.amazon.com/braket/	index
+Redshift Data API	aws	801	1	https://aws.amazon.com/redshift/	index
+AWS Deadline Cloud	aws	802	1	https://aws.amazon.com/deadline-cloud/	index
+Glue Data Catalog	aws	803	1	https://aws.amazon.com/glue/	page
+AWS SimSpace Weaver	aws	804	1	https://aws.amazon.com/simspaceweaver/	index
+DataBrew	aws	805	1	https://aws.amazon.com/glue/features/databrew/	index
+AWS RoboMaker	aws	806	1	https://aws.amazon.com/robomaker/	index
+Amazon GameLift	aws	807	0	https://aws.amazon.com/gamelift/	index
+Amazon Lumberyard	aws	808	1	https://aws.amazon.com/lumberyard/	index
+Open 3D Engine	aws	809	0	https://aws.amazon.com/lumberyard/	index
+Amazon Nimble Studio	aws	810	1	https://aws.amazon.com/nimble-studio/	index
+Amazon Interactive Video Service	aws	811	0	https://aws.amazon.com/ivs/	index
+MWAA	aws	812	0	https://aws.amazon.com/managed-workflows-for-apache-airflow/	index
+Amazon Kinesis Video Streams	aws	813	1	https://aws.amazon.com/kinesis/video-streams/	index
+Amazon Elastic Transcoder	aws	814	1	https://aws.amazon.com/elastictranscoder/	index
+AWS Elemental MediaConvert	aws	815	0	https://aws.amazon.com/mediaconvert/	index
+AWS Elemental MediaLive	aws	816	0	https://aws.amazon.com/medialive/	index
+AWS Elemental MediaPackage	aws	817	0	https://aws.amazon.com/mediapackage/	index
+AWS Elemental MediaConnect	aws	818	0	https://aws.amazon.com/mediaconnect/	index
+AWS Elemental MediaStore	aws	819	0	https://aws.amazon.com/mediastore/	index
+AWS Elemental MediaTailor	aws	820	0	https://aws.amazon.com/mediatailor/	index
+AWS Elemental Appliances & Software	aws	822	0	https://aws.amazon.com/elemental-appliances-software/	index
+ADOT	aws	823	0	https://aws.amazon.com/otel/	wikipedia-title
+X-Ray	aws	824	1	https://aws.amazon.com/xray/	index
+AWS IoT Core	aws	825	0	https://aws.amazon.com/iot-core/	index
+AWS IoT Greengrass	aws	826	1	https://aws.amazon.com/greengrass/	index
+AWS IoT SiteWise	aws	827	0	https://aws.amazon.com/iot-sitewise/	index
+WebSocket API	aws	829	1	https://aws.amazon.com/api-gateway/	wikipedia-title
+AWS IoT TwinMaker	aws	830	0	https://aws.amazon.com/iot-twinmaker/	index
+AWS IoT FleetWise	aws	831	0	https://aws.amazon.com/iot-fleetwise/	index
+AWS IoT Device Management	aws	832	0	https://aws.amazon.com/iot-device-management/	index
+AWS IoT Device Defender	aws	833	0	https://aws.amazon.com/iot-device-defender/	index
+AWS IoT Events	aws	834	0	https://aws.amazon.com/iot-events/	index
+Infrastructure Composer	aws	835	1	https://aws.amazon.com/application-composer/	index
+AWS IoT Analytics	aws	836	0	https://aws.amazon.com/iot-analytics/	index
+AWS IoT 1-Click	aws	837	0	https://aws.amazon.com/iot-1-click/	index
+AWS IoT ExpressLink	aws	839	0	https://aws.amazon.com/iot-expresslink/	index
+AWS IoT RoboRunner	aws	840	0	https://aws.amazon.com/roborunner	index
+AWS IoT EduKit	aws	841	0	https://aws.amazon.com/iot/edukit/	index
+FreeRTOS	aws	842	0	https://aws.amazon.com/freertos/	index
+Amazon Corretto	aws	843	0	https://aws.amazon.com/corretto/	index
+AWS Health	aws	847	1	https://aws.amazon.com/premiumsupport/technology/aws-health/	index
+Firecracker	aws	849	1	https://aws.amazon.com/products/	wikipedia-title
+Bottlerocket	aws	850	1	https://aws.amazon.com/products/	index
+CUR	aws	851	0	https://aws.amazon.com/aws-cost-management/aws-cost-and-usage-reporting/	page
+Amazon EC2 Mac instances	aws	854	1	https://aws.amazon.com/ec2/instance-types/mac/	page
+Amazon EC2 Spot Instances	aws	855	1	https://aws.amazon.com/ec2/spot/	index
+Amazon Elastic Container Registry Public	aws	856	0	https://aws.amazon.com/products/	index
+Amazon CloudWatch Internet Monitor	aws	857	1	https://aws.amazon.com/cloudwatch/features/	index
+Amazon CloudWatch Synthetics	aws	858	1	https://aws.amazon.com/products/	index
+Tag Editor	aws	860	1	https://aws.amazon.com/products/	index
+RAM	aws	862	0	https://aws.amazon.com/ram/	index
+FIS	aws	865	0	https://aws.amazon.com/fis/	index
+Amazon DevOps Guru	aws	866	1	https://aws.amazon.com/devops-guru/	index
+Business Support	aws	867	1	https://aws.amazon.com/premiumsupport/	index
+Enterprise Support	aws	868	1	https://aws.amazon.com/premiumsupport/	index
+re:Invent	aws	870	0	https://aws.amazon.com/products/	index
+Amazon Q Developer in chat applications	aws	872	1	https://aws.amazon.com/chatbot/	index
+AWS OpsWorks	aws	873	1	https://aws.amazon.com/opsworks/	index
+Amazon Aurora Limitless Database	aws	874	1	https://aws.amazon.com/products/	index
+zero-ETL integration	aws	875	0	https://aws.amazon.com/products/	index
+Amazon ElastiCache Serverless	aws	876	0	https://aws.amazon.com/elasticache/features/	index
+Amazon EKS Hybrid Nodes	aws	877	1	https://aws.amazon.com/eks/hybrid-nodes/	index
+Amazon S3 Glacier Instant Retrieval	aws	878	1	https://aws.amazon.com/s3/storage-classes/glacier/instant-retrieval/	index
+Amazon SageMaker Studio Lab	aws	879	0	https://aws.amazon.com/sagemaker/studio-lab/	index
+Amazon SageMaker Ground Truth Plus	aws	880	0	https://aws.amazon.com/sagemaker/data-labeling/	index
+Amazon SageMaker HyperPod recipes	aws	881	0	https://aws.amazon.com/sagemaker-ai/hyperpod/	index
+Amazon SageMaker Training Compiler	aws	882	0	https://aws.amazon.com/sagemaker/train/	index
+AWS Clean Rooms ML	aws	883	1	https://aws.amazon.com/clean-rooms/ml	index
+AWS Glue for Ray	aws	884	1	https://aws.amazon.com/glue/features/engines/	index
+Amazon MSK Serverless	aws	885	0	https://aws.amazon.com/msk/features/msk-serverless/	page
+Amazon MemoryDB for Redis	aws	887	0	https://aws.amazon.com/memorydb/	index
+AppSpec	aws	888	0	https://aws.amazon.com/products/	index
+Amazon Q in QuickSight	aws	889	0	https://aws.amazon.com/quicksight/q/	index
+Storage Browser for Amazon S3	aws	890	1	https://aws.amazon.com/s3/features/storage-browser/	index
+AWS Service Management Connector	aws	891	1	https://aws.amazon.com/service-management-connector/	index
+AWS Tools and SDKs	aws	892	1	https://aws.amazon.com/getting-started/tools-sdks/	index
+AWS IoT Button	aws	893	0	https://aws.amazon.com/iotbutton/	index
+Amazon WorkSpaces Family	aws	894	1	https://aws.amazon.com/workspaces/	index
+Amazon EC2 Hpc7g	aws	896	0	https://aws.amazon.com/products/	index
+AWS Toolkit	aws	898	1	https://aws.amazon.com/products/	index
+AWS Skill Builder	aws	899	1	https://skillbuilder.aws/	page
+GWLB	aws	900	0	https://aws.amazon.com/elasticloadbalancing/gateway-load-balancer/	page
+AWS Activate	aws	901	1	https://aws.amazon.com/startups/	index
+AWS Partner Network	aws	903	0	https://aws.amazon.com/partners/	index
+AWS GovCloud (US)	aws	904	0	https://aws.amazon.com/govcloud-us/	index
+AWS European Sovereign Cloud	aws	905	1	https://aws.amazon.com/products/	index
+AWS Certified Solutions Architect	aws	908	1	https://aws.amazon.com/certification/	page
+AWS Certified Cloud Practitioner	aws	909	1	https://aws.amazon.com/certification/	page
+AWS Certified Developer	aws	910	1	https://aws.amazon.com/certification/	page
+AWS Private CA	aws	911	1	https://aws.amazon.com/private-ca/	index
+Serverless	aws	917	1	https://docs.aws.amazon.com/	index
+event-driven architecture	aws	919	1	https://docs.aws.amazon.com/	wikipedia-title
+fan-out	aws	920	1	https://docs.aws.amazon.com/	wikipedia-title
+IAM Roles Anywhere	aws	921	1	https://aws.amazon.com/products/	index
+blue/green deployment	aws	922	1	https://docs.aws.amazon.com/	index
+multi-region	aws	924	1	https://docs.aws.amazon.com/	index
+disaster recovery	aws	925	1	https://docs.aws.amazon.com/	index
+Amazon A2I	aws	926	0	https://aws.amazon.com/augmented-ai/	index
+data lake	aws	927	1	https://docs.aws.amazon.com/	index
+lakehouse	aws	928	1	https://docs.aws.amazon.com/	wikipedia-title
+Apache Iceberg	aws	929	0	https://docs.aws.amazon.com/	wikipedia-title
+Valkey	aws	930	0	https://docs.aws.amazon.com/	index
+Amazon Lookout for Metrics	aws	932	1	https://aws.amazon.com/lookout-for-equipment/	index
+Amazon Lookout for Vision	aws	933	1	https://aws.amazon.com/lookout-for-equipment/	index
+cross-account access	aws	935	1	https://docs.aws.amazon.com/	index
+principle of least privilege	aws	936	1	https://docs.aws.amazon.com/	wikipedia-title
+Amazon Resource Name (ARN) format	aws	938	0	https://docs.aws.amazon.com/	index
+EC2 instance type	aws	939	1	https://docs.aws.amazon.com/	index
+vCPU	aws	940	0	https://docs.aws.amazon.com/	wikipedia-title
+IOPS	aws	942	0	https://docs.aws.amazon.com/	index
+AWS Deep Learning Containers	aws	944	1	https://aws.amazon.com/products/	index
+Neuron SDK	aws	946	0	https://aws.amazon.com/machine-learning/neuron/	page
+lifecycle hook	aws	952	1	https://docs.aws.amazon.com/	index
+Nova Reel	aws	953	0	https://aws.amazon.com/nova/	index
+Nova Lite	aws	955	1	https://aws.amazon.com/nova/	index
+Nova Pro	aws	956	1	https://aws.amazon.com/nova/	index
+Nova Premier	aws	957	1	https://aws.amazon.com/nova/	index
+requester pays	aws	958	1	https://docs.aws.amazon.com/	index
+TensorFlow on AWS	aws	964	0	https://aws.amazon.com/products/	index
+Apache MXNet on AWS	aws	965	0	https://aws.amazon.com/products/	index
+managed policy	aws	966	1	https://docs.aws.amazon.com/	index
+WorkSpaces	aws	968	1	https://aws.amazon.com/workspaces/	index
+AppStream 2.0	aws	971	0	https://aws.amazon.com/appstream2/	index
+Amazon Chime SDK	aws	975	1	https://aws.amazon.com/chime/	index
+Contact Lens	aws	980	1	https://aws.amazon.com/connect/contact-lens/	index
+EMR cluster	aws	990	1	https://docs.aws.amazon.com/	index
+GameLift	aws	992	0	https://aws.amazon.com/gamelift/	index
+O3DE	aws	995	0	https://aws.amazon.com/lumberyard/	index
+Amazon IVS	aws	998	0	https://aws.amazon.com/ivs/	index
+vector store	aws	1008	1	https://docs.aws.amazon.com/	wikipedia-title
+ECS task	aws	1009	1	https://docs.aws.amazon.com/	index
+Greengrass	aws	1011	1	https://aws.amazon.com/greengrass/	index
+Elastic Beanstalk environment	aws	1022	1	https://docs.aws.amazon.com/	index
+Amazon EC2 instance	aws	1023	1	https://docs.aws.amazon.com/	index
+virtual private cloud	aws	1024	1	https://docs.aws.amazon.com/	index
+Corretto	aws	1025	0	https://aws.amazon.com/corretto/	index
+ECR Public	aws	1030	0	https://aws.amazon.com/products/	index
+CloudWatch RUM	aws	1031	1	https://aws.amazon.com/products/	index
+Aurora Limitless	aws	1038	1	https://aws.amazon.com/products/	index
+zero-ETL	aws	1039	0	https://aws.amazon.com/products/	index
+ElastiCache Serverless	aws	1040	0	https://aws.amazon.com/elasticache/features/	index
+EKS Hybrid Nodes	aws	1041	1	https://aws.amazon.com/eks/hybrid-nodes/	index
+Glacier Instant Retrieval	aws	1042	1	https://aws.amazon.com/s3/storage-classes/glacier/instant-retrieval/	index
+MSK Serverless	aws	1043	0	https://aws.amazon.com/msk/features/msk-serverless/	page
+Amazon Q Code Transformation	aws	1044	1	https://aws.amazon.com/products/	index
+Hpc6id	aws	1045	0	https://aws.amazon.com/products/	index
+APN	aws	1048	0	https://aws.amazon.com/partners/	index
+GovCloud	aws	1049	0	https://aws.amazon.com/govcloud-us/	index
+OpenID Connect	aws	1052	0	https://docs.aws.amazon.com/	wikipedia-title
+least privilege	aws	1053	1	https://docs.aws.amazon.com/	wikipedia-title
+instance family	aws	1054	1	https://docs.aws.amazon.com/	index
+load balancer	aws	1056	1	https://docs.aws.amazon.com/	index
+scale-out	aws	1057	1	https://docs.aws.amazon.com/	index
+CORS	aws	1059	0	https://docs.aws.amazon.com/	wikipedia-title
+inline policy	aws	1061	1	https://docs.aws.amazon.com/	index
+throttling	aws	1064	1	https://docs.aws.amazon.com/	index
+PITR	aws	1068	0	https://docs.aws.amazon.com/	wikipedia-title
+PySpark	aws	1069	0	https://docs.aws.amazon.com/	wikipedia-title
+vector database	aws	1071	1	https://docs.aws.amazon.com/	index
+granted	aws	1075	0	https://docs.aws.amazon.com/	index

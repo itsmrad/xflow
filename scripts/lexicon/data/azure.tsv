@@ -1,0 +1,484 @@
+# canonical	domain	rank	english	source_url	confirmed_by (scripts/lexicon/build.py import)
+Azure	azure	1	1	https://azure.microsoft.com/en-us/products/	index
+Microsoft Entra ID	azure	2	0	https://learn.microsoft.com/en-us/entra/	index
+Azure DevOps	azure	3	0	https://learn.microsoft.com/en-us/azure/devops/	index
+Azure Kubernetes Service	azure	4	0	https://azure.microsoft.com/en-us/products/	index
+AKS	azure	5	0	https://azure.microsoft.com/en-us/products/	index
+Azure CLI	azure	6	0	https://learn.microsoft.com/en-us/cli/azure/	index
+az	azure	7	0	https://learn.microsoft.com/en-us/cli/azure/	index
+Azure Functions	azure	8	0	https://azure.microsoft.com/en-us/products/	index
+Azure App Service	azure	9	0	https://azure.microsoft.com/en-us/products/	index
+Azure Virtual Machines	azure	10	0	https://azure.microsoft.com/en-us/products/	index
+Azure Blob Storage	azure	11	0	https://azure.microsoft.com/en-us/products/	index
+Azure Cosmos DB	azure	12	0	https://azure.microsoft.com/en-us/products/	index
+Azure SQL Database	azure	13	0	https://azure.microsoft.com/en-us/products/	index
+Azure SQL	azure	14	0	https://azure.microsoft.com/en-us/products/	index
+Azure Key Vault	azure	15	1	https://azure.microsoft.com/en-us/products/	index
+Key Vault	azure	16	1	https://azure.microsoft.com/en-us/products/	index
+Azure Monitor	azure	17	1	https://azure.microsoft.com/en-us/products/	index
+Application Insights	azure	18	0	https://learn.microsoft.com/en-us/azure/	index
+Log Analytics	azure	20	0	https://learn.microsoft.com/en-us/azure/	index
+KQL	azure	22	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Azure Container Apps	azure	23	0	https://azure.microsoft.com/en-us/products/	index
+Azure Container Registry	azure	24	0	https://azure.microsoft.com/en-us/products/	index
+Azure Container Instances	azure	26	0	https://azure.microsoft.com/en-us/products/	index
+Azure Front Door	azure	28	1	https://azure.microsoft.com/en-us/products/	index
+Azure Application Gateway	azure	29	0	https://azure.microsoft.com/en-us/products/	index
+Application Gateway	azure	30	0	https://azure.microsoft.com/en-us/products/	index
+Azure Load Balancer	azure	31	0	https://azure.microsoft.com/en-us/products/	index
+Azure API Management	azure	32	0	https://azure.microsoft.com/en-us/products/	index
+Azure Event Hubs	azure	34	1	https://azure.microsoft.com/en-us/products/	index
+Event Hubs	azure	35	1	https://azure.microsoft.com/en-us/products/	index
+Azure Service Bus	azure	36	1	https://azure.microsoft.com/en-us/products/	index
+Service Bus	azure	37	1	https://azure.microsoft.com/en-us/products/	index
+Azure Event Grid	azure	38	1	https://azure.microsoft.com/en-us/products/	index
+Event Grid	azure	39	1	https://azure.microsoft.com/en-us/products/	index
+Azure Logic Apps	azure	40	1	https://azure.microsoft.com/en-us/products/	index
+Logic Apps	azure	41	1	https://azure.microsoft.com/en-us/products/	index
+Azure Data Factory	azure	42	0	https://azure.microsoft.com/en-us/products/	index
+Azure Databricks	azure	44	0	https://azure.microsoft.com/en-us/products/	index
+Azure Synapse Analytics	azure	45	0	https://azure.microsoft.com/en-us/products/	index
+Synapse	azure	46	0	https://azure.microsoft.com/en-us/products/	index
+Microsoft Fabric	azure	47	1	https://learn.microsoft.com/en-us/fabric/	index
+Fabric	azure	48	1	https://learn.microsoft.com/en-us/fabric/	index
+OneLake	azure	49	0	https://learn.microsoft.com/en-us/fabric/	page
+Azure Data Lake Storage	azure	50	0	https://azure.microsoft.com/en-us/products/	index
+Azure OpenAI	azure	53	0	https://azure.microsoft.com/en-us/products/	index
+Azure OpenAI Service	azure	54	0	https://azure.microsoft.com/en-us/products/	index
+Microsoft Foundry	azure	56	0	https://azure.microsoft.com/en-us/products/	index
+Azure AI Services	azure	57	0	https://azure.microsoft.com/en-us/products/	wikipedia-title
+Azure Cognitive Services	azure	58	0	https://azure.microsoft.com/en-us/products/	wikipedia-title
+Azure AI Search	azure	59	0	https://azure.microsoft.com/en-us/products/	index
+Azure Cognitive Search	azure	60	0	https://azure.microsoft.com/en-us/products/	index
+Azure Machine Learning	azure	61	0	https://azure.microsoft.com/en-us/products/	index
+Azure AI Language	azure	65	0	https://azure.microsoft.com/en-us/products/	index
+Azure AI Document Intelligence	azure	66	0	https://azure.microsoft.com/en-us/products/	index
+Document Intelligence	azure	67	0	https://azure.microsoft.com/en-us/products/	index
+Azure AI Content Safety	azure	68	0	https://azure.microsoft.com/en-us/products/	index
+Azure AI Bot Service	azure	70	0	https://azure.microsoft.com/en-us/products/	index
+Azure Bot Service	azure	71	0	https://azure.microsoft.com/en-us/products/	index
+Azure AI Video Indexer	azure	75	0	https://azure.microsoft.com/en-us/products/	index
+Azure AI Custom Vision	azure	76	0	https://azure.microsoft.com/en-us/products/	index
+Azure AI Immersive Reader	azure	77	0	https://azure.microsoft.com/en-us/products/	index
+Azure Health Data Services	azure	81	0	https://azure.microsoft.com/en-us/products/	index
+Phi	azure	83	0	https://learn.microsoft.com/en-us/azure/	index
+Copilot Studio	azure	84	1	https://learn.microsoft.com/en-us/power-platform/	page
+Microsoft Copilot	azure	85	1	https://learn.microsoft.com/en-us/microsoft-365/	index
+Microsoft 365 Copilot	azure	86	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+GitHub Copilot	azure	87	1	https://docs.github.com/	index
+Azure Copilot	azure	88	1	https://azure.microsoft.com/en-us/products/	index
+Prompt Flow	azure	92	1	https://learn.microsoft.com/en-us/azure/	index
+Azure Virtual Network	azure	93	0	https://azure.microsoft.com/en-us/products/	index
+VNet	azure	94	0	https://learn.microsoft.com/en-us/azure/	index
+Virtual Network	azure	95	0	https://learn.microsoft.com/en-us/azure/	index
+NSG	azure	97	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Private Link	azure	99	0	https://azure.microsoft.com/en-us/products/	index
+Private Link	azure	100	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Firewall	azure	102	1	https://azure.microsoft.com/en-us/products/	index
+Azure Bastion	azure	103	0	https://azure.microsoft.com/en-us/products/	index
+Azure DNS	azure	104	0	https://azure.microsoft.com/en-us/products/	index
+Azure Traffic Manager	azure	106	0	https://azure.microsoft.com/en-us/products/	index
+Traffic Manager	azure	107	0	https://azure.microsoft.com/en-us/products/	index
+Azure ExpressRoute	azure	108	0	https://azure.microsoft.com/en-us/products/	index
+ExpressRoute	azure	109	0	https://azure.microsoft.com/en-us/products/	index
+Azure VPN Gateway	azure	110	0	https://azure.microsoft.com/en-us/products/	index
+VPN Gateway	azure	111	0	https://azure.microsoft.com/en-us/products/	index
+Azure Virtual WAN	azure	112	0	https://azure.microsoft.com/en-us/products/	index
+Virtual WAN	azure	113	0	https://azure.microsoft.com/en-us/products/	index
+Azure Route Server	azure	114	0	https://azure.microsoft.com/en-us/products/	index
+Azure DDoS Protection	azure	115	0	https://azure.microsoft.com/en-us/products/	index
+Azure NAT Gateway	azure	116	0	https://azure.microsoft.com/en-us/products/	index
+NAT Gateway	azure	117	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Network Watcher	azure	118	0	https://azure.microsoft.com/en-us/products/	index
+Azure Web Application Firewall	azure	120	0	https://azure.microsoft.com/en-us/products/	index
+WAF	azure	121	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Virtual Network Manager	azure	122	0	https://azure.microsoft.com/en-us/products/	index
+Azure Kubernetes Fleet Manager	azure	124	0	https://azure.microsoft.com/en-us/products/	index
+Azure Red Hat OpenShift	azure	125	0	https://azure.microsoft.com/en-us/products/	index
+Azure Arc	azure	127	1	https://azure.microsoft.com/en-us/products/	index
+Azure Arc-enabled Kubernetes	azure	128	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Stack HCI	azure	129	0	https://azure.microsoft.com/en-us/products/	index
+Azure Local	azure	130	1	https://azure.microsoft.com/en-us/products/	index
+Azure Stack Hub	azure	131	1	https://azure.microsoft.com/en-us/products/	index
+Azure Stack Edge	azure	132	1	https://azure.microsoft.com/en-us/products/	index
+Azure Data Box	azure	133	1	https://azure.microsoft.com/en-us/products/	index
+Azure VMware Solution	azure	134	0	https://azure.microsoft.com/en-us/products/	index
+AVS	azure	135	0	https://azure.microsoft.com/en-us/products/	index
+Azure Migrate	azure	136	0	https://azure.microsoft.com/en-us/products/	index
+Azure Site Recovery	azure	137	0	https://azure.microsoft.com/en-us/products/	index
+Azure Backup	azure	139	1	https://azure.microsoft.com/en-us/products/	index
+Azure Database Migration Service	azure	140	0	https://azure.microsoft.com/en-us/products/	index
+Azure Resource Manager	azure	141	0	https://learn.microsoft.com/en-us/azure/	index
+ARM	azure	142	0	https://learn.microsoft.com/en-us/azure/	index
+ARM templates	azure	143	0	https://learn.microsoft.com/en-us/azure/	index
+Bicep	azure	145	1	https://learn.microsoft.com/en-us/azure/	index
+Azure Resource Graph	azure	146	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Policy	azure	147	1	https://azure.microsoft.com/en-us/products/	index
+Azure Blueprints	azure	148	1	https://azure.microsoft.com/en-us/products/	index
+Azure Advisor	azure	149	1	https://azure.microsoft.com/en-us/products/	index
+Azure Cost Management	azure	150	0	https://azure.microsoft.com/en-us/products/	index
+Microsoft Cost Management	azure	151	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Service Health	azure	152	0	https://azure.microsoft.com/en-us/products/	index
+Azure Resource Health	azure	153	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Automation	azure	156	1	https://azure.microsoft.com/en-us/products/	index
+Azure Lighthouse	azure	157	1	https://azure.microsoft.com/en-us/products/	index
+Management Group	azure	159	0	https://learn.microsoft.com/en-us/azure/	index
+Landing Zone	azure	161	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Cloud Adoption Framework	azure	162	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Deployment Environments	azure	166	0	https://azure.microsoft.com/en-us/products/	index
+Microsoft Dev Box	azure	167	1	https://azure.microsoft.com/en-us/products/	index
+Dev Box	azure	168	1	https://azure.microsoft.com/en-us/products/	index
+Azure Developer CLI	azure	169	0	https://learn.microsoft.com/en-us/azure/	index
+azd	azure	170	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Azure PowerShell	azure	171	0	https://learn.microsoft.com/en-us/powershell/azure/	index
+Az PowerShell	azure	172	0	https://learn.microsoft.com/en-us/powershell/azure/	page
+Azure Cloud Shell	azure	173	1	https://learn.microsoft.com/en-us/azure/	index
+Cloud Shell	azure	174	1	https://learn.microsoft.com/en-us/azure/	index
+Azure Portal	azure	175	1	https://learn.microsoft.com/en-us/azure/	index
+Azure SDK	azure	176	0	https://learn.microsoft.com/en-us/azure/	index
+Azurite	azure	179	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Azure Storage	azure	180	0	https://azure.microsoft.com/en-us/products/	index
+Storage Account	azure	181	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Files	azure	182	1	https://azure.microsoft.com/en-us/products/	index
+Azure File Sync	azure	183	0	https://azure.microsoft.com/en-us/products/	index
+Azure Queue Storage	azure	184	0	https://azure.microsoft.com/en-us/products/	index
+Azure Table Storage	azure	185	0	https://azure.microsoft.com/en-us/products/	index
+Azure Managed Disks	azure	186	0	https://azure.microsoft.com/en-us/products/	index
+Azure Disk Storage	azure	187	0	https://azure.microsoft.com/en-us/products/	index
+Azure NetApp Files	azure	188	0	https://azure.microsoft.com/en-us/products/	index
+Azure Elastic SAN	azure	189	0	https://azure.microsoft.com/en-us/products/	index
+Azure Container Storage	azure	190	0	https://azure.microsoft.com/en-us/products/	index
+Azure Managed Lustre	azure	191	0	https://azure.microsoft.com/en-us/products/	index
+Azure Data Explorer	azure	192	0	https://azure.microsoft.com/en-us/products/	index
+Azure HDInsight	azure	194	0	https://azure.microsoft.com/en-us/products/	index
+HDInsight	azure	195	0	https://azure.microsoft.com/en-us/products/	index
+Azure Stream Analytics	azure	196	0	https://azure.microsoft.com/en-us/products/	index
+Azure Analysis Services	azure	197	0	https://azure.microsoft.com/en-us/products/	index
+Azure Data Share	azure	199	0	https://azure.microsoft.com/en-us/products/	index
+Azure Purview	azure	200	0	https://azure.microsoft.com/en-us/products/	index
+Microsoft Purview	azure	201	0	https://azure.microsoft.com/en-us/products/	index
+Azure Web PubSub	azure	202	0	https://azure.microsoft.com/en-us/products/	index
+Azure SignalR Service	azure	203	0	https://azure.microsoft.com/en-us/products/	index
+SignalR	azure	204	0	https://learn.microsoft.com/en-us/dotnet/	index
+Azure Notification Hubs	azure	205	1	https://azure.microsoft.com/en-us/products/	index
+Azure Relay	azure	206	1	https://azure.microsoft.com/en-us/products/	index
+Azure Communication Services	azure	207	0	https://azure.microsoft.com/en-us/products/	index
+Azure Static Web Apps	azure	209	0	https://azure.microsoft.com/en-us/products/	index
+Azure Spring Apps	azure	210	1	https://azure.microsoft.com/en-us/products/	index
+Azure Batch	azure	211	1	https://azure.microsoft.com/en-us/products/	index
+Azure CycleCloud	azure	212	0	https://azure.microsoft.com/en-us/products/	index
+Azure Service Fabric	azure	213	0	https://azure.microsoft.com/en-us/products/	index
+Service Fabric	azure	214	0	https://azure.microsoft.com/en-us/products/	index
+Azure Virtual Machine Scale Sets	azure	215	0	https://azure.microsoft.com/en-us/products/	index
+Virtual Machine Scale Sets	azure	216	0	https://azure.microsoft.com/en-us/products/	index
+Azure Dedicated Host	azure	223	0	https://azure.microsoft.com/en-us/products/	index
+Azure Image Builder	azure	225	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Virtual Desktop	azure	226	0	https://azure.microsoft.com/en-us/products/	index
+Windows 365	azure	228	0	https://azure.microsoft.com/en-us/products/	index
+Azure Spot Virtual Machines	azure	229	0	https://azure.microsoft.com/en-us/products/	index
+Azure Reserved VM Instances	azure	231	0	https://azure.microsoft.com/en-us/products/	index
+Azure Hybrid Benefit	azure	233	0	https://azure.microsoft.com/en-us/products/	index
+func	azure	238	0	https://learn.microsoft.com/en-us/azure/	index
+Kudu	azure	239	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Azure Web Apps	azure	244	1	https://azure.microsoft.com/en-us/products/	wikipedia-title
+Azure API Center	azure	245	0	https://azure.microsoft.com/en-us/products/	index
+Azure Cache for Redis	azure	246	1	https://azure.microsoft.com/en-us/products/	index
+Azure Managed Redis	azure	247	1	https://azure.microsoft.com/en-us/products/	index
+Azure Database for PostgreSQL	azure	248	0	https://azure.microsoft.com/en-us/products/	index
+Azure Database for MySQL	azure	249	0	https://azure.microsoft.com/en-us/products/	index
+Azure Database for MariaDB	azure	250	0	https://azure.microsoft.com/en-us/products/	index
+Flexible Server	azure	251	1	https://learn.microsoft.com/en-us/azure/	index
+Azure SQL Managed Instance	azure	252	0	https://azure.microsoft.com/en-us/products/	index
+SQL Managed Instance	azure	253	0	https://learn.microsoft.com/en-us/azure/	index
+SQL Server on Azure Virtual Machines	azure	256	0	https://azure.microsoft.com/en-us/products/	index
+Azure Cosmos DB for NoSQL	azure	257	0	https://azure.microsoft.com/en-us/products/	index
+Azure Cosmos DB for MongoDB	azure	258	0	https://azure.microsoft.com/en-us/products/	index
+Azure Cosmos DB for PostgreSQL	azure	259	0	https://azure.microsoft.com/en-us/products/	index
+Azure Cosmos DB for Apache Cassandra	azure	260	0	https://azure.microsoft.com/en-us/products/	index
+Azure Cosmos DB for Apache Gremlin	azure	261	0	https://azure.microsoft.com/en-us/products/	index
+Azure Cosmos DB for Table	azure	262	0	https://azure.microsoft.com/en-us/products/	index
+Cosmos DB	azure	263	0	https://azure.microsoft.com/en-us/products/	index
+Azure Managed Instance for Apache Cassandra	azure	265	0	https://azure.microsoft.com/en-us/products/	index
+Azure Confidential Computing	azure	266	0	https://azure.microsoft.com/en-us/products/	index
+Azure Confidential Ledger	azure	267	0	https://azure.microsoft.com/en-us/products/	page
+Microsoft Defender for Cloud	azure	268	0	https://azure.microsoft.com/en-us/products/	index
+Microsoft Defender XDR	azure	269	0	https://learn.microsoft.com/en-us/defender-xdr/	page
+Microsoft Defender for Endpoint	azure	270	0	https://learn.microsoft.com/en-us/defender-xdr/	page
+Microsoft Defender for Identity	azure	271	0	https://learn.microsoft.com/en-us/defender-xdr/	page
+Microsoft Defender for Office 365	azure	272	0	https://learn.microsoft.com/en-us/defender-xdr/	page
+Microsoft Defender for Cloud Apps	azure	273	0	https://learn.microsoft.com/en-us/defender-xdr/	page
+Defender for Storage	azure	276	0	https://learn.microsoft.com/en-us/azure/	index
+Microsoft Sentinel	azure	278	1	https://azure.microsoft.com/en-us/products/	index
+Microsoft Security Copilot	azure	280	1	https://learn.microsoft.com/en-us/microsoft-365/	index
+Azure Dedicated HSM	azure	282	0	https://azure.microsoft.com/en-us/products/	index
+Azure Managed HSM	azure	283	0	https://azure.microsoft.com/en-us/products/	index
+Azure Key Vault Managed HSM	azure	284	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Attestation	azure	286	0	https://azure.microsoft.com/en-us/products/	index
+Azure Information Protection	azure	287	0	https://learn.microsoft.com/en-us/microsoft-365/	index
+Microsoft Intune	azure	288	0	https://learn.microsoft.com/en-us/microsoft-365/	page
+Microsoft Endpoint Manager	azure	289	0	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Entra ID Protection	azure	290	0	https://learn.microsoft.com/en-us/entra/	page
+Conditional Access	azure	292	0	https://learn.microsoft.com/en-us/entra/	index
+Microsoft Entra External ID	azure	293	0	https://learn.microsoft.com/en-us/entra/	index
+Azure Active Directory	azure	295	0	https://learn.microsoft.com/en-us/entra/	index
+Azure AD	azure	296	0	https://learn.microsoft.com/en-us/entra/	index
+AAD	azure	297	0	https://learn.microsoft.com/en-us/entra/	index
+Microsoft Entra Domain Services	azure	298	0	https://learn.microsoft.com/en-us/entra/	index
+Microsoft Entra Connect	azure	299	0	https://learn.microsoft.com/en-us/entra/	wikipedia-title
+Microsoft Entra Private Access	azure	301	0	https://learn.microsoft.com/en-us/entra/	page
+Microsoft Entra Internet Access	azure	302	0	https://learn.microsoft.com/en-us/entra/	page
+Microsoft Entra Verified ID	azure	304	0	https://learn.microsoft.com/en-us/entra/	index
+Microsoft Entra Privileged Identity Management	azure	306	0	https://learn.microsoft.com/en-us/entra/	index
+PIM	azure	307	0	https://learn.microsoft.com/en-us/entra/	index
+Microsoft Entra ID Governance	azure	308	0	https://learn.microsoft.com/en-us/entra/	page
+Microsoft Entra Workload ID	azure	309	0	https://learn.microsoft.com/en-us/entra/	index
+Workload Identity Federation	azure	310	0	https://learn.microsoft.com/en-us/entra/	index
+Microsoft Authenticator	azure	313	0	https://learn.microsoft.com/en-us/entra/	wikipedia-title
+Microsoft Graph	azure	314	1	https://learn.microsoft.com/en-us/microsoft-365/	index
+MSAL	azure	319	0	https://learn.microsoft.com/en-us/entra/	wikipedia-title
+Microsoft identity platform	azure	321	0	https://learn.microsoft.com/en-us/entra/	index
+DefaultAzureCredential	azure	324	0	https://learn.microsoft.com/en-us/dotnet/	index
+Managed Identity	azure	325	0	https://learn.microsoft.com/en-us/azure/	index
+Enterprise Application	azure	331	0	https://learn.microsoft.com/en-us/entra/	wikipedia-title
+Tenant	azure	333	1	https://learn.microsoft.com/en-us/entra/	page
+Subscription	azure	335	1	https://learn.microsoft.com/en-us/azure/	index
+Region	azure	338	1	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Geography	azure	340	1	https://learn.microsoft.com/en-us/azure/	index
+Resource Provider	azure	342	0	https://learn.microsoft.com/en-us/azure/	index
+Microsoft.Compute	azure	343	0	https://learn.microsoft.com/en-us/azure/	index
+Microsoft.Storage	azure	344	0	https://learn.microsoft.com/en-us/azure/	index
+Microsoft.Network	azure	345	0	https://learn.microsoft.com/en-us/azure/	index
+Microsoft.Web	azure	346	0	https://learn.microsoft.com/en-us/azure/	index
+Microsoft.KeyVault	azure	347	0	https://learn.microsoft.com/en-us/azure/	index
+Microsoft.Authorization	azure	348	0	https://learn.microsoft.com/en-us/azure/	index
+Microsoft.ContainerService	azure	349	0	https://learn.microsoft.com/en-us/azure/	index
+Role-Based Access Control	azure	351	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+RBAC	azure	352	0	https://learn.microsoft.com/en-us/azure/	index
+Azure RBAC	azure	353	0	https://learn.microsoft.com/en-us/azure/	index
+Owner	azure	357	1	https://learn.microsoft.com/en-us/azure/	index
+Contributor	azure	358	1	https://learn.microsoft.com/en-us/azure/	index
+Reader	azure	359	1	https://learn.microsoft.com/en-us/azure/	index
+User Access Administrator	azure	360	0	https://learn.microsoft.com/en-us/azure/	index
+Tag	azure	362	1	https://learn.microsoft.com/en-us/azure/	index
+Scope	azure	363	1	https://learn.microsoft.com/en-us/azure/	index
+Hub-and-Spoke	azure	365	0	https://learn.microsoft.com/en-us/azure/	page
+Subnet	azure	368	1	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Network Interface	azure	369	0	https://learn.microsoft.com/en-us/azure/	index
+NIC	azure	370	0	https://learn.microsoft.com/en-us/azure/	index
+Public IP	azure	371	0	https://learn.microsoft.com/en-us/azure/	index
+Public IP Address	azure	372	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+UDR	azure	374	0	https://learn.microsoft.com/en-us/azure/	index
+ASG	azure	380	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Monitor Agent	azure	388	0	https://learn.microsoft.com/en-us/azure/	index
+Managed Grafana	azure	393	0	https://azure.microsoft.com/en-us/products/	index
+Azure Managed Grafana	azure	394	0	https://azure.microsoft.com/en-us/products/	index
+Update Manager	azure	399	0	https://azure.microsoft.com/en-us/products/	index
+Azure Update Manager	azure	400	0	https://azure.microsoft.com/en-us/products/	index
+Azure Chaos Studio	azure	402	0	https://azure.microsoft.com/en-us/products/	index
+Azure Load Testing	azure	403	0	https://azure.microsoft.com/en-us/products/	index
+Azure Test Plans	azure	404	0	https://learn.microsoft.com/en-us/azure/devops/	index
+Azure Boards	azure	405	1	https://learn.microsoft.com/en-us/azure/devops/	index
+Azure Repos	azure	406	1	https://learn.microsoft.com/en-us/azure/devops/	index
+Azure Pipelines	azure	407	1	https://learn.microsoft.com/en-us/azure/devops/	index
+Azure Artifacts	azure	408	1	https://learn.microsoft.com/en-us/azure/devops/	index
+Azure DevOps Server	azure	409	0	https://learn.microsoft.com/en-us/azure/devops/	page
+Team Foundation Server	azure	410	0	https://learn.microsoft.com/en-us/azure/devops/	wikipedia-title
+Azure DevOps Services	azure	411	0	https://learn.microsoft.com/en-us/azure/devops/	index
+Azure DevTest Labs	azure	412	0	https://azure.microsoft.com/en-us/products/	index
+Azure Lab Services	azure	413	0	https://azure.microsoft.com/en-us/products/	index
+Microsoft Playwright Testing	azure	414	0	https://azure.microsoft.com/en-us/products/	index
+Playwright	azure	415	0	https://docs.github.com/	index
+Visual Studio	azure	416	1	https://visualstudio.microsoft.com/	index
+Visual Studio Code	azure	417	1	https://visualstudio.microsoft.com/	index
+VS Code	azure	418	0	https://visualstudio.microsoft.com/	index
+GitHub Codespaces	azure	420	1	https://docs.github.com/	index
+GitHub Actions	azure	421	1	https://docs.github.com/	index
+GitHub	azure	422	0	https://docs.github.com/	index
+GitHub Advanced Security	azure	423	0	https://docs.github.com/	index
+CodeQL	azure	424	0	https://docs.github.com/	page
+GitHub Packages	azure	426	1	https://docs.github.com/	page
+GitHub Enterprise	azure	430	1	https://docs.github.com/	index
+GitHub Enterprise Server	azure	431	0	https://docs.github.com/	page
+GitHub Pages	azure	432	1	https://docs.github.com/	index
+GitHub CLI	azure	433	0	https://docs.github.com/	page
+gh	azure	434	0	https://docs.github.com/	index
+Git	azure	435	0	https://docs.github.com/	index
+.NET	azure	439	0	https://learn.microsoft.com/en-us/dotnet/	index
+.NET Core	azure	440	0	https://learn.microsoft.com/en-us/dotnet/	wikipedia-title
+Aspire	azure	442	1	https://learn.microsoft.com/en-us/dotnet/	page
+.NET MAUI	azure	443	0	https://learn.microsoft.com/en-us/dotnet/	page
+Blazor	azure	444	0	https://learn.microsoft.com/en-us/dotnet/	page
+ASP.NET Core	azure	445	0	https://learn.microsoft.com/en-us/dotnet/	page
+ASP.NET	azure	446	0	https://learn.microsoft.com/en-us/dotnet/	page
+Entity Framework Core	azure	447	0	https://learn.microsoft.com/en-us/dotnet/	page
+EF Core	azure	448	0	https://learn.microsoft.com/en-us/dotnet/	wikipedia-title
+NuGet	azure	449	0	https://learn.microsoft.com/en-us/dotnet/	wikipedia-title
+C#	azure	451	0	https://learn.microsoft.com/en-us/dotnet/	page
+F#	azure	452	0	https://learn.microsoft.com/en-us/dotnet/	page
+TypeScript	azure	453	1	https://visualstudio.microsoft.com/	wikipedia-title
+PowerShell	azure	454	1	https://learn.microsoft.com/en-us/powershell/azure/	index
+pwsh	azure	455	0	https://learn.microsoft.com/en-us/powershell/azure/	wikipedia-title
+Windows Subsystem for Linux	azure	456	0	https://learn.microsoft.com/en-us/windows/	wikipedia-title
+WSL2	azure	458	0	https://learn.microsoft.com/en-us/windows/	wikipedia-title
+Windows Terminal	azure	459	1	https://learn.microsoft.com/en-us/windows/	wikipedia-title
+Windows Package Manager	azure	461	0	https://learn.microsoft.com/en-us/windows/	wikipedia-title
+Hyper-V	azure	462	0	https://learn.microsoft.com/en-us/windows/	wikipedia-title
+Windows Server	azure	463	1	https://learn.microsoft.com/en-us/windows/	index
+Active Directory	azure	464	0	https://learn.microsoft.com/en-us/windows/	index
+Internet Information Services	azure	466	0	https://learn.microsoft.com/en-us/windows/	wikipedia-title
+SQL Server	azure	467	0	https://azure.microsoft.com/en-us/products/	index
+SQL Server Management Studio	azure	468	0	https://azure.microsoft.com/en-us/products/	wikipedia-title
+SSMS	azure	469	0	https://azure.microsoft.com/en-us/products/	wikipedia-title
+T-SQL	azure	471	0	https://azure.microsoft.com/en-us/products/	wikipedia-title
+Transact-SQL	azure	472	0	https://azure.microsoft.com/en-us/products/	wikipedia-title
+Template Specs	azure	478	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Resource Mover	azure	483	0	https://azure.microsoft.com/en-us/products/	index
+Azure Marketplace	azure	486	1	https://azure.microsoft.com/en-us/products/	index
+Microsoft Marketplace	azure	487	1	https://azure.microsoft.com/en-us/products/	index
+Azure Government	azure	488	1	https://azure.microsoft.com/en-us/products/	index
+Microsoft Cloud for Sovereignty	azure	490	0	https://azure.microsoft.com/en-us/products/	index
+Azure Sphere	azure	491	1	https://azure.microsoft.com/en-us/products/	index
+Azure IoT Hub	azure	492	0	https://azure.microsoft.com/en-us/products/	index
+IoT Hub	azure	493	0	https://azure.microsoft.com/en-us/products/	index
+Azure IoT Central	azure	494	0	https://azure.microsoft.com/en-us/products/	index
+Azure IoT Edge	azure	495	0	https://azure.microsoft.com/en-us/products/	index
+Azure IoT Operations	azure	496	0	https://azure.microsoft.com/en-us/products/	index
+Azure Digital Twins	azure	497	0	https://azure.microsoft.com/en-us/products/	index
+Azure Maps	azure	499	1	https://azure.microsoft.com/en-us/products/	index
+Azure Quantum	azure	501	0	https://azure.microsoft.com/en-us/products/	index
+Azure Media Services	azure	502	1	https://azure.microsoft.com/en-us/products/	index
+Azure Cloud Services	azure	504	0	https://azure.microsoft.com/en-us/products/	index
+Azure Scheduler	azure	505	1	https://azure.microsoft.com/en-us/products/	index
+Dapr	azure	508	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Cilium	azure	513	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Azure Linux	azure	514	1	https://learn.microsoft.com/en-us/azure/	index
+CBL-Mariner	azure	515	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+AKS Automatic	azure	516	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Policy for Kubernetes	azure	526	0	https://learn.microsoft.com/en-us/azure/	index
+AGIC	azure	528	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Azure Kubernetes Service Edge Essentials	azure	532	0	https://learn.microsoft.com/en-us/azure/	index
+Azure App Configuration	azure	534	0	https://azure.microsoft.com/en-us/products/	index
+App Configuration	azure	535	0	https://azure.microsoft.com/en-us/products/	index
+Azure Import/Export	azure	548	0	https://azure.microsoft.com/en-us/products/	index
+Microsoft Customer Agreement	azure	556	0	https://learn.microsoft.com/en-us/azure/	index
+MSDN	azure	562	0	https://visualstudio.microsoft.com/	wikipedia-title
+Microsoft Learn	azure	563	1	https://learn.microsoft.com/en-us/azure/	index
+Azure Architecture Center	azure	564	1	https://learn.microsoft.com/en-us/azure/	index
+Zero Trust	azure	567	1	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+CMK	azure	570	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Storage Account Key	azure	574	0	https://learn.microsoft.com/en-us/azure/	index
+Runbook	azure	580	1	https://learn.microsoft.com/en-us/azure/	index
+Power Platform	azure	581	1	https://learn.microsoft.com/en-us/power-platform/	index
+Power BI	azure	582	0	https://learn.microsoft.com/en-us/power-bi/	index
+Power BI Desktop	azure	583	0	https://learn.microsoft.com/en-us/power-bi/	page
+Power BI Service	azure	584	0	https://learn.microsoft.com/en-us/power-bi/	page
+Power BI Embedded	azure	585	0	https://learn.microsoft.com/en-us/power-bi/	index
+Power BI Report Server	azure	586	0	https://learn.microsoft.com/en-us/power-bi/	page
+Power Query	azure	588	1	https://learn.microsoft.com/en-us/power-bi/	wikipedia-title
+Power Pivot	azure	589	1	https://learn.microsoft.com/en-us/power-bi/	page
+DAX	azure	590	0	https://learn.microsoft.com/en-us/power-bi/	page
+Data Analysis Expressions	azure	591	0	https://learn.microsoft.com/en-us/power-bi/	page
+Semantic Model	azure	593	1	https://learn.microsoft.com/en-us/power-bi/	page
+On-premises Data Gateway	azure	599	0	https://learn.microsoft.com/en-us/power-bi/	page
+Power Automate	azure	602	0	https://learn.microsoft.com/en-us/power-platform/	page
+Power Automate Desktop	azure	603	0	https://learn.microsoft.com/en-us/power-platform/	wikipedia-title
+Power Apps	azure	606	0	https://learn.microsoft.com/en-us/power-platform/	page
+Power Fx	azure	609	0	https://learn.microsoft.com/en-us/power-platform/	page
+Power Pages	azure	610	1	https://learn.microsoft.com/en-us/power-platform/	page
+Power Virtual Agents	azure	611	0	https://learn.microsoft.com/en-us/power-platform/	wikipedia-title
+Dataverse	azure	612	0	https://learn.microsoft.com/en-us/power-platform/	page
+Microsoft Dataverse	azure	613	0	https://learn.microsoft.com/en-us/power-platform/	page
+AI Builder	azure	615	1	https://learn.microsoft.com/en-us/power-platform/	page
+Power Platform Admin Center	azure	618	0	https://learn.microsoft.com/en-us/power-platform/	page
+Solution	azure	622	1	https://learn.microsoft.com/en-us/power-platform/	index
+Connector	azure	623	1	https://learn.microsoft.com/en-us/power-platform/	index
+Data Loss Prevention	azure	625	0	https://learn.microsoft.com/en-us/power-platform/	wikipedia-title
+Microsoft 365	azure	629	0	https://learn.microsoft.com/en-us/microsoft-365/	index
+Office 365	azure	630	0	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Teams	azure	632	1	https://learn.microsoft.com/en-us/microsoft-365/	index
+Teams	azure	633	1	https://learn.microsoft.com/en-us/microsoft-365/	index
+Bot Framework	azure	638	1	https://learn.microsoft.com/en-us/microsoft-365/	index
+SharePoint	azure	643	0	https://learn.microsoft.com/en-us/microsoft-365/	page
+OneDrive	azure	647	0	https://learn.microsoft.com/en-us/microsoft-365/	page
+Exchange Online	azure	648	0	https://learn.microsoft.com/en-us/microsoft-365/	page
+Exchange Server	azure	649	0	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Outlook	azure	650	1	https://learn.microsoft.com/en-us/microsoft-365/	page
+Excel	azure	654	1	https://learn.microsoft.com/en-us/microsoft-365/	page
+Microsoft Excel	azure	655	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Word	azure	656	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft PowerPoint	azure	657	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft OneNote	azure	658	0	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Planner	azure	659	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Loop	azure	660	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Viva	azure	661	1	https://learn.microsoft.com/en-us/microsoft-365/	page
+Viva Engage	azure	662	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Yammer	azure	663	0	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Forms	azure	665	1	https://learn.microsoft.com/en-us/microsoft-365/	page
+Microsoft Bookings	azure	666	1	https://learn.microsoft.com/en-us/microsoft-365/	page
+Microsoft Stream	azure	667	1	https://learn.microsoft.com/en-us/microsoft-365/	page
+Microsoft To Do	azure	668	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Whiteboard	azure	669	1	https://learn.microsoft.com/en-us/microsoft-365/	page
+Microsoft Project	azure	670	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Visio	azure	671	0	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Access	azure	672	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft Publisher	azure	673	1	https://learn.microsoft.com/en-us/microsoft-365/	wikipedia-title
+Microsoft 365 Admin Center	azure	674	0	https://learn.microsoft.com/en-us/microsoft-365/	index
+az resource	azure	708	0	https://learn.microsoft.com/en-us/cli/azure/	index
+Data Plane	azure	711	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Control Plane	azure	712	0	https://learn.microsoft.com/en-us/azure/	index
+Infrastructure as Code	azure	713	0	https://learn.microsoft.com/en-us/azure/	page
+IaC	azure	714	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Serverless	azure	715	1	https://learn.microsoft.com/en-us/azure/	index
+Platform as a Service	azure	716	0	https://learn.microsoft.com/en-us/azure/	index
+PaaS	azure	717	0	https://learn.microsoft.com/en-us/azure/	index
+Infrastructure as a Service	azure	718	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+IaaS	azure	719	0	https://learn.microsoft.com/en-us/azure/	index
+Software as a Service	azure	720	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+SaaS	azure	721	0	https://learn.microsoft.com/en-us/azure/	index
+SLA	azure	722	0	https://learn.microsoft.com/en-us/azure/	index
+SKU	azure	723	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Azure HPC	azure	729	0	https://azure.microsoft.com/en-us/products/	index
+Azure HPC Cache	azure	730	0	https://azure.microsoft.com/en-us/products/	index
+Azure M-series	azure	739	0	https://learn.microsoft.com/en-us/azure/	index
+Azure Compute Fleet	azure	741	0	https://learn.microsoft.com/en-us/azure/	index
+cloud-init	azure	748	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+IMDS	azure	750	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Azure Serial Console	azure	753	0	https://learn.microsoft.com/en-us/azure/	index
+Hyperscale	azure	757	1	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+vCore	azure	759	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Elastic Pool	azure	760	1	https://learn.microsoft.com/en-us/azure/	index
+PITR	azure	764	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Transparent Data Encryption	azure	765	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Always Encrypted	azure	767	1	https://learn.microsoft.com/en-us/azure/	index
+Ledger	azure	769	1	https://learn.microsoft.com/en-us/azure/	page
+Autoscale	azure	774	1	https://learn.microsoft.com/en-us/azure/	index
+Unity Catalog	azure	796	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Lakehouse	azure	797	1	https://learn.microsoft.com/en-us/fabric/	wikipedia-title
+Warehouse	azure	799	1	https://learn.microsoft.com/en-us/fabric/	page
+Real-Time Intelligence	azure	804	0	https://learn.microsoft.com/en-us/fabric/	index
+Fabric Capacity	azure	807	0	https://learn.microsoft.com/en-us/fabric/	index
+Mirroring	azure	810	1	https://learn.microsoft.com/en-us/fabric/	index
+Notebook	azure	812	1	https://learn.microsoft.com/en-us/fabric/	index
+Spark Pool	azure	813	0	https://learn.microsoft.com/en-us/azure/	index
+Azure SQL Data Warehouse	azure	816	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Webhook	azure	827	1	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Azure Integration Services	azure	834	0	https://azure.microsoft.com/en-us/products/	index
+Developer Portal	azure	837	1	https://learn.microsoft.com/en-us/azure/	index
+Retrieval-Augmented Generation	azure	848	0	https://learn.microsoft.com/en-us/azure/	index
+RAG	azure	849	0	https://learn.microsoft.com/en-us/azure/	index
+Skillset	azure	852	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Indexer	azure	853	1	https://learn.microsoft.com/en-us/azure/	index
+Whisper	azure	854	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+GPT-4o	azure	855	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+GPT-4	azure	856	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+GPT-5	azure	857	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+DALL-E	azure	860	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+Responsible AI	azure	865	1	https://learn.microsoft.com/en-us/azure/	index
+Hugging Face	azure	868	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+ONNX	azure	874	0	https://learn.microsoft.com/en-us/azure/	wikipedia-title
+DeepSpeed	azure	875	0	https://docs.github.com/	wikipedia-title
+Olive	azure	876	1	https://docs.github.com/	wikipedia-title
+Copilot+ PC	azure	879	0	https://learn.microsoft.com/en-us/windows/	wikipedia-title
+Presidio	azure	883	0	https://docs.github.com/	wikipedia-title
+Guidance	azure	885	1	https://docs.github.com/	index
+Model Context Protocol	azure	890	0	https://docs.github.com/	wikipedia-title
