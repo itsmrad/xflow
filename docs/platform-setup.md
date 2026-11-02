@@ -117,6 +117,15 @@ open `/dev/uinput`; daemon service names and packaging differ across versions.
 Follow the distribution's user/group and socket-permission instructions. XFlow
 does not start a privileged daemon or modify device permissions.
 
+`ydotool key` sends physical key codes, so its Ctrl+V uses the key where QWERTY
+has V. That is V on QWERTY, QWERTZ, AZERTY and Colemak, but not on Dvorak
+(Ctrl+K, and Ctrl+Shift+K for the terminal chord), Workman (Ctrl+C) or Colemak
+Mod-DH (Ctrl+D). In a terminal, Ctrl+C can interrupt the running process and
+Ctrl+D can close the session. On those layouts do not use ydotool paste: use
+the GNOME extension, wtype on Wayland (used when no ydotool socket is found),
+xdotool on X11, or `injection.method = "clipboard"`. The Shell, wtype and
+xdotool paths send the "v" key symbol and follow the active layout.
+
 Export the same `YDOTOOL_SOCKET` in the environment that starts the XFlow daemon
 if your service uses a different path. Successful keyboard dispatch reports
 `pasted`; it is not an accessibility acknowledgement that an application

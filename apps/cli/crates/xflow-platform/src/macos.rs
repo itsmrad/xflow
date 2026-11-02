@@ -743,87 +743,102 @@ fn send_keys(text: &str, typed: bool) -> Result<()> {
 
 /// Virtual key that yields "v" with Command held in the current layout (Dvorak,
 /// AZERTY, "… QWERTY ⌘"); kVK_ANSI_V when the layout has none (e.g. Cyrillic).
-/// Carbon is loaded on first paste only, keeping it out of the idle daemon.
+/// Read fresh on every paste (~10 µs), so layout switches need no invalidation.
 fn paste_keycode() -> u16 {
-    type CopySource = unsafe extern "C" fn() -> Ref;
-    type GetProperty = unsafe extern "C" fn(Ref, Ref) -> Ref;
-    type KbdType = unsafe extern "C" fn() -> u8;
-    type Translate = unsafe extern "C" fn(
-        *const u8,
-        u16,
-        u16,
-        u32,
-        u32,
-        u32,
-        *mut u32,
-        usize,
-        *mut usize,
-        *mut u16,
-    ) -> i32;
-    struct Carbon(CopySource, GetProperty, KbdType, Translate, Ref);
-    unsafe impl Send for Carbon {}
-    unsafe impl Sync for Carbon {}
+    carbon()
+        .and_then(|carbon| {
+            let source = Owned::new(unsafe { (carbon.0)() })?;
+            unsafe { source_v_key(carbon, source.0) }
+        })
+        .unwrap_or(ANSI_V)
+}
+
+const ANSI_V: u16 = 9;
+
+/// kVK_ANSI_V when it gives "v", else the first key that does, else kVK_ANSI_V.
+fn v_key(is_v: impl Fn(u16) -> bool) -> u16 {
+    std::iter::once(ANSI_V)
+        .chain(0..128)
+        .find(|&key| is_v(key))
+        .unwrap_or(ANSI_V)
+}
+
+type CopySource = unsafe extern "C" fn() -> Ref;
+type GetProperty = unsafe extern "C" fn(Ref, Ref) -> Ref;
+type KbdType = unsafe extern "C" fn() -> u8;
+type Translate = unsafe extern "C" fn(
+    *const u8,
+    u16,
+    u16,
+    u32,
+    u32,
+    u32,
+    *mut u32,
+    usize,
+    *mut usize,
+    *mut u16,
+) -> i32;
+struct Carbon(CopySource, GetProperty, KbdType, Translate, Ref);
+unsafe impl Send for Carbon {}
+unsafe impl Sync for Carbon {}
+
+/// Carbon is loaded on first paste only, keeping it out of the idle daemon.
+fn carbon() -> Option<&'static Carbon> {
     extern "C" {
         fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
         fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
     }
-    const ANSI_V: u16 = 9;
     static CARBON: OnceLock<Option<Carbon>> = OnceLock::new();
-    let carbon = CARBON.get_or_init(|| unsafe {
-        let lib = dlopen(
-            c"/System/Library/Frameworks/Carbon.framework/Carbon".as_ptr(),
-            1,
-        );
-        let sym = |name: &CStr| {
-            (!lib.is_null())
-                .then(|| dlsym(lib, name.as_ptr()))
-                .filter(|p| !p.is_null())
-        };
-        let key = sym(c"kTISPropertyUnicodeKeyLayoutData")?;
-        Some(Carbon(
-            std::mem::transmute::<*mut c_void, CopySource>(sym(
-                c"TISCopyCurrentKeyboardLayoutInputSource",
-            )?),
-            std::mem::transmute::<*mut c_void, GetProperty>(sym(c"TISGetInputSourceProperty")?),
-            std::mem::transmute::<*mut c_void, KbdType>(sym(c"LMGetKbdType")?),
-            std::mem::transmute::<*mut c_void, Translate>(sym(c"UCKeyTranslate")?),
-            *(key as *const Ref),
-        ))
-    });
-    let Some(Carbon(copy_source, property, kbd_type, translate, layout_key)) = carbon else {
-        return ANSI_V;
-    };
-    unsafe {
-        let Some(source) = Owned::new(copy_source()) else {
-            return ANSI_V;
-        };
-        let data = property(source.0, *layout_key);
-        if data.is_null() {
-            return ANSI_V;
-        }
-        let layout = CFDataGetBytePtr(data);
-        let translates_to_v = |key: u16| {
-            let (mut dead, mut len, mut out) = (0, 0, [0_u16; 4]);
-            // cmdKey >> 8; kUCKeyActionDown; kUCKeyTranslateNoDeadKeysMask.
-            translate(
-                layout,
-                key,
-                0,
+    CARBON
+        .get_or_init(|| unsafe {
+            let lib = dlopen(
+                c"/System/Library/Frameworks/Carbon.framework/Carbon".as_ptr(),
                 1,
-                kbd_type().into(),
-                1,
-                &mut dead,
-                4,
-                &mut len,
-                out.as_mut_ptr(),
-            ) == 0
-                && out[..len] == [u16::from(b'v')]
-        };
-        std::iter::once(ANSI_V)
-            .chain(0..128)
-            .find(|&key| translates_to_v(key))
-            .unwrap_or(ANSI_V)
+            );
+            let sym = |name: &CStr| {
+                (!lib.is_null())
+                    .then(|| dlsym(lib, name.as_ptr()))
+                    .filter(|p| !p.is_null())
+            };
+            let key = sym(c"kTISPropertyUnicodeKeyLayoutData")?;
+            Some(Carbon(
+                std::mem::transmute::<*mut c_void, CopySource>(sym(
+                    c"TISCopyCurrentKeyboardLayoutInputSource",
+                )?),
+                std::mem::transmute::<*mut c_void, GetProperty>(sym(c"TISGetInputSourceProperty")?),
+                std::mem::transmute::<*mut c_void, KbdType>(sym(c"LMGetKbdType")?),
+                std::mem::transmute::<*mut c_void, Translate>(sym(c"UCKeyTranslate")?),
+                *(key as *const Ref),
+            ))
+        })
+        .as_ref()
+}
+
+/// The paste key for a TIS input source; None when it has no Unicode layout data.
+unsafe fn source_v_key(carbon: &Carbon, source: Ref) -> Option<u16> {
+    let Carbon(_, property, kbd_type, translate, layout_key) = carbon;
+    let data = property(source, *layout_key);
+    if data.is_null() {
+        return None;
     }
+    let layout = CFDataGetBytePtr(data);
+    Some(v_key(|key| {
+        let (mut dead, mut len, mut out) = (0, 0, [0_u16; 4]);
+        // cmdKey >> 8; kUCKeyActionDown; kUCKeyTranslateNoDeadKeysMask.
+        translate(
+            layout,
+            key,
+            0,
+            1,
+            kbd_type().into(),
+            1,
+            &mut dead,
+            4,
+            &mut len,
+            out.as_mut_ptr(),
+        ) == 0
+            && out[..len] == [u16::from(b'v')]
+    }))
 }
 
 pub struct MacDesktop {
@@ -1137,6 +1152,66 @@ pub fn microphone_permission(request: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn paste_key_follows_command_layer_of_layout() {
+        // Sparse ⌘-layer fixtures: (virtual key, character it types with ⌘ held).
+        type Layout<'a> = &'a [(u16, &'a str)];
+        let pick = |layout: Layout| v_key(|key| layout.contains(&(key, "v")));
+        let cases: [(&str, Layout, u16); 12] = [
+            ("US", &[(9, "v"), (47, "."), (11, "b")], 9),
+            ("Dvorak", &[(9, "k"), (47, "v"), (11, "x")], 47),
+            ("Dvorak - QWERTY ⌘", &[(9, "v"), (47, "."), (40, "k")], 9),
+            ("Dvorak - Right", &[(9, "j"), (43, "v")], 43),
+            ("AZERTY", &[(9, "v"), (12, "a"), (13, "z")], 9),
+            ("QWERTZ", &[(9, "v"), (6, "y"), (16, "z")], 9),
+            ("Colemak", &[(9, "v"), (2, "s"), (40, "e")], 9),
+            ("Colemak Mod-DH", &[(9, "d"), (11, "v")], 11),
+            ("Russian, Latin ⌘ layer", &[(9, "v"), (47, "ю")], 9),
+            ("Cyrillic only: physical V", &[(9, "м"), (47, "ю")], 9),
+            ("no v anywhere", &[(9, "ž"), (11, "V")], 9),
+            ("two v keys: lowest", &[(9, "c"), (3, "v"), (47, "v")], 3),
+        ];
+        for (name, layout, key) in cases {
+            assert_eq!(pick(layout), key, "{name}");
+        }
+        assert_eq!(pick(&[(9, "v"), (2, "v")]), 9, "kVK_ANSI_V wins a tie");
+    }
+    #[test]
+    #[ignore = "reads every installed macOS keyboard layout (read-only; no switching or typing)"]
+    fn native_installed_layout_paste_keys() {
+        #[link(name = "Carbon", kind = "framework")]
+        extern "C" {
+            fn TISCreateInputSourceList(properties: Ref, all_installed: bool) -> Ref;
+            static kTISPropertyInputSourceID: Ref;
+        }
+        let carbon = carbon().expect("Carbon TIS/UCKeyTranslate symbols");
+        let list = Owned::new(unsafe { TISCreateInputSourceList(ptr::null(), true) }).unwrap();
+        let mut keys = std::collections::BTreeMap::new();
+        for i in 0..unsafe { CFArrayGetCount(list.0) } {
+            let source = unsafe { CFArrayGetValueAtIndex(list.0, i) };
+            let id = cf_text(unsafe { (carbon.1)(source, kTISPropertyInputSourceID) });
+            if let (Some(id), Some(key)) = (id, unsafe { source_v_key(carbon, source) }) {
+                keys.insert(id, key);
+            }
+        }
+        let moved: Vec<_> = keys.iter().filter(|(_, &key)| key != ANSI_V).collect();
+        println!("{} layouts; off kVK_ANSI_V: {moved:?}", keys.len());
+        let current = paste_keycode();
+        println!("current layout paste key: {current}");
+        for (id, key) in [
+            ("US", 9),
+            ("Dvorak", 47),
+            ("DVORAK-QWERTYCMD", 9),
+            ("French", 9),
+            ("German", 9),
+            ("Colemak", 9),
+            ("Russian", 9),
+            ("Devanagari-QWERTY", 9),
+        ] {
+            let id = format!("com.apple.keylayout.{id}");
+            assert_eq!(keys.get(&id), Some(&key), "{id}");
+        }
+    }
     #[tokio::test]
     #[ignore = "pastes 20 markers into an explicitly named scratch Chrome/VS Code window"]
     async fn native_chromium_paste_matrix() {
