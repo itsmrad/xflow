@@ -29,6 +29,7 @@ api_key_env = "OPENAI_API_KEY"
 # prompt = "Keep my British spelling."
 timeout_secs = 20
 app_context = false          # opt in: tell the model the focused app id (never window contents)
+rewrite_selection = false    # opt in (macOS): a short hold over selected text rewrites it; sends the selection to the cleanup provider (never terminals, search or password fields)
 
 [hotkey]
 key = "fn"                  # macOS Fn/Globe; see docs/hotkeys.md for allowed keys/chords

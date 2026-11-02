@@ -166,6 +166,9 @@ pub struct CleanupConfig {
     pub timeout_secs: u64,
     /// Tell the cleanup model which app is focused (app id only, never window text).
     pub app_context: bool,
+    /// Opt in: a short hold over selected text rewrites it; the selection is sent to
+    /// the cleanup provider.
+    pub rewrite_selection: bool,
 }
 impl Default for CleanupConfig {
     fn default() -> Self {
@@ -178,6 +181,7 @@ impl Default for CleanupConfig {
             prompt: None,
             timeout_secs: 20,
             app_context: false,
+            rewrite_selection: false,
         }
     }
 }

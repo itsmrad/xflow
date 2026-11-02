@@ -17,6 +17,7 @@
 │                ││            Service               None chosen            ││                                         │
 │                ││            Model                 Recommended            ││                                         │
 │                ││            API key               Choose a service first ││                                         │
+│                ││            Edit selected text    Off                    ││                                         │
 │                ││            Remove um and uh      On                     ││                                         │
 │                ││            Spoken punctuation    Off                    ││                                         │
 │                ││            Spoken lists          On                     ││                                         │
@@ -29,7 +30,6 @@
 │                ││  Privacy   Save history          On                     ││                                         │
 │                ││            Keep last             500 dictations         ││                                         │
 │                ││            Local services only   Off                    ││                                         │
-│                ││            Share app name        Off                    ││                                         │
 ╰────────────────╯╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────╯
 
  ↑↓ move · Enter change · Esc back · Tab next page · ? help · q quit
