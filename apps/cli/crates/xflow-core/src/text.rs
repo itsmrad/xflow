@@ -162,7 +162,8 @@ pub fn prepare(text: &str, config: &Config, terminal: bool) -> (String, Outcome)
     }
     text = tidy(&text);
     text = crate::code::apply(&text, config, |s| {
-        crate::cues::apply(&crate::snap::apply(s, config, terminal), config, terminal)
+        let s = crate::title::apply(s, config);
+        crate::cues::apply(&crate::snap::apply(&s, config, terminal), config, terminal)
     });
     let pairs: Vec<_> = config
         .dictionary

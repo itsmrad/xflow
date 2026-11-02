@@ -597,6 +597,25 @@ fn filename(text: &str, w: &[Word<'_>], i: usize) -> Option<(usize, String)> {
 }
 
 /// A known extension, lowercased and repaired ("TOML", "jason", "envy").
+/// "use auth session dot ts" -> `useAuthSession.ts`, "user service dot py" ->
+/// `user_service.py`, when that file is a dictionary, vocabulary or window-title term.
+fn known_file(text: &str, w: &[Word<'_>], i: usize, config: &Config) -> Option<(usize, String)> {
+    (1..=3).rev().find_map(|n| {
+        let dot = i + n;
+        let range = w.get(i..dot + 2)?;
+        if !is(&w[dot], "dot") || !range.iter().all(|x| spoken(text, x)) || !joined(text, range) {
+            return None;
+        }
+        let stem: String = w[i..dot].iter().map(|x| x.text.to_lowercase()).collect();
+        let name = format!("{stem}.{}", ext(&w[dot + 1])?);
+        let mut terms = (config.dictionary.words.iter())
+            .chain(&config.stt.vocabulary)
+            .chain(&config.title_terms);
+        terms
+            .find(|t| t.to_lowercase().replace(['_', '-'], "") == name)
+            .map(|t| (dot + 2, t.clone()))
+    })
+}
 fn ext(word: &Word<'_>) -> Option<&'static str> {
     let lower = word.text.to_lowercase();
     EXTENSIONS
@@ -718,7 +737,8 @@ pub fn apply(text: &str, config: &Config, mut prose: impl FnMut(&str) -> String)
     }
     while i < w.len() {
         let (end, code, glue_before, glue_after) = if let Some((end, id)) =
-            identifier(text, &w, i, last)
+            known_file(text, &w, i, config)
+                .or_else(|| identifier(text, &w, i, last))
                 .or_else(|| fused(text, &w[i]).map(|id| (i + 1, id)))
                 .or_else(|| filename(text, &w, i))
         {

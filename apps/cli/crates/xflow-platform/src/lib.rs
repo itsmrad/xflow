@@ -20,7 +20,7 @@ pub use audio::{input_devices, CpalCapture, InputDevice};
 pub use bridge::run_desktop_bridge;
 #[cfg(target_os = "linux")]
 pub use desktop::LinuxDesktop as NativeDesktop;
-pub use desktop::{is_terminal, terminal_context, terminal_controls, LinuxDesktop};
+pub use desktop::{is_editor, is_terminal, terminal_context, terminal_controls, LinuxDesktop};
 #[cfg(target_os = "macos")]
 pub use macos::{
     microphone_permission, permissions, request_access, MacDesktop, MacDesktop as NativeDesktop,

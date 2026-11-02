@@ -9,6 +9,7 @@
 
 ### Privacy
 - **The focused app's name is no longer sent to the writing service by default.** Turn it on in Settings › Privacy › Share app name. If you had set `cleanup.app_context = true` yourself, it stays on. (#38)
+- **Opt in: spell the names in your editor's title bar.** With Settings › Privacy › Use window titles (`privacy.window_terms = true`, off by default), xflow reads the focused code editor's or terminal app's window title when you start dictating and picks out file, project and branch names. With `useTaskStore.ts — myapp` open, "open use task store" becomes `open useTaskStore` and "use task store dot ts" becomes `useTaskStore.ts`. Only a camelCase name said word for word, or a file name said with "dot", is changed, so ordinary sentences stay as you said them. Only editor and terminal apps are read: never browsers (even a web terminal), mail or password managers, never a password field. The title is never sent to a provider, saved or logged; a name you dictate becomes part of your text like any other word. A title that takes longer than 100 ms is skipped. (#65)
 
 ## 0.2.0-beta — 2026-10-29
 
