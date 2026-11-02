@@ -1,635 +1,210 @@
 # xflow dev pack. Fields (TAB-separated; trailing ones may be omitted; - = none):
 # canonical, safe heard forms, cued heard forms, left cues, right cues, left blockers, right blockers, continuations after a left cue.
 # A heard form is how speech-to-text mis-hears exactly the canonical: lowercase ASCII words, nothing extra.
-# Cued forms are everyday English or names and change only next to a cue word; blockers always win. See NOTICE.
+# Safe forms: every word is not English, not a name, not a digit or single letter, and the form is more than a case change.
+# Cued forms need an adjacent non-English cue; an English left cue (ask, hey, tell) also needs a continuation (to, about, for).
+# Cued forms change only lowercase input. See NOTICE.
 Claude Code	-	cloud code|claude code	ask|hey|tell	-	google|the|aws|azure	storage|provider|computing	to|about|for
-Claude	-	cloud|claude	ask|hey|tell	opus|sonnet|haiku|fable	google|the|aws|azure|on	storage|provider|computing|flare|front|cover|formation|service|services	to|about|for|opus|sonnet|haiku|fable
-Claude Haiku	claud haiku
-Codex	-	codecs|codex	ask|openai	cli|agent	video|audio|media	video|audio|compression	to|about|for
-Cursor	-	cursor	-	editor|ide|agent|composer	mouse|text|database	position|pointer|blink|blinks|blinking
-kubectl	kube ctl|kube control|cube ctl|kube cuddle|kube cuttle|kube c t l|cube c t l|koob control
-PostgreSQL	post gre sql|post gress sql|post gres sql|postgres sql|postgres ql|postgre sql|postgress sql|post gres q l|postgres q l
-Postgres	post gres|post gress|postgress|postgres
-Next.js	next js|nextjs|next j s|next jay s|next jas
-Vercel	vercell|versel|ver cell|vercel|versell
-Supabase	soupa base|supabase|soupabase	super base|supa base	-	auth|database|cli|realtime|postgres
-npm	n p m|n pm
-pnpm	p n p m|p npm|pn pm
-npx	n p x|n px
-GitHub	-	github|git hub	-	pull|actions|repository|repo|repos|issue|issues|copilot|org|organization|workflow|workflows|action|token|desktop|cli
-GitLab	gitlab
-OAuth	o auth|oh auth|oauth
-JSON	j son|json	jason	-	payload|schema|parser|array	-	bourne|derulo|statham|momoa
-YAML	yammel|yaml|yamle
-nginx	n ginx|enginex	engine x	-	proxy|config|conf|reverse|ingress
-SQLite	sql lite|s q lite|sql light
+Claude	-	cloud|claude	ask|hey|tell	-	google|the|aws|azure|on	storage|provider|computing|flare|front|cover|formation|service|services	to|about|for
+Codex	-	codecs|codex	ask|openai	cli	video|audio|media	video|audio|compression	to|about|for
+kubectl	kube ctl
+Postgres	postgress
+Next.js	nextjs
+Vercel	vercell|versel|versell
+Supabase	soupabase	super base|supa base|soupa base	-	cli|postgres
+GitHub	-	github|git hub	-	repo|repos|cli
+YAML	yammel|yamle
+nginx	enginex
 Redis	reddis|redditz
-Kafka	-	kafka	apache	topic|topics|broker|brokers|consumer|consumers|producer|producers|partition|partitions|cluster	franz	novel|story|book|stories
-Terraform	terraform
-Anthropic	anthro pic|an thropic	anthropic	-	api|claude|console|sdk
-OpenAI	openai	open ai|open a i	-	api|sdk|codex|whisper|embeddings|playground	an
-Gemini	-	gemini	google	api|cli|pro|flash|ultra|nano	-	zodiac|constellation|sign|twins
-Llama	-	llama	meta	weights|inference|3|4|cpp	-	animal|farm|wool|llamas
-Ollama	o llama|ollama|olama|o lama
-Hugging Face	huggingface	hugging face	-	hub|dataset|datasets|space|spaces|token|transformers|api|inference|repo
-PyTorch	py torch
-TypeScript	-	typescript|type script|types script	-	compiler|config|interface|generics
-JavaScript	-	javascript|java script	-	framework|engine|runtime|bundle|array
-Tailwind	-	tail wind|tailwind	-	css|config|v4|plugin|utilities	a|the|strong|nice	helps|helped
-Tailwind CSS	tailwind css|tail wind css|tailwind c s s
-shadcn	shadkin|shad cn|shad c n|shad cien|shad sea n|chad cn|chad c n|shad cen
-shadcn/ui	shadcn ui|shad cn ui|shad c n ui|chad cn ui
-tRPC	t r p c|trpc|t rpc|tea rpc
-gRPC	g r p c|grpc|g rpc|gee rpc
-WebSocket	websocket
-WebSockets	websockets
-Docker	-	dogger|docker	-	container|containers|compose|daemon|dockerfile|image|images|swarm	-	bank|boat|fisherman|sailed
+Anthropic	-	anthropic|anthro pic|an thropic	-	sdk
+OpenAI	-	open ai|open a i	-	sdk	an
+Gemini	-	gemini	-	cli|nano	-	zodiac|constellation|sign|twins
+Llama	-	llama	-	cpp	-	animal|farm|wool|llamas
+Ollama	olama
+Hugging Face	huggingface	hugging face	-	repo
+Tailwind	-	tail wind|tailwind	-	v4	a|the|strong|nice	helps|helped
+shadcn	shadkin
+shadcn/ui	shadcn ui
+Docker	-	dogger|docker	-	dockerfile	-	bank|boat|fisherman|sailed
 # AI products, models and companies
-ChatGPT	chat gpt|chat g p t|chatgpt|chat gbt|chat gtp|chat gpd|chat g b t|chad gpt|chat gp
-GPT	g p t|gpt
-GPT-4	gpt 4|gpt four|g p t 4|g p t four
-GPT-4o	gpt 4o|gpt four o|gpt 4 o|g p t 4o|gpt for o
-GPT-5	gpt 5|gpt five|g p t 5|g p t five
-o3	-	o 3|oh 3|o three|oh three	openai	mini|pro
-OpenAI Codex	openai codex|open ai codecs
-Copilot	-	copilot|co pilot	github|microsoft	agent|workspace|extension|suggestion|suggestions|autocomplete|completions|cli
-GitHub Copilot	github co pilot|git hub co pilot
-Microsoft Copilot	microsoft co pilot
-Gemini CLI	gemini cli|gemini c l i
-Google DeepMind	google deepmind
-DeepMind	deepmind	deep mind	google	research|lab|paper|ceo|researchers|alphafold
-AlphaFold	alphafold
-DeepSeek	deepseek|deep sik
-Mistral	-	mistral	-	api|large|7b|le|ai	the	wind|winds
-Mixtral	mixtral|mix tral
-Perplexity	-	perplexity	ask	api|comet|labs|sonar|ai
-Grok	-	grok|grock	ask	3|4|api|ai
-Groq	groq
-GroqCloud	grok cloud|groqcloud|groq cloud
-xAI	x ai|x a i|xai
-Midjourney	-	mid journey|midjourney	-	prompt|prompts|v6|v7|discord
-Stable Diffusion	-	stable diffusion	-	xl|checkpoint|webui|prompt|prompts
-DALL-E	dall e|dal e|dahl e	dolly|dali|dally	-	prompt|prompts|3	hello	parton|lama|sheep
-Sora	-	sora	openai	2
-Whisper	-	whisper	openai	transcription|v3|api|cpp	a|in	quietly|softly|sweet
-whisper.cpp	whisper cpp|whisper c p p|whisper dot cpp
-llama.cpp	llama cpp|llama c p p|llama dot cpp|lama cpp
-LangChain	lang chain|langchain|langchane
-LangGraph	lang graph|langgraph
-LangSmith	lang smith|langsmith
-LlamaIndex	llamaindex
-CrewAI	crewai
-AutoGen	autogen
-DSPy	d s p y|dspy|ds pie|ds py|d s pie
-vLLM	v llm|vllm|v l l m|vee llm
-LLM	l l m|llm
-LLMs	l l ms|llms|l l m s|el el ems
-MCP	m c p|mcp
-RAG	r a g	rag	-	pipeline|pipelines|retrieval|chatbot|eval|evaluation	-	doll|dolls|time|top|tag|rug
-LoRA	-	laura|lora	-	adapter|adapters|finetune|finetuning|weights	-	ingraham|palmer
-QLoRA	q lora|qlora|q laura
-RLHF	r l h f|rlhf
-GPU	g p u|gpu
-GPUs	g p us|gpus|g p u s
-CPU	c p u|cpu
-CPUs	c p us|cpus|c p u s
-TPU	t p u|tpu
-NPU	n p u|npu
-CUDA	cooda|cuda|c u d a|kooda
-Nvidia	n video|envidia|en vidia|in vidia|nvidea|n vidia|envidea
-AMD	a m d|amd
-Keras	keras|kerras
-scikit-learn	scikit learn|sci kit learn|sklearn|s k learn
-NumPy	num pie|numpy|num py|num pi|numpie|numb py
-Jupyter	jupyter	jupiter	-	notebook|notebooks|kernel	planet|moon|moons|mission|orbit
-JupyterLab	jupyter lab|jupyterlab
-Google Colab	google colab|google co lab|google collab
-Colab	colab	collab|co lab	google	notebook|notebooks|gpu|runtime
-Kaggle	kaggle|kaggel
-MLflow	ml flow|mlflow|m l flow
+GPT-4o	gpt 4o
+o3	-	o 3|oh 3|o three|oh three	openai
+Copilot	-	copilot|co pilot	-	cli
+DeepMind	-	deep mind	-	alphafold
+Mistral	-	mistral	-	7b	the	wind|winds
+Midjourney	-	mid journey|midjourney	-	v6|v7
+Stable Diffusion	-	stable diffusion	-	webui
+Sora	-	sora	openai
+Whisper	-	whisper	openai	v3|cpp	a|in	quietly|softly|sweet
+LangChain	langchane
+CUDA	cooda|kooda
+Nvidia	nvidea|envidea
+Keras	kerras
+scikit-learn	sklearn
+NumPy	numpie
+Kaggle	kaggel
 Weights & Biases	wandb
-Cohere	-	cohere	-	api|embed|embeddings|rerank
-OpenRouter	openrouter	open router	-	api|credits
-Deepgram	deepgram
-AssemblyAI	assemblyai
-ElevenLabs	elevenlabs|11 labs|11labs
-Windsurf	-	windsurf|wind surf	-	editor|ide|agent|cascade	-	board|boards|lesson|lessons
-Cline	-	cline	-	agent|extension|mcp	calvin
-Aider	-	aider	-	cli|agent	-	and
-Replit	replit|repl it|replet
-v0	v zero
-Codeium	codeium|code ium|codeum
-Tabnine	tabnine|tab 9
-Sourcegraph	sourcegraph
-Anysphere	anysphere
-JetBrains	jetbrains
-IntelliJ	intelli j|intellij|intel j|intelli jay|intellij ay
-IntelliJ IDEA	intellij idea|intelli j idea|intel j idea
-PyCharm	py charm|pycharm
-WebStorm	webstorm
-GoLand	goland
-RustRover	rustrover
-CLion	c lion|clion
-Xcode	x code|xcode
-VS Code	vs code|v s code|vscode|bs code|vee s code|vs coat
-Visual Studio	-	visual studio	-	2022|2026|solution|installer
-Neovim	neovim|nvim|n vim|neo vin
-Vim	-	vim	-	bindings|keybindings|motions|config|plugin|plugins|editor	-	and|vigor
-Emacs	e max|ee max|e macs|emax
-tmux	t mux|t mucks
-zsh	z s h|z shell
-Oh My Zsh	oh my zsh|oh my z s h|oh my z shell
-PowerShell	powershell
-WSL	w s l|wsl
-iTerm	iterm
-iTerm2	iterm2|i term 2|iterm 2
-Ghostty	ghostty
-Alacritty	alacritty|ala critty|alla critty
-WezTerm	wez term|wezterm
-Zed	-	zed	-	editor|ide|extension|extensions
+ElevenLabs	11labs
+Cline	-	cline	-	mcp	calvin
+Aider	-	aider	-	cli	-	and
+Replit	replet
+Codeium	codeum
+VS Code	vscode
+Neovim	nvim
+Emacs	emax
 # Languages and formats
-Java	-	java	-	jvm|spring|exception|8|11|17|21|25|backend	-	coffee|beans|island|sea|cup|script
-Kotlin	cotlin|kot lin
-Scala	-	scala	-	spark|sbt|3|compiler	la
-Go	-	go	-	routine|routines|struct|structs|fmt|toolchain|generics|compiler
-Golang	golang|go lang|goal ang
-Rust	-	rust	rewritten in|rewrite in|rewrote it in	crate|crates|compiler|binary|analyzer|toolchain|lang|async|traits|macro|macros|ownership|borrow|cli|backend|rewrite	-	on|stain|stains|proof|removal|belt|colored|bucket|spots|never
-Python	-	python	-	script|scripts|package|packages|3|module|modules|venv|interpreter|dict|sdk|api|typing	-	snake|snakes|skin|bite
-Ruby	-	ruby	-	bundler	-	ring|red|slippers|tuesday
+Java	-	java	-	jvm	-	coffee|beans|island|sea|cup|script
+Kotlin	cotlin
+Scala	-	scala	-	sbt	la
+Go	-	go	-	struct|structs|fmt|toolchain
+Rust	-	rust	-	toolchain|async|cli	-	on|stain|stains|proof|removal|belt|colored|bucket|spots|never
+Python	-	python	-	venv|sdk	-	snake|snakes|skin|bite
 Ruby on Rails	rubyonrails
-Rails	-	rails	ruby	console|migration|migrations|controller|controllers|api|generator	off|the|guard|hand|train
-C++	c plus plus|c p p
-C#	-	c sharp|see sharp	-	dotnet|language	-	major|minor|chord|note|scale|key
-.NET	-	dot net	-	core|framework|8|9|10|runtime|sdk|maui|aspire
-ASP.NET	a s p dot net|a s p net
-PHP	p h p|php|pee h pee
-Laravel	laravel|lara vel|laravell|lara bell
-Symfony	symfony
-Swift	-	swift	-	compiler|playground|concurrency|macro|macros	taylor	river|current|action|response|kick|kicks|reply|recovery
-SwiftUI	swift ui|swiftui|swift u i
-SwiftData	swiftdata
-Objective-C	objective c|objectivec
-Dart	-	dart	-	sdk|analyzer	-	board|boards|game|games
-Flutter	-	flutter	-	widget|widgets|sdk|doctor|plugin|plugins
+C#	-	c sharp|see sharp	-	dotnet	-	major|minor|chord|note|scale|key
+.NET	-	dot net	-	sdk
+Laravel	laravell
+Objective-C	objectivec
+Dart	-	dart	-	sdk	-	board|boards|game|games
+Flutter	-	flutter	-	sdk
 React Native	reactnative
-React	react js|reactjs|react j s	react	-	component|components|hook|hooks|query|props|19|18|dom|compiler|devtools	-	to|quickly|badly|well|strongly|differently|angrily|positively|negatively
-Vue.js	view js|vue js|vuejs|view j s|vue j s|viewjs
-Vue	-	vue	-	router|composition|devtools|sfc|component|components|3	the|a|of|my|your|our|this|that|point|to|in|with|using|learn
-Nuxt	nuxt|nuxt js|nuxtjs|nux js|knucks js|nux t|nucks
-Angular	-	angular	-	cli|signals|router|material|17|18|19|20	-	cheilitis|momentum|velocity|frequency|shape|face|features
-AngularJS	angular js|angularjs
-Svelte	svelt|svell te|svelty
-SvelteKit	sveltekit|svelt kit
-SolidJS	solid js|solidjs|solid j s
-Astro	-	astro	-	islands|starlight|config|framework
-Remix	-	remix	-	loader|loaders|framework	a|the|this
-Gatsby	-	gatsby	-	plugin|plugins|starter	great
-Django	d jango|jengo
-Flask	-	flask	-	route|routes|api|blueprint|blueprints|sqlalchemy	a|the|hip|vacuum|thermos|his|her|my
-FastAPI	fast api|fastapi|fast a p i|fast app i
-Pydantic	pydantic|pi dantic|pie dantic|py dantic	pedantic	-	v2|schema|schemas|validator|basemodel
-SQLAlchemy	sql alchemy|sqlalchemy|s q l alchemy
-Spring Boot	springboot	spring boot	-	starter|actuator
-Express	express js|expressjs|express j s	express	-	middleware|router
-NestJS	nest js|nestjs|nest j s
-Node.js	node js|nodejs|node j s|known js
-Deno	deno	dino	-	deploy|runtime|kv
-Bun	bun js|bunjs	bun	-	install|runtime|lockfile	hot|cinnamon|burger|sweet|honey|sticky
-Electron	-	electron	-	renderer|builder|forge|preload|ipc	an|the|one|each|free|valence|single
-Expo	-	expo	-	router|eas|cli|sdk|prebuild	world|trade|car|art|auto|food|travel
-Redux	redox js
-Zustand	zustand|zu stand|tsu stand|zoostand
-TanStack	tanstack
-TanStack Query	tanstack query
-React Query	-	react query	-	hook|hooks|cache|devtools|mutation|mutations
-Prisma	prisma|prizma
-Drizzle	-	drizzle	-	schema|schemas|migration|migrations|studio|orm|kit	light|steady
-Drizzle ORM	drizzle orm|drizzle o r m
-TypeORM	type orm|typeorm|type o r m
-Sequelize	sequelize|sequel ize
-Mongoose	-	mongoose	-	schema|schemas|middleware	the|a|wild|grey	snake|snakes
-Vite	veet|vite|vit js|vite js|vitejs|veet js
-Vitest	vi test|vitest|veet test|vite test
-Jest	-	jest	-	mock|mocks|matcher|matchers|snapshot|snapshots	in|a|half|the|only
-Playwright	-	playwright	-	trace|codegen|mcp|fixture|fixtures|locator|locators	famous|great|the
-Cypress	-	cypress	-	config|runner|dashboard	-	tree|trees|hill|swamp
-ESLint	eslint|e s lint|ee s lint|easel int
-Prettier	-	prettier	-	config|plugin|eslint|rc	-	than|and|now|today|girl|picture
-Babel	-	babel	-	config|plugin|plugins|preset|presets|loader|rc	tower|of	fish
-Turborepo	turbo repo|turborepo
-Nx	-	n x	-	monorepo|workspace|workspaces|cloud|console|graph
+React	reactjs	react|react js|react j s	-	devtools	-	to|quickly|badly|well|strongly|differently|angrily|positively|negatively
+Vue.js	vue js|vuejs|viewjs
+Vue	-	vue	-	devtools|sfc	the|a|of|my|your|our|this|that|point|to|in|with|using|learn
+Nuxt	nuxt js|nuxtjs|nux js
+Angular	-	angular	-	cli	-	cheilitis|momentum|velocity|frequency|shape|face|features
+Svelte	svelt|svelty
+Flask	-	flask	-	sqlalchemy	a|the|hip|vacuum|thermos|his|her|my
+Pydantic	-	pedantic|pi dantic|pie dantic|py dantic	-	v2|basemodel
+Spring Boot	springboot
+Express	expressjs	express|express js|express j s	-	middleware
+Node.js	nodejs
+Bun	bunjs	bun|bun js	-	lockfile	hot|cinnamon|burger|sweet|honey|sticky
+Electron	-	electron	-	preload|ipc	an|the|one|each|free|valence|single
+Expo	-	expo	-	eas|cli|sdk|prebuild	world|trade|car|art|auto|food|travel
+Zustand	zoostand
+React Query	-	react query	-	devtools
+Prisma	prizma
+Drizzle	-	drizzle	-	orm	light|steady
+Mongoose	-	mongoose	-	middleware	the|a|wild|grey	snake|snakes
+Vite	vit js|vitejs
+Playwright	-	playwright	-	codegen|mcp	famous|great|the
+Prettier	-	prettier	-	eslint	-	than|and|now|today|girl|picture
+Nx	-	n x	-	monorepo
 Lerna	learna
-Yarn	-	yarn	-	install|add|workspace|workspaces|berry|lock|lockfile	-	ball|balls|knit|knitting|shop
-Homebrew	-	home brew|homebrew	-	install|cask|formulae	-	beer|ale|kit|lager
-uv	-	u v	-	pip|sync|venv|init|python
-Poetry	-	poetry	-	install|lock|env|venv	the|of|read|write|wrote|loves|love
-conda	-	condo	-	env|activate|forge
-Anaconda	-	anaconda	-	navigator|prompt|installer	the|a|giant	snake|snakes
-pipx	pip x
-PyPI	pypi|pie p i|py pi|pipey
-Cargo	-	cargo	-	toml|clippy|fmt|crate|crates|bench	the|a|air|heavy|of	ship|ships|pants|plane|hold|bay
-Cargo.toml	cargo toml|cargo dot toml|cargo tommel
-rustc	rust c
-Clippy	-	clippy	cargo	lint|lints|warning|warnings|clean|config
-Lua	lua
-Luau	lu au
-Elixir	-	elixir	-	phoenix|genserver	an|the|magic|of
-Phoenix LiveView	phoenix liveview
-Erlang	ur lang|air lang|er lang
-Haskell	haskell|haskel|haskil
+Yarn	-	yarn	-	lockfile	-	ball|balls|knit|knitting|shop
+uv	-	u v	-	venv
+Poetry	-	poetry	-	venv	the|of|read|write|wrote|loves|love
+PyPI	pipey
+Cargo	-	cargo	-	toml|clippy|fmt	the|a|air|heavy|of	ship|ships|pants|plane|hold|bay
+Elixir	-	elixir	-	genserver	an|the|magic|of
+Haskell	haskil
 Clojure	clojur
-ClojureScript	clojurescript
-OCaml	o camel|o caml
-F#	-	f sharp	-	language	-	major|minor|chord|note|scale|key
-Zig	-	zig	-	compiler|toolchain|language	-	zag
-Solidity	-	solidity	-	contract|contracts|compiler
-WebAssembly	webassembly
-Wasm	wasm|wazzam|wasum|w a s m|waz em
-HTML	h t m l|html|h t m el
-HTML5	html five|h t m l five|html 5|h t m l 5
-CSS	c s s|css|see s s|c ss
-SCSS	s c s s|scss
-Sass	-	sass	-	css|variables|mixin|mixins|compiler|partials
-Bootstrap	-	bootstrap	-	css|modal|navbar	the|a|to|by
-jQuery	j query|jquery
-SQL	sql|s q l|ess q l	sequel|ess cue el	raw|plain	query|queries|database|databases|injection|join|joins|dialect|migration|migrations|schema	the|a|its|first|second|third|to|movie|film|book
-NoSQL	no sql|nosql|no s q l
-GraphQL	graph ql|graphql|graph q l|graph quel
-REST API	rest api|rest a p i|restful api
-TOML	tommel|toml|tom l|t o m l
-XML	x m l|xml|ex m l
-Markdown	-	mark down|markdown	-	syntax|preview|heading|headings|parser|renderer	-	price|prices|sale|stock|inventory
-MDX	m d x|mdx
-regex	regexp|reg exp|rej ex|redge ex
-cron	chron
-cron job	chron job|cronjob
-crontab	cron tab|chron tab
-README	readme	read me	-	md|badge	please|you|to|it
-CSV	c s v|csv|see s v
-TSV	t s v|tsv
-UUID	u u i d|uuid|you you i d|u u id
-GUID	g u i d|guid|gwid
-Base64	base 64
-UTF-8	utf 8|u t f 8|utf eight|u t f eight|utf8
+Zig	-	zig	-	toolchain	-	zag
+Wasm	wazzam|wasum
+Sass	-	sass	-	mixin|mixins
+Bootstrap	-	bootstrap	-	navbar	the|a|to|by
+TOML	tommel
+regex	regexp
+cron job	cronjob
+GUID	gwid
+UTF-8	utf8
 ASCII	asky
-Unicode	uni code
-URL	u r l|url
-URLs	u r ls|urls|u r l s
-URI	u r i
-HTTP	h t t p|http
-HTTPS	h t t p s|https
-API	a p i|api
-APIs	a p is|a p i s
-SDK	s d k|sdk
-SDKs	s d ks|sdks|s d k s
-CLI	c l i|cli
-CLIs	c l is|clis|c l i s
-UI	u i|ui
-UX	u x|ux
-UI/UX	ui ux|u i u x
-CI/CD	c i c d|ci cd|c i slash c d|ci slash cd|cicd
-CI	-	c i	fix|failing	pipeline|pipelines|config|workflow
-DevOps	dev ops|devops
-DevSecOps	dev sec ops|devsecops
-MLOps	m l ops|ml ops|mlops
-SRE	s r e|sre
-JWT	j w t|jwt|jay w t
-JWTs	j w ts|jwts|j w t s
-SSO	s s o|sso
-SAML	saml|sam l|s a m l
-LDAP	l dap|ldap|l d a p
-OIDC	o i d c|oidc
-OpenID Connect	openid connect
-TCP	t c p|tcp
-UDP	u d p|udp
-TCP/IP	tcp ip|t c p i p
-DNS	d n s|dns
-CDN	c d n|cdn
-VPN	v p n|vpn
-SSL	s s l|ssl
-TLS	t l s|tls
-SSH	s s h|ssh
-CORS	-	cors	-	error|errors|policy|header|headers|preflight|middleware
-CRUD	c r u d	crud	-	operations|api|apis|endpoints|endpoint|routes|generator
-ORM	o r m|orm
-MVC	m v c|mvc
-SPA	-	s p a	-	framework|routing
-SSR	s s r|ssr
-SSG	s s g|ssg
-PWA	p w a|pwa
-WebRTC	web rtc|webrtc|web r t c
-WebGL	web gl|webgl|web g l
-WebGPU	web gpu|webgpu|web g p u
-WebKit	webkit
-OpenSSL	open ssl|openssl|open s s l
+UI/UX	ui ux
+CI/CD	cicd
+CORS	-	cors	-	middleware
 Let's Encrypt	letsencrypt
-PR	p r
-PRs	p rs|prs|p r s
-monorepo	mono repo
-Dependabot	dependa bot|dependabot
-Gitpod	gitpod
-Codespaces	codespaces
-GitHub CLI	github cli|git hub cli
-GitLab CI	gitlab ci|git lab ci|gitlab c i|git lab c i
-Bitbucket	bitbucket
-git	-	get	-	rebase|stash|bisect
 # Cloud, infrastructure, ops
-AWS	a w s|aws
-GCP	g c p|gcp
-Azure	-	azure	microsoft	devops|ad|blob|openai|sql|cli|tenant|vm|vms|aks|kubernetes	the|clear|bright|sky	sky|skies|sea|blue|water|waters
-Azure DevOps	azure devops|azure dev ops
-Google Cloud	-	google cloud	-	storage|console|sdk|cli|billing|bucket|buckets
-EC2	e c 2|ec2|e c two|ec two
-S3	-	s3|s 3|s three	aws|amazon	bucket|buckets|storage|upload|uploads|url|urls|path
-AWS Lambda	aws lambda|a w s lambda
-DynamoDB	dynamo db|dynamo d b|dinamo db|dyno db
-RDS	r d s|rds
-Amazon Aurora	aws aurora
-CloudFront	cloudfront
-CloudWatch	cloudwatch
-CloudFormation	cloudformation	cloud formation|claude formation	aws	template|templates|stacks|drift|changeset|resource|resources
-CloudTrail	cloudtrail
-IAM	i a m|iam	i am	aws	role|roles|policy|policies
-VPC	v p c|vpc
-EKS	e k s|eks
-ECS	e c s|ecs
-ECR	e c r|ecr
-SQS	s q s|sqs
-SNS	s n s|sns
-Route 53	root 53
-Amazon Bedrock	aws bedrock
-SageMaker	sagemaker
-Fargate	fargate
-Redshift	-	redshift|red shift	aws|amazon	cluster|clusters|query|queries|warehouse|serverless|spectrum
-Amazon Athena	aws athena
+Azure	-	azure	-	devops|openai|cli|vm|vms|aks|kubernetes	the|clear|bright|sky	sky|skies|sea|blue|water|waters
+Google Cloud	-	google cloud	-	sdk|cli
+S3	-	s3|s 3|s three	-	urls
+CloudFormation	-	cloud formation|claude formation	-	changeset
+Redshift	-	redshift|red shift	-	serverless
 Kinesis	kenesis|kinnesis
-EventBridge	eventbridge
-AWS Step Functions	aws step functions
-AWS Amplify	aws amplify|a w s amplify
-Cognito	cognito|cog neato
-Firestore	firestore
-Cloud Functions	-	cloud functions	google|firebase
-GKE	g k e|gke
-Kubernetes	cooper netties|kuber netes|kubernetes|kuber nettys|cube ernetes|kuberneties|kubernetties|cooper nettys|kubernets|cube netties|kubernetis
-k8s	k eights|k 8 s|k8 s|k eight s
-Helm	-	helm	-	chart|charts|repo	the|at|take|took|taking
-minikube	mini kube|minicube
-Istio	istio|east ee oh
-Envoy	-	envoy	-	proxy|sidecar	special|an|the|us|un
-Argo CD	argo cd|argo c d|argocd
-Prometheus	-	prometheus	-	metrics|metric|alertmanager|exporter|exporters|scrape|alert|alerts
-Grafana	grafana|grafanna|graf ana
-Datadog	datadog
-New Relic	-	new relic	-	apm|dashboard|dashboards	a
-Sentry	-	sentry	-	sdk|dsn|trace|traces|replay	a|the|loyal|lone	duty|box|post
-PagerDuty	pagerduty
-OpenTelemetry	opentelemetry|otel|o tel
-Splunk	splunk|splunck
-Kibana	kibana|ki bana|kibbana
-Logstash	logstash
-OpenSearch	opensearch	open search	-	cluster|clusters|dashboards|serverless
-Pulumi	pulumi|pull oomy|poo loomy|pulumy
+Kubernetes	kuber netes|kuber nettys|kuberneties|kubernetties|kubernets|kubernetis
+Helm	-	helm	-	repo	the|at|take|took|taking
+minikube	minicube
+Argo CD	argocd
+Prometheus	-	prometheus	-	alertmanager
+Grafana	grafanna
+New Relic	-	new relic	-	apm	a
+Sentry	-	sentry	-	sdk|dsn	a|the|loyal|lone	duty|box|post
+OpenTelemetry	otel
+Splunk	splunck
+Kibana	kibbana
+OpenSearch	-	open search	-	serverless
+Pulumi	pulumy
 Ansible	ansibel|ansable
-HashiCorp	hashi corp|hashicorp
-HashiCorp Vault	hashicorp vault|hashi corp vault
-Jenkins	-	jenkins	-	pipeline|pipelines|plugin|plugins
-Jenkinsfile	jenkinsfile
-CircleCI	circle ci|circleci|circle c i
-Travis CI	travis ci|travis c i
-Podman	podman
-containerd	container d
 Linux	linnux|linix
-Ubuntu	ubunto|oo boon too|u bun two
-Alpine Linux	alpine linnux
+Ubuntu	ubunto
 Red Hat	redhat
-RHEL	r h e l|rhel
-OpenShift	openshift
-macOS	mac o s|macos|mac oh s
-iOS	i o s|ios|eye o s
-iPadOS	ipad os|ipados|ipad o s
-watchOS	watchos|watch o s
-visionOS	visionos|vision o s
-tvOS	tv os|tvos|t v o s
-iPhones	iphones
-iPad	ipad
-iPads	ipads
-MacBook	macbook
-MacBook Pro	macbook pro
-MacBook Air	macbook air
-iMac	imac
-AirPods	airpods
-TestFlight	testflight	test flight	-	beta|betas|testers|tester
-App Store	app store|appstore
-App Store Connect	app store connect|appstore connect
+App Store	appstore
 Play Store	playstore
-Android	-	android	-	studio|sdk|emulator|device|devices|phone|phones|14|15|16|17|manifest|gradle|kotlin	paranoid|an
-Gradle	gradle|gradel|grade le
-Maven	-	maven	-	central|plugin|pom|wrapper	a|the|real
-JVM	j v m|jvm
-JDK	j d k|jdk
-Chrome	-	chrome	-	browser|extension|extensions|devtools|canary|driver|headless	-	plated|plating|finish|wheels|bumper
-Chrome DevTools	chrome devtools
-Chromium	-	chromium	-	browser|browsers|based|fork	-	plating|plated
-Safari	-	safari	-	browser|extension|extensions|inspector|devtools	a|on|african|wildlife|desert	park|tour|trip|hat|holiday
-DevTools	devtools
-package.json	package dot json|package json|package dot j son
-tsconfig	ts config|t s config|tee s config
-tsconfig.json	tsconfig json|ts config json|tsconfig dot json|ts config dot json
-.env	-	dot env	-	local|example|variables|variable
+Android	-	android	-	sdk|gradle	paranoid|an
+Gradle	gradel
+Chrome	-	chrome	-	devtools	-	plated|plating|finish|wheels|bumper
+Safari	-	safari	-	devtools	a|on|african|wildlife|desert	park|tour|trip|hat|holiday
+tsconfig.json	tsconfig json
 # Data stores and backends
-MongoDB	mongo db|mango db|mongo d b|mongol db
-MongoDB Atlas	mongo db atlas|mango db atlas
-MySQL	my sql|my s q l	my sequel	-	database|databases|query|queries|workbench
-MariaDB	maria db|maria d b
-SQL Server	sql server|s q l server
-Cassandra	-	cassandra	apache	keyspace|cql|db
-CockroachDB	cockroach db|cockroachdb|cockroach d b
-Neo4j	neo four j|neo 4 j|neo4j|neo 4j|neo for j
-DuckDB	duck db|duckdb|duck d b
-ClickHouse	clickhouse
-Snowflake	-	snowflake	-	warehouse|warehouses|sql|cortex|connector|database	a|each|every|little|special	falls|fell|melts|melted
-Databricks	databricks
-PySpark	pyspark|py spark
-Hadoop	ha doop|had oop|hadoo
-Apache Flink	apache flink
-Apache Airflow	apache airflow
-Airflow	-	airflow|air flow	apache	dag|dags
-dbt	d b t
-Fivetran	fivetran|5tran
-Pinecone	-	pinecone|pine cone	-	vector|vectors|db|api|namespace|namespaces|serverless
-Weaviate	weaviate|weave iate|we v8|weave e8|weavy ate
-Qdrant	q drant|qdrant	quadrant|cue drant	-	vector|vectors|db
-Chroma	chromadb	chroma	-	db|vector|vectors
-ChromaDB	chroma db|chroma d b
-pgvector	pg vector|p g vector
-Milvus	mil vus|mill vus
-Memcached	memcache d|mem cache d
-RabbitMQ	rabbit mq|rabbitmq|rabbit m q
-Celery	-	celery	-	worker|workers|broker	-	stick|sticks|soup|salt|juice|root
-NATS	-	nats	-	jetstream|subject|subjects
-ZeroMQ	zero mq|zeromq|zero m q
-Neon	-	neon	-	postgres|database|databases|db|branching|serverless	the|a|bright|pink|green|blue	sign|signs|light|lights|lighting
-Turso	turso|tursso|terso
-PlanetScale	planetscale
-Upstash	upstash
-Convex	-	convex	-	mutation|mutations	a	lens|lenses|mirror|hull|shape|function
-Hasura	hasura
-Clerk	-	clerk	-	auth|middleware|webhook|webhooks|sdk	the|a|bank|desk|county|court|city|store|hotel|law|shop
-Auth0	auth zero|auth 0|auth0|oauth zero|auth o
-Okta	okta|octa
-Firebase Auth	firebase auth|fire base auth
-Stripe	-	stripe	-	api|checkout|webhook|webhooks|sdk|cli	a|one|each|white|red|blue|black|pin|racing
-Twilio	twilio|twillio|twileo|twilleo
-SendGrid	sendgrid
-Mailgun	mailgun
-Algolia	algolia|al golia
-Meilisearch	meili search|meilisearch|miley search|mili search
-Typesense	typesense
-Postman	-	postman	-	api|workspace|workspaces|cli|mock|mocks|flows	the|a|our	delivered|came|brought
-Swagger	-	swagger	-	spec|json|yaml|codegen
-OpenAPI	openapi	open api	-	spec|specs|specification|schema|schemas|generator|yaml|json	an
-Protobuf	proto buf|protobuf|protobuff
-ffmpeg	f f mpeg|ff mpeg|f f m peg|f f m p e g|eff eff mpeg|ff m peg|f fmpeg
-ImageMagick	image magick|imagemagick
-jq	-	j q	-	filter|expression
-ripgrep	rip grep
-fzf	f z f|f zed f
-htop	h top
-Wireshark	wireshark
-ngrok	n grok|en grok|end grok|in grok
-Tailscale	tailscale
-WireGuard	wireguard
-Cloudflare	cloudflare
-Cloudflare Workers	cloudflare workers
-Cloudflare Pages	cloudflare pages
-Cloudflare R2	cloudflare r2|cloud flare r2|cloudflare r 2
-Akamai	akamai|aca my
-Netlify	net lify|netlify|nettlify|netlefy|net ify
-Heroku	hero ku|herokku|hero koo
-DigitalOcean	digitalocean	digital ocean	-	droplet|droplets|kubernetes|vps
-Linode	linode
-Hetzner	hetzner|hets ner|het sner|hetsner
-Coolify	coolify|cool ify
-Caddy	-	caddy	-	proxy|reverse	golf|the
-Caddyfile	caddyfile
-Traefik	traefik	traffic	-	middleware|middlewares|ingress|entrypoint|entrypoints
-HAProxy	h a proxy|haproxy
-Apache	-	apache	-	license|http|webserver|httpd	-	helicopter|helicopters|tribe|tribes|nation|chief|warrior
-# Companies and products
-Google	-	google	-	cloud|sheets|drive|maps|chrome|play|workspace|meet|calendar|analytics|ads|gemini|pixel|colab|firebase|fonts|api
-Microsoft	-	microsoft|micro soft	-	azure|office|word|excel|outlook|copilot|365|windows|edge|graph|entra|store
-Microsoft 365	microsoft 365
-Office 365	office 365
-Meta	-	meta	-	ai|llama|quest
+Cassandra	-	cassandra	-	keyspace|cql
+Hadoop	hadoo
+Fivetran	5tran
+Pinecone	-	pinecone|pine cone	-	namespace|namespaces|serverless
+Chroma	chromadb
+Neon	-	neon	-	postgres|serverless	the|a|bright|pink|green|blue	sign|signs|light|lights|lighting
+Turso	tursso
+Clerk	-	clerk	-	middleware|webhook|webhooks|sdk	the|a|bank|desk|county|court|city|store|hotel|law|shop
+Stripe	-	stripe	-	webhook|webhooks|sdk|cli	a|one|each|white|red|blue|black|pin|racing
+Twilio	twillio|twileo|twilleo
+Postman	-	postman	-	cli	the|a|our	delivered|came|brought
+Swagger	-	swagger	-	json|yaml|codegen
+OpenAPI	-	open api	-	yaml|json	an
+Protobuf	protobuff
+Netlify	nettlify|netlefy
+Heroku	herokku
+DigitalOcean	-	digital ocean	-	kubernetes|vps
+Hetzner	hets ner|hetsner
+Traefik	-	traffic	-	middleware|middlewares
+Apache	-	apache	-	webserver|httpd	-	helicopter|helicopters|tribe|tribes|nation|chief|warrior
+# Safe forms: every word is not English, not a name, not a digit or single letter, and the form is more than a case change. Cued forms need an adjacent non-English cue; an English left cue (ask, hey, tell) also needs a continuation (to, about, for). Cued forms change only lowercase input. See NOTICE.
+Google	-	google	-	colab
+Microsoft	-	microsoft|micro soft	-	entra
 Netflix	netflicks
-Intel	-	intel	-	chip|chips|cpu|cpus|processor|processors|xeon
-Qualcomm	qualcom|qual comm|quall comm
-TSMC	t s m c|tsmc
-Samsung	-	samsung	-	galaxy|phone|phones|tv|display|electronics|internet
-Huawei	huawei|hua wei
-Xiaomi	xiaomi|xiao mi|shao mi
-ByteDance	bytedance
-TikTok	tik tok|tiktok	tick tock	-	video|videos|creator|creators|influencer|influencers|trend|trends	clock|clocks|the	goes|went
-Instagram	insta gram|instergram
-WhatsApp	whats app|whatsapp|watts app
-LinkedIn	linkedin	linked in	-	profile|profiles|recruiter|newsletter|inmail
-Reddit	reddit|redit	read it	-	subreddit|karma|upvotes
-Pinterest	pinterest
-Snapchat	snapchat
-Discord	-	discord	-	bot|bots|webhook|nitro
-Twitch	-	twitch	-	stream|streams|streamer|streamers|streaming|emote|emotes	a|the|nervous|muscle
-Spotify	spotify|spot ify|spotty fy
-Airbnb	air bnb|airbnb|air b and b|air b n b|air bee n bee
-DoorDash	doordash
-Instacart	insta cart|instacart
-Shopify	shopify|shop ify|shoppify
-eBay	e bay|ebay
-Venmo	venmo|ven mo|vemo|venmoe
-Coinbase	coinbase
-Robinhood	-	robin hood|robinhood	-	trading|crypto|ipo	-	and|men|merry|legend
-Palantir	palantir|palan tear|palanteer|pallantir
-Oracle	-	oracle	-	database|db|java|jdk|erp|netsuite|sql	the|an|of|delphi|delphic
-SAP	s a p	sap	-	erp|hana|fiori|abap|ariba|concur
-SAP HANA	sap hana|s a p hana
-S/4HANA	s4 hana|s four hana|s 4 hana|s4hana
-IBM	i b m|ibm
-Atlassian	atlassian|at lassian|atlassien|at lassien
-Dropbox	-	dropbox|drop box	-	api|sync	a|the|our|night
-Cisco	-	cisco	-	webex|router|routers|meraki|networking
-Lenovo	lenovo|lenova|len ovo
-Logitech	logi tech|logitech
-Adobe	-	adobe	-	photoshop|acrobat|illustrator|premiere|firefly|xd|lightroom|indesign	-	house|houses|brick|bricks|walls|hut|huts
-Photoshop	photoshop
-Figma	figma|figmo|figmah
-FigJam	figjam
-Canva	canva|kanva|canvah
-Webflow	webflow
-Miro	-	miro	-	whiteboard
-Loom	-	loom	-	video|videos|recording|recordings
-Calendly	calendly|calend ly|calendaly|calendlee
-Zapier	zapier|zappier|zappy er|zap e er
-n8n	n eight n|n 8 n|nate n|n 8n
-Mixpanel	mixpanel
-PostHog	posthog
-LaunchDarkly	launchdarkly
-Optimizely	optimizely
-Zendesk	zendesk
-Freshdesk	freshdesk
-Auth.js	auth js|authjs|auth dot js
-NextAuth	next auth|nextauth
-Passport.js	passport js|passportjs
-Three.js	three js|threejs|3 js|three j s
-D3.js	d3 js|d three js|d 3 js|d3js
-Chart.js	chart js|chartjs|chart j s
-Recharts	recharts
-GSAP	g sap|gsap|g s a p
+Intel	-	intel	-	cpus|xeon
+Qualcomm	qualcom
+Instagram	instergram
+LinkedIn	-	linked in	-	inmail
+Reddit	-	read it	-	subreddit
+Discord	-	discord	-	webhook
+Shopify	shoppify
+Venmo	vemo|venmoe
+Palantir	palanteer|pallantir
+Oracle	-	oracle	-	jdk|erp|netsuite	the|an|of|delphi|delphic
+SAP	-	sap|s a p	-	erp|fiori|abap|ariba
+S/4HANA	s4hana
+Atlassian	atlassien
+Cisco	-	cisco	-	webex|meraki
+Lenovo	lenova
+Adobe	-	adobe	-	xd|indesign	-	house|houses|brick|bricks|walls|hut|huts
+Figma	figmo|figmah
+Canva	kanva|canvah
+Calendly	calendaly|calendlee
+Zapier	zappier
+Auth.js	authjs
+Passport.js	passportjs
+Three.js	threejs
+D3.js	d3 js|d3js
+Chart.js	chartjs
 Lottie	lottee
-Radix UI	radix ui|ray dix ui|radix u i
-Material UI	material ui|material u i
-MUI	m u i|mui
-Chakra UI	chakra ui|chakra u i
 Ant Design	antd
-Headless UI	headless ui|headless u i
-Hono	hono|hono js|hono dot js
-Fastify	fastify|fast ify|fasty fy
-Koa	koa js|koajs
-Socket.IO	socketio|socket i o
-Axios	axios|axioss|axe eos|ax eos
-Lodash	lodash
-Moment.js	moment js|momentjs
-date-fns	date fns|date f n s
-Zod	-	zod|zodd	-	schema|schemas|validation|v4
+Hono	hono js
+Koa	koajs
+Socket.IO	socketio
+Axios	axioss
+Moment.js	momentjs
+Zod	-	zod|zodd	-	v4
 Immer	immer js
-RxJS	r x js|rxjs|rx js|r x j s
 Rollup	rollup js|rollupjs
-esbuild	e s build|ee s build
-SWC	s w c|swc
-Rspack	r s pack|rspack
-Biome	-	biome	-	lint|linter|formatter|js|json
-Deno Deploy	deno deploy|dino deploy
-Cloudflare D1	cloudflare d1|cloudflare d one|cloud flare d1
-Supabase Edge Functions	supabase edge functions
-Vercel AI SDK	vercel ai sdk|versal ai sdk|vercel a i sdk|vercel ai s d k
-AI SDK	ai sdk|a i sdk|a i s d k|ai s d k
-Mastra	mastra
-Pipecat	pipecat
-LiveKit	livekit
-Turbopack	turbopack
-Jotai	jotai
-MobX	mob x|mobx
+Biome	-	biome	-	js|json
 Xamarin	zamarin|zamaran
-.NET MAUI	dot net maui|net maui
-Blazor	blazor|blazor app
-Godot	guh doe|godo
-Raspberry Pi	raspberry py
-Arduino	ardweeno|ar duino
-ESP32	esp 32|e s p 32|esp thirty two|e s p thirty two
-NFC	n f c|nfc
-USB-C	usb c|u s b c|usbc|usb see
-HDMI	h d m i|hdmi
-SSD	s s d|ssd
-NVMe	n v m e|nvme|n v me|nv me
-OLED	o l e d|oled
-ARM64	arm 64|arm64|a r m 64
-x86	x 86|x eighty six|ex 86
-x86-64	x86 64|x 86 64|x eighty six sixty four
+Arduino	ardweeno
+USB-C	usbc

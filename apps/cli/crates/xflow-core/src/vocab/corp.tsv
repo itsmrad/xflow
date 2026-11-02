@@ -1,222 +1,29 @@
 # xflow corp pack: business, SaaS and workplace terms. Same format as dev.tsv.
-OKR	o k r|okr|oh k r
-OKRs	o k rs|okrs|o k r s|oh k rs
-KPI	k p i|kpi|kay p i
-KPIs	k p is|kpis|k p i s
-ARR	a r r	arr	million	target|targets|multiple|milestone	-	matey|me|pirate
-MRR	m r r|mrr
-ACV	a c v|acv
-TCV	t c v|tcv
-CAC	c a c|cac
-LTV	l t v|ltv
-LTV/CAC	ltv cac|l t v c a c|ltv to cac
-NRR	n r r|nrr
-GRR	g r r
-NPS	n p s|nps
-CSAT	c sat|c s a t|csat
-SaaS	saas|s a a s	sass	b2b|enterprise|vertical	startup|startups|metrics|pricing|vendor|vendors|founder|founders
-B2B	b 2 b|b2b|b to b
-B2C	b 2 c|b2c|b to c
-D2C	d 2 c|d2c|d to c
-SMB	s m b|smb
-SMBs	s m bs|smbs|s m b s
-GTM	g t m|gtm
-ICP	i c p|icp
-SDR	s d r|sdr
-SDRs	s d rs|sdrs|s d r s
-BDR	b d r|bdr
-CRM	c r m|crm|see r m
-ERP	e r p|erp
-HRIS	h r i s|hris|h ris|h r is
-ATS	a t s
-PTO	p t o|pto
-EOD	e o d|eod
-EOW	e o w|eow
-ETA	e t a
-ASAP	a s a p|asap
-FYI	f y i|fyi
-TL;DR	t l d r|tldr|tl dr|t l dr
-POC	p o c|poc
-MVP	m v p|mvp
-PRD	p r d|prd
-RFP	r f p|rfp
-RFQ	r f q|rfq
-RFI	r f i|rfi
-SOW	s o w
-NDA	n d a|nda
-NDAs	n d as|ndas|n d a s
-MSA	m s a|msa
-SLA	s l a
-SLAs	s l as|slas|s l a s
-SLO	s l o|slo
-SOC 2	sock 2|s o c 2|s o c two|soc ii|sock ii|soc2	soc 2|sock two|soc two	-	audit|compliance|compliant|certification|certified|controls
-SOC 2 Type II	soc 2 type 2|sock 2 type 2|soc 2 type two|soc 2 type ii
-ISO 27001	iso 27001|i s o 27001|iso 27 001
-GDPR	g d p r|gdpr
-CCPA	c c p a|ccpa
-HIPAA	hipaa|h i p a a|hipa
-PCI DSS	pci dss|p c i d s s|pci d s s
-PCI	p c i|pci
-FedRAMP	fedramp
-RBAC	r bac|r b a c|rbac
-C-suite	c suite
-CEO	c e o|ceo|see e o
-CTO	c t o|cto
-CFO	c f o|cfo
-COO	c o o
-CPO	c p o|cpo
-CMO	c m o|cmo
-CRO	c r o
-CISO	c i s o|ciso
-CHRO	c h r o|chro
-VP	v p|vee p
-SVP	s v p|svp
-EVP	e v p|evp
-HR	h r
-QBR	q b r|qbr
-QBRs	q b rs|qbrs|q b r s
-Q1	q 1|q one
-Q2	q 2|q two
-Q3	q 3|q three
-Q4	q 4|q four
-YoY	y o y
-QoQ	q o q|qoq
-MoM	m o m
-YTD	y t d|ytd
-WFH	w f h|wfh
-RTO	r t o
-OOO	o o o
-PIP	p i p
-ESOP	e sop|e s o p|ee sop|esop
-RSU	r s u|rsu
-RSUs	r s us|rsus|r s u s
-401(k)	401 k|four oh one k|four o one k|401k|four zero one k
-W-2	w 2|w two
-W-9	w 9|w nine
-LLC	l l c|llc
-GmbH	g m b h|gmbh
-DEI	d e i|dei
-ESG	e s g|esg
-CSR	c s r
-L&D	l and d|l n d
-Kanban	kanban	can ban|kan ban	-	method|column|columns
-Scrum	-	scrum	-	master|masters|sprint|sprints|framework|ceremony|ceremonies
-Gantt chart	gannt chart|gantt chart
-RACI	r a c i|raci	racy	-	matrix|chart
-SWOT	s w o t	swat|swot	-	analysis|matrix
-insurtech	insur tech
-omnichannel	omni channel
-Salesforce	-	sales force|salesforce	-	crm|lightning|apex|einstein|agentforce	the|our|their|a|your|direct|field|inside|outside
-Agentforce	agentforce
-HubSpot	hubspot
-Workday	-	workday	-	hcm|financials|tenant	a|the|every|each|long|short|normal|typical|whole|full|my|your|our
-ServiceNow	servicenow	service now	-	itsm
-Jira	jira|gira|jirra
-Jira ticket	jira ticket|gira ticket
-Confluence	-	confluence	-	wiki	the|a	of
-Trello	trello|trelo|trell oh
-Asana	-	asana	-	workspace	yoga|a|the	pose|poses
-Monday.com	monday dot com|monday com
-ClickUp	clickup	click up	-	workspace
-Notion	-	notion	-	workspace|ai|wiki	a|the|no|any|vague|faint|this|that|false|romantic	of|that
-Linear	-	linear	-	ticket|tickets|triage|workspace	a|non|the
-Slack	-	slack	-	channel|channels|workspace|workspaces|huddle|huddles|dm|dms|bot|bots|emoji	some|cut|take|pick|no|of|any|little|more	off|tide|water|jaw|jawed
-Microsoft Teams	m s teams
-Teams	-	teams	microsoft	chats	two|our|the|sales|product|engineering|all|both|cross|different|multiple|small|large|their|your|my|many|other|several|three|four|support|design|data|security|ops|remote
-Zoom	-	zoom	-	webinar|webinars|invite|invites	-	in|out|lens|level|into
-Google Workspace	google workspace
-G Suite	g suite|gsuite
-Gmail	g mail
-Outlook	-	outlook	-	calendar|calendars|email|emails|inbox	the|an|positive|negative|economic|financial|bright|bleak|stable|future|our|my	for|on
-PowerPoint	-	power point	-	deck|decks|slide|slides|presentation|presentations
-Google Docs	google docs
-OneDrive	onedrive	one drive	-	folder|folders|sync
-DocuSign	docu sign|docusign|docu signed
-Gong	-	gong	-	insights|ai	a|the	show|sound|rang
-Salesloft	salesloft
-ZoomInfo	zoominfo
-Marketo	marketo|marquetto
-Pardot	pardot
-Mailchimp	mailchimp
-Klaviyo	klaviyo|clavio|clay vio|klavio
-Intercom	-	intercom	-	messenger|bot|fin|widget	the|an|over
-Gainsight	gainsight
-Pendo	pendo
-Qualtrics	qualtrics|qual trics|qualtricks
-SurveyMonkey	surveymonkey
-Typeform	typeform
-Power BI	power bi|power b i|powerbi
-Looker	-	looker	-	studio|lookml|dashboard|dashboards	a|real|quite
-Metabase	metabase
-NetSuite	netsuite
-Oracle NetSuite	oracle netsuite
-BambooHR	bamboo h r|bamboo hr
-Rippling	-	rippling	-	payroll	-	water|muscles|effect|effects
-Gusto	-	gusto	-	payroll	with|great|such|real
-Deel	deel	-	-	-	a|the|big|good|great|done|no|real
-Justworks	justworks	just works	-	payroll|peo
-ADP	a d p|adp
-Paychex	paychex
-Greenhouse	-	greenhouse	-	ats|scorecard|scorecards|requisition	the|a	gas|gases|effect|emissions
+LTV/CAC	ltv cac
+SaaS	-	sass|s a a s	b2b
+TL;DR	tldr
+SOC 2	soc2
+HIPAA	hipa
+401(k)	401k
+Salesforce	-	sales force|salesforce	-	crm|agentforce	the|our|their|a|your|direct|field|inside|outside
+Workday	-	workday	-	hcm	a|the|every|each|long|short|normal|typical|whole|full|my|your|our
+ServiceNow	-	service now	-	itsm
+Jira	jirra
+Trello	trelo
+G Suite	gsuite
+Marketo	marquetto
+Klaviyo	clavio|klavio
+Qualtrics	qual trics|qualtricks
+Power BI	powerbi
+Looker	-	looker	-	lookml	a|real|quite
+Justworks	-	just works	-	peo
 Lattice	-	lattice	-	okrs	a|the|crystal	structure|energy|work
-1Password	1password	one password	-	vault|vaults|cli
-LastPass	lastpass	last pass	-	vault|vaults
-Bitwarden	bitwarden
-CrowdStrike	crowdstrike
-Palo Alto Networks	palo alto networks
-Zscaler	z scaler|zscaler
-SentinelOne	sentinelone
-Snyk	snyk	sneak|snick	-	cli|vulnerability|vulnerabilities|iac
-Vanta	vanta
-Drata	drata|drahta|dra ta
-Expensify	expensify|expense ify|expensive fy
-Brex	brex	bricks	-	expense|expenses|reimbursement
-Bill.com	bill dot com|bill com
-Coupa	coupa
-SAP Concur	s a p concur
-Concur	-	concur	-	expense|expenses	i|we|they|you|fully|both|all	with|that
-Navan	nav an
-Airtable	airtable
-Lucidchart	lucidchart
-Visio	visio
-Grammarly	grammarly|grammerly
+1Password	-	one password	-	cli
+Snyk	-	sneak|snick	-	cli|iac
+Drata	drahta
+Grammarly	grammerly
 Help Scout	helpscout
-Freshworks	freshworks
-Zoho	zoho
-Zoho CRM	zoho crm|zo ho crm
-Pipedrive	pipedrive
-Dynamics 365	dynamics 365
-SuccessFactors	successfactors	success factors	sap	module|instance|admin|employee|integration
-Coda	-	coda	-	ai	a|the
-Basecamp	-	base camp|basecamp	-	todo|todos	the|a|everest|mountain
-Wrike	wrike
-Toggl	toggl
-Clockify	clockify|clock ify
-Glean	-	glean	-	ai|connector|connectors	to|can|we|i|you|might|could
-Okta Verify	okta verify|octa verify
-Workday HCM	workday hcm|workday h c m
-Calendly link	calendly link|calendaly link
-Docusign envelope	docusign envelope|docu sign envelope
-LinkedIn Sales Navigator	linkedin sales navigator
-Superhuman	-	superhuman	-	inbox|shortcut|shortcuts	-	strength|effort|feat
-Zendesk ticket	zendesk ticket
-Freshservice	freshservice
-PagerDuty incident	pagerduty incident
-Atlassian Rovo	atlassian rovo
-Rovo	rovo|row vo
-Figma file	figma file
-Workato	workato|work ato
-MuleSoft	mulesoft
-Boomi	boomi
-Segment	-	segment	-	cdp|protocols	a|the|each|every|market|customer|this|that|one|our|new
-Databricks SQL	databricks sql|data bricks sql
-Gartner	gartner|gartener
-Gartner Magic Quadrant	gartner magic quadrant
-McKinsey	mckinsey|mc kinsey
-Deloitte	deloitte|de loitte
-PwC	p w c|pwc|p double u c
-KPMG	k p m g|kpmg
+Segment	-	segment	-	cdp	a|the|each|every|market|customer|this|that|one|our|new
+Gartner	gartener
 Accenture	ascenture
-Y Combinator	y combinator|ycombinator
-YC	y c
-a16z	a 16 z|a sixteen z
+Y Combinator	ycombinator

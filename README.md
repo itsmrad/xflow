@@ -141,8 +141,8 @@ xflow completions bash > xflow.bash
 ```
 
 Shipped term packs fix mis-heard developer, business, spreadsheet and finance
-terms locally after transcription ("kube control" → kubectl, "v lookup" → VLOOKUP,
-"e bit da" → EBITDA). Ordinary English changes only next to a technical context word:
+terms locally after transcription ("kube ctl" → kubectl, "zlookup" → XLOOKUP,
+"ebida" → EBITDA). Ordinary English changes only next to a technical context word:
 "ask cloud to review" becomes "ask Claude to review", "cloud storage" stays, and a
 capitalised word keeps its case. `[vocab]`
 turns packs on or off: dev and corp everywhere (dev always in terminals and
