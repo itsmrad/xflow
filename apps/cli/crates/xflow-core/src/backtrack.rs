@@ -134,9 +134,7 @@ pub fn apply(text: &str) -> (String, Outcome) {
                 // A cue left over after a repair ("buy 3 apples, I mean 4, no, 5"),
                 // or brackets and quotes the edit left unbalanced: nothing is edited.
                 if edited != text
-                    && (ambiguous
-                        || Ctx::new(&edited).any_cue()
-                        || balanced(text) && !balanced(&edited))
+                    && (ambiguous || Ctx::new(&edited).any_cue() || marks(text) != marks(&edited))
                 {
                     return (text.to_owned(), Outcome::Ambiguous);
                 }
@@ -160,29 +158,18 @@ pub fn ambiguous(text: &str) -> bool {
     apply(text).1 == Outcome::Ambiguous
 }
 
-/// Brackets close in order, and straight quotes and backticks pair up.
-fn balanced(text: &str) -> bool {
-    let mut open = Vec::new();
-    for c in text.chars() {
-        match c {
-            '(' | '[' | '{' | '“' => open.push(c),
-            ')' | ']' | '}' | '”' => {
-                let want = match c {
-                    ')' => '(',
-                    ']' => '[',
-                    '}' => '{',
-                    _ => '“',
-                };
-                if open.pop() != Some(want) {
-                    return false;
-                }
-            }
-            _ => {}
-        }
-    }
-    open.is_empty()
-        && text.matches('"').count().is_multiple_of(2)
-        && text.matches('`').count().is_multiple_of(2)
+/// Open-minus-close count of each bracket and curly quote, and the parity of
+/// straight quotes and backticks: an edit must leave all of them as they were.
+fn marks(text: &str) -> [i64; 6] {
+    let n = |c: char| text.matches(c).count() as i64;
+    [
+        n('(') - n(')'),
+        n('[') - n(']'),
+        n('{') - n('}'),
+        n('“') - n('”'),
+        n('"') % 2,
+        n('`') % 2,
+    ]
 }
 /// A quote mark, or a possessive that may be one; an apostrophe inside a word
 /// ("o'clock", "don’t") isn't. An edit never spans one.
@@ -535,14 +522,14 @@ fn pass(text: &str) -> (Option<String>, bool) {
     let mut i = 0;
     while i < c.t.len() {
         let Some(end) = c.cue(i) else {
-            // A sentence ending in a refused cancel ("He called. Just scratch that.")
-            // goes to the model, unless it is quoted or mentioned ("the phrase …").
-            if let Some((end, ["scratch", "that"] | ["never", "mind"])) = c.phrase(i) {
+            // A refused cancel ("He called. Just scratch that, please.") goes to the
+            // model, unless it is quoted or mentioned ("the phrase scratch that").
+            if let Some((_, ["scratch", "that"] | ["never", "mind"])) = c.phrase(i) {
                 let mention = i > 0
                     && !c.initial(i)
                     && (MENTIONS.contains(&c.lower(i - 1))
                         || DETERMINERS.contains(&c.lower(i - 1)));
-                ambiguous |= !c.quoted[i] && !mention && (end == c.t.len() || c.initial(end));
+                ambiguous |= !c.quoted[i] && !mention;
             }
             // Skip only the refused phrase: "Sorry, scratch that." still cancels.
             i = c.phrase(i).map_or(i + 1, |(end, _)| end);
@@ -933,6 +920,21 @@ mod tests {
             ("We should call Alice, no no ( we should call Bob ).", "We should call Alice, no no ( we should call Bob ).", Ambiguous),
             ("I will use the old setting, no no @ I will use the new setting.", "I will use the old setting, no no @ I will use the new setting.", Ambiguous),
             ("Meet at noon (bring notes. Scratch that. Call me).", "Meet at noon (bring notes. Scratch that. Call me).", Ambiguous),
+            // Tenth review: a refused cancel with a tail still goes to the model.
+            ("Call Bob. Just scratch that, please.", "Call Bob. Just scratch that, please.", Ambiguous),
+            ("Call Bob. Just scratch that please.", "Call Bob. Just scratch that please.", Ambiguous),
+            ("He left. Just never mind, thanks.", "He left. Just never mind, thanks.", Ambiguous),
+            ("Call Bob. Then scratch that, ok.", "Call Bob. Then scratch that, ok.", Ambiguous),
+            ("Call Bob. Just scratch that, okay?", "Call Bob. Just scratch that, okay?", Ambiguous),
+            ("Just scratch that, sorry.", "Just scratch that, sorry.", Ambiguous),
+            ("Just scratch that, bring notes.", "Just scratch that, bring notes.", Ambiguous),
+            ("We should scratch that idea.", "We should scratch that idea.", Ambiguous),
+            // No edit changes a bracket's open/close balance, even an unbalanced one.
+            ("1) Buy milk. 2) I will call Alice (at 3, no no I will call Bob at 5) today.", "1) Buy milk. 2) I will call Alice (at 3, no no I will call Bob at 5) today.", Ambiguous),
+            ("Note: a) call me (at 3, no no call me at 5) later.", "Note: a) call me (at 3, no no call me at 5) later.", Ambiguous),
+            ("Done :) I will call Alice (at 3, no no I will call Bob at 5) later.", "Done :) I will call Alice (at 3, no no I will call Bob at 5) later.", Ambiguous),
+            ("Ok :( I will send (three boxes, no no I will send five boxes) now.", "Ok :( I will send (three boxes, no no I will send five boxes) now.", Ambiguous),
+            ("a) buy 3 apples), I mean 4.", "a) buy 3 apples), I mean 4.", Ambiguous),
         ] {
             assert_eq!(apply(input), (output.to_owned(), outcome), "{input}");
             assert_eq!(ambiguous(input), outcome == Ambiguous, "{input}");
@@ -973,6 +975,181 @@ mod tests {
                 );
             }
         }
+    }
+    /// Lowercase words, for the word-loss and word-gain checks.
+    fn counted(s: &str) -> std::collections::HashMap<String, usize> {
+        let mut out = std::collections::HashMap::new();
+        for w in s
+            .split(|c: char| !c.is_alphanumeric() && !matches!(c, '_' | '\'' | '’'))
+            .filter(|w| !w.is_empty())
+        {
+            *out.entry(w.to_lowercase()).or_default() += 1;
+        }
+        out
+    }
+    /// The round-10 review harness, fixed seed: templated corrections, cancels,
+    /// refused cancels and bracketed restarts, plus random cue soup.
+    fn fuzz_cases() -> Vec<(String, Option<String>, u8)> {
+        let mut seed = 0x107_2026_1010_u64;
+        let mut pick = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed as usize) % n
+        };
+        let nums = [
+            "3", "4", "5", "three", "four", "five", "30", "40", "3.1", "3.2", "3:30", "4:45",
+        ];
+        let cues = [
+            "no",
+            "actually",
+            "I mean",
+            "I meant",
+            "make that",
+            "correction",
+            "sorry",
+            "no wait",
+            "wait no",
+            "no no",
+        ];
+        let fillers = [
+            "",
+            "um, ",
+            "umm, ",
+            "oh, ",
+            "please, ",
+            "you know, ",
+            "hm, ",
+            "well, ",
+            "hey, now, ",
+            "yeah, ",
+            "right, ",
+            "alright, ",
+            "uhm, ",
+            "mhm, ",
+        ];
+        let pres = [
+            "Just ",
+            "Totally ",
+            "On second thought ",
+            "Okay so just ",
+            "Then ",
+            "Oh just ",
+            "Simply ",
+            "Kindly ",
+            "Instead ",
+            "Forget it ",
+        ];
+        let gaps = [
+            ", ", "; ", " — ", ",\t", ",  ", ", - ", ", $ ", ", ( ", ", ‘ ", ", @ ", ", + ", ", − ",
+        ];
+        let ends = [".", "!", "?", ";", ",", " —"];
+        let brackets = [
+            ("(", ")"),
+            ("[", "]"),
+            ("{", "}"),
+            ("“", "”"),
+            ("\"", "\""),
+            ("`", "`"),
+            ("( ", " )"),
+            ("", ""),
+        ];
+        let tails = [
+            ", please", " please", ", okay", ", thanks", ", sorry", " now", ", ok",
+        ];
+        let mut cases = Vec::new();
+        for n in 0..4_000 {
+            let (a, b, cue) = (
+                nums[pick(nums.len())],
+                nums[pick(nums.len())],
+                cues[pick(cues.len())],
+            );
+            let (fill, gap, end) = (
+                fillers[pick(fillers.len())],
+                gaps[pick(gaps.len())],
+                ends[pick(ends.len())],
+            );
+            let (o, c) = brackets[pick(brackets.len())];
+            let pre = pres[pick(pres.len())];
+            let cancel = ["scratch that", "never mind"][pick(2)];
+            let fin = [".", "!", "?", ""][pick(4)];
+            let lead = ["", "a) ", "1) ", ":) "][pick(4)];
+            cases.push(match n % 13 {
+                0 => (format!("Save receipt. We need {a} boxes, {cue}{gap}{b}{end} Archive the backup."), Some(format!("Save receipt. We need {b} boxes. Archive the backup.")), 0),
+                1 => (format!("Save receipt. Send it to John, {cue}{gap}to Mike{end} Archive the backup."), Some("Save receipt. Send it to Mike. Archive the backup.".into()), 0),
+                2 => (format!("Save receipt. Call John. {fill}{cancel}. Archive the backup."), Some("Save receipt. Archive the backup.".into()), 0),
+                3 => (format!("Save receipt. I will send {a} boxes, {cue}{gap}I will send {b} boxes{end} Archive the backup."), Some(format!("Save receipt. I will send {b} boxes. Archive the backup.")), 0),
+                4 => (format!("Save receipt. Call John. {pre}{cancel}{fin}{}", [" Archive the backup.", ""][pick(2)]), None, 1),
+                5 => (format!("Call John. {pre}{cancel}{fin}"), None, 1),
+                6 => (format!("{lead}Save receipt. I will send {a} boxes, {cue} {o}I will send {b} boxes{c}. Archive."), None, 2),
+                7 => (format!("{lead}Save receipt {o}I will send {a} boxes, {cue} I will send {b} boxes{c}. Archive."), None, 2),
+                8 => (format!("{lead}Save {o}{a} boxes, {cue}, {b}{c} now. Send it {o}to John, sorry, to Mike{c}."), None, 2),
+                9 => (format!("{lead}{o}Call me at {a}{c}, {cue} {o}call me at {b}{c} later."), None, 2),
+                10 | 11 => (format!("{lead}I will call Alice {o}at {a}, {cue} I will call Bob at {b}{c} later."), None, 2),
+                _ => (format!("Call John. {pre}{cancel}{}{}", tails[pick(tails.len())], [".", "!", "?"][pick(3)]), None, 1),
+            });
+        }
+        let pool = [
+            "save", "receipt", "send", "John", "Mike", "3", "4", "5", "three", "five", "no",
+            "wait", "sorry", "actually", "make", "it", "that", "scratch", "never", "mind", "just",
+            "I", "mean", "um", "uhm", "please", "you", "know", "boxes", "backup", "don't", "α",
+            "naïve", "二", "dogs'", "o'clock",
+        ];
+        let punct = [
+            " ", ", ", ". ", "; ", ": ", "! ", "? ", " — ", " - ", " + ", " $ ", " ( ", " ) ",
+            " [", "] ", " “", "” ", " \"", " ‘ ", " ’ ", "\n", " ", " ",
+        ];
+        for _ in 0..1_000 {
+            let mut s = String::new();
+            for _ in 0..2 + pick(20) {
+                s.push_str(pool[pick(pool.len())]);
+                s.push_str(punct[pick(punct.len())]);
+            }
+            cases.push((s, None, 3));
+        }
+        cases
+    }
+    #[test]
+    fn fuzz_never_loses_glues_or_unbalances() {
+        let start = std::time::Instant::now();
+        for (input, protected, kind) in fuzz_cases() {
+            let (output, outcome) = std::panic::catch_unwind(|| apply(&input))
+                .unwrap_or_else(|_| panic!("panicked: {input:?}"));
+            match outcome {
+                Outcome::Ambiguous | Outcome::Unchanged => {
+                    assert_eq!(output, input, "{outcome:?} edited {input:?}")
+                }
+                Outcome::Discarded => assert!(output.is_empty(), "{input:?}"),
+                Outcome::Edited => {
+                    let (before, after) = (counted(&input), counted(&output));
+                    assert!(
+                        after
+                            .iter()
+                            .all(|(w, n)| before.get(w).is_some_and(|m| m >= n)),
+                        "added or glued words: {input:?} -> {output:?}"
+                    );
+                    if let Some(p) = &protected {
+                        assert!(
+                            counted(p)
+                                .iter()
+                                .all(|(w, n)| after.get(w).is_some_and(|m| m >= n)),
+                            "lost words: {input:?} -> {output:?}"
+                        );
+                    }
+                    assert_eq!(
+                        marks(&input),
+                        marks(&output),
+                        "brackets: {input:?} -> {output:?}"
+                    );
+                }
+            }
+            // A refused cancel always reaches the model (see `cleanup_can_help`).
+            assert!(
+                kind != 1 || outcome == Outcome::Ambiguous,
+                "{outcome:?}: {input:?}"
+            );
+        }
+        eprintln!("backtrack fuzz: 5,000 cases in {:?}", start.elapsed());
     }
     #[test]
     fn repairs_stay_linear() {
