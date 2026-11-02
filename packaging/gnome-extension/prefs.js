@@ -146,8 +146,7 @@ export default class XFlowPreferences extends ExtensionPreferences {
         combo(feedback, 'idle-style', 'When idle', ['hidden', 'minimal'], ['Hidden', 'Minimal handle']);
         toggle(feedback, 'animations', 'Animations', 'Also respects the system’s Reduce Motion setting.');
         toggle(feedback, 'show-messages', 'Show messages');
-        number(feedback, 'success-hold-ms', 'Success duration (ms)', 0, 60000, 100);
-        number(feedback, 'error-hold-ms', 'Error duration (ms)', 0, 60000, 100);
+        number(feedback, 'error-hold-ms', 'Alert duration (ms)', 0, 2000, 100);
         window.connect('close-request', () => {
             capture?.close();
             for (const id of connections) settings.disconnect(id);

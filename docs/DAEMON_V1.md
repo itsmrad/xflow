@@ -75,8 +75,8 @@ open/close balance, or the pairing of straight quotes or backticks, is not made.
 its own clause deletes the sentence before it (a full stop after "Mr." ends no
 sentence, and an unsure one such as "p.m.", "St." or "etc." refuses the edit);
 after a full stop it is always a cancel, even after "said" or "that"; at the end of a dictation it
-discards all of it: nothing is cleaned or pasted, the status and the macOS pill
-say "Discarded", and history records `cleanup: discarded`. Emphasis, apologies,
+discards all of it: nothing is cleaned or pasted, the status says "Discarded"
+(the pill stays hidden), and history records `cleanup: discarded`. Emphasis, apologies,
 negation ("no, no one came"), quoted or backticked text, flags and mentions ("the
 phrase scratch that") are left alone. Any other cue stays in the text verbatim
 and makes model cleanup run.

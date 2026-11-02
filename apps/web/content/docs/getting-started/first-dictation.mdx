@@ -13,11 +13,7 @@ Capture starts the moment you press. After 150 ms the start sound plays and the 
 <Pill state="listening" />
 </Step>
 <Step title="Let go">
-The pill switches to processing while the provider transcribes.
-
-<Pill state="processing" />
-
-The text lands at your cursor, with a trailing space so you can keep going.
+The pill collapses and the text lands at your cursor, with a trailing space so you can keep going.
 </Step>
 </Steps>
 
@@ -35,7 +31,7 @@ A normal dictation moves through `listening`, `processing` and `success`. The fi
 
 xflow keeps the transcript before it tries to deliver it, so a failed paste never loses your words.
 
-- If the app or window changed, or the field isn't editable, the text is copied instead. The pill says “Copied — press ⌘V to paste”.
+- If the app or window changed, or the field isn't editable, the text is copied instead. The pill shows “Copied — paste with ⌘V” in red for 2 s.
 - On macOS, password fields refuse dictation.
 - Multi-line text is never pasted into a terminal automatically; it stays on the clipboard.
 

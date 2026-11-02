@@ -18,7 +18,7 @@ Without `--json`, `watch` prints each event as a small `FIELD / VALUE` table, or
 | State | Meaning |
 | --- | --- |
 | `idle` | Nothing in progress |
-| `listening` | Recording. `message` is `Hands-free recording` while latched |
+| `listening` | Recording. `message` is `Hands-free recording` while latched. It adds `Can't hear you — check mic` after 2 s with no sound since recording began (cleared by the first sound), and `Recording stops in 1 min` 60 s before `recording.max_seconds` (caps over 60 s). Both are advisories; recording continues |
 | `processing` | Transcribing, cleaning up and delivering |
 | `success` | Done. Kept until the next recording or cancel |
 | `error` | Failed. `message` says why. Kept until the next recording or cancel |

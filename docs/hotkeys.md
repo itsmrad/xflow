@@ -76,17 +76,20 @@ a missing tap, e.g. after granting Input Monitoring. Timing values are bounded:
 The macOS pill is a small dark capsule just above the Dock on the screen under
 the mouse, modeled on Wispr Flow's bar. While you are listening it shows a live
 waveform. In hands-free mode it gets wider and adds ✕ (cancel) and ■ (stop)
-buttons. While processing, the bars collapse into shimmering dots. On error it
-flashes red with a shake, then fades. It never takes focus. Clicks pass through
-it, except on the hands-free buttons. With Reduce Motion it shows and hides
-without animating.
+buttons. While you are listening it turns amber for "Can't hear you — check
+mic" (no sound since you started) and "Recording stops in 1 min". When you
+release the key or stop, it collapses at once; pasting and copying happen
+silently. Only a failure brings it back: a red pill for at most 2 s with a
+short reason ("Couldn't transcribe", "No speech heard", "Couldn't paste", "Recording failed", or "Copied — paste with ⌘V" when the text could not be pasted). It never takes focus. Clicks pass through it, except on the
+hands-free buttons. With Reduce Motion it shows and hides without animating.
+`xflow watch`, `xflow status` and history still carry the full outcome.
 
-| Listening | Hands-free | Processing | Error |
-|---|---|---|---|
-| ![](img/pill-listening.png) | ![](img/pill-hands-free.png) | ![](img/pill-processing.png) | ![](img/pill-error.png) |
+| Listening | Hands-free | Failure |
+|---|---|---|
+| ![](img/pill-listening.png) | ![](img/pill-hands-free.png) | ![](img/pill-error.png) |
 
 The pill runs as a transient sibling process, `xflow overlay-pill`. It receives
-only state, level and a hands-free flag, over bounded stdin frames. It is drawn
+only state, level, a hands-free flag, the listening hints and a failure kind, over bounded stdin frames. It is drawn
 with CALayers and animates at about 60 fps only while it is visible. It exits
 when the session ends. `xflowd` never loads AppKit, and a missing or crashed
 helper does not stop recording. `xflow` must be installed next to `xflowd` so

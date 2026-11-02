@@ -80,7 +80,7 @@ Settings include `theme` (light/dark/auto), `position` (bottom-center, top-cente
 bottom-left, bottom-right, top-left, top-right), `monitor` (primary/focused/pointer),
 `margin`, `offset-x`, `offset-y`, `scale`, `opacity`, `waveform-bars`,
 `waveform-style` (rounded/thin/square), `idle-style` (hidden/minimal), `animations`,
-`show-messages`, `success-hold-ms`, `error-hold-ms`, `hotkey-mode` and
+`show-messages`, `error-hold-ms` (failure alert, at most 2000), `hotkey-mode` and
 `ptt-threshold-ms`. Pointer monitor selection is sampled on activation and layout
 updates, without idle polling. Placement uses the monitor work area and HiDPI
 scale, and clamps offsets to keep the pill on screen. The old `position=top` and

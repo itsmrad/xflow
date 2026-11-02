@@ -191,25 +191,29 @@ export default class XFlowExtension extends Extension {
         if (!this._enabled) return;
         const s = this._settings;
         const g = this._geometry;
-        const idle = this._state === 'idle';
+        // Shown only while listening; after release only a failure alerts, briefly.
+        const listening = this._state === 'listening';
+        const hint = L.isHint(this._state, this._message);
+        const alert = listening ? null : L.alertText(this._state, this._message, this._previous);
+        const idle = !listening && !alert;
         const minimal = idle && s.get_string('idle-style') === 'minimal';
         const theme = L.resolveTheme(s.get_string('theme'), this._desktop.get_string('color-scheme'));
-        this._pill.style_class = `xflow-pill xflow-${theme} xflow-${this._state}${this._mode === 'command' ? ' xflow-command' : ''}`;
+        this._pill.style_class = `xflow-pill xflow-${theme}${this._mode === 'command' ? ' xflow-command' : ''}${alert ? ' xflow-alert' : hint ? ' xflow-hint' : ''}`;
         this._pill.remove_all_transitions();
         const sf = this._themeContext.scale_factor;
         this._pill.set_style(`padding: ${minimal ? 0 : 8 * s.get_double('scale')}px ${minimal ? 0 : g.padX}px; spacing: ${g.spacing}px; max-width: ${g.maxWidth}px; border-radius: ${g.height / 2}px;`);
         this._pill.height = (minimal ? g.handleHeight : g.height) * sf;
         this._pill.width = minimal ? g.handleWidth * sf : -1;
-        this._wave.visible = ACTIVE.has(this._state);
-        for (let i = 0; i < this._bars.length; i++) this._bars[i].visible = this._state !== 'processing' || i < 5;
-        this._icon.visible = this._state === 'success' || this._state === 'error';
-        this._icon.icon_name = this._state === 'error' ? 'dialog-warning-symbolic' : 'object-select-symbolic';
+        this._wave.visible = listening;
+        this._icon.visible = Boolean(alert) || hint;
+        this._icon.icon_name = 'dialog-warning-symbolic';
         this._icon.icon_size = g.iconSize;
-        const labels = {listening: this._mode === 'command' ? 'Command' : 'Listening', processing: 'Processing', success: 'Done', error: 'XFlow error'};
-        this._label.text = this._message ?? labels[this._state] ?? '';
+        const listeningLabel = this._mode === 'command' ? 'Command' : 'Listening';
+        this._label.text = alert ?? this._message ?? listeningLabel;
         this._label.set_style(`font-size: ${g.fontSize}px; max-width: ${Math.max(80, g.maxWidth - g.width - 40)}px;`);
-        this._label.visible = !idle && s.get_boolean('show-messages');
-        this._pill.accessible_name = idle ? 'XFlow ready' : `XFlow ${labels[this._state]}`;
+        // Alert and hint text stay visible: they need the user to act.
+        this._label.visible = !idle && (s.get_boolean('show-messages') || Boolean(alert) || hint);
+        this._pill.accessible_name = idle ? 'XFlow ready' : alert ? `XFlow: ${alert}` : hint ? `XFlow: ${this._message}` : `XFlow ${listeningLabel}`;
         const opacity = Math.round(s.get_double('opacity') * 255);
         if (idle && !minimal) {
             this._cancelSource('_frameSource');
@@ -252,7 +256,7 @@ export default class XFlowExtension extends Extension {
     }
 
     _syncFrames() {
-        const animate = ACTIVE.has(this._state) && this._animations();
+        const animate = this._state === 'listening' && this._animations();
         if (!animate) this._cancelSource('_frameSource');
         this._drawFrame(0);
         if (animate && !this._frameSource) {
@@ -282,6 +286,7 @@ export default class XFlowExtension extends Extension {
         ++this._revision;
         const changed = this._state !== event.state || this._mode !== (event.mode ?? this._mode)
             || this._message !== (event.message ?? null);
+        if (event.state !== this._state) this._previous = this._state;
         this._state = event.state;
         this._mode = event.mode ?? this._mode;
         this._message = event.message ?? null;
@@ -297,8 +302,8 @@ export default class XFlowExtension extends Extension {
 
     _scheduleHold() {
         this._cancelSource('_holdSource');
-        if (this._state !== 'success' && this._state !== 'error') return;
-        const ms = L.holdTime(this._state, {successMs: this._settings.get_int('success-hold-ms'), errorMs: this._settings.get_int('error-hold-ms')});
+        if (this._state === 'listening' || !L.alertText(this._state, this._message, this._previous)) return;
+        const ms = L.holdTime(this._settings.get_int('error-hold-ms'));
         this._holdSource = this._timeout(Math.max(1, ms), () => {
             this._holdSource = 0;
             this._update({state: 'idle'});

@@ -457,8 +457,33 @@ export class HotkeyMachine {
 }
 
 /** How long a terminal state stays on screen before collapsing. */
-export function holdTime(state, {successMs, errorMs}) {
-    if (state === 'success') return clamp(finite(successMs, 900), 0, 60000);
-    if (state === 'error') return clamp(finite(errorMs, 4000), 0, 60000);
-    return 0;
+// Daemon messages (daemon.rs COPIED, NOT_CAUGHT, INJECTION_FAILED, NO_SIGNAL, ENDS_SOON).
+export const COPIED = 'Copied — press Ctrl+V to paste';
+export const NOT_CAUGHT = "Didn't catch anything";
+const HINTS = ["Can't hear you — check mic", 'Recording stops in 1 min'];
+export const ALERT_MS = 2000;
+
+/** Listening advisory: shown while the key is held; recording continues. */
+export function isHint(state, message) {
+    return state === 'listening' && HINTS.some(hint => message?.includes(hint));
+}
+
+/**
+ * Brief text for the short red pill after release, or null to stay hidden.
+ * Only failures the user must act on alert; a paste, an asked-for copy or a
+ * discard is silent. `previous` is the state before this event.
+ */
+export function alertText(state, message, previous) {
+    if (state === 'idle') return message === NOT_CAUGHT ? 'No speech heard' : null;
+    if (state === 'success') return message?.startsWith(COPIED) ? 'Copied — paste with Ctrl+V' : null;
+    if (state !== 'error') return null;
+    if (message === NOT_RUNNING) return message;
+    if (message?.startsWith('Injection failed')) return "Couldn't paste";
+    if (previous === 'processing') return "Couldn't transcribe";
+    if (previous === 'listening') return 'Recording failed';
+    return message ?? 'XFlow error'; // a command or setup failure outside a dictation
+}
+
+export function holdTime(errorMs) {
+    return clamp(finite(errorMs, ALERT_MS), 0, ALERT_MS);
 }
