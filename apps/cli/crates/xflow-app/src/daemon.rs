@@ -60,8 +60,8 @@ fn native_audio(config: &xflow_core::config::RecordingConfig) -> Result<Arc<dyn 
 }
 
 struct Processed {
-    /// Command after a rewrite of the selection (resolved only once processing ends).
-    mode: Mode,
+    /// The text rewrites `target.selected_text` (resolved only once processing ends).
+    rewrite: bool,
     /// Clipboard only: a failed rewrite must leave the selection untouched.
     copy: bool,
     provider: String,
@@ -93,6 +93,9 @@ const START_GRACE: Duration = Duration::from_secs(5);
 const DRAIN_EVERY: Duration = Duration::from_secs(1);
 /// Longer selections are dictated over, not rewritten: one model call stays fast.
 const MAX_REWRITE_CHARS: usize = 6000;
+/// Longer speech over a selection is replacement text, pasted as dictated.
+const REWRITE_WORDS: usize = 12;
+const REWRITE_FAILED: &str = "Rewrite failed; selection left untouched";
 struct Opening {
     mode: Mode,
     context: Option<AppContext>,
@@ -165,6 +168,8 @@ pub struct Engine {
     opening: Option<Opening>,
     /// A hotkey session not yet revealed: capture runs, but no cue or pill.
     quiet: bool,
+    /// This session latched hands-free; it never rewrites a selection.
+    hands_free: bool,
     reloading: bool,
     delivering: bool,
     state: State,
@@ -261,6 +266,7 @@ impl Engine {
             rearming: false,
             opening: None,
             quiet: false,
+            hands_free: false,
             reloading: false,
             delivering: false,
             state: State::Idle,
@@ -683,6 +689,7 @@ impl Engine {
         }
         self.advance();
         self.retrying = false;
+        self.hands_free = hands_free;
         self.mode = mode;
         self.delivery = delivery;
         self.started = Some(Instant::now());
@@ -717,6 +724,7 @@ impl Engine {
         let focus = self.focus.clone();
         // A hold with text selected may rewrite it; the read shares the context's focus walk.
         let rewrite = mode == Mode::Dictation
+            && !hands_free
             && delivery == Delivery::Inject
             && context.is_none()
             && self.config.cleanup.rewrite_selection
@@ -938,6 +946,7 @@ impl Engine {
         let generation = self.generation;
         let epoch = self.epoch.clone();
         let session_mode = self.mode;
+        let hands_free = self.hands_free;
         let mut context = self.context_job.take();
         let mut timings = self.timings.clone();
         // Read where the text lands while transcription runs. A read past 100 ms is
@@ -1064,7 +1073,7 @@ impl Engine {
                     xflow_providers::find_provider(xflow_providers::ProviderKind::Stt, &provider)
                         .map(|p| p.default_model.to_owned())
                 };
-                let (target, terms) = if let Some(ref mut job) = context {
+                let (mut target, terms) = if let Some(ref mut job) = context {
                     match tokio::time::timeout(Duration::from_secs(2), &mut *job).await {
                         Ok(Ok(c)) => c,
                         _ => {
@@ -1075,31 +1084,6 @@ impl Engine {
                 } else {
                     Default::default()
                 };
-                // Only a dictation's context job reads a selection: a hold over one rewrites it.
-                let mut rewrite = session_mode == Mode::Dictation
-                    && target.selected_text.as_deref().is_some_and(|s| !s.trim().is_empty());
-                if rewrite && target.selected_text.as_deref().is_some_and(|s| s.chars().count() > MAX_REWRITE_CHARS) {
-                    rewrite = false;
-                    add_warning(&mut warning, "Selection is over 6,000 characters; dictated instead of rewriting");
-                }
-                // A failed rewrite leaves the selection alone: the text goes to the clipboard.
-                let mut copy = false;
-                if let Some(e) = failed {
-                    // A partial instruction must never run against the selection.
-                    if session_mode == Mode::Command {
-                        return Err(e.context("part of the command could not be transcribed; selection left untouched"));
-                    }
-                    if rewrite {
-                        (rewrite, copy) = (false, true);
-                        add_warning(&mut warning, "Rewrite skipped; selection left untouched");
-                    }
-                    add_warning(&mut warning, &format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered{note}"));
-                }
-                let session_mode = if rewrite { Mode::Command } else { session_mode };
-                let selection = target.selected_text.as_deref().unwrap_or("");
-                if selection.len() > MAX_MESSAGE_BYTES {
-                    bail!("selected text exceeds safety limit");
-                }
                 let terminal = xflow_platform::terminal_context(&target);
                 // Title names are for this dictation's local formatting only (see `title::apply`).
                 let titled = (!terms.is_empty()).then(|| {
@@ -1120,7 +1104,40 @@ impl Engine {
                 let instructions = style
                     .and_then(|s| s.prompt.as_deref())
                     .or(config.cleanup.prompt.as_deref());
-                let dictation = session_mode != Mode::Command;
+                // A short hold over a selection rewrites it (only a dictation's context job reads
+                // one). Longer speech is replacement text: it pastes as dictated.
+                let mut rewrite = session_mode == Mode::Dictation
+                    && !hands_free
+                    && !discarded
+                    && mode != CleanupMode::Raw
+                    && local.split_whitespace().count() <= REWRITE_WORDS
+                    && target.selected_text.as_deref().is_some_and(|s| !s.trim().is_empty());
+                if rewrite && target.selected_text.as_deref().is_some_and(|s| s.chars().count() > MAX_REWRITE_CHARS) {
+                    rewrite = false;
+                    add_warning(&mut warning, "Selection is over 6,000 characters; dictated instead of rewriting");
+                }
+                if session_mode == Mode::Dictation && !rewrite {
+                    target.selected_text = None;
+                }
+                // A failed rewrite leaves the selection alone: the dictation goes to the clipboard.
+                let mut copy = false;
+                if let Some(e) = failed {
+                    // A partial instruction must never run against the selection.
+                    if session_mode == Mode::Command {
+                        return Err(e.context("part of the command could not be transcribed; selection left untouched"));
+                    }
+                    if rewrite {
+                        (rewrite, copy) = (false, true);
+                        add_warning(&mut warning, REWRITE_FAILED);
+                    }
+                    add_warning(&mut warning, &format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered{note}"));
+                }
+                let command = session_mode == Mode::Command || rewrite;
+                let selection = target.selected_text.as_deref().unwrap_or("");
+                if selection.len() > MAX_MESSAGE_BYTES {
+                    bail!("selected text exceeds safety limit");
+                }
+                let dictation = !command;
                 let cleanup = services
                     .transformer
                     .filter(|_| !discarded && (!dictation || mode != CleanupMode::Raw));
@@ -1140,18 +1157,14 @@ impl Engine {
                     let cleanup_start = Instant::now();
                     let transformed = transformer
                         .transform(TransformRequest {
-                            text: if session_mode == Mode::Command {
-                                selection
-                            } else {
-                                &local
-                            },
-                            mode: if session_mode == Mode::Command && mode == CleanupMode::Raw {
+                            text: if command { selection } else { &local },
+                            mode: if command && mode == CleanupMode::Raw {
                                 CleanupMode::Light
                             } else {
                                 mode
                             },
                             instructions,
-                            command: (session_mode == Mode::Command).then_some(local.as_str()),
+                            command: command.then_some(local.as_str()),
                             app_id: target
                                 .app_id
                                 .as_deref()
@@ -1161,8 +1174,10 @@ impl Engine {
                         ;
                     // Dictation never waits long on formatting: past a length-scaled
                     // budget (Groq takes ~0.2 s per 40 words) the local text is pasted.
-                    let budget = Duration::from_millis(3000 + 25 * local.split_whitespace().count() as u64);
-                    let transformed = if dictation {
+                    // A rewrite gets the same budget, scaled by the selection it returns.
+                    let words = local.split_whitespace().count() + selection.split_whitespace().count();
+                    let budget = Duration::from_millis(3000 + 25 * words as u64);
+                    let transformed = if dictation || rewrite {
                         tokio::time::timeout(budget, transformed).await.ok()
                     } else {
                         Some(transformed.await)
@@ -1176,14 +1191,19 @@ impl Engine {
                             add_warning(&mut warning, "Cleanup changed too much; original transcript retained");
                             local
                         }
-                        Some(Some(s)) => {
+                        // A rewrite that reads as a reply is never pasted over the selection.
+                        Some(Some(s)) if !rewrite || !xflow_providers::command_answered(selection, &s) => {
                             outcome = Some(CleanupOutcome::Applied);
                             s
                         }
-                        _ if rewrite => {
+                        result if rewrite => {
                             (rewrite, copy) = (false, true);
-                            outcome = Some(CleanupOutcome::Failed);
-                            add_warning(&mut warning, "Rewrite failed; selection left untouched");
+                            outcome = Some(match result {
+                                Some(Some(_)) => CleanupOutcome::Rejected,
+                                None => CleanupOutcome::Slow,
+                                Some(None) => CleanupOutcome::Failed,
+                            });
+                            add_warning(&mut warning, REWRITE_FAILED);
                             local
                         }
                         _ if !dictation => {
@@ -1194,7 +1214,7 @@ impl Engine {
                             add_warning(&mut warning, "Cleanup was too slow; original transcript retained");
                             local
                         }
-                        Some(None) => {
+                        _ => {
                             outcome = Some(CleanupOutcome::Failed);
                             add_warning(&mut warning, "Cleanup failed; original transcript retained");
                             local
@@ -1206,9 +1226,11 @@ impl Engine {
                 let text = xflow_core::text::after_cleanup(&text, &config);
                 let text = if terminal {
                     xflow_core::text::terminal_plain(&text)
-                } else if rewrite {
-                    // Replace the selection exactly, keeping only its own trailing whitespace.
-                    format!("{}{}", text.trim_end(), &selection[selection.trim_end().len()..])
+                } else if rewrite && !text.trim().is_empty() {
+                    // Replace the selection exactly, keeping only its own edge whitespace.
+                    let lead = &selection[..selection.len() - selection.trim_start().len()];
+                    let trail = &selection[selection.trim_end().len()..];
+                    format!("{lead}{}{trail}", text.trim())
                 } else {
                     text
                 };
@@ -1224,7 +1246,7 @@ impl Engine {
                     app_id: target.app_id.clone(),
                     language: language.or(config.stt.language),
                     duration_ms: Some(timings.audio_ms as u64),
-                    mode: session_mode,
+                    mode: if rewrite { Mode::Command } else { session_mode },
                     cleanup: outcome,
                     ..HistoryEntry::default()
                 };
@@ -1240,7 +1262,7 @@ impl Engine {
                 // A transcript that is ready first waits at most 20 ms, then goes unadjusted.
                 let around = match around {
                     // Nothing is pasted after a discard, and a rewrite replaces the selection.
-                    Some(job) if discarded || session_mode == Mode::Command => {
+                    Some(job) if discarded || command => {
                         job.abort();
                         None
                     }
@@ -1252,7 +1274,7 @@ impl Engine {
                     None => None,
                 };
                 Ok(Some(Processed {
-                    mode: session_mode,
+                    rewrite,
                     copy,
                     provider,
                     model,
@@ -1512,7 +1534,7 @@ impl Engine {
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
                         if self.keeping().is_some() { self.load_kept(); }
-                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some(DISCARDED.into())); }, Ok(Some(mut processed)) => { self.mode = processed.mode; self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
+                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some(DISCARDED.into())); }, Ok(Some(mut processed)) => { if processed.rewrite { self.mode = Mode::Command; } self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
                     // Late, from a canceled session: nothing it kept may stay.
                     Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
@@ -1579,7 +1601,10 @@ impl Engine {
                     self.delivering = true;
                     deliveries.spawn(async move {
                         let start = Instant::now();
-                        let result = match delivery { Delivery::Inject if processed.copy => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
+                        // The selection must still be the one rewritten: same app, window and text.
+                        let moved = delivery == Delivery::Inject && processed.rewrite && desktop.context_with_selection().await.ok().as_ref() != Some(&processed.target);
+                        if moved { add_warning(&mut processed.warning, "Selection changed; rewrite copied"); }
+                        let result = match delivery { Delivery::Inject if processed.copy || moved => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
                         if delivery != Delivery::None { processed.timings.inject_ms = Some(ms(start.elapsed())); }
                         processed.timings.total_ms = ms(processed.stopped.elapsed());
                         if let Some(entry) = &mut processed.entry { entry.latency_ms = Some(processed.timings.total_ms as u64); if store.set_latency(entry.id, processed.timings.total_ms as u64).await.is_err() { add_warning(&mut processed.warning, "History latency update failed"); } }
@@ -1597,7 +1622,7 @@ impl Engine {
                                 opening.hands_free |= action == HotkeyAction::HandsFree;
                                 self.quiet = false;
                             } else if self.state == State::Listening {
-                                if action == HotkeyAction::HandsFree { self.message = Some(HANDS_FREE.into()); }
+                                if action == HotkeyAction::HandsFree { self.hands_free = true; self.message = Some(HANDS_FREE.into()); }
                                 if std::mem::take(&mut self.quiet) { self.cue(xflow_platform::Cue::Start); }
                                 self.publish();
                             }
@@ -3220,6 +3245,9 @@ mod tests {
         rewrite: Option<String>,
         /// The focused field is secure: delivery is refused.
         refuse: bool,
+        /// The selection is gone after the first read.
+        selection_moves: bool,
+        selection_reads: AtomicUsize,
     }
     struct ScriptedField {
         field: Arc<Mutex<Option<String>>>,
@@ -3263,7 +3291,9 @@ mod tests {
         }
         async fn context_with_selection(&self) -> Result<AppContext> {
             let mut context = self.context().await?;
-            context.selected_text = self.rewrite.clone();
+            let moved =
+                self.selection_moves && self.selection_reads.fetch_add(1, Ordering::SeqCst) > 0;
+            context.selected_text = self.rewrite.clone().filter(|_| !moved);
             Ok(context)
         }
         async fn copy(&self, text: &str) -> Result<()> {
@@ -3356,67 +3386,83 @@ mod tests {
             Ok(self.1.unwrap_or("my signature").into())
         }
     }
-    /// One hold over "Meet on Tuesday" with `desktop`'s selection, until it succeeds or fails.
+    /// Opted in, with light cleanup.
+    fn rewriting() -> Config {
+        let mut config = Config::default();
+        config.cleanup.rewrite_selection = true;
+        config.cleanup.mode = CleanupMode::Light;
+        config
+    }
+    /// One hold saying `said` over "Meet on Tuesday" with `desktop`'s selection, until it
+    /// succeeds, fails or is discarded.
     async fn hold_over(
         config: Config,
+        said: &'static str,
         desktop: RecordingDesktop,
         transformer: Arc<dyn TextTransformer>,
-        store: Store,
     ) -> (Arc<RecordingDesktop>, Response) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("db"), true, 5).unwrap();
         let desktop = Arc::new(RecordingDesktop {
             field: Arc::new(Mutex::new(Some("Meet on Tuesday".into()))),
             ..desktop
         });
         let (mut engine, tx, rx, mut events, _) = fixture(config, desktop.clone(), store);
         engine.services.transformer = Some(transformer);
+        engine.services.stt = Arc::new(ImmediateStt {
+            calls: Arc::default(),
+            text: said,
+        });
         let task = tokio::spawn(engine.run(rx));
         assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
-        ask(&tx, Request::Stop).await;
-        let r = tokio::time::timeout(Duration::from_secs(3), async {
+        assert_eq!(ask(&tx, Request::Stop).await.state, State::Processing);
+        let r = settled(&mut events).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+        (desktop, r)
+    }
+    async fn settled(events: &mut broadcast::Receiver<Response>) -> Response {
+        tokio::time::timeout(Duration::from_secs(6), async {
             loop {
                 let r = events.recv().await.unwrap();
-                if matches!(r.state, State::Success | State::Error) {
+                if matches!(r.state, State::Success | State::Error | State::Idle) {
                     return r;
                 }
             }
         })
         .await
-        .unwrap();
-        ask(&tx, Request::Shutdown).await;
-        task.await.unwrap();
-        (desktop, r)
+        .unwrap()
     }
-    fn unused_store() -> Store {
-        Store::open(std::path::Path::new("unused"), false, 10).unwrap()
-    }
+    const SAID: &str = "um post gres is ready";
     #[tokio::test]
     async fn a_hold_over_a_selection_rewrites_it_and_history_records_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("db"), true, 5).unwrap();
-        let transformer = Arc::new(RecordingTransformer(Mutex::default(), Some("Monday")));
-        let desktop = RecordingDesktop {
-            rewrite: Some("Tuesday".into()),
-            ..RecordingDesktop::default()
-        };
-        let (desktop, r) = hold_over(Config::default(), desktop, transformer.clone(), store).await;
-        assert_eq!(r.state, State::Success, "{:?}", r.message);
-        // Exactly the selection is replaced: no trailing space, no smart spacing.
-        assert_eq!(
-            desktop.field.lock().unwrap().as_deref(),
-            Some("Meet on Monday")
-        );
-        let calls = transformer.0.lock().unwrap().clone();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "Tuesday");
-        assert!(calls[0].1.contains("is ready"), "{:?}", calls[0].1);
-        let entry = r.entry.unwrap();
-        assert_eq!((entry.mode, entry.text.as_str()), (Mode::Command, "Monday"));
-        assert_eq!(entry.raw_text.as_deref(), Some("um post gres is ready"));
-        assert_eq!(
-            desktop.watches.load(Ordering::SeqCst),
-            0,
-            "model text is never learned from"
-        );
+        // The reply's edge whitespace is dropped; the selection's own is kept.
+        for selection in ["Tuesday", " Tuesday"] {
+            let transformer = Arc::new(RecordingTransformer(Mutex::default(), Some(" Monday ")));
+            let desktop = RecordingDesktop {
+                rewrite: Some(selection.into()),
+                ..RecordingDesktop::default()
+            };
+            let (desktop, r) = hold_over(rewriting(), SAID, desktop, transformer.clone()).await;
+            assert_eq!(r.state, State::Success, "{:?}", r.message);
+            assert_eq!(
+                desktop.field.lock().unwrap().as_deref(),
+                Some("Meet on Monday")
+            );
+            let calls = transformer.0.lock().unwrap().clone();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, selection);
+            assert!(calls[0].1.contains("is ready"), "{:?}", calls[0].1);
+            let entry = r.entry.unwrap();
+            assert_eq!(entry.mode, Mode::Command);
+            assert_eq!(entry.text.trim(), "Monday");
+            assert_eq!(entry.raw_text.as_deref(), Some(SAID));
+            assert_eq!(
+                desktop.watches.load(Ordering::SeqCst),
+                0,
+                "model text is never learned from"
+            );
+        }
     }
     #[tokio::test]
     async fn a_hold_dictates_without_a_usable_selection() {
@@ -3425,32 +3471,40 @@ mod tests {
             terminal_input: true,
             ..AppContext::default()
         };
-        let mut off = Config::default();
+        let mut off = rewriting();
         off.cleanup.rewrite_selection = false;
+        let mut raw = rewriting();
+        raw.cleanup.mode = CleanupMode::Raw;
+        let long = "x".repeat(6001);
+        // Over the 64 KiB frame limit: still dictated and saved, never an error.
+        let huge = "x".repeat(70 * 1024);
         for (case, config, rewrite, context, notice) in [
-            ("no selection", Config::default(), None, None, None),
+            ("no selection", rewriting(), None, None, false),
             (
                 "blank selection",
-                Config::default(),
+                rewriting(),
                 Some(" \n".to_owned()),
                 None,
-                None,
+                false,
             ),
             (
                 "terminal",
-                Config::default(),
+                rewriting(),
                 Some("Tuesday".into()),
                 Some(terminal),
-                None,
+                false,
             ),
-            ("turned off", off, Some("Tuesday".into()), None, None),
             (
-                "too long",
+                "default off",
                 Config::default(),
-                Some("x".repeat(6001)),
+                Some("Tuesday".into()),
                 None,
-                Some("over 6,000 characters"),
+                false,
             ),
+            ("turned off", off, Some("Tuesday".into()), None, false),
+            ("raw mode", raw, Some("Tuesday".into()), None, false),
+            ("too long", rewriting(), Some(long), None, true),
+            ("over 64 KiB", rewriting(), Some(huge), None, true),
         ] {
             let transformer = Arc::new(RecordingTransformer::default());
             let desktop = RecordingDesktop {
@@ -3458,8 +3512,7 @@ mod tests {
                 context,
                 ..RecordingDesktop::default()
             };
-            let (desktop, r) =
-                hold_over(config, desktop, transformer.clone(), unused_store()).await;
+            let (desktop, r) = hold_over(config, SAID, desktop, transformer.clone()).await;
             assert_eq!(r.state, State::Success, "{case}: {:?}", r.message);
             assert!(transformer.0.lock().unwrap().is_empty(), "{case}");
             assert_eq!(desktop.injections.lock().unwrap().len(), 1, "{case}");
@@ -3470,10 +3523,84 @@ mod tests {
             );
             assert_eq!(
                 r.message.is_some_and(|m| m.contains("6,000")),
-                notice.is_some(),
+                notice,
                 "{case}"
             );
+            assert_eq!(r.entry.map(|e| e.mode), Some(Mode::Dictation), "{case}");
         }
+    }
+    #[tokio::test]
+    async fn long_speech_over_a_selection_is_dictated_not_rewritten() {
+        let said = "we should meet on monday at the office near the station after lunch";
+        let transformer = Arc::new(RecordingTransformer::default());
+        let desktop = RecordingDesktop {
+            rewrite: Some("Tuesday".into()),
+            ..RecordingDesktop::default()
+        };
+        let (desktop, r) = hold_over(rewriting(), said, desktop, transformer.clone()).await;
+        assert_eq!(r.state, State::Success, "{:?}", r.message);
+        // Only dictation cleanup ran: no command, the selection never sent.
+        let calls = transformer.0.lock().unwrap().clone();
+        assert!(
+            calls.iter().all(|c| c.1.is_empty() && c.0 != "Tuesday"),
+            "{calls:?}"
+        );
+        assert_eq!(desktop.injections.lock().unwrap().len(), 1);
+        assert_eq!(r.entry.map(|e| e.mode), Some(Mode::Dictation));
+    }
+    #[tokio::test]
+    async fn scratch_that_over_a_selection_pastes_nothing() {
+        let transformer = Arc::new(RecordingTransformer::default());
+        let desktop = RecordingDesktop {
+            rewrite: Some("Tuesday ".into()),
+            ..RecordingDesktop::default()
+        };
+        let (desktop, r) = hold_over(
+            rewriting(),
+            "Um, scratch that.",
+            desktop,
+            transformer.clone(),
+        )
+        .await;
+        assert_eq!(
+            (r.state, r.message.as_deref()),
+            (State::Idle, Some(DISCARDED))
+        );
+        assert!(transformer.0.lock().unwrap().is_empty());
+        assert!(desktop.injections.lock().unwrap().is_empty());
+        assert!(desktop.copies.lock().unwrap().is_empty());
+        assert_eq!(
+            desktop.field.lock().unwrap().as_deref(),
+            Some("Meet on Tuesday")
+        );
+    }
+    #[tokio::test]
+    async fn a_hands_free_session_never_rewrites() {
+        let desktop = Arc::new(RecordingDesktop {
+            rewrite: Some("Tuesday".into()),
+            field: Arc::new(Mutex::new(Some("Meet on Tuesday".into()))),
+            ..RecordingDesktop::default()
+        });
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(rewriting(), desktop.clone(), unused_store());
+        let transformer = Arc::new(RecordingTransformer::default());
+        engine.services.transformer = Some(transformer.clone());
+        let (keys, key_events) = mpsc::channel(4);
+        engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
+        let task = tokio::spawn(engine.run(rx));
+        keys.send(HotkeyAction::Start).await.unwrap();
+        keys.send(HotkeyAction::HandsFree).await.unwrap();
+        let listening = hotkey_state(&mut events, State::Listening).await;
+        assert_eq!(listening.message.as_deref(), Some(HANDS_FREE));
+        ask(&tx, Request::Stop).await;
+        assert_eq!(settled(&mut events).await.state, State::Success);
+        assert!(transformer.0.lock().unwrap().is_empty());
+        assert_eq!(desktop.injections.lock().unwrap().len(), 1);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    fn unused_store() -> Store {
+        Store::open(std::path::Path::new("unused"), false, 10).unwrap()
     }
     #[tokio::test]
     async fn a_hold_in_a_secure_field_is_refused() {
@@ -3482,13 +3609,7 @@ mod tests {
             refuse: true,
             ..RecordingDesktop::default()
         };
-        let (desktop, r) = hold_over(
-            Config::default(),
-            desktop,
-            transformer.clone(),
-            unused_store(),
-        )
-        .await;
+        let (desktop, r) = hold_over(rewriting(), SAID, desktop, transformer.clone()).await;
         assert_eq!(r.state, State::Error);
         assert!(r.message.unwrap().contains("secure field"));
         assert!(transformer.0.lock().unwrap().is_empty());
@@ -3498,30 +3619,70 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn a_failed_rewrite_leaves_the_selection_and_copies_the_dictation() {
+    async fn a_failed_slow_or_answering_rewrite_leaves_the_selection_and_copies_the_dictation() {
+        let answer: Arc<dyn TextTransformer> = Arc::new(RecordingTransformer(
+            Mutex::default(),
+            Some("Sure! Here is the rewritten text: Monday"),
+        ));
+        for (case, transformer, outcome) in [
+            (
+                "failed",
+                Arc::new(FailingCleanup) as Arc<dyn TextTransformer>,
+                CleanupOutcome::Failed,
+            ),
+            ("answered", answer, CleanupOutcome::Rejected),
+            // The dictation budget (3 s plus 25 ms a word), not the 20 s provider timeout.
+            ("slow", Arc::new(Stalled), CleanupOutcome::Slow),
+        ] {
+            let desktop = RecordingDesktop {
+                rewrite: Some("Tuesday".into()),
+                ..RecordingDesktop::default()
+            };
+            let started = Instant::now();
+            let (desktop, r) = hold_over(rewriting(), SAID, desktop, transformer).await;
+            assert!(started.elapsed() < Duration::from_secs(4), "{case}");
+            assert_eq!(r.state, State::Success, "{case}: {:?}", r.message);
+            let message = r.message.unwrap();
+            assert!(
+                message.starts_with(COPIED) && message.contains(REWRITE_FAILED),
+                "{case}: {message}"
+            );
+            assert!(desktop.injections.lock().unwrap().is_empty(), "{case}");
+            assert_eq!(
+                desktop.field.lock().unwrap().as_deref(),
+                Some("Meet on Tuesday"),
+                "{case}"
+            );
+            assert_eq!(
+                *desktop.copies.lock().unwrap(),
+                ["post gres is ready "],
+                "{case}"
+            );
+            let entry = r.entry.unwrap();
+            assert_eq!(
+                (entry.mode, entry.cleanup),
+                (Mode::Dictation, Some(outcome)),
+                "{case}"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn a_selection_changed_before_delivery_gets_the_rewrite_copied() {
+        let transformer = Arc::new(RecordingTransformer(Mutex::default(), Some("Monday")));
         let desktop = RecordingDesktop {
             rewrite: Some("Tuesday".into()),
+            selection_moves: true,
             ..RecordingDesktop::default()
         };
-        let (desktop, r) = hold_over(
-            Config::default(),
-            desktop,
-            Arc::new(FailingCleanup),
-            unused_store(),
-        )
-        .await;
+        let (desktop, r) = hold_over(rewriting(), SAID, desktop, transformer).await;
         assert_eq!(r.state, State::Success, "{:?}", r.message);
-        let message = r.message.unwrap();
-        assert!(
-            message.starts_with(COPIED) && message.contains("selection left untouched"),
-            "{message}"
-        );
+        assert!(r.message.unwrap().contains("Selection changed"));
         assert!(desktop.injections.lock().unwrap().is_empty());
         assert_eq!(
             desktop.field.lock().unwrap().as_deref(),
             Some("Meet on Tuesday")
         );
-        assert_eq!(*desktop.copies.lock().unwrap(), ["post gres is ready "]);
+        assert_eq!(*desktop.copies.lock().unwrap(), ["Monday"]);
     }
     fn fixture(
         mut config: Config,

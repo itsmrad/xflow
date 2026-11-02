@@ -17,7 +17,7 @@
 │                ││            Service               None chosen            ││                                         │
 │                ││            Model                 Recommended            ││                                         │
 │                ││            API key               Choose a service first ││                                         │
-│                ││            Edit selected text    On                     ││                                         │
+│                ││            Edit selected text    Off                    ││                                         │
 │                ││            Remove um and uh      On                     ││                                         │
 │                ││            Spoken punctuation    Off                    ││                                         │
 │                ││            Spoken lists          On                     ││                                         │

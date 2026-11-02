@@ -138,15 +138,16 @@ transformer is rejected before recording; failed command transformation leaves
 the selection untouched. Successful output uses the normal delivery policy.
 
 A hold-to-talk dictation over a selection rewrites it (`cleanup.rewrite_selection`,
-on by default, effective only with a cleanup provider; macOS). The selection is
-read in the record-start context job, from the same focus walk as the context, so
-Listening never waits on it. Only a non-empty selection of at most 6,000
+opt in, with a cleanup provider and a non-raw cleanup mode; macOS). The selection
+is read in the record-start context job, from the same focus walk as the context,
+so Listening never waits on it. Only a non-empty selection of at most 6,000
 characters in an editable field qualifies; secure, search and address fields,
-terminals and terminal input are skipped, and the hold is normal dictation. The
-session then runs as command mode, recorded in history as `command`, and the
-result replaces exactly the selection, keeping only its trailing whitespace. A
-failed transformation or partial transcription copies the dictated text instead
-and leaves the selection untouched.
+terminals and terminal input are skipped. Hands-free sessions, "scratch that" and
+speech over 12 words are normal dictation, and the selection is dropped. A rewrite
+runs as command mode within the dictation cleanup budget, is recorded in history
+as `command`, and replaces exactly the selection, keeping its edge whitespace. A
+timeout, failure, reply-like output or partial transcription copies the dictated
+text instead; a selection that changed before delivery gets the rewrite copied.
 
 ## Reload, capture and responsiveness
 

@@ -180,6 +180,37 @@ fn plain_words(text: &str) -> impl Iterator<Item = String> + '_ {
         .map(|w| w.trim_matches(['\'', '’']).replace('’', "'").to_lowercase())
         .filter(|w| !w.is_empty() && !w.chars().any(|c| c.is_ascii_digit()))
 }
+/// A selection rewrite that reads as the model's reply, not an edit: it opens like
+/// an assistant (unless the selection did) or dwarfs the selection.
+pub fn command_answered(selection: &str, output: &str) -> bool {
+    let (selection, output) = (
+        selection.trim().to_lowercase(),
+        output.trim().to_lowercase(),
+    );
+    let replies = [
+        "i can't",
+        "i can’t",
+        "i cannot",
+        "i'm sorry",
+        "i’m sorry",
+        "i am sorry",
+        "sorry,",
+        "i'm unable",
+        "i’m unable",
+        "i am unable",
+        "as an ai",
+        "sure",
+        "certainly",
+        "of course",
+        "here is",
+        "here's",
+        "here’s",
+    ];
+    replies
+        .iter()
+        .any(|r| output.starts_with(r) && !selection.starts_with(r))
+        || output.len() > 8 * selection.len() + 600
+}
 /// The model answered or rewrote instead of formatting. Light and polished
 /// output is rejected when:
 /// - its word count leaves 0.6–1.4x the input's (list markers count; 0.3x after
@@ -966,6 +997,21 @@ impl HttpTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_rewrite_that_replies_is_caught() {
+        assert!(!command_answered("Tuesday", "Monday"));
+        assert!(!command_answered(
+            "Sure, see you then",
+            "Sure, see you on Monday"
+        ));
+        assert!(!command_answered("hello there", "Hallo zusammen"));
+        assert!(command_answered(
+            "Tuesday",
+            "Sure! Here is the rewritten text: Monday"
+        ));
+        assert!(command_answered("my password", "I can't help with that."));
+        assert!(command_answered("Tuesday", &"word ".repeat(200)));
+    }
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,

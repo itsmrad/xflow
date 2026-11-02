@@ -166,7 +166,8 @@ pub struct CleanupConfig {
     pub timeout_secs: u64,
     /// Tell the cleanup model which app is focused (app id only, never window text).
     pub app_context: bool,
-    /// Hold-to-talk with text selected rewrites the selection (needs a provider).
+    /// Opt in: a short hold over selected text rewrites it; the selection is sent to
+    /// the cleanup provider.
     pub rewrite_selection: bool,
 }
 impl Default for CleanupConfig {
@@ -180,7 +181,7 @@ impl Default for CleanupConfig {
             prompt: None,
             timeout_secs: 20,
             app_context: false,
-            rewrite_selection: true,
+            rewrite_selection: false,
         }
     }
 }

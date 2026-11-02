@@ -548,7 +548,7 @@ fn focus_waiting(wait: bool) -> Focus {
         .any(|label| terminal_input_label(&label))
         || element
             .attribute("AXDOMClassList")
-            .is_some_and(|classes| terminal_dom_classes(&classes));
+            .is_some_and(|classes| dom_class(&classes, "xterm-helper-textarea"));
     focus.editable = if focus.secure
         || element.flag("AXEnabled") == Some(false)
         || element.flag("AXEditable") == Some(false)
@@ -604,7 +604,11 @@ fn rewrite_selection(focus: &Focus) -> Option<String> {
     .filter_map(|name| element.text(name));
     let role = element.text("AXRole");
     let subrole = element.text("AXSubrole");
-    (!search_field(role.as_deref(), subrole.as_deref(), labels)).then_some(text)
+    // Chromium's omnibox view class names Chrome, Edge and Brave address bars in any language.
+    let omnibox = element
+        .attribute("AXDOMClassList")
+        .is_some_and(|classes| dom_class(&classes, "OmniboxViewViews"));
+    (!omnibox && !search_field(role.as_deref(), subrole.as_deref(), labels)).then_some(text)
 }
 /// Search boxes and browser address bars: a rewrite there would run a query.
 fn search_field(
@@ -626,16 +630,15 @@ fn terminal_input_label(label: &str) -> bool {
     let label = label.trim().to_ascii_lowercase();
     label == "terminal input" || label == "terminal-input" || label == "xterm-helper-textarea"
 }
-/// Chromium exposes CSS classes as an array, independently of localized labels.
-fn terminal_dom_classes(classes: &Owned) -> bool {
+/// Chromium exposes CSS (and native view) classes as an array, independently of localized labels.
+fn dom_class(classes: &Owned, name: &str) -> bool {
     if unsafe { CFGetTypeID(classes.0) != CFArrayGetTypeID() } {
         return false;
     }
     let count = unsafe { CFArrayGetCount(classes.0) };
     (0..=128).contains(&count)
         && (0..count).any(|i| {
-            cf_text(unsafe { CFArrayGetValueAtIndex(classes.0, i) }).as_deref()
-                == Some("xterm-helper-textarea")
+            cf_text(unsafe { CFArrayGetValueAtIndex(classes.0, i) }).as_deref() == Some(name)
         })
 }
 /// Shared by selection, paste receipts and the caret/correction reader.
@@ -1892,16 +1895,17 @@ mod tests {
                 CFArrayCreate(ptr::null(), refs.as_ptr(), refs.len() as isize, ptr::null())
             })
             .unwrap();
-            terminal_dom_classes(&array)
+            dom_class(&array, "xterm-helper-textarea")
         };
         assert!(contains(&["input", "xterm-helper-textarea", "focused"]));
         assert!(contains(&["xterm-helper-textarea"]));
         assert!(!contains(&[]));
         assert!(!contains(&["editor", "xterm-helper-textarea-other"]));
         assert!(!contains(&["editor xterm-helper-textarea"]));
-        assert!(!terminal_dom_classes(&Owned::string(
+        assert!(!dom_class(
+            &Owned::string("xterm-helper-textarea"),
             "xterm-helper-textarea"
-        )));
+        ));
     }
     #[test]
     fn terminal_input_labels_and_password_prompt_refusal() {
