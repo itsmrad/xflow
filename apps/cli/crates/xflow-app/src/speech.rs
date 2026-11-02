@@ -443,6 +443,7 @@ mod tests {
         config.stt.languages = vec!["hi".into(), "en".into()];
         assert!(suspect(echo, &config, &[]));
         assert!(suspect("मैं अभी check करके", &config, &[]));
+        assert!(suspect("अभी अभी अभी अभी अभी बताता हूँ।.", &config, &[]));
         assert!(!suspect("कल API deploy करना है", &config, &[]));
         // Everyday words inside shipped terms are not echoes on their own.
         for heard in ["Next.", "Code", "Monday", "Teams", "Power", "Microsoft"] {
