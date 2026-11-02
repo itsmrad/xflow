@@ -3395,7 +3395,7 @@ dependencies = [
 
 [[package]]
 name = "xflow-app"
-version = "0.2.0-beta"
+version = "0.2.1-beta"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3423,7 +3423,7 @@ dependencies = [
 
 [[package]]
 name = "xflow-core"
-version = "0.2.0-beta"
+version = "0.2.1-beta"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3436,7 +3436,7 @@ dependencies = [
 
 [[package]]
 name = "xflow-platform"
-version = "0.2.0-beta"
+version = "0.2.1-beta"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3451,7 +3451,7 @@ dependencies = [
 
 [[package]]
 name = "xflow-providers"
-version = "0.2.0-beta"
+version = "0.2.1-beta"
 dependencies = [
  "anyhow",
  "async-trait",
