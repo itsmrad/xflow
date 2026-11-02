@@ -749,7 +749,7 @@ impl Engine {
                     "{e:#}; transcribed the audio captured before it"
                 )));
                 if let Some(tail) = self.segments.tail.take() {
-                    self.send(tail);
+                    self.send(tail, true);
                 }
             }
             Err(e) => {
@@ -804,7 +804,7 @@ impl Engine {
                 tail
             }
             Some(tail) => {
-                self.send(tail);
+                self.send(tail, false);
                 audio
             }
             None => audio,
@@ -815,18 +815,19 @@ impl Engine {
                 samples: std::mem::replace(&mut tail.samples, rest),
                 ..tail
             };
-            self.send(head);
+            self.send(head, false);
         }
         if last {
             if !tail.samples.is_empty() {
-                self.send(tail);
+                self.send(tail, true);
             }
         } else {
             self.segments.tail = Some(tail);
         }
     }
     /// Uploads one segment in the background; silence is counted, never sent.
-    fn send(&mut self, audio: AudioClip) {
+    /// The dictation's edge silence is trimmed: before the first segment, after the last.
+    fn send(&mut self, mut audio: AudioClip, last: bool) {
         let segments = &mut self.segments;
         segments.audio_ms += u64::from(audio_duration(&audio).unwrap_or(0));
         let index = segments.count;
@@ -838,10 +839,19 @@ impl Engine {
         segments.heard = true;
         trace_segment("send");
         let (stt, config) = (self.services.stt.clone(), self.config.clone());
+        let keep = speech::trim(
+            &audio,
+            &activity.voiced,
+            index == 0,
+            last,
+            config.recording.min_ms,
+        );
         segments.sent.spawn(async move {
             // Every upload is 16 kHz mono anyway; holding that copy for a retry instead
             // of native-rate audio cuts in-flight memory 3–6x.
             let audio = tokio::task::spawn_blocking(move || {
+                audio.samples.truncate(keep.end);
+                audio.samples.drain(..keep.start);
                 xflow_providers::upload_audio(&audio).unwrap_or(audio)
             })
             .await
@@ -3867,6 +3877,91 @@ mod tests {
             expected.join(" ")
         );
         assert_eq!(done.timings.unwrap().audio_ms, 300_000);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// `samples` at 16 kHz mono; stop returns what the first `drained_ms` didn't.
+    fn stream(samples: Vec<f32>, drained_ms: usize) -> Arc<StreamAudio> {
+        Arc::new(StreamAudio {
+            samples,
+            drained: drained_ms * 16,
+            cursor: Mutex::new(0),
+            stop_fails: false,
+            failed: AtomicBool::new(false),
+        })
+    }
+    #[tokio::test]
+    async fn edge_silence_is_trimmed_before_upload_and_kept_audio_is_the_sent_clip() {
+        // 1 s of silence, 2 s of tone, 1 s of silence.
+        let samples: Vec<f32> = (0..64_000)
+            .map(|i| match i {
+                16_000..48_000 => 0.2 * (i as f32 * 0.07).sin(),
+                _ => 0.0,
+            })
+            .collect();
+        let audio = stream(samples.clone(), 0);
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            failures: 1,
+            ..SegmentStt::default()
+        });
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        let (mut engine, tx, rx, mut events, _) = segment_fixture(audio, stt.clone());
+        engine.config.privacy.keep_failed_audio = true;
+        engine.kept_dir = Some(dir.clone());
+        let task = tokio::spawn(engine.run(rx));
+        assert!(ask(&tx, Request::start()).await.ok);
+        assert!(ask(&tx, Request::Stop).await.ok);
+        let error = timeout_event_error(&mut events).await;
+        // 250 ms of the silence stays on each side; the provider got nothing else.
+        let sent = stt.clips.lock().unwrap()[0].clone();
+        assert_eq!(sent.samples, samples[12_000..52_000]);
+        // The kept clip (what retry and the backup see) is the one sent.
+        assert_eq!(error.failed_audio.unwrap().audio_ms, 2_500);
+        let kept = retry::audio(&dir, 0).unwrap();
+        assert_eq!(kept.samples.len(), sent.samples.len());
+        assert!(kept
+            .samples
+            .iter()
+            .zip(&sent.samples)
+            .all(|(k, s)| (k - s).abs() < 1e-4));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_segmented_dictation_trims_only_its_outer_edges() {
+        // 70 s: 2 s of silence, 66 s of speech, 2 s of silence; one segment is cut
+        // while recording, the tail is sent at stop.
+        let samples: Vec<f32> = (0..70 * 16_000)
+            .map(|i| match i {
+                32_000..1_088_000 => 0.1 + 0.5 * i as f32 / 1_120_000.0,
+                _ => 0.001,
+            })
+            .collect();
+        let audio = stream(samples.clone(), 65_000);
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            ..SegmentStt::default()
+        });
+        let (engine, tx, rx, mut events, _) = segment_fixture(audio, stt.clone());
+        let task = tokio::spawn(engine.run(rx));
+        assert!(ask(&tx, Request::start()).await.ok);
+        wait_for(|| !stt.clips.lock().unwrap().is_empty()).await;
+        ask(&tx, Request::Stop).await;
+        let done = success(&mut events).await;
+        let mut clips = std::mem::take(&mut *stt.clips.lock().unwrap());
+        assert_eq!(clips.len(), 2);
+        // Samples rise through the speech, so the first sample orders the clips.
+        clips.sort_by(|a, b| a.samples[0].total_cmp(&b.samples[0]));
+        let rebuilt: Vec<f32> = clips.iter().flat_map(|c| c.samples.clone()).collect();
+        assert_eq!(
+            rebuilt,
+            samples[28_000..1_092_000],
+            "no gap or overlap at the cut"
+        );
+        // The recording's length, not the upload's, is what was dictated.
+        assert_eq!(done.timings.unwrap().audio_ms, 70_000);
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
