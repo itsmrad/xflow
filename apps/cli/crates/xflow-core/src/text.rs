@@ -167,7 +167,7 @@ pub fn prepare(
         text = replace(&text, &pairs, false);
     }
     text = tidy(&text);
-    text = crate::code::apply(&text, config, |s| {
+    text = crate::code::apply(&text, config, terminal, app, |s| {
         let s = crate::title::apply(s, config);
         crate::cues::apply(
             &crate::snap::apply(&s, config, terminal),
@@ -231,7 +231,7 @@ pub(crate) const ABBREVIATIONS: &[&str] = &[
 ];
 /// Function words, which never start a name, so mid-sentence they are lowercased.
 /// SCOWL's common list can't decide this: "john", "notes", "ok" and "smith" are on it.
-const CONTINUING: &[&str] = &[
+pub(crate) const CONTINUING: &[&str] = &[
     "a",
     "about",
     "after",

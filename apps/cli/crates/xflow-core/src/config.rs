@@ -266,7 +266,8 @@ impl InjectionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct FormattingConfig {
-    /// Format explicit casing commands and recognized spoken filenames locally.
+    /// Format explicit casing commands and recognized spoken filenames locally,
+    /// and in terminals and editors spoken symbols next to code-shaped words.
     pub spoken_code: bool,
     /// Restore user spellings and context-gated developer terms locally.
     pub snap_to_dictionary: bool,
