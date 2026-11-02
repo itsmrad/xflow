@@ -6,6 +6,11 @@
 - **Spoken underscore and dash work in every app.** In a browser, chat app or Electron app, "EBS underscore 321 underscore GHJ" becomes `EBS_321_GHJ` and "Hi dash There" becomes `Hi-There`. Outside terminals and editors a dash joins only IDs (capitals, digits, single letters, camelCase) or two capitalised words; "a dash of salt", "the 100 meter dash today", "underscore the point" and "Dash" as a name stay as said. Dot, slash, colon, operators and quotes stay in terminals and editors. Whisper's commas around the word no longer block it: "Hi, Dash, There." becomes `Hi-There.` `formatting.spoken_code = false` turns it all off.
 - **"cloud.ai" becomes Claude.ai.** Bare "cloud" is unchanged.
 
+### GNOME extension
+- **A missed key release no longer kills the shortcut.** The next press recovers it instead of being ignored until you log out.
+- **A slow microphone start no longer shows "XFlow command failed".** The extension waits up to 10 s for the daemon instead of 5 s.
+- **Holding a shortcut when GNOME reports no held modifiers no longer stops at once.** The release then comes from GNOME's own key-up signal.
+
 ## 0.2.1-beta — 2026-11-02
 
 ### Recording pill

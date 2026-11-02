@@ -196,9 +196,12 @@ test('toggle mode toggles on press and ignores release', () => {
 test('hold mode is push-to-talk', () => {
     const m = new L.HotkeyMachine('hold', 300);
     assert.equal(m.press(0, false), 'start');
-    assert.equal(m.press(10, true), null, 'stale press while held');
     assert.equal(m.release(50), 'stop');
     assert.equal(m.release(60), null, 'duplicate release (key event + modifier watch)');
+    assert.equal(m.press(100, false), 'start');
+    assert.equal(m.press(200, true), 'stop', 'a press while held means the release was missed');
+    assert.equal(m.holding, false);
+    assert.equal(m.press(300, false), 'start', 'shortcut still works');
 });
 
 test('smart mode: hold stops, double tap is hands-free, lone tap cancels', () => {
@@ -210,7 +213,6 @@ test('smart mode: hold stops, double tap is hands-free, lone tap cancels', () =>
     assert.equal(m.release(1120), null, 'tap waits for its second press');
     assert.equal(m.deadline(), 1620);
     assert.equal(m.press(1300, true), null, 'second tap latches hands-free');
-    assert.equal(m.press(1310, true), null, 'key repeats are ignored');
     assert.equal(m.release(1400), null);
     assert.equal(m.press(5000, true), 'stop', 'next press ends hands-free');
     assert.equal(m.release(5100), null, 'release of the stopping press is ignored');

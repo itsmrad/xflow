@@ -370,9 +370,9 @@ export default class XFlowExtension extends Extension {
                 // release needs a watcher, running only for this held shortcut.
                 this._cancelSource('_releaseSource');
                 const mask = L.heldModifierMask(global.get_pointer()[2]);
-                if (binding.hasModifiers) this._releaseSource = this._timeout(16, () => {
+                if (binding.hasModifiers && mask) this._releaseSource = this._timeout(16, () => {
                     const [, , modifiers] = global.get_pointer();
-                    if (!mask || (modifiers & mask) !== mask) {
+                    if ((modifiers & mask) !== mask) {
                         this._releaseSource = 0;
                         this._release(action);
                         return false;
@@ -424,7 +424,7 @@ export default class XFlowExtension extends Extension {
             const json = await new Promise((resolve, reject) => {
                 Gio.DBus.session.call('org.xflow.Daemon', '/org/xflow/Daemon', 'org.xflow.Daemon', 'Command',
                     new GLib.Variant('(s)', [request]), new GLib.VariantType('(s)'), Gio.DBusCallFlags.NONE,
-                    5000, this._cancellable, (connection, result) => {
+                    10000, this._cancellable, (connection, result) => {
                         try { resolve(connection.call_finish(result).deep_unpack()[0]); } catch (error) { reject(error); }
                     });
             });

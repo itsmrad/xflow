@@ -417,7 +417,8 @@ export class HotkeyMachine {
 
     press(nowMs, active) {
         if (this.mode === 'toggle') return 'toggle';
-        if (this.holding) return null; // stale: the previous release was never seen
+        // Autorepeat is ignored, so a press while held means the release was missed: treat it as released.
+        this.holding = false;
         if (this.mode === 'smart' && active && this.tapAt !== null && nowMs - this.tapAt <= this.doubleTapMs) {
             this.tapAt = null;
             this.handsFree = true;
