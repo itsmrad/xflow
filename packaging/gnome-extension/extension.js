@@ -194,7 +194,8 @@ export default class XFlowExtension extends Extension {
         const idle = this._state === 'idle';
         const minimal = idle && s.get_string('idle-style') === 'minimal';
         const theme = L.resolveTheme(s.get_string('theme'), this._desktop.get_string('color-scheme'));
-        this._pill.style_class = `xflow-pill xflow-${theme} xflow-${this._state}${this._mode === 'command' ? ' xflow-command' : ''}`;
+        const notice = L.notice(this._state, this._message);
+        this._pill.style_class = `xflow-pill xflow-${theme} xflow-${this._state}${this._mode === 'command' ? ' xflow-command' : ''}${notice ? ` xflow-${notice}` : ''}`;
         this._pill.remove_all_transitions();
         const sf = this._themeContext.scale_factor;
         this._pill.set_style(`padding: ${minimal ? 0 : 8 * s.get_double('scale')}px ${minimal ? 0 : g.padX}px; spacing: ${g.spacing}px; max-width: ${g.maxWidth}px; border-radius: ${g.height / 2}px;`);
@@ -202,14 +203,16 @@ export default class XFlowExtension extends Extension {
         this._pill.width = minimal ? g.handleWidth * sf : -1;
         this._wave.visible = ACTIVE.has(this._state);
         for (let i = 0; i < this._bars.length; i++) this._bars[i].visible = this._state !== 'processing' || i < 5;
-        this._icon.visible = this._state === 'success' || this._state === 'error';
-        this._icon.icon_name = this._state === 'error' ? 'dialog-warning-symbolic' : 'object-select-symbolic';
+        this._icon.visible = this._state === 'success' || this._state === 'error' || notice === 'hint';
+        this._icon.icon_name = this._state === 'error' || notice === 'hint' ? 'dialog-warning-symbolic'
+            : notice === 'copied' ? 'edit-copy-symbolic' : 'object-select-symbolic';
         this._icon.icon_size = g.iconSize;
         const labels = {listening: this._mode === 'command' ? 'Command' : 'Listening', processing: 'Processing', success: 'Done', error: 'XFlow error'};
         this._label.text = this._message ?? labels[this._state] ?? '';
         this._label.set_style(`font-size: ${g.fontSize}px; max-width: ${Math.max(80, g.maxWidth - g.width - 40)}px;`);
-        this._label.visible = !idle && s.get_boolean('show-messages');
-        this._pill.accessible_name = idle ? 'XFlow ready' : `XFlow ${labels[this._state]}`;
+        // Copy-only and hint text stay visible: they need the user to act.
+        this._label.visible = !idle && (s.get_boolean('show-messages') || notice !== null);
+        this._pill.accessible_name = idle ? 'XFlow ready' : notice ? `XFlow: ${this._message}` : `XFlow ${labels[this._state]}`;
         const opacity = Math.round(s.get_double('opacity') * 255);
         if (idle && !minimal) {
             this._cancelSource('_frameSource');
@@ -298,7 +301,7 @@ export default class XFlowExtension extends Extension {
     _scheduleHold() {
         this._cancelSource('_holdSource');
         if (this._state !== 'success' && this._state !== 'error') return;
-        const ms = L.holdTime(this._state, {successMs: this._settings.get_int('success-hold-ms'), errorMs: this._settings.get_int('error-hold-ms')});
+        const ms = L.holdTime(this._state, {successMs: this._settings.get_int('success-hold-ms'), errorMs: this._settings.get_int('error-hold-ms')}, this._message);
         this._holdSource = this._timeout(Math.max(1, ms), () => {
             this._holdSource = 0;
             this._update({state: 'idle'});

@@ -303,12 +303,16 @@ impl Engine {
                 0.0
             },
         );
-        r.message = match (&self.message, &self.persistence_warning) {
+        let mut message = self.message.clone();
+        if let Some(hint) = self.hint() {
+            add_warning(&mut message, hint);
+        }
+        r.message = match (message, &self.persistence_warning) {
             (Some(message), Some(warning)) => {
                 Some(bounded_message(&format!("{message}; {warning}")))
             }
             (None, Some(warning)) => Some(warning.clone()),
-            (message, None) => message.clone(),
+            (message, None) => message,
         };
         if let Some(warning) = &self.hotkey_warning {
             r.message = Some(bounded_message(&match r.message {
@@ -534,6 +538,19 @@ impl Engine {
                 .map_err(|e| bounded_message(&format!("{e:#}")));
             let _ = tx.send(Completion::Rearmed(result)).await;
         });
+    }
+    /// Listening advisories (#30), read off the session clocks on each level tick; no timer of their own.
+    fn hint(&self) -> Option<&'static str> {
+        let started = self.started.filter(|_| self.state == State::Listening)?;
+        let max = u64::from(self.config.recording.max_seconds);
+        if max > ENDS_SOON_SECS && started.elapsed() >= Duration::from_secs(max - ENDS_SOON_SECS) {
+            Some(ENDS_SOON)
+        // `silent_since` stays at `started` until the first level above the threshold.
+        } else if self.silent_since == Some(started) && started.elapsed() >= NO_SIGNAL_AFTER {
+            Some(NO_SIGNAL)
+        } else {
+            None
+        }
     }
     fn reset_hotkeys(&mut self) {
         if let Some(hotkeys) = &mut self.hotkeys {
@@ -1588,9 +1605,10 @@ impl Engine {
                         self.reset_hotkeys();
                         continue;
                     }
-                    self.publish(); let level = self.services.audio.level();
+                    let level = self.services.audio.level();
                     if level.is_finite() && level > self.config.recording.silence_threshold { self.silent_since = None; }
                     else { self.silent_since.get_or_insert_with(Instant::now); }
+                    self.publish();
                     if self.config.recording.auto_stop_secs > 0 && self.silent_since.is_some_and(|s| s.elapsed() >= Duration::from_secs(self.config.recording.auto_stop_secs as u64)) {
                         if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
                         self.reset_hotkeys();
@@ -2108,6 +2126,12 @@ async fn edit_history(
     fit_final(&mut r);
     Ok(r)
 }
+/// Nothing above `recording.silence_threshold` since listening began: muted or wrong mic.
+pub(crate) const NO_SIGNAL: &str = "Can't hear you — check mic";
+const NO_SIGNAL_AFTER: Duration = Duration::from_secs(2);
+/// Shown for the last minute before `recording.max_seconds` stops capture.
+pub(crate) const ENDS_SOON: &str = "Recording stops in 1 min";
+const ENDS_SOON_SECS: u64 = 60;
 /// The dictation ended with "scratch that" (#75); the pill shows it too.
 pub(crate) const DISCARDED: &str = "Discarded";
 #[cfg(target_os = "macos")]
@@ -6258,6 +6282,95 @@ mod tests {
         let mut off = Config::default();
         off.stt.domain_hints = false;
         assert!(first_upload(excel(), off).await.domain.is_empty());
+    }
+    /// The first listening event whose message contains `text`, or None after `within`.
+    async fn listening_with(
+        events: &mut broadcast::Receiver<Response>,
+        text: &str,
+        within: Duration,
+    ) -> Option<Response> {
+        tokio::time::timeout(within, async {
+            loop {
+                let r = events.recv().await.unwrap();
+                if r.state == State::Listening
+                    && r.message.as_deref().is_some_and(|m| m.contains(text))
+                {
+                    return r;
+                }
+            }
+        })
+        .await
+        .ok()
+    }
+    #[tokio::test]
+    async fn muted_mic_hint_appears_by_two_and_a_half_seconds_and_clears_on_sound() {
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let audio = Arc::new(LevelAudio(std::sync::atomic::AtomicU32::new(
+            0.0_f32.to_bits(),
+        )));
+        engine.services.audio = audio.clone();
+        let task = tokio::spawn(engine.run(rx));
+        let started = Instant::now();
+        ask(&tx, Request::start()).await;
+        listening_with(&mut events, NO_SIGNAL, Duration::from_millis(2500))
+            .await
+            .expect("no-signal hint within 2.5 s");
+        assert!(started.elapsed() >= NO_SIGNAL_AFTER);
+        audio.0.store(0.2_f32.to_bits(), Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while events.recv().await.unwrap().message.is_some() {}
+        })
+        .await
+        .expect("the hint clears once sound arrives");
+        // Quiet after speech is a pause, not a dead microphone.
+        audio.0.store(0.0_f32.to_bits(), Ordering::SeqCst);
+        assert!(
+            listening_with(&mut events, NO_SIGNAL, Duration::from_millis(2300))
+                .await
+                .is_none()
+        );
+        assert_eq!(ask(&tx, Request::Status).await.state, State::Listening);
+        ask(&tx, Request::Cancel).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn cap_warning_is_emitted_a_minute_before_max_and_resets_per_session() {
+        let mut config = Config::default();
+        config.recording.max_seconds = ENDS_SOON_SECS as u32 + 1;
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            config,
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        engine.services.audio = Arc::new(LevelAudio(std::sync::atomic::AtomicU32::new(
+            0.2_f32.to_bits(),
+        )));
+        let task = tokio::spawn(engine.run(rx));
+        for _ in 0..2 {
+            let started = Instant::now();
+            ask(&tx, Request::start()).await;
+            listening_with(&mut events, ENDS_SOON, Duration::from_millis(1500))
+                .await
+                .expect("warning one minute before the cap");
+            let at = started.elapsed();
+            assert!(at >= Duration::from_secs(1), "{at:?}");
+            assert_eq!(ask(&tx, Request::Status).await.state, State::Listening);
+            // A terminal event ends the session clock; the next session starts unwarned.
+            ask(&tx, Request::Cancel).await;
+        }
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[test]
+    fn gnome_pill_knows_the_listening_hints() {
+        let logic = include_str!("../../../../../packaging/gnome-extension/logic.js");
+        assert!(logic.contains(NO_SIGNAL) && logic.contains(ENDS_SOON));
+        assert!(logic.contains("Copied — press Ctrl+V to paste"));
     }
     #[test]
     fn recognition_hints_include_stt_and_dictionary_words() {

@@ -247,6 +247,19 @@ test('hold times are bounded per state', () => {
     assert.equal(L.holdTime('listening', {successMs: 800, errorMs: 4000}), 0);
 });
 
+test('copy-only results and listening hints are distinct notices', () => {
+    assert.equal(L.notice('success', `${L.COPIED}; Cleanup failed`), 'copied');
+    assert.equal(L.notice('success', null), null);
+    assert.equal(L.notice('success', 'Pasted — check it landed'), null);
+    assert.equal(L.notice('listening', "Hands-free recording; Can't hear you — check mic"), 'hint');
+    assert.equal(L.notice('listening', 'Recording stops in 1 min'), 'hint');
+    assert.equal(L.notice('listening', 'Hands-free recording'), null);
+    assert.equal(L.notice('error', "Can't hear you — check mic"), null);
+    assert.equal(L.holdTime('success', {successMs: 800, errorMs: 4000}, L.COPIED), 3000);
+    assert.equal(L.holdTime('success', {successMs: 5000, errorMs: 4000}, L.COPIED), 5000);
+    assert.equal(L.holdTime('success', {successMs: 800, errorMs: 4000}, null), 800);
+});
+
 test('demo level stays in a speech-like RMS range', () => {
     for (let t = 0; t < 3000; t += 37) {
         const level = L.demoLevel(t);

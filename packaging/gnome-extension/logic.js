@@ -457,7 +457,20 @@ export class HotkeyMachine {
 }
 
 /** How long a terminal state stays on screen before collapsing. */
-export function holdTime(state, {successMs, errorMs}) {
+// Daemon messages (daemon.rs COPIED, NO_SIGNAL, ENDS_SOON); a copy-only result leads its message.
+export const COPIED = 'Copied — press Ctrl+V to paste';
+const HINTS = ["Can't hear you — check mic", 'Recording stops in 1 min'];
+export const COPIED_HOLD_MS = 3000;
+
+/** 'copied' for a clipboard-only result, 'hint' for a listening advisory, else null. */
+export function notice(state, message) {
+    if (state === 'success' && message?.startsWith(COPIED)) return 'copied';
+    if (state === 'listening' && HINTS.some(hint => message?.includes(hint))) return 'hint';
+    return null;
+}
+
+export function holdTime(state, {successMs, errorMs}, message = null) {
+    if (notice(state, message) === 'copied') return Math.max(COPIED_HOLD_MS, clamp(finite(successMs, 900), 0, 60000));
     if (state === 'success') return clamp(finite(successMs, 900), 0, 60000);
     if (state === 'error') return clamp(finite(errorMs, 4000), 0, 60000);
     return 0;

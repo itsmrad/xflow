@@ -238,6 +238,17 @@ fn frame(screen: Rect, position: &str, scale: f64) -> Rect {
     )
 }
 
+/// Listening advisory text; the daemon sends at most one at a time.
+fn hint_text(event: PillEvent) -> Option<&'static CStr> {
+    if event.ends_soon {
+        Some(c"Recording stops in 1 min")
+    } else if event.no_signal {
+        Some(c"Can't hear you — check mic")
+    } else {
+        None
+    }
+}
+
 fn ease_out(p: f64) -> f64 {
     1.0 - (1.0 - p.clamp(0.0, 1.0)).powi(3)
 }
@@ -275,14 +286,7 @@ pub(super) fn run(
                     other => {
                         let event = match other {
                             Ok(Some(event)) => event,
-                            _ => PillEvent {
-                                state: State::Idle,
-                                level: 0.0,
-                                hands_free: false,
-                                copied: false,
-                                uncertain: false,
-                                discarded: false,
-                            },
+                            _ => PillEvent::default(),
                         };
                         let _ = events_tx.send(event);
                         break;
@@ -326,7 +330,7 @@ pub(super) fn run(
         msg!(panel, c"setBecomesKeyOnlyIfNeeded:", 1i8 => i8; ());
         msg!(panel, c"setHidesOnDeactivate:", 0i8 => i8; ());
         msg!(panel, c"setIgnoresMouseEvents:", 1i8 => i8; ());
-        msg!(panel, c"setAccessibilityLabel:", string(c"XFlow recording status") => Id; ());
+        msg!(panel, c"setAccessibilityLabel:", string(hint_text(first).unwrap_or(c"XFlow recording status")) => Id; ());
         // All Spaces, stationary, outside window cycling, over full-screen apps.
         msg!(panel, c"setCollectionBehavior:", 1usize | (1 << 4) | (1 << 6) | (1 << 8) => usize; ());
         msg!(panel, c"setOpaque:", 0i8 => i8; ());
@@ -345,6 +349,7 @@ pub(super) fn run(
         };
         let dark = color(0.0, 0.0, 0.0, 0.85);
         let alarm = color(0.62, 0.09, 0.09, 0.92);
+        let amber = color(0.62, 0.38, 0.03, 0.92);
         let white = color(1.0, 1.0, 1.0, 1.0);
         let capsule = layer(root, dark, PILL_H * s / 2.0);
         msg!(capsule, c"setBorderWidth:", 0.75 * s => f64; ());
@@ -369,7 +374,7 @@ pub(super) fn run(
         place(square, BUTTON * s / 2.0, BUTTON * s / 2.0, 8.0 * s, 8.0 * s);
 
         let copied_label = msg!(class(c"CATextLayer"), c"layer"; Id);
-        msg!(copied_label, c"setString:", string(c"Copied — press ⌘V to paste") => Id; ());
+        msg!(copied_label, c"setString:", string(hint_text(first).unwrap_or(c"Copied — press ⌘V to paste")) => Id; ());
         msg!(copied_label, c"setFontSize:", 12.0 * s => f64; ());
         msg!(copied_label, c"setAlignmentMode:", string(c"center") => Id; ());
         msg!(copied_label, c"setForegroundColor:", white => Id; ());
@@ -394,6 +399,11 @@ pub(super) fn run(
                 if event.active() {
                     if event.state == State::Listening {
                         wave.set_level(event.level);
+                    }
+                    if hint_text(event) != hint_text(state) {
+                        let label = string(hint_text(event).unwrap_or(c"XFlow recording status"));
+                        msg!(copied_label, c"setString:", label => Id; ());
+                        msg!(panel, c"setAccessibilityLabel:", label => Id; ());
                     }
                     state = event;
                 } else {
@@ -426,8 +436,9 @@ pub(super) fn run(
             } else {
                 1.0 - (-dt / 70.0).exp()
             };
-            let notice = state.copied || state.uncertain || state.discarded;
-            width += ((if state.copied || state.uncertain {
+            let hint = closing.is_none() && hint_text(state).is_some();
+            let notice = state.copied || state.uncertain || state.discarded || hint;
+            width += ((if state.copied || state.uncertain || hint {
                 290.0
             } else if state.discarded || hands_free {
                 HANDS_FREE_W
@@ -483,7 +494,7 @@ pub(super) fn run(
             place(capsule, WIN_W * s / 2.0, WIN_H * s / 2.0, w, h);
             transform(capsule, scale, 0.0, shake);
             msg!(capsule, c"setOpacity:", (alpha * opacity) as f32 => f32; ());
-            msg!(capsule, c"setBackgroundColor:", if error { alarm } else { dark } => Id; ());
+            msg!(capsule, c"setBackgroundColor:", if error { alarm } else if hint { amber } else { dark } => Id; ());
             place(copied_label, w / 2.0, h / 2.0, w - 16.0 * s, 16.0 * s);
             msg!(copied_label, c"setOpacity:", if notice { 1.0f32 } else { 0.0f32 } => f32; ());
             let pitch = (BAR_W + BAR_GAP) * s;
@@ -540,6 +551,17 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hint_text_matches_the_daemon_messages() {
+        let text = |event| hint_text(event).map(|t| t.to_str().unwrap());
+        let mut event = PillEvent::default();
+        assert_eq!(text(event), None);
+        event.no_signal = true;
+        assert_eq!(text(event), Some(crate::daemon::NO_SIGNAL));
+        event.ends_soon = true;
+        assert_eq!(text(event), Some(crate::daemon::ENDS_SOON));
+    }
 
     #[test]
     fn placement_respects_visible_area_and_position_aliases() {

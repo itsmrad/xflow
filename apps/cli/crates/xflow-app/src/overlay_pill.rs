@@ -12,10 +12,10 @@ use xflow_core::{DesktopEvent, State};
 
 mod native;
 
-const MAX_EVENT_BYTES: usize = 128;
+const MAX_EVENT_BYTES: usize = 192;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PillEvent {
     state: State,
@@ -28,6 +28,11 @@ struct PillEvent {
     uncertain: bool,
     #[serde(default)]
     discarded: bool,
+    /// Listening advisories; the session continues.
+    #[serde(default)]
+    no_signal: bool,
+    #[serde(default)]
+    ends_soon: bool,
 }
 
 impl PillEvent {
@@ -36,7 +41,13 @@ impl PillEvent {
     }
 
     fn from_desktop(event: DesktopEvent) -> Self {
+        let hint = |text| {
+            event.state == State::Listening
+                && event.message.as_deref().is_some_and(|m| m.contains(text))
+        };
         Self {
+            no_signal: hint(crate::daemon::NO_SIGNAL),
+            ends_soon: hint(crate::daemon::ENDS_SOON),
             state: event.state,
             level: if event.level.is_finite() {
                 event.level.clamp(0.0, 1.0)
@@ -177,7 +188,7 @@ pub fn helper(config: &std::path::Path) -> Result<()> {
     native::run(first, input, settings)
 }
 
-/// Hidden `xflow overlay preview`: cycles listening, hands-free, processing
+/// Hidden `xflow overlay preview`: cycles listening, hands-free (then no signal), processing
 /// and error without dictating.
 pub fn preview() -> Result<()> {
     use std::io::Write;
@@ -200,9 +211,8 @@ pub fn preview() -> Result<()> {
             state,
             level,
             hands_free,
-            copied: false,
-            uncertain: false,
-            discarded: false,
+            no_signal: (150..175).contains(&i),
+            ..Default::default()
         };
         writeln!(stdin, "{}", serde_json::to_string(&event)?)?;
         std::thread::sleep(Duration::from_millis(40));
@@ -227,10 +237,7 @@ mod tests {
         let event = PillEvent {
             state: State::Listening,
             level: 0.5,
-            hands_free: false,
-            copied: false,
-            uncertain: false,
-            discarded: false,
+            ..Default::default()
         };
         let mut stalled = false;
         for _ in 0..4096 {
@@ -298,5 +305,40 @@ mod tests {
         });
         assert!(discarded.discarded && !discarded.copied && !discarded.active());
         assert!(serde_json::to_string(&discarded).unwrap().len() < MAX_EVENT_BYTES);
+    }
+
+    #[test]
+    fn listening_hints_map_only_while_listening() {
+        let event = |state, message: String| {
+            PillEvent::from_desktop(DesktopEvent {
+                state,
+                level: 0.0,
+                message: Some(message),
+                mode: Default::default(),
+            })
+        };
+        use crate::daemon::{ENDS_SOON, HANDS_FREE, NO_SIGNAL};
+        let quiet = event(State::Listening, format!("{HANDS_FREE}; {NO_SIGNAL}"));
+        assert!(quiet.hands_free && quiet.no_signal && !quiet.ends_soon && quiet.active());
+        let ending = event(State::Listening, ENDS_SOON.into());
+        assert!(ending.ends_soon && !ending.no_signal && !ending.hands_free);
+        assert!(!event(State::Listening, HANDS_FREE.into()).no_signal);
+        let done = event(State::Success, NO_SIGNAL.into());
+        assert!(!done.no_signal && !done.ends_soon);
+        let all = PillEvent {
+            state: State::Processing,
+            level: 0.123_456_79,
+            hands_free: true,
+            copied: true,
+            uncertain: true,
+            discarded: true,
+            no_signal: true,
+            ends_soon: true,
+        };
+        let frame = format!("{}\n", serde_json::to_string(&all).unwrap());
+        let read = read_event(&mut std::io::Cursor::new(frame))
+            .unwrap()
+            .unwrap();
+        assert!(read.no_signal && read.ends_soon);
     }
 }
