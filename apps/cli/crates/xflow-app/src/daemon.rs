@@ -184,8 +184,9 @@ pub struct Engine {
     /// Words learned while a reload was in flight; the reload may have read the file first.
     learned_during_reload: Option<DictionaryConfig>,
     notifications: tokio::task::JoinSet<()>,
-    started: Option<Instant>,
-    silent_since: Option<Instant>,
+    // Tokio's clock (the same in production) so the listening hints can be tested on paused time.
+    started: Option<tokio::time::Instant>,
+    silent_since: Option<tokio::time::Instant>,
     segments: Segments,
     timings: Timings,
     last_timings: Option<Timings>,
@@ -696,7 +697,7 @@ impl Engine {
         self.retrying = false;
         self.mode = mode;
         self.delivery = delivery;
-        self.started = Some(Instant::now());
+        self.started = Some(tokio::time::Instant::now());
         self.silent_since = self.started;
         self.segments = Segments::default();
         self.timings = Timings {
@@ -1406,11 +1407,9 @@ impl Engine {
         loop {
             // Catches transitions made without `set_state`, e.g. the final Success.
             self.track();
-            let deadline = self.started.map(|s| {
-                tokio::time::Instant::from_std(
-                    s + Duration::from_secs(self.config.recording.max_seconds as u64),
-                )
-            });
+            let deadline = self
+                .started
+                .map(|s| s + Duration::from_secs(self.config.recording.max_seconds as u64));
             // Kept audio is deleted when it expires, even with no client asking.
             let expiry = self.kept.as_ref().filter(|_| !self.active()).map(|k| {
                 tokio::time::Instant::now()
@@ -1607,7 +1606,7 @@ impl Engine {
                     }
                     let level = self.services.audio.level();
                     if level.is_finite() && level > self.config.recording.silence_threshold { self.silent_since = None; }
-                    else { self.silent_since.get_or_insert_with(Instant::now); }
+                    else { self.silent_since.get_or_insert_with(tokio::time::Instant::now); }
                     self.publish();
                     if self.config.recording.auto_stop_secs > 0 && self.silent_since.is_some_and(|s| s.elapsed() >= Duration::from_secs(self.config.recording.auto_stop_secs as u64)) {
                         if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
@@ -6302,7 +6301,8 @@ mod tests {
         .await
         .ok()
     }
-    #[tokio::test]
+    /// Paused clock: the 25 Hz level tick runs on exact virtual time, so the bounds cannot flake.
+    #[tokio::test(start_paused = true)]
     async fn muted_mic_hint_appears_by_two_and_a_half_seconds_and_clears_on_sound() {
         let (mut engine, tx, rx, mut events, _) = fixture(
             Config::default(),
@@ -6314,22 +6314,24 @@ mod tests {
         )));
         engine.services.audio = audio.clone();
         let task = tokio::spawn(engine.run(rx));
-        let started = Instant::now();
+        let started = tokio::time::Instant::now();
         ask(&tx, Request::start()).await;
         listening_with(&mut events, NO_SIGNAL, Duration::from_millis(2500))
             .await
             .expect("no-signal hint within 2.5 s");
-        assert!(started.elapsed() >= NO_SIGNAL_AFTER);
+        let at = started.elapsed();
+        assert!(
+            at >= NO_SIGNAL_AFTER && at <= NO_SIGNAL_AFTER + Duration::from_millis(80),
+            "{at:?}"
+        );
         audio.0.store(0.2_f32.to_bits(), Ordering::SeqCst);
-        tokio::time::timeout(Duration::from_millis(500), async {
-            while events.recv().await.unwrap().message.is_some() {}
-        })
-        .await
-        .expect("the hint clears once sound arrives");
+        // The engine is parked on its next tick, which reads the new level.
+        let next = events.recv().await.unwrap();
+        assert_eq!((next.state, next.message), (State::Listening, None));
         // Quiet after speech is a pause, not a dead microphone.
         audio.0.store(0.0_f32.to_bits(), Ordering::SeqCst);
         assert!(
-            listening_with(&mut events, NO_SIGNAL, Duration::from_millis(2300))
+            listening_with(&mut events, NO_SIGNAL, Duration::from_secs(5))
                 .await
                 .is_none()
         );
@@ -6338,7 +6340,7 @@ mod tests {
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn cap_warning_is_emitted_a_minute_before_max_and_resets_per_session() {
         let mut config = Config::default();
         config.recording.max_seconds = ENDS_SOON_SECS as u32 + 1;
@@ -6352,13 +6354,16 @@ mod tests {
         )));
         let task = tokio::spawn(engine.run(rx));
         for _ in 0..2 {
-            let started = Instant::now();
+            let started = tokio::time::Instant::now();
             ask(&tx, Request::start()).await;
             listening_with(&mut events, ENDS_SOON, Duration::from_millis(1500))
                 .await
                 .expect("warning one minute before the cap");
             let at = started.elapsed();
-            assert!(at >= Duration::from_secs(1), "{at:?}");
+            assert!(
+                at >= Duration::from_secs(1) && at <= Duration::from_millis(1080),
+                "{at:?}"
+            );
             assert_eq!(ask(&tx, Request::Status).await.state, State::Listening);
             // A terminal event ends the session clock; the next session starts unwarned.
             ask(&tx, Request::Cancel).await;

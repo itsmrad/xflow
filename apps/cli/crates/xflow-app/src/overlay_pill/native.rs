@@ -409,17 +409,21 @@ pub(super) fn run(
                 } else {
                     state = event;
                     closing.get_or_insert((Instant::now(), event.state));
-                    if event.copied || event.uncertain || event.discarded {
-                        let label = string(if event.uncertain {
-                            c"Pasted — check it landed"
-                        } else if event.discarded {
-                            c"Discarded"
-                        } else {
-                            c"Copied — press ⌘V to paste"
-                        });
-                        msg!(copied_label, c"setString:", label => Id; ());
-                        msg!(panel, c"setAccessibilityLabel:", label => Id; ());
+                    let label = if event.uncertain {
+                        Some(c"Pasted — check it landed")
+                    } else if event.discarded {
+                        Some(c"Discarded")
+                    } else if event.copied {
+                        Some(c"Copied — press ⌘V to paste")
+                    } else {
+                        None
+                    };
+                    if let Some(label) = label {
+                        msg!(copied_label, c"setString:", string(label) => Id; ());
                     }
+                    // Without a notice, drop any listening hint so it is not read during fade-out.
+                    let label = string(label.unwrap_or(c"XFlow recording status"));
+                    msg!(panel, c"setAccessibilityLabel:", label => Id; ());
                 }
             }
             let now = Instant::now();
