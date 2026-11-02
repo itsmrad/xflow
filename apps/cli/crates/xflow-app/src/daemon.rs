@@ -60,6 +60,10 @@ fn native_audio(config: &xflow_core::config::RecordingConfig) -> Result<Arc<dyn 
 }
 
 struct Processed {
+    /// Command after a rewrite of the selection (resolved only once processing ends).
+    mode: Mode,
+    /// Clipboard only: a failed rewrite must leave the selection untouched.
+    copy: bool,
     provider: String,
     model: Option<String>,
     text: String,
@@ -87,6 +91,8 @@ const MIC_SLOW: Duration = Duration::from_secs(1);
 const START_GRACE: Duration = Duration::from_secs(5);
 /// How often captured audio moves from the microphone buffer into segments.
 const DRAIN_EVERY: Duration = Duration::from_secs(1);
+/// Longer selections are dictated over, not rewritten: one model call stays fast.
+const MAX_REWRITE_CHARS: usize = 6000;
 struct Opening {
     mode: Mode,
     context: Option<AppContext>,
@@ -709,6 +715,12 @@ impl Engine {
         let window_terms =
             self.config.privacy.window_terms && self.config.formatting.snap_to_dictionary;
         let focus = self.focus.clone();
+        // A hold with text selected may rewrite it; the read shares the context's focus walk.
+        let rewrite = mode == Mode::Dictation
+            && delivery == Delivery::Inject
+            && context.is_none()
+            && self.config.cleanup.rewrite_selection
+            && self.services.transformer.is_some();
         // Both queries run after capture opens and outside the command actor.
         let task = tokio::spawn(async move {
             let context = async {
@@ -717,6 +729,7 @@ impl Engine {
                     None if delivery == Delivery::None && mode == Mode::Dictation => {
                         AppContext::default()
                     }
+                    None if rewrite => desktop.context_with_selection().await.unwrap_or_default(),
                     None => desktop.context().await.unwrap_or_default(),
                 }
             };
@@ -730,6 +743,9 @@ impl Engine {
             let (mut target, selection) = tokio::join!(context, selection);
             if mode == Mode::Command {
                 target.selected_text = selection.or(target.selected_text);
+            } else if !rewrite || xflow_platform::terminal_context(&target) {
+                // Never rewrite in a terminal, whatever the desktop reports.
+                target.selected_text = None;
             }
             *focus
                 .lock()
@@ -1048,13 +1064,6 @@ impl Engine {
                     xflow_providers::find_provider(xflow_providers::ProviderKind::Stt, &provider)
                         .map(|p| p.default_model.to_owned())
                 };
-                if let Some(e) = failed {
-                    // A partial instruction must never run against the selection.
-                    if session_mode == Mode::Command {
-                        return Err(e.context("part of the command could not be transcribed; selection left untouched"));
-                    }
-                    add_warning(&mut warning, &format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered{note}"));
-                }
                 let (target, terms) = if let Some(ref mut job) = context {
                     match tokio::time::timeout(Duration::from_secs(2), &mut *job).await {
                         Ok(Ok(c)) => c,
@@ -1066,6 +1075,27 @@ impl Engine {
                 } else {
                     Default::default()
                 };
+                // Only a dictation's context job reads a selection: a hold over one rewrites it.
+                let mut rewrite = session_mode == Mode::Dictation
+                    && target.selected_text.as_deref().is_some_and(|s| !s.trim().is_empty());
+                if rewrite && target.selected_text.as_deref().is_some_and(|s| s.chars().count() > MAX_REWRITE_CHARS) {
+                    rewrite = false;
+                    add_warning(&mut warning, "Selection is over 6,000 characters; dictated instead of rewriting");
+                }
+                // A failed rewrite leaves the selection alone: the text goes to the clipboard.
+                let mut copy = false;
+                if let Some(e) = failed {
+                    // A partial instruction must never run against the selection.
+                    if session_mode == Mode::Command {
+                        return Err(e.context("part of the command could not be transcribed; selection left untouched"));
+                    }
+                    if rewrite {
+                        (rewrite, copy) = (false, true);
+                        add_warning(&mut warning, "Rewrite skipped; selection left untouched");
+                    }
+                    add_warning(&mut warning, &format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered{note}"));
+                }
+                let session_mode = if rewrite { Mode::Command } else { session_mode };
                 let selection = target.selected_text.as_deref().unwrap_or("");
                 if selection.len() > MAX_MESSAGE_BYTES {
                     bail!("selected text exceeds safety limit");
@@ -1150,6 +1180,12 @@ impl Engine {
                             outcome = Some(CleanupOutcome::Applied);
                             s
                         }
+                        _ if rewrite => {
+                            (rewrite, copy) = (false, true);
+                            outcome = Some(CleanupOutcome::Failed);
+                            add_warning(&mut warning, "Rewrite failed; selection left untouched");
+                            local
+                        }
                         _ if !dictation => {
                             bail!("command transformation failed; selection left untouched")
                         }
@@ -1170,6 +1206,9 @@ impl Engine {
                 let text = xflow_core::text::after_cleanup(&text, &config);
                 let text = if terminal {
                     xflow_core::text::terminal_plain(&text)
+                } else if rewrite {
+                    // Replace the selection exactly, keeping only its own trailing whitespace.
+                    format!("{}{}", text.trim_end(), &selection[selection.trim_end().len()..])
                 } else {
                     text
                 };
@@ -1200,8 +1239,8 @@ impl Engine {
                 };
                 // A transcript that is ready first waits at most 20 ms, then goes unadjusted.
                 let around = match around {
-                    // Nothing is pasted after a discard, so its field read is dropped.
-                    Some(job) if discarded => {
+                    // Nothing is pasted after a discard, and a rewrite replaces the selection.
+                    Some(job) if discarded || session_mode == Mode::Command => {
                         job.abort();
                         None
                     }
@@ -1213,6 +1252,8 @@ impl Engine {
                     None => None,
                 };
                 Ok(Some(Processed {
+                    mode: session_mode,
+                    copy,
                     provider,
                     model,
                     text,
@@ -1471,7 +1512,7 @@ impl Engine {
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
                         if self.keeping().is_some() { self.load_kept(); }
-                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some(DISCARDED.into())); }, Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
+                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some(DISCARDED.into())); }, Ok(Some(mut processed)) => { self.mode = processed.mode; self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
                     // Late, from a canceled session: nothing it kept may stay.
                     Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
@@ -1538,7 +1579,7 @@ impl Engine {
                     self.delivering = true;
                     deliveries.spawn(async move {
                         let start = Instant::now();
-                        let result = match delivery { Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
+                        let result = match delivery { Delivery::Inject if processed.copy => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
                         if delivery != Delivery::None { processed.timings.inject_ms = Some(ms(start.elapsed())); }
                         processed.timings.total_ms = ms(processed.stopped.elapsed());
                         if let Some(entry) = &mut processed.entry { entry.latency_ms = Some(processed.timings.total_ms as u64); if store.set_latency(entry.id, processed.timings.total_ms as u64).await.is_err() { add_warning(&mut processed.warning, "History latency update failed"); } }
@@ -3175,6 +3216,10 @@ mod tests {
         title: Option<&'static str>,
         title_reads: AtomicUsize,
         title_delay: Duration,
+        /// The editable selection a hold may rewrite; a paste over it replaces it.
+        rewrite: Option<String>,
+        /// The focused field is secure: delivery is refused.
+        refuse: bool,
     }
     struct ScriptedField {
         field: Arc<Mutex<Option<String>>>,
@@ -3216,11 +3261,26 @@ mod tests {
         async fn selection(&self) -> Result<Option<String>> {
             Ok((!self.empty_selection).then(|| "selected draft".into()))
         }
+        async fn context_with_selection(&self) -> Result<AppContext> {
+            let mut context = self.context().await?;
+            context.selected_text = self.rewrite.clone();
+            Ok(context)
+        }
         async fn copy(&self, text: &str) -> Result<()> {
             self.copies.lock().unwrap().push(text.into());
             Ok(())
         }
         async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome> {
+            if self.refuse {
+                bail!("refusing delivery into a secure field");
+            }
+            if let (Some(selected), Some(field)) =
+                (&target.selected_text, self.field.lock().unwrap().as_mut())
+            {
+                self.injections.lock().unwrap().push(text.into());
+                *field = field.replacen(selected.as_str(), text, 1);
+                return Ok(InjectionOutcome::Pasted);
+            }
             if self.guard_terminal && xflow_platform::terminal_controls(text, target) {
                 self.copy(text).await?;
                 return Ok(InjectionOutcome::ClipboardOnly);
@@ -3280,7 +3340,8 @@ mod tests {
         Vec<String>,
     );
     #[derive(Default)]
-    struct RecordingTransformer(Mutex<Vec<TransformCall>>);
+    /// Records each request; replies with `.1`, or "my signature".
+    struct RecordingTransformer(Mutex<Vec<TransformCall>>, Option<&'static str>);
     #[async_trait]
     impl TextTransformer for RecordingTransformer {
         async fn transform(&self, r: TransformRequest<'_>) -> Result<String> {
@@ -3292,8 +3353,175 @@ mod tests {
                 r.app_id.map(str::to_owned),
                 r.vocabulary.to_vec(),
             ));
-            Ok("my signature".into())
+            Ok(self.1.unwrap_or("my signature").into())
         }
+    }
+    /// One hold over "Meet on Tuesday" with `desktop`'s selection, until it succeeds or fails.
+    async fn hold_over(
+        config: Config,
+        desktop: RecordingDesktop,
+        transformer: Arc<dyn TextTransformer>,
+        store: Store,
+    ) -> (Arc<RecordingDesktop>, Response) {
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some("Meet on Tuesday".into()))),
+            ..desktop
+        });
+        let (mut engine, tx, rx, mut events, _) = fixture(config, desktop.clone(), store);
+        engine.services.transformer = Some(transformer);
+        let task = tokio::spawn(engine.run(rx));
+        assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
+        ask(&tx, Request::Stop).await;
+        let r = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let r = events.recv().await.unwrap();
+                if matches!(r.state, State::Success | State::Error) {
+                    return r;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+        (desktop, r)
+    }
+    fn unused_store() -> Store {
+        Store::open(std::path::Path::new("unused"), false, 10).unwrap()
+    }
+    #[tokio::test]
+    async fn a_hold_over_a_selection_rewrites_it_and_history_records_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("db"), true, 5).unwrap();
+        let transformer = Arc::new(RecordingTransformer(Mutex::default(), Some("Monday")));
+        let desktop = RecordingDesktop {
+            rewrite: Some("Tuesday".into()),
+            ..RecordingDesktop::default()
+        };
+        let (desktop, r) = hold_over(Config::default(), desktop, transformer.clone(), store).await;
+        assert_eq!(r.state, State::Success, "{:?}", r.message);
+        // Exactly the selection is replaced: no trailing space, no smart spacing.
+        assert_eq!(
+            desktop.field.lock().unwrap().as_deref(),
+            Some("Meet on Monday")
+        );
+        let calls = transformer.0.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "Tuesday");
+        assert!(calls[0].1.contains("is ready"), "{:?}", calls[0].1);
+        let entry = r.entry.unwrap();
+        assert_eq!((entry.mode, entry.text.as_str()), (Mode::Command, "Monday"));
+        assert_eq!(entry.raw_text.as_deref(), Some("um post gres is ready"));
+        assert_eq!(
+            desktop.watches.load(Ordering::SeqCst),
+            0,
+            "model text is never learned from"
+        );
+    }
+    #[tokio::test]
+    async fn a_hold_dictates_without_a_usable_selection() {
+        let terminal = AppContext {
+            app_id: Some("Org.Editor".into()),
+            terminal_input: true,
+            ..AppContext::default()
+        };
+        let mut off = Config::default();
+        off.cleanup.rewrite_selection = false;
+        for (case, config, rewrite, context, notice) in [
+            ("no selection", Config::default(), None, None, None),
+            (
+                "blank selection",
+                Config::default(),
+                Some(" \n".to_owned()),
+                None,
+                None,
+            ),
+            (
+                "terminal",
+                Config::default(),
+                Some("Tuesday".into()),
+                Some(terminal),
+                None,
+            ),
+            ("turned off", off, Some("Tuesday".into()), None, None),
+            (
+                "too long",
+                Config::default(),
+                Some("x".repeat(6001)),
+                None,
+                Some("over 6,000 characters"),
+            ),
+        ] {
+            let transformer = Arc::new(RecordingTransformer::default());
+            let desktop = RecordingDesktop {
+                rewrite,
+                context,
+                ..RecordingDesktop::default()
+            };
+            let (desktop, r) =
+                hold_over(config, desktop, transformer.clone(), unused_store()).await;
+            assert_eq!(r.state, State::Success, "{case}: {:?}", r.message);
+            assert!(transformer.0.lock().unwrap().is_empty(), "{case}");
+            assert_eq!(desktop.injections.lock().unwrap().len(), 1, "{case}");
+            assert_eq!(
+                r.text.as_deref().map(str::trim_end),
+                Some("post gres is ready"),
+                "{case}"
+            );
+            assert_eq!(
+                r.message.is_some_and(|m| m.contains("6,000")),
+                notice.is_some(),
+                "{case}"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn a_hold_in_a_secure_field_is_refused() {
+        let transformer = Arc::new(RecordingTransformer::default());
+        let desktop = RecordingDesktop {
+            refuse: true,
+            ..RecordingDesktop::default()
+        };
+        let (desktop, r) = hold_over(
+            Config::default(),
+            desktop,
+            transformer.clone(),
+            unused_store(),
+        )
+        .await;
+        assert_eq!(r.state, State::Error);
+        assert!(r.message.unwrap().contains("secure field"));
+        assert!(transformer.0.lock().unwrap().is_empty());
+        assert_eq!(
+            desktop.field.lock().unwrap().as_deref(),
+            Some("Meet on Tuesday")
+        );
+    }
+    #[tokio::test]
+    async fn a_failed_rewrite_leaves_the_selection_and_copies_the_dictation() {
+        let desktop = RecordingDesktop {
+            rewrite: Some("Tuesday".into()),
+            ..RecordingDesktop::default()
+        };
+        let (desktop, r) = hold_over(
+            Config::default(),
+            desktop,
+            Arc::new(FailingCleanup),
+            unused_store(),
+        )
+        .await;
+        assert_eq!(r.state, State::Success, "{:?}", r.message);
+        let message = r.message.unwrap();
+        assert!(
+            message.starts_with(COPIED) && message.contains("selection left untouched"),
+            "{message}"
+        );
+        assert!(desktop.injections.lock().unwrap().is_empty());
+        assert_eq!(
+            desktop.field.lock().unwrap().as_deref(),
+            Some("Meet on Tuesday")
+        );
+        assert_eq!(*desktop.copies.lock().unwrap(), ["post gres is ready "]);
     }
     fn fixture(
         mut config: Config,

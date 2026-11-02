@@ -25,6 +25,7 @@ pub const SETTINGS: &[Row] = &[
     ("cleanup.provider", "Writing", "Service", "The AI service that tidies your text when cleanup is on."),
     ("cleanup.model", "Writing", "Model", "Models offered by the writing service you chose."),
     ("action.cleanup_key", "Writing", "API key", "Your key for the writing service, stored encrypted by xflow."),
+    ("cleanup.rewrite_selection", "Writing", "Edit selected text", "With text selected, hold the key and say how to change it, or what to put instead. Uses the writing service. macOS only for now. Never in terminals, search boxes or password fields."),
     ("formatting.remove_fillers", "Writing", "Remove um and uh", "Leave out filler words such as um and uh."),
     ("formatting.spoken_punctuation", "Writing", "Spoken punctuation", "Say \"comma\", \"period\" or \"new line\" to type them."),
     ("formatting.lists", "Writing", "Spoken lists", "Say \"one …, two …, three …\" or \"bullet …\" to get a list. Never in terminals."),

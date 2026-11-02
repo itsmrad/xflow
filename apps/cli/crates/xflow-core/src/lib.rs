@@ -202,6 +202,11 @@ pub trait Desktop: Send + Sync {
     async fn selection(&self) -> Result<Option<String>> {
         Ok(None)
     }
+    /// `context`, plus `selected_text` when the focused field is editable and not
+    /// secure, a search or address field, or a terminal: a hold-to-talk rewrite.
+    async fn context_with_selection(&self) -> Result<AppContext> {
+        self.context().await
+    }
     /// Pin the focused editable field, if it is still in `target`, and watch it
     /// while the user may correct a dictation. None when unsupported, secure, a
     /// terminal, or focus moved. Dropping the watch releases everything.

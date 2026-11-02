@@ -585,6 +585,42 @@ fn is_secure(role: Option<&str>, subrole: Option<&str>, protected: Option<bool>)
         || subrole == Some("AXSecureTextField")
         || protected == Some(true)
 }
+/// The selection a hold-to-talk may rewrite: plain editable text only, never a
+/// secure, terminal, search or address field.
+fn rewrite_selection(focus: &Focus) -> Option<String> {
+    let element = focus.element.as_ref()?;
+    if !text_reads_allowed(focus) || focus.editable != Some(true) {
+        return None;
+    }
+    let text = element.text("AXSelectedText").filter(|s| !s.is_empty())?;
+    let labels = [
+        "AXTitle",
+        "AXDescription",
+        "AXIdentifier",
+        "AXDOMIdentifier",
+        "AXPlaceholderValue",
+    ]
+    .iter()
+    .filter_map(|name| element.text(name));
+    let role = element.text("AXRole");
+    let subrole = element.text("AXSubrole");
+    (!search_field(role.as_deref(), subrole.as_deref(), labels)).then_some(text)
+}
+/// Search boxes and browser address bars: a rewrite there would run a query.
+fn search_field(
+    role: Option<&str>,
+    subrole: Option<&str>,
+    mut labels: impl Iterator<Item = String>,
+) -> bool {
+    role == Some("AXSearchField")
+        || subrole == Some("AXSearchField")
+        || labels.any(|label| {
+            let label = label.to_ascii_lowercase();
+            ["search", "address", "urlbar"]
+                .iter()
+                .any(|word| label.contains(word))
+        })
+}
 /// Labels, never AXValue: terminal contents may include secrets.
 fn terminal_input_label(label: &str) -> bool {
     let label = label.trim().to_ascii_lowercase();
@@ -870,6 +906,14 @@ impl MacDesktop {
 impl Desktop for MacDesktop {
     async fn context(&self) -> Result<AppContext> {
         tokio::task::spawn_blocking(|| Ok(focus().context)).await?
+    }
+    async fn context_with_selection(&self) -> Result<AppContext> {
+        tokio::task::spawn_blocking(|| {
+            let mut focus = focus();
+            focus.context.selected_text = rewrite_selection(&focus);
+            Ok(focus.context)
+        })
+        .await?
     }
     async fn selection(&self) -> Result<Option<String>> {
         tokio::task::spawn_blocking(|| {
@@ -1475,6 +1519,37 @@ mod tests {
         // Let the abandoned read return before the next test touches HIServices.
         std::thread::sleep(Duration::from_millis(300));
         let _ = pasteboard.write("");
+    }
+    #[test]
+    fn search_and_address_fields_are_never_rewritten() {
+        let labels = |l: &[&str]| {
+            l.iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .into_iter()
+        };
+        assert!(search_field(Some("AXSearchField"), None, labels(&[])));
+        assert!(search_field(
+            Some("AXTextField"),
+            Some("AXSearchField"),
+            labels(&[])
+        ));
+        // Chrome, Safari and Firefox address bars.
+        for label in [
+            "Address and search bar",
+            "WEB_BROWSER_ADDRESS_AND_SEARCH_FIELD",
+            "urlbar-input",
+        ] {
+            assert!(
+                search_field(Some("AXTextField"), None, labels(&[label])),
+                "{label}"
+            );
+        }
+        assert!(!search_field(
+            Some("AXTextArea"),
+            None,
+            labels(&["Message body", "compose"])
+        ));
     }
     #[test]
     fn secure_role_subrole_or_protected_content_is_never_read() {

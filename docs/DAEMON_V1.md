@@ -137,6 +137,17 @@ selection as transformer input. An empty selection requests generation. A missin
 transformer is rejected before recording; failed command transformation leaves
 the selection untouched. Successful output uses the normal delivery policy.
 
+A hold-to-talk dictation over a selection rewrites it (`cleanup.rewrite_selection`,
+on by default, effective only with a cleanup provider; macOS). The selection is
+read in the record-start context job, from the same focus walk as the context, so
+Listening never waits on it. Only a non-empty selection of at most 6,000
+characters in an editable field qualifies; secure, search and address fields,
+terminals and terminal input are skipped, and the hold is normal dictation. The
+session then runs as command mode, recorded in history as `command`, and the
+result replaces exactly the selection, keeping only its trailing whitespace. A
+failed transformation or partial transcription copies the dictated text instead
+and leaves the selection untouched.
+
 ## Reload, capture and responsiveness
 
 IPC reload and SIGHUP reread the path supplied to xflowd, including `--config`.

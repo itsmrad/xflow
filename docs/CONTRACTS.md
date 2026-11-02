@@ -16,7 +16,7 @@ history disabled; it must never silently erase saved rows at startup.
 | Section | Keys | Consumer |
 | --- | --- | --- |
 | `[stt]` | provider, model, endpoint, protocol, api_key_env, language, vocabulary, domain_hints, timeout_secs, fallback (one catalog id, opt-in) | providers |
-| `[cleanup]` | mode (raw/light/polished/custom), provider, endpoint, model, api_key_env, prompt, timeout_secs, app_context | providers, daemon |
+| `[cleanup]` | mode (raw/light/polished/custom), provider, endpoint, model, api_key_env, prompt, timeout_secs, app_context, rewrite_selection | providers, daemon |
 | `[recording]` | max_seconds, silence_threshold, device, min_ms, auto_stop_secs, keep_warm_secs, ignore_speakers | platform audio, daemon |
 | `[hotkey]` | key, double_tap_ms (500), hold_threshold_ms (500), enabled (true) | macOS event tap, daemon |
 | `[injection]` | method (paste/type/clipboard), clipboard_only, restore_clipboard, restore_delay_ms, trailing_space, smart_spacing | platform desktop, extension |

@@ -20,6 +20,12 @@ Command mode needs a [cleanup provider](#set-up-cleanup). Without one, the daemo
 
 On macOS the selection is read through Accessibility. On GNOME it is the PRIMARY selection, up to 64 KiB.
 
+## Edit selected text by holding the key (macOS)
+
+With text selected, hold your dictation key and say the change — or just the new wording: select “Tuesday”, say “Monday”, and the selection becomes “Monday”. With nothing selected, the hold is normal dictation. It is on once a cleanup provider is set up; turn it off in Settings › Writing › Edit selected text or with `cleanup.rewrite_selection = false`.
+
+Terminals, search boxes, address bars and password fields always get normal dictation, and so does a selection over 6,000 characters (with a notice). If the rewrite fails, the selection is left untouched and what you said is copied.
+
 ## Set up cleanup
 
 Cleanup is a chat-completions model. Pick a preset; its key is the one you stored for that provider.
