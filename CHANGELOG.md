@@ -5,6 +5,7 @@
 ### Dictation
 - **Spoken underscore and dash work in every app.** In a browser, chat app or Electron app, "EBS underscore 321 underscore GHJ" becomes `EBS_321_GHJ` and "Hi dash There" becomes `Hi-There`. Outside terminals and editors a dash joins only IDs (capitals, digits, single letters, camelCase) or two capitalised words; "a dash of salt", "the 100 meter dash today", "underscore the point" and "Dash" as a name stay as said. Dot, slash, colon, operators and quotes stay in terminals and editors. Whisper's commas around the word no longer block it: "Hi, Dash, There." becomes `Hi-There.` `formatting.spoken_code = false` turns it all off.
 - **"cloud.ai" becomes Claude.ai.** Bare "cloud" is unchanged.
+- **Pasting no longer leaves an empty clipboard after an image or file copy (macOS).** When the clipboard held no text, xflow restored empty text after pasting; it now leaves the pasted text there instead of an empty clipboard.
 
 ## 0.2.1-beta — 2026-11-02
 

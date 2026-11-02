@@ -237,8 +237,8 @@ impl Pasteboard {
         let flags = unsafe { PasteboardSynchronize(self.0) };
         flags & 2 != 0
     }
-    /// The first item's text as pbpaste reads it: UTF-8, else UTF-16, "" when it
-    /// has neither. None on any failure, so a failed read never restores "".
+    /// The first item's text as pbpaste reads it: UTF-8, else UTF-16. None when it
+    /// has neither (an image or file) or on any failure, so restore never writes "".
     fn read(&self) -> Option<String> {
         let mut count = 0;
         let mut item = ptr::null();
@@ -268,7 +268,6 @@ impl Pasteboard {
                     let text = String::from_utf16(&units).ok()?;
                     text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned()
                 }
-                Err(NO_FLAVOR) => String::new(),
                 _ => return None,
             },
             Err(_) => return None,
@@ -1356,7 +1355,7 @@ mod tests {
     #[ignore = "types a marker into the frontmost TextEdit document; run explicitly on macOS"]
     async fn native_textedit_paste() {
         let desktop = MacDesktop::new(&InjectionConfig::default());
-        let previous = read_previous(CLIPBOARD.into()).await.unwrap();
+        let previous = read_previous(CLIPBOARD.into()).await;
         let context = desktop.context().await.unwrap();
         assert_eq!(
             context.app_id.as_deref(),
@@ -1381,7 +1380,7 @@ mod tests {
             .unwrap()
             .value
             .contains("xflow macOS delivery check"));
-        assert_eq!(read_previous(CLIPBOARD.into()).await.unwrap(), previous);
+        assert_eq!(read_previous(CLIPBOARD.into()).await, previous);
     }
     /// A private named pasteboard, so tests never touch the user's clipboard.
     fn scratch(test: &str) -> (String, Pasteboard, std::sync::MutexGuard<'static, ()>) {
@@ -1440,15 +1439,15 @@ mod tests {
             (
                 "p.setDataForType($('héllo utf16').dataUsingEncoding($.NSUTF16StringEncoding), \
                  'public.utf16-plain-text')",
-                "héllo utf16",
+                Some("héllo utf16"),
             ),
-            ("p.setDataForType($.NSData.data, 'public.tiff')", ""),
+            ("p.setDataForType($.NSData.data, 'public.tiff')", None),
         ] {
             let status = appkit(&name, &format!("p.clearContents; {script}"))
                 .status()
                 .unwrap();
             assert!(status.success());
-            assert_eq!(pasteboard.read().as_deref(), Some(expected), "{script}");
+            assert_eq!(pasteboard.read().as_deref(), expected, "{script}");
         }
         pasteboard.write("").unwrap();
     }
