@@ -165,9 +165,11 @@ safety checks to the platform. Network and SQLite work run outside the actor.
 
 Clips shorter than `recording.min_ms` are discarded before upload. Silence before
 the first voiced frame and after the last is trimmed to 400 ms before upload (never
-below `recording.min_ms`). Those edges are frames over half of
-`recording.silence_threshold`, so soft first words and endings stay; the speech
-gate itself still uses the full threshold. Pauses inside the dictation and the cuts
+below `recording.min_ms`). The last voiced frame is the last over half of
+`recording.silence_threshold`; the first is the first over 1.5x the clip's noise
+floor (its 10th-percentile frame), kept between a quarter and half of the
+threshold, so soft first words and endings stay; the speech gate itself still uses
+the full threshold. Pauses inside the dictation and the cuts
 between long dictation segments are kept, and kept failed audio is the trimmed clip. Listening ticks
 at 25 Hz publish levels, reset continuous-silence time on speech, and stop on the
 silence deadline, maximum recording deadline, or capture's `finished()` flag.
