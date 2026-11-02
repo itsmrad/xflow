@@ -1516,10 +1516,11 @@ impl Engine {
                                 self.state = State::Success; self.message = message; let mut r = self.status();
                                 r.text = Some(processed.text); r.injection = outcome; r.entry = processed.entry; r.timings = Some(processed.timings);
                                 fit_final(&mut r);
-                                let _ = self.desktop_events.send(DesktopEvent { state: self.state, level: 0.0, message: self.message.clone(), mode: self.mode });
+                                // Pills alert only on a failed paste, never on an asked-for copy.
+                                let _ = self.desktop_events.send(DesktopEvent { state: self.state, level: 0.0, message: self.message.clone().filter(|_| self.delivery == Delivery::Inject), mode: self.mode });
                                 let _ = self.events.send(r);
                             }
-                            Err(e) => self.set_state(State::Error, Some(format!("Injection failed: {e}; transcript available via last"))),
+                            Err(e) => self.set_state(State::Error, Some(format!("{INJECTION_FAILED}: {e}; transcript available via last"))),
                         }
                     }
                     Completion::Reloaded { result, reply } => {
@@ -2125,6 +2126,7 @@ async fn edit_history(
     fit_final(&mut r);
     Ok(r)
 }
+pub(crate) const INJECTION_FAILED: &str = "Injection failed";
 /// Nothing above `recording.silence_threshold` since listening began: muted or wrong mic.
 pub(crate) const NO_SIGNAL: &str = "Can't hear you — check mic";
 const NO_SIGNAL_AFTER: Duration = Duration::from_secs(2);
@@ -5422,6 +5424,7 @@ mod tests {
                 desktop.clone(),
                 Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
             );
+            let mut pill = engine.desktop_events.subscribe();
             let task = tokio::spawn(engine.run(rx));
             ask(
                 &tx,
@@ -5436,6 +5439,17 @@ mod tests {
             .await;
             ask(&tx, Request::Stop).await;
             let final_event = success(&mut events).await;
+            // An asked-for copy is no failure: the pill hears nothing; watch keeps it all.
+            let pill_final = loop {
+                let event = pill.recv().await.unwrap();
+                if event.state == State::Success {
+                    break event;
+                }
+            };
+            assert_eq!(pill_final.message, None);
+            if delivery == Delivery::Clipboard {
+                assert!(final_event.message.unwrap().starts_with(COPIED));
+            }
             assert!(desktop.injections.lock().unwrap().is_empty());
             assert!(final_event.entry.is_none());
             if delivery == Delivery::None {

@@ -241,23 +241,34 @@ test('smart mode reset drops a hold after the daemon stops', () => {
     assert.equal(m.thresholdMs, 0);
 });
 
-test('hold times are bounded per state', () => {
-    assert.equal(L.holdTime('success', {successMs: 800, errorMs: 4000}), 800);
-    assert.equal(L.holdTime('error', {successMs: 800, errorMs: 1e9}), 60000);
-    assert.equal(L.holdTime('listening', {successMs: 800, errorMs: 4000}), 0);
+test('alerts are at most two seconds', () => {
+    assert.equal(L.holdTime(1500), 1500);
+    assert.equal(L.holdTime(4000), L.ALERT_MS);
+    assert.equal(L.holdTime(undefined), L.ALERT_MS);
 });
 
-test('copy-only results and listening hints are distinct notices', () => {
-    assert.equal(L.notice('success', `${L.COPIED}; Cleanup failed`), 'copied');
-    assert.equal(L.notice('success', null), null);
-    assert.equal(L.notice('success', 'Pasted — check it landed'), null);
-    assert.equal(L.notice('listening', "Hands-free recording; Can't hear you — check mic"), 'hint');
-    assert.equal(L.notice('listening', 'Recording stops in 1 min'), 'hint');
-    assert.equal(L.notice('listening', 'Hands-free recording'), null);
-    assert.equal(L.notice('error', "Can't hear you — check mic"), null);
-    assert.equal(L.holdTime('success', {successMs: 800, errorMs: 4000}, L.COPIED), 3000);
-    assert.equal(L.holdTime('success', {successMs: 5000, errorMs: 4000}, L.COPIED), 5000);
-    assert.equal(L.holdTime('success', {successMs: 800, errorMs: 4000}, null), 800);
+test('after release only failures the user must act on alert', () => {
+    // Silent: paste, uncertain paste, discard, cancel, warnings on success.
+    for (const message of [null, 'Pasted — check it landed', 'Cleanup failed; original transcript retained'])
+        assert.equal(L.alertText('success', message, 'processing'), null);
+    assert.equal(L.alertText('idle', 'Discarded', 'processing'), null);
+    assert.equal(L.alertText('idle', null, 'listening'), null);
+    assert.equal(L.alertText('processing', null, 'listening'), null);
+    // Alerts.
+    assert.equal(L.alertText('success', `${L.COPIED}; Terminal paste capability unverified`, 'processing'), 'Copied — paste with Ctrl+V');
+    assert.equal(L.alertText('idle', L.NOT_CAUGHT, 'processing'), 'No speech heard');
+    assert.equal(L.alertText('error', 'groq: 401 invalid key', 'processing'), "Couldn't transcribe");
+    assert.equal(L.alertText('error', 'Injection failed: x; transcript available via last', 'processing'), "Couldn't paste");
+    assert.equal(L.alertText('error', 'input device lost', 'listening'), 'Recording failed');
+    assert.equal(L.alertText('error', L.NOT_RUNNING, 'listening'), L.NOT_RUNNING);
+    assert.equal(L.alertText('error', 'XFlow command failed', 'idle'), 'XFlow command failed');
+});
+
+test('listening hints are advisories only while listening', () => {
+    assert.ok(L.isHint('listening', "Hands-free recording; Can't hear you — check mic"));
+    assert.ok(L.isHint('listening', 'Recording stops in 1 min'));
+    assert.ok(!L.isHint('listening', 'Hands-free recording'));
+    assert.ok(!L.isHint('error', "Can't hear you — check mic"));
 });
 
 test('demo level stays in a speech-like RMS range', () => {

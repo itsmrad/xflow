@@ -9,10 +9,11 @@ The pill is a small dark capsule just above the Dock, on the screen under the mo
 | --- | --- |
 | Listening | <Pill state="listening" /> A live waveform |
 | Hands-free | <Pill state="hands-free" /> Wider, with ✕ (cancel) and ■ (stop) |
-| Processing | <Pill state="processing" /> The bars collapse into shimmering dots |
-| Error | <Pill state="error" /> Flashes red with a shake, then fades |
+| Mic hint | Amber "Can't hear you — check mic" when nothing has been heard for 2 s, or "Recording stops in 1 min" near `recording.max_seconds`. Recording continues |
+| Released | Collapses at once. Pasting and copying happen silently |
+| Failure | <Pill state="error" /> Red for at most 2 s with a short reason: "Couldn't transcribe", "No speech heard", "Couldn't paste", "Recording failed", or "Copied — paste with ⌘V" when the text could not be pasted |
 
-With Reduce Motion on, it shows and hides without animating.
+With Reduce Motion on, it shows and hides without animating. `xflow watch` and `xflow status` still carry the full outcome and messages.
 
 ## Settings (macOS)
 

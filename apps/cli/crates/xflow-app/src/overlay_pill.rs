@@ -22,17 +22,25 @@ struct PillEvent {
     level: f32,
     #[serde(default)]
     hands_free: bool,
-    #[serde(default)]
-    copied: bool,
-    #[serde(default)]
-    uncertain: bool,
-    #[serde(default)]
-    discarded: bool,
     /// Listening advisories; the session continues.
     #[serde(default)]
     no_signal: bool,
     #[serde(default)]
     ends_soon: bool,
+    /// The only thing shown after release: a short red failure pill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    alert: Option<Alert>,
+}
+
+/// Failures the user must act on; a paste, an asked-for copy or a discard is silent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Alert {
+    Copied,
+    NoSpeech,
+    Paste,
+    Transcribe,
+    Record,
 }
 
 impl PillEvent {
@@ -40,69 +48,73 @@ impl PillEvent {
         matches!(self.state, State::Listening | State::Processing)
     }
 
-    fn from_desktop(event: DesktopEvent) -> Self {
-        let hint = |text| {
-            event.state == State::Listening
-                && event.message.as_deref().is_some_and(|m| m.contains(text))
-        };
+    /// `processed`: this session reached Processing, so an error is a transcription failure.
+    fn from_desktop(event: DesktopEvent, processed: bool) -> Self {
+        use crate::daemon::{COPIED, ENDS_SOON, HANDS_FREE, INJECTION_FAILED, NO_SIGNAL};
+        let message = event.message.as_deref().unwrap_or_default();
+        let listening = event.state == State::Listening;
         Self {
-            no_signal: hint(crate::daemon::NO_SIGNAL),
-            ends_soon: hint(crate::daemon::ENDS_SOON),
             state: event.state,
             level: if event.level.is_finite() {
                 event.level.clamp(0.0, 1.0)
             } else {
                 0.0
             },
-            uncertain: event
-                .message
-                .as_deref()
-                .is_some_and(|m| m.starts_with(crate::daemon::UNCERTAIN)),
-            copied: event
-                .message
-                .as_deref()
-                .is_some_and(|m| m.contains(crate::daemon::COPIED)),
-            discarded: event.state == State::Idle
-                && event.message.as_deref() == Some(crate::daemon::DISCARDED),
-            hands_free: event
-                .message
-                .is_some_and(|m| m.starts_with(crate::daemon::HANDS_FREE)),
+            hands_free: message.starts_with(HANDS_FREE),
+            no_signal: listening && message.contains(NO_SIGNAL),
+            ends_soon: listening && message.contains(ENDS_SOON),
+            alert: match event.state {
+                State::Idle if message == crate::speech::NOT_CAUGHT => Some(Alert::NoSpeech),
+                State::Success if message.starts_with(COPIED) => Some(Alert::Copied),
+                State::Error if message.starts_with(INJECTION_FAILED) => Some(Alert::Paste),
+                State::Error if processed => Some(Alert::Transcribe),
+                State::Error => Some(Alert::Record),
+                _ => None,
+            },
         }
     }
 }
 
 /// Spawn this future with a dedicated desktop-event subscription. Failures are
 /// deliberately isolated from recording; no helper, timer or AppKit exists at idle.
+/// The pill shows while listening and collapses on release; afterwards only a
+/// session's failure brings it back, briefly.
 pub async fn run(mut events: broadcast::Receiver<DesktopEvent>, config: std::path::PathBuf) {
     let mut helper: Option<Child> = None;
-    let mut session_active = false;
+    // None outside a session; Some(true) once it reached Processing.
+    let mut session: Option<bool> = None;
     loop {
         let event = match events.recv().await {
-            Ok(event) => PillEvent::from_desktop(event),
+            Ok(event) => PillEvent::from_desktop(event, session == Some(true)),
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
             Err(broadcast::error::RecvError::Closed) => break,
         };
-        if !event.active() {
-            // The final success/error frame lets the pill play its exit animation.
-            if let Some(child) = &mut helper {
-                let _ = send(child, event).await;
+        match event.state {
+            State::Listening => {
+                if session.is_none() {
+                    session = Some(false);
+                    // Retry only on the next session, not on every microphone-level event.
+                    helper = spawn(&config).ok();
+                }
+                if let Some(child) = &mut helper {
+                    if send(child, event).await.is_err() {
+                        close(&mut helper, false).await;
+                    }
+                }
             }
-            close(
-                &mut helper,
-                event.copied || event.uncertain || event.discarded,
-            )
-            .await;
-            session_active = false;
-            continue;
-        }
-        if !session_active {
-            session_active = true;
-            // Retry only on the next session, not on every microphone-level event.
-            helper = spawn(&config).ok();
-        }
-        if let Some(child) = &mut helper {
-            if send(child, event).await.is_err() {
+            State::Processing => {
+                session = Some(true);
                 close(&mut helper, false).await;
+            }
+            _ => {
+                let alert = session.take().is_some() && event.alert.is_some();
+                if alert && helper.is_none() {
+                    helper = spawn(&config).ok();
+                }
+                if let Some(child) = helper.as_mut().filter(|_| alert) {
+                    let _ = send(child, event).await;
+                }
+                close(&mut helper, alert).await;
             }
         }
     }
@@ -137,7 +149,7 @@ async fn send(child: &mut Child, event: PillEvent) -> Result<()> {
     Ok(())
 }
 
-/// `notice`: the pill holds a message (copied, discarded) before it fades.
+/// `notice`: the pill holds a failure alert before it fades.
 async fn close(helper: &mut Option<Child>, notice: bool) {
     if let Some(mut child) = helper.take() {
         drop(child.stdin.take());
@@ -178,7 +190,7 @@ pub fn helper(config: &std::path::Path) -> Result<()> {
     let Some(first) = read_event(&mut input)? else {
         return Ok(());
     };
-    if !first.active() {
+    if !first.active() && first.alert.is_none() {
         return Ok(());
     }
     let settings = crate::gsettings::GSettings::beside(config);
@@ -188,8 +200,8 @@ pub fn helper(config: &std::path::Path) -> Result<()> {
     native::run(first, input, settings)
 }
 
-/// Hidden `xflow overlay preview`: cycles listening, hands-free (then no signal), processing
-/// and error without dictating.
+/// Hidden `xflow overlay preview`: cycles listening, hands-free (then no signal)
+/// and a failure alert without dictating.
 pub fn preview() -> Result<()> {
     use std::io::Write;
     let mut child = std::process::Command::new(std::env::current_exe()?)
@@ -198,20 +210,19 @@ pub fn preview() -> Result<()> {
         .spawn()
         .context("cannot start the recording pill")?;
     let mut stdin = child.stdin.take().context("pill input closed")?;
-    for i in 0..=250 {
+    for i in 0..=175 {
         let t = i as f32 * 0.04; // 25 Hz, like the daemon's level tick
-        let (state, hands_free) = match i {
-            0..=99 => (State::Listening, false),
-            100..=174 => (State::Listening, true),
-            175..=249 => (State::Processing, false),
-            _ => (State::Error, false),
-        };
         let level = 0.01 + 0.2 * ((t * 7.0).sin() * (t * 1.7).sin()).abs();
         let event = PillEvent {
-            state,
+            state: if i < 175 {
+                State::Listening
+            } else {
+                State::Error
+            },
             level,
-            hands_free,
+            hands_free: i >= 100,
             no_signal: (150..175).contains(&i),
+            alert: (i == 175).then_some(Alert::Transcribe),
             ..Default::default()
         };
         writeln!(stdin, "{}", serde_json::to_string(&event)?)?;
@@ -272,50 +283,83 @@ mod tests {
         ] {
             assert!(read_event(&mut std::io::Cursor::new(frame)).is_err());
         }
-        let event = PillEvent::from_desktop(DesktopEvent {
-            state: State::Listening,
-            level: f32::NAN,
-            message: Some("private".into()),
-            mode: Default::default(),
-        });
+        let event = PillEvent::from_desktop(
+            DesktopEvent {
+                state: State::Listening,
+                level: f32::NAN,
+                message: Some("private".into()),
+                mode: Default::default(),
+            },
+            false,
+        );
         let encoded = serde_json::to_string(&event).unwrap();
         assert_eq!(event.level, 0.0);
         assert!(!encoded.contains("private"));
         assert!(encoded.len() < MAX_EVENT_BYTES);
-        let copied = PillEvent::from_desktop(DesktopEvent {
-            state: State::Success,
-            level: 0.0,
-            message: Some(crate::daemon::COPIED.into()),
-            mode: Default::default(),
-        });
-        assert!(copied.copied && !copied.active());
-        let uncertain = PillEvent::from_desktop(DesktopEvent {
-            state: State::Success,
-            level: 0.0,
-            message: Some(crate::daemon::UNCERTAIN.into()),
-            mode: Default::default(),
-        });
-        assert!(uncertain.uncertain && !uncertain.copied && !uncertain.active());
-        assert!(serde_json::to_vec(&uncertain).unwrap().len() < MAX_EVENT_BYTES);
-        let discarded = PillEvent::from_desktop(DesktopEvent {
-            state: State::Idle,
-            level: 0.0,
-            message: Some(crate::daemon::DISCARDED.into()),
-            mode: Default::default(),
-        });
-        assert!(discarded.discarded && !discarded.copied && !discarded.active());
-        assert!(serde_json::to_string(&discarded).unwrap().len() < MAX_EVENT_BYTES);
+        let alert = |state, message: &str, processed| {
+            PillEvent::from_desktop(
+                DesktopEvent {
+                    state,
+                    level: 0.0,
+                    message: Some(message.into()),
+                    mode: Default::default(),
+                },
+                processed,
+            )
+            .alert
+        };
+        use crate::daemon::{COPIED, DISCARDED, INJECTION_FAILED, UNCERTAIN};
+        // Silent after release: pasted, uncertain paste, warnings, discard, too short.
+        for (state, message) in [
+            (
+                State::Success,
+                "Cleanup failed; original transcript retained",
+            ),
+            (State::Success, UNCERTAIN),
+            (State::Idle, DISCARDED),
+            (State::Idle, "Recording too short; discarded"),
+            (State::Processing, ""),
+        ] {
+            assert_eq!(alert(state, message, true), None, "{message}");
+        }
+        let copied = format!("{COPIED}; Terminal paste capability unverified");
+        assert_eq!(alert(State::Success, &copied, true), Some(Alert::Copied));
+        assert_eq!(
+            alert(State::Idle, crate::speech::NOT_CAUGHT, true),
+            Some(Alert::NoSpeech)
+        );
+        let paste = format!("{INJECTION_FAILED}: denied; transcript available via last");
+        assert_eq!(alert(State::Error, &paste, true), Some(Alert::Paste));
+        assert_eq!(alert(State::Error, "401", true), Some(Alert::Transcribe));
+        assert_eq!(
+            alert(State::Error, "device lost", false),
+            Some(Alert::Record)
+        );
+        let frame = PillEvent {
+            state: State::Error,
+            alert: Some(Alert::Transcribe),
+            ..Default::default()
+        };
+        let frame = format!("{}\n", serde_json::to_string(&frame).unwrap());
+        assert!(frame.len() < MAX_EVENT_BYTES);
+        let read = read_event(&mut std::io::Cursor::new(frame))
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.alert, Some(Alert::Transcribe));
     }
 
     #[test]
     fn listening_hints_map_only_while_listening() {
         let event = |state, message: String| {
-            PillEvent::from_desktop(DesktopEvent {
-                state,
-                level: 0.0,
-                message: Some(message),
-                mode: Default::default(),
-            })
+            PillEvent::from_desktop(
+                DesktopEvent {
+                    state,
+                    level: 0.0,
+                    message: Some(message),
+                    mode: Default::default(),
+                },
+                false,
+            )
         };
         use crate::daemon::{ENDS_SOON, HANDS_FREE, NO_SIGNAL};
         let quiet = event(State::Listening, format!("{HANDS_FREE}; {NO_SIGNAL}"));
@@ -329,11 +373,9 @@ mod tests {
             state: State::Processing,
             level: 0.123_456_79,
             hands_free: true,
-            copied: true,
-            uncertain: true,
-            discarded: true,
             no_signal: true,
             ends_soon: true,
+            alert: Some(Alert::NoSpeech),
         };
         let frame = format!("{}\n", serde_json::to_string(&all).unwrap());
         let read = read_event(&mut std::io::Cursor::new(frame))

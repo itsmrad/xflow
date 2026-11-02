@@ -9,9 +9,7 @@
 .xflow-dark .xflow-bar { background-color: #fafaf7; }
 .xflow-command { border-color: #8071a8; }
 .xflow-command .xflow-bar { background-color: #8071a8; }
-.xflow-error { border-color: #b84942; }
-.xflow-error StIcon { color: #b84942; }
-.xflow-success StIcon { color: #4c785b; }
-.xflow-copied, .xflow-hint { border-color: #b7791f; }
-.xflow-success.xflow-copied StIcon, .xflow-hint StIcon { color: #b7791f; }
+.xflow-alert { background-color: #a8322b; border-color: #a8322b; color: #ffffff; }
+.xflow-hint { border-color: #b7791f; }
+.xflow-hint StIcon { color: #b7791f; }
 .xflow-wave { padding: 0; }

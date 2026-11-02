@@ -141,9 +141,9 @@ and requests unchanged, and the delivery adapter always rechecks live focus.
   the buffered clip or original error. Reset on start/stop/cancel; no new idle polling.
 - `InjectionOutcome::Typed`, `CleanupMode::Custom`, `Mode::{Dictation, Command}`.
 - `InjectionOutcome::Uncertain` (`"uncertain"`): macOS dispatched paste keys to a known editable,
-  nonsecure, unchanged target but could not confirm insertion. The pill says "Pasted — check it
-  landed"; clipboard text and `last` remain available. Unknown focus is `ClipboardOnly`, with
-  a "Copied" pill. Uncertain delivery does not start correction learning.
+  nonsecure, unchanged target but could not confirm insertion. The status says "Pasted — check it
+  landed" (the pill stays silent); clipboard text and `last` remain available. Unknown focus is
+  `ClipboardOnly`, with a short red "Copied — paste with ⌘V" pill when paste was requested. Uncertain delivery does not start correction learning.
 - `GlobalHotkeys::received_events()` optionally reports whether a native tap has received keyboard input.
 - `GlobalHotkeys::next_action()` adds `HandsFree` (latch notification without restarting capture);
   `reset()` clears a gesture when another control ends a session. Physical events are

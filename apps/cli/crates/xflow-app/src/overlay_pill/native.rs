@@ -1,6 +1,6 @@
 //! Wispr-style "Flow bar": a dark capsule with a live waveform, drawn with
 //! CALayers. All Objective-C objects stay on the helper's main thread.
-use super::{read_event, PillEvent};
+use super::{read_event, Alert, PillEvent};
 use crate::gsettings::GSettings;
 use anyhow::{bail, Result};
 use std::{
@@ -238,15 +238,21 @@ fn frame(screen: Rect, position: &str, scale: f64) -> Rect {
     )
 }
 
-/// Listening advisory text; the daemon sends at most one at a time.
-fn hint_text(event: PillEvent) -> Option<&'static CStr> {
-    if event.ends_soon {
-        Some(c"Recording stops in 1 min")
-    } else if event.no_signal {
-        Some(c"Can't hear you — check mic")
-    } else {
-        None
-    }
+/// The alert held after release, at most this long including the fade.
+const ALERT_SECS: f64 = 2.0;
+
+/// What the pill says: a failure alert after release, or a listening advisory.
+fn label_text(event: PillEvent) -> Option<&'static CStr> {
+    Some(match (event.alert, event.ends_soon, event.no_signal) {
+        (Some(Alert::Copied), ..) => c"Copied — paste with ⌘V",
+        (Some(Alert::NoSpeech), ..) => c"No speech heard",
+        (Some(Alert::Paste), ..) => c"Couldn't paste",
+        (Some(Alert::Transcribe), ..) => c"Couldn't transcribe",
+        (Some(Alert::Record), ..) => c"Recording failed",
+        (None, true, _) => c"Recording stops in 1 min",
+        (None, _, true) => c"Can't hear you — check mic",
+        (None, false, false) => return None,
+    })
 }
 
 fn ease_out(p: f64) -> f64 {
@@ -330,7 +336,7 @@ pub(super) fn run(
         msg!(panel, c"setBecomesKeyOnlyIfNeeded:", 1i8 => i8; ());
         msg!(panel, c"setHidesOnDeactivate:", 0i8 => i8; ());
         msg!(panel, c"setIgnoresMouseEvents:", 1i8 => i8; ());
-        msg!(panel, c"setAccessibilityLabel:", string(hint_text(first).unwrap_or(c"XFlow recording status")) => Id; ());
+        msg!(panel, c"setAccessibilityLabel:", string(label_text(first).unwrap_or(c"XFlow recording status")) => Id; ());
         // All Spaces, stationary, outside window cycling, over full-screen apps.
         msg!(panel, c"setCollectionBehavior:", 1usize | (1 << 4) | (1 << 6) | (1 << 8) => usize; ());
         msg!(panel, c"setOpaque:", 0i8 => i8; ());
@@ -374,7 +380,7 @@ pub(super) fn run(
         place(square, BUTTON * s / 2.0, BUTTON * s / 2.0, 8.0 * s, 8.0 * s);
 
         let copied_label = msg!(class(c"CATextLayer"), c"layer"; Id);
-        msg!(copied_label, c"setString:", string(hint_text(first).unwrap_or(c"Copied — press ⌘V to paste")) => Id; ());
+        msg!(copied_label, c"setString:", string(label_text(first).unwrap_or(c"")) => Id; ());
         msg!(copied_label, c"setFontSize:", 12.0 * s => f64; ());
         msg!(copied_label, c"setAlignmentMode:", string(c"center") => Id; ());
         msg!(copied_label, c"setForegroundColor:", white => Id; ());
@@ -392,39 +398,30 @@ pub(super) fn run(
         let mut clickable = false;
         let shown = Instant::now();
         let mut last = shown;
-        let mut closing: Option<(Instant, State)> = None;
+        // A first frame that is already final is a failure alert after release.
+        let mut closing = (!first.active()).then(|| (Instant::now(), first.state));
         loop {
             let tick_pool = msg!(class(c"NSAutoreleasePool"), c"new"; Id);
             while let Ok(event) = events.try_recv() {
-                if event.active() {
-                    if event.state == State::Listening {
-                        wave.set_level(event.level);
-                    }
-                    if hint_text(event) != hint_text(state) {
-                        let label = string(hint_text(event).unwrap_or(c"XFlow recording status"));
-                        msg!(copied_label, c"setString:", label => Id; ());
-                        msg!(panel, c"setAccessibilityLabel:", label => Id; ());
-                    }
-                    state = event;
-                } else {
-                    state = event;
-                    closing.get_or_insert((Instant::now(), event.state));
-                    let label = if event.uncertain {
-                        Some(c"Pasted — check it landed")
-                    } else if event.discarded {
-                        Some(c"Discarded")
-                    } else if event.copied {
-                        Some(c"Copied — press ⌘V to paste")
-                    } else {
-                        None
-                    };
+                if closing.is_some() {
+                    continue; // e.g. EOF after an alert frame
+                }
+                if event.state == State::Listening {
+                    wave.set_level(event.level);
+                }
+                if !event.active() {
+                    closing = Some((Instant::now(), event.state));
+                }
+                if label_text(event) != label_text(state) {
+                    let label = label_text(event);
                     if let Some(label) = label {
                         msg!(copied_label, c"setString:", string(label) => Id; ());
                     }
-                    // Without a notice, drop any listening hint so it is not read during fade-out.
+                    // Without text, drop any hint so it is not read during fade-out.
                     let label = string(label.unwrap_or(c"XFlow recording status"));
                     msg!(panel, c"setAccessibilityLabel:", label => Id; ());
                 }
+                state = event;
             }
             let now = Instant::now();
             let dt = now.duration_since(last).as_secs_f64() * 1000.0;
@@ -440,11 +437,11 @@ pub(super) fn run(
             } else {
                 1.0 - (-dt / 70.0).exp()
             };
-            let hint = closing.is_none() && hint_text(state).is_some();
-            let notice = state.copied || state.uncertain || state.discarded || hint;
-            width += ((if state.copied || state.uncertain || hint {
-                290.0
-            } else if state.discarded || hands_free {
+            let alert = state.alert.is_some();
+            let notice = label_text(state).is_some();
+            width += ((if notice {
+                250.0
+            } else if hands_free {
                 HANDS_FREE_W
             } else {
                 LISTEN_W
@@ -456,26 +453,16 @@ pub(super) fn run(
             } else {
                 ease_out(shown.elapsed().as_secs_f64() / 0.18)
             };
-            let (mut alpha, mut scale, mut shake, mut error) =
-                (appear, 0.6 + 0.4 * appear, 0.0, false);
-            if let Some((at, final_state)) = closing {
+            let (mut alpha, mut scale, mut shake) = (appear, 0.6 + 0.4 * appear, 0.0);
+            if let Some((at, _)) = closing {
                 let e = at.elapsed().as_secs_f64();
-                error = final_state == State::Error;
-                let fade_from = if state.copied || state.uncertain {
-                    3.0
-                } else if state.discarded {
-                    1.5
-                } else if error {
-                    0.45
-                } else {
-                    0.0
-                };
                 let fade = if reduce_motion { 0.0 } else { 0.15 };
+                let fade_from = if alert { ALERT_SECS - fade } else { 0.0 };
                 if e >= fade_from + fade {
                     msg!(tick_pool, c"drain"; ());
                     break;
                 }
-                if error && !reduce_motion && e < 0.3 {
+                if alert && !reduce_motion && e < 0.3 {
                     shake = 4.0 * s * (e * std::f64::consts::TAU * 12.0).sin() * (1.0 - e / 0.3);
                 }
                 let q = if fade > 0.0 {
@@ -498,7 +485,7 @@ pub(super) fn run(
             place(capsule, WIN_W * s / 2.0, WIN_H * s / 2.0, w, h);
             transform(capsule, scale, 0.0, shake);
             msg!(capsule, c"setOpacity:", (alpha * opacity) as f32 => f32; ());
-            msg!(capsule, c"setBackgroundColor:", if error { alarm } else if hint { amber } else { dark } => Id; ());
+            msg!(capsule, c"setBackgroundColor:", if alert { alarm } else if notice { amber } else { dark } => Id; ());
             place(copied_label, w / 2.0, h / 2.0, w - 16.0 * s, 16.0 * s);
             msg!(copied_label, c"setOpacity:", if notice { 1.0f32 } else { 0.0f32 } => f32; ());
             let pitch = (BAR_W + BAR_GAP) * s;
@@ -557,16 +544,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hint_text_matches_the_daemon_messages() {
-        let text = |event| hint_text(event).map(|t| t.to_str().unwrap());
+    fn label_text_matches_the_daemon_messages_and_alerts_win() {
+        let text = |event| label_text(event).map(|t| t.to_str().unwrap());
         let mut event = PillEvent::default();
         assert_eq!(text(event), None);
         event.no_signal = true;
         assert_eq!(text(event), Some(crate::daemon::NO_SIGNAL));
         event.ends_soon = true;
         assert_eq!(text(event), Some(crate::daemon::ENDS_SOON));
+        event.alert = Some(Alert::Copied);
+        assert_eq!(text(event), Some("Copied — paste with ⌘V"));
     }
-
     #[test]
     fn placement_respects_visible_area_and_position_aliases() {
         let screen = Rect::new(-1000.0, 40.0, 1000.0, 700.0);
