@@ -1,5 +1,6 @@
 # xflow dev pack. Format and rules: cues.rs (`fields`) and its data test; sources: NOTICE.
 Claude Code	-	cloud code|claude code	ask|hey|tell	-	google|the|aws|azure	storage|provider|computing	to|about|for
+Claude.ai	cloud.ai
 Claude	-	cloud|claude	ask|hey|tell	-	google|the|aws|azure|on	storage|provider|computing|flare|front|cover|formation|service|services	to|about|for
 Codex	-	codecs|codex	ask|openai	cli	video|audio|media	video|audio|compression	to|about|for
 kubectl	kube ctl

@@ -1,8 +1,9 @@
 //! Spoken code: explicit casing commands ("camel case user id" -> userId), a
 //! closed filename grammar ("index dot ts" -> index.ts) and bracket pairs
 //! ("open paren" -> "("). Spoken symbols ("user underscore id" -> user_id,
-//! "dash dash verbose" -> --verbose) only in terminals and editors, and only
-//! next to code-shaped words; elsewhere "dot", "slash" and "backtick" stay speech.
+//! "dash dash verbose" -> --verbose) in terminals and editors, and only next
+//! to code-shaped words. Elsewhere only underscore and dash join ("EBS
+//! underscore 321" -> EBS_321), and "dot", "slash" and "backtick" stay speech.
 use crate::{
     config::Config,
     text::{words, Word},
@@ -817,10 +818,45 @@ fn plain(text: &str, w: &[Word<'_>], k: usize) -> bool {
         && symbol(text, w, k).is_none()
         && pair(text, w, k).is_none()
 }
-/// Word `k` follows word `k - 1` on the same line.
+/// Word `k` follows word `k - 1` on the same line. Next to a spoken underscore
+/// or dash (`dash`) it may follow Whisper's comma, or its period after the
+/// symbol word (`right`): "Hi, Dash, There."
 fn after(text: &str, w: &[Word<'_>], k: usize) -> bool {
-    k > 0 && w.get(k).is_some_and(|x| gap(&text[w[k - 1].end..x.start]))
+    near(text, w, k, false, false)
 }
+fn near(text: &str, w: &[Word<'_>], k: usize, dash: bool, right: bool) -> bool {
+    k > 0
+        && w.get(k).is_some_and(|x| {
+            let s = &text[w[k - 1].end..x.start];
+            gap(s)
+                || dash
+                    && (s.strip_prefix(',').is_some_and(gap)
+                        || right && s.strip_prefix('.').is_some_and(gap))
+        })
+}
+/// The joins that run outside terminals and editors.
+fn dash(sym: &str, kind: Sym) -> bool {
+    kind == Sym::Join && matches!(sym, "_" | "-")
+}
+/// An ID part: EBS, 321, 42MB, x, userId.
+fn id(x: &Word<'_>) -> bool {
+    code_like(x)
+        || x.text.contains(|c: char| c.is_ascii_digit())
+        || x.text.len() > 1 && !x.text.contains(char::is_lowercase)
+}
+/// Outside code apps "dash" joins only an ID or a pair of capitalised words
+/// (`names`): "EC2 dash 42MB", "Hi dash There", never "a dash of salt".
+fn id_or_names(l: &Word<'_>, r: &Word<'_>, names: bool) -> bool {
+    let cap = |x: &Word<'_>| x.text.starts_with(char::is_uppercase);
+    id(l) || id(r) || names && cap(l) && cap(r)
+}
+/// Whisper's full stop after the symbol word: only an ID may join across it,
+/// since the capital after it starts a sentence ("Hi Dash. Thanks for coming.").
+fn stop(text: &str, w: &[Word<'_>], end: usize) -> bool {
+    text[w[end - 1].end..w[end].start].contains('.')
+}
+/// "underscore" is a verb after these: "I underscore", "we will underscore".
+const LEADS: &[&str] = &["i", "will", "can", "may", "shall", "cannot"];
 /// A content word a symbol may join: "user", "id", "src", "3000"; never "the" or "of".
 fn operand(text: &str, w: &[Word<'_>], k: usize) -> bool {
     plain(text, w, k) && !function(&w[k])
@@ -840,13 +876,26 @@ fn flag(word: &Word<'_>) -> bool {
         && (t.len() == 1 && t != "i" || t.len() <= 3 && !common(&t) && !function(word))
 }
 /// Joins from the symbol at `k` onto `code`: "slash bin", "dot sh". After an
-/// unmistakable lead (`loose`) any spoken word joins: --no-verify. The end.
-fn joins(text: &str, w: &[Word<'_>], mut k: usize, code: &mut String, loose: bool) -> usize {
-    while let Some((end, sym, kind)) = symbol(text, w, k)
-        .filter(|s| matches!(s.2, Sym::Join | Sym::Path) && gap(&text[w[k - 1].end..w[k].start]))
-    {
+/// unmistakable lead (`loose`) any spoken word joins: --no-verify. Outside
+/// code apps (`!dev`) only underscores and dashes. The end.
+fn joins(
+    text: &str,
+    w: &[Word<'_>],
+    mut k: usize,
+    code: &mut String,
+    loose: bool,
+    dev: bool,
+) -> usize {
+    while let Some((end, sym, kind)) = symbol(text, w, k).filter(|s| {
+        (dev && matches!(s.2, Sym::Join | Sym::Path) || dash(s.1, s.2))
+            && near(text, w, k, dash(s.1, s.2), false)
+    }) {
         let right = if loose { plain } else { operand };
-        if right(text, w, end) && after(text, w, end) && !(sym == "-" && !loose && flag(&w[end])) {
+        if right(text, w, end)
+            && near(text, w, end, dash(sym, kind), true)
+            && !(stop(text, w, end) && !id(&w[end]))
+            && !(sym == "-" && !loose && flag(&w[end]))
+        {
             code.push_str(sym);
             code.push_str(w[end].text);
             k = end + 1;
@@ -862,18 +911,27 @@ fn joins(text: &str, w: &[Word<'_>], mut k: usize, code: &mut String, loose: boo
     k
 }
 
-/// A spoken symbol at word `i` in a terminal or editor: (end, code, glue
-/// before, glue after). Joins need content words on both sides and operators
-/// code-like ones, so prose in a code app ("add a dash of salt", "plus one",
-/// "the star of the show") stays prose. `quote`: the open quote's closing word.
+/// A spoken symbol at word `i`: (end, code, glue before, glue after). Joins
+/// need content words on both sides and operators code-like ones, so prose in
+/// a code app ("add a dash of salt", "plus one", "the star of the show") stays
+/// prose. Outside terminals and editors (`!dev`) only an underscore or dash
+/// between two words, under `id_or_names`. `quote`: the open quote's closing word.
 fn symbols(
     text: &str,
     w: &[Word<'_>],
     i: usize,
     last: Option<usize>,
-    terminal: bool,
+    (terminal, dev): (bool, bool),
     quote: &mut Option<usize>,
 ) -> Option<(usize, String, bool, bool)> {
+    // Prose apps skip the symbol table on every other word.
+    if !dev
+        && !w
+            .get(i + 1)
+            .is_some_and(|x| any(x, &["underscore", "dash", "hyphen"]))
+    {
+        return None;
+    }
     let left = i
         .checked_sub(1)
         .filter(|&p| gap(&text[w[p].end..w[i].start]));
@@ -884,33 +942,52 @@ fn symbols(
         // After "the" or "a" it is prose ("a polka dot dress"), except underscore,
         // which is a verb after a plural: "these findings underscore concerns".
         let (end, sym, kind) = symbol(text, w, i + 1)?;
-        let ok = matches!(kind, Sym::Join | Sym::Path)
-            && operand(text, w, i)
-            && operand(text, w, end)
-            && after(text, w, end)
-            && !(sym == "-" && flag(&w[end]))
-            && !(if sym == "_" { plural(&w[i]) } else { det })
-            && !any(&w[i], VERBS)
+        let (l, r) = (&w[i], w.get(end)?);
+        // "Hi dash There": Whisper's capital mid-sentence makes even "There" a name.
+        let name = |x: &Word<'_>| x.text.starts_with(char::is_uppercase) && !any(x, DETERMINERS);
+        // "the 100 meter dash" is a race.
+        let race = i > 0 && w[i - 1].text.chars().all(|c| c.is_ascii_digit());
+        let stop = stop(text, w, end);
+        let ok = (if dev && !stop {
+            matches!(kind, Sym::Join | Sym::Path)
+        } else {
+            dash(sym, kind) && (sym == "_" && !any(l, LEADS) && !stop || id_or_names(l, r, !stop))
+        }) && operand(text, w, i)
+            && (operand(text, w, end)
+                || sym == "-" && !stop && name(l) && name(r) && plain(text, w, end))
+            && near(text, w, i + 1, dash(sym, kind), false)
+            && near(text, w, end, dash(sym, kind), true)
+            && !(sym == "-" && (flag(r) || race))
+            && !(if sym == "_" { plural(l) } else { det })
+            && !any(l, VERBS)
             // "four dot env" names the dotfile: `four .env`.
             && !(sym == "." && filename(text, w, i + 1).is_some());
         if !ok {
             return None;
         }
-        let mut code = w[i].text.to_owned();
-        return Some((joins(text, w, i + 1, &mut code, false), code, false, false));
+        let mut code = format!("{}{sym}{}", l.text, r.text);
+        return Some((
+            joins(text, w, end + 1, &mut code, false, dev),
+            code,
+            false,
+            false,
+        ));
     };
+    if !dev {
+        return None;
+    }
     let right = |code: &mut String, loose| {
         let ok = if loose { plain } else { operand };
         (ok(text, w, end) && after(text, w, end)).then(|| {
             code.push_str(w[end].text);
-            joins(text, w, end + 1, code, loose)
+            joins(text, w, end + 1, code, loose, true)
         })
     };
     match kind {
         // Right after inserted code: "camel case user id dot length" -> userId.length.
         Sym::Join | Sym::Path if after_code => {
             let mut code = String::new();
-            let end = joins(text, w, i, &mut code, false);
+            let end = joins(text, w, i, &mut code, false, true);
             (end > i).then_some((end, code, true, false))
         }
         // "dash la" -> -la, keeping the space after the command.
@@ -981,7 +1058,8 @@ pub(crate) fn literal(word: &str) -> bool {
 /// through `prose` (the snap pass), so a dictionary term never re-cases an
 /// identifier the speaker spelled out. Output never gains a newline, so this
 /// is as safe in terminals as anywhere.
-/// `terminal` and `app` (the focused app) turn on spoken symbols in code apps.
+/// `terminal` and `app` (the focused app) turn on every spoken symbol in code
+/// apps; elsewhere only underscores and dashes.
 pub fn apply(
     text: &str,
     config: &Config,
@@ -1016,10 +1094,7 @@ pub fn apply(
             (end, id, false, false)
         } else if let Some((end, c, open)) = bracket(text, &w, i, &mut depth, &last_close) {
             (end, c.to_string(), !open, open)
-        } else if let Some(found) = dev
-            .then(|| symbols(text, &w, i, last, terminal, &mut quote))
-            .flatten()
-        {
+        } else if let Some(found) = symbols(text, &w, i, last, (terminal, dev), &mut quote) {
             found
         } else {
             i += 1;
@@ -1362,12 +1437,16 @@ mod tests {
     }
 
     type App = (bool, Option<&'static str>);
-    /// No app, Mail, Notes, Slack: never spoken symbols.
-    const PROSE_APPS: [App; 4] = [
+    /// No app, Mail, Notes, Slack, TextEdit, the Helium browser, T3 Code (an
+    /// Electron app): no spoken symbol but underscore and dash.
+    const PROSE_APPS: [App; 7] = [
         (false, None),
         (false, Some("com.apple.mail")),
         (false, Some("com.apple.Notes")),
         (false, Some("com.tinyspeck.slackmacgap")),
+        (false, Some("com.apple.TextEdit")),
+        (false, Some("net.imput.helium")),
+        (false, Some("com.t3tools.t3code")),
     ];
     /// Terminal, VS Code's integrated terminal, then editors.
     const CODE_APPS: [App; 5] = [
@@ -1488,13 +1567,13 @@ mod tests {
                 let expected = if app.0 { terminal } else { editor };
                 assert_eq!(symbols_in(input, app), expected, "{input} {app:?}");
             }
-            // Prose apps get only the existing filename and bracket grammar.
+            // Prose apps get the filename and bracket grammar, and of the
+            // symbols only "user underscore id": the rest are not IDs or names.
             for app in PROSE_APPS {
-                assert_eq!(
-                    symbols_in(input, app),
-                    code(input, &config),
-                    "{input} {app:?}"
-                );
+                let got = symbols_in(input, app);
+                assert_eq!(got, code(input, &config), "{input} {app:?}");
+                let joined = got.contains(['_', '-', '/', '\\', '@', '#', '$', '~', '=', '`', '"']);
+                assert_eq!(joined, input.contains("underscore id"), "{input} {app:?}");
             }
         }
     }
@@ -1549,6 +1628,27 @@ mod tests {
             "Press the tilde key.",
             "Put an asterisk next to it.",
             "Revenue grew twelve percent last quarter.",
+            "We ran the 100 meter dash today.",
+            "the 100 meter dash today",
+            "He made a dash for the door.",
+            "Dash is my dog's name.",
+            "My friend Dash came over.",
+            "Draw a dash, then a dot.",
+            "a dash, then a dot",
+            "It was the twenty-first time.",
+            "a well-known author",
+            "Get a dash cam.",
+            "dash cam footage",
+            "The Pentagon underscored the risk.",
+            "Underscore the importance of sleep.",
+            "I underscore that point.",
+            "We will underscore the need.",
+            "Officials underscore safety.",
+            "Add a dash of salt, then stir.",
+            "Make a dash. Then rest.",
+            "Hi Dash. Thanks for coming.",
+            "Hi, Dash. We need to talk.",
+            "Say hi to Dash, Thanks.",
         ] {
             for app in PROSE_APPS.into_iter().chain(CODE_APPS) {
                 for text in [text.to_owned(), text.to_lowercase()] {
@@ -1562,12 +1662,51 @@ mod tests {
         assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
+    /// The owner's v0.2.1-beta history rows, as Whisper wrote them, through the
+    /// whole pipeline: underscore and dash join IDs and names in every app.
+    #[test]
+    fn spoken_underscore_and_dash_in_every_app() {
+        use crate::text::prepare;
+        let mut config = Config::default();
+        for (raw, expected) in [
+            ("EBS underscore 321 underscore GHJ.", "EBS_321_GHJ."),
+            ("EBS underscore 321 underscore GHJ", "EBS_321_GHJ"),
+            ("Hi, Dash, There.", "Hi-There."),
+            ("Hi dash There", "Hi-There"),
+            (
+                "Amazon EC2 Server Dash 42MB RAM",
+                "Amazon EC2 Server-42MB RAM",
+            ),
+            ("Order the Model X dash 7.", "Order the Model X-7."),
+            ("Ask for EBS dash. 42 next.", "Ask for EBS-42 next."),
+            ("Use user underscore id here.", "Use user_id here."),
+            ("Log in at Claude.ai.", "Log in at Claude.ai."),
+            ("Log in at cloud.ai.", "Log in at Claude.ai."),
+            ("Log in at Cloud.ai today.", "Log in at Claude.ai today."),
+            ("Cloud.ai is down.", "Claude.ai is down."),
+            ("The cloud is down.", "The cloud is down."),
+        ] {
+            for (terminal, app) in PROSE_APPS.into_iter().chain(CODE_APPS) {
+                let got = prepare(raw, &config, terminal, app).0;
+                assert_eq!(got, expected, "{raw} {app:?}");
+            }
+        }
+        // spoken_code = false turns the joins off; the Claude.ai term stays.
+        config.formatting.spoken_code = false;
+        for raw in ["Hi, Dash, There.", "EBS underscore 321 underscore GHJ."] {
+            assert_eq!(
+                prepare(raw, &config, false, Some("net.imput.helium")).0,
+                raw
+            );
+        }
+    }
+
     /// The prose controls, as written and lowercased: spoken symbols change
-    /// nothing outside code apps. In code apps only two spoken mentions of code
-    /// convert, by design: "dash dash flag" and "main dot street".
+    /// nothing outside code apps, underscore and dash included. In code apps
+    /// only two spoken mentions of code convert, by design: "dash dash flag"
+    /// and "main dot street".
     #[test]
     fn prose_controls_are_unchanged_by_spoken_symbols() {
-        let config = Config::default();
         let mut changed = std::collections::BTreeSet::new();
         let mut words = 0;
         for line in [
@@ -1580,12 +1719,11 @@ mod tests {
         {
             words += line.split_whitespace().count();
             for text in [line.to_owned(), line.to_lowercase()] {
-                let plain = code(&text, &config);
                 for app in PROSE_APPS {
-                    assert_eq!(symbols_in(&text, app), plain, "{text} {app:?}");
+                    assert_eq!(symbols_in(&text, app), text, "{text} {app:?}");
                 }
                 for app in CODE_APPS {
-                    if symbols_in(&text, app) != plain {
+                    if symbols_in(&text, app) != text {
                         changed.insert(text.to_lowercase());
                     }
                 }
