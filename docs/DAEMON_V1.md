@@ -259,7 +259,9 @@ Once desktop delivery starts, cancel/shutdown lets it finish key release rather
 than aborting it midway. New recording is briefly refused while that delivery
 finishes; stale completion cannot overwrite current state. Shutdown also drains
 explicit copy/paste operations. Sounds and notifications use platform hooks;
-stderr logging honors `XFLOW_LOG` without recording transcripts or secrets.
+stderr logging honors `XFLOW_LOG` without recording transcripts or secrets;
+platform audio uses the same log, so `XFLOW_LOG=debug` shows `live_hal_units=`
+and `open_to_first_callback_us=`.
 
 ## Timing meaning
 

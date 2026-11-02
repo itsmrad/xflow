@@ -321,7 +321,10 @@ fn usable_inputs<D>(
             }),
             Ok(None) => None,
             Err(error) => {
-                tracing::debug!(device_id = id, %error, "skipping unavailable microphone");
+                xflow_core::log(
+                    "debug",
+                    &format!("skipping unavailable microphone device_id={id}: {error}"),
+                );
                 None
             }
         })
@@ -397,10 +400,16 @@ fn stable_inputs<D>(
         match read() {
             Ok(Some(inputs)) => return Ok(inputs),
             Ok(None) => {}
-            Err(error) => tracing::debug!(%error, "microphone inventory unavailable"),
+            Err(error) => xflow_core::log(
+                "debug",
+                &format!("microphone inventory unavailable: {error}"),
+            ),
         }
     }
-    tracing::debug!("audio device inventory changed; using the system default");
+    xflow_core::log(
+        "debug",
+        "audio device inventory changed; using the system default",
+    );
     Ok(vec![default()?])
 }
 
@@ -504,7 +513,14 @@ fn select_device(config: &RecordingConfig) -> Result<(cpal::Device, DeviceChoice
         current_default(&cpal::default_host()).ok(),
         config,
     );
-    tracing::debug!(resolution_us = started.elapsed().as_micros() as u64, device_id = ?selected.1.device_id, "microphone resolved");
+    xflow_core::log(
+        "debug",
+        &format!(
+            "microphone resolved resolution_us={} device_id={:?}",
+            started.elapsed().as_micros(),
+            selected.1.device_id
+        ),
+    );
     Ok(selected)
 }
 
@@ -655,7 +671,7 @@ impl<S: StreamTrait> Drop for PauseOnDrop<S> {
     fn drop(&mut self) {
         // Only default CPAL handles reach this guard; non-default inputs use an owned HAL unit.
         if let Err(error) = self.0.pause() {
-            tracing::warn!(%error, "cannot stop microphone stream");
+            xflow_core::log("warn", &format!("cannot stop microphone stream: {error}"));
         }
     }
 }
@@ -672,7 +688,10 @@ struct OwnedHalUnit<U> {
 impl<U> OwnedHalUnit<U> {
     fn new(unit: U) -> Self {
         let live = LIVE_HAL_UNITS.fetch_add(1, Ordering::Relaxed) + 1;
-        tracing::debug!(live_hal_units = live, "HAL input allocated");
+        xflow_core::log(
+            "debug",
+            &format!("HAL input allocated live_hal_units={live}"),
+        );
         Self { unit: Some(unit) }
     }
 }
@@ -684,7 +703,10 @@ impl<U> Drop for OwnedHalUnit<U> {
         drop(self.unit.take());
         let previous = LIVE_HAL_UNITS.fetch_sub(1, Ordering::Relaxed);
         debug_assert!(previous > 0);
-        tracing::debug!(live_hal_units = previous - 1, "HAL input disposed");
+        xflow_core::log(
+            "debug",
+            &format!("HAL input disposed live_hal_units={}", previous - 1),
+        );
     }
 }
 
@@ -747,9 +769,15 @@ fn render_failure(strikes: &std::cell::Cell<u8>, read: Result<i32>) -> Option<St
             if strikes.get() >= 2 {
                 return Some(format!("microphone render failed: CoreAudio {status}"));
             }
-            tracing::debug!(status, "transient microphone render error");
+            xflow_core::log(
+                "debug",
+                &format!("transient microphone render error: CoreAudio {status}"),
+            );
         }
-        Err(error) => tracing::debug!(%error, "cannot read microphone render status"),
+        Err(error) => xflow_core::log(
+            "debug",
+            &format!("cannot read microphone render status: {error}"),
+        ),
     }
     None
 }
@@ -764,7 +792,10 @@ impl OpenStream {
             match input_alive(id) {
                 Ok(false) => return Some("microphone disconnected".to_string()),
                 Ok(true) => {}
-                Err(error) => tracing::debug!(%error, "cannot read microphone availability"),
+                Err(error) => xflow_core::log(
+                    "debug",
+                    &format!("cannot read microphone availability: {error}"),
+                ),
             }
             let owned = self
                 ._stream
@@ -905,7 +936,7 @@ impl CpalCapture {
                                                 stream = None;
                                                 return Err(error.context("warm microphone is unavailable"));
                                             }
-                                            tracing::debug!(%error, "microphone selection unavailable; reusing present warm stream");
+                                            xflow_core::log("debug", &format!("microphone selection unavailable; reusing present warm stream: {error:#}"));
                                             None
                                         }
                                         Err(error) => return Err(error),
@@ -930,10 +961,10 @@ impl CpalCapture {
                                         open.channels,
                                         &config,
                                     )?)?;
-                                    tracing::debug!(
-                                        warm_start_us = started.elapsed().as_micros() as u64,
-                                        "microphone warm stream activated"
-                                    );
+                                    xflow_core::log("debug", &format!(
+                                        "microphone warm stream activated warm_start_us={}",
+                                        started.elapsed().as_micros()
+                                    ));
                                 } else {
                                     generation = generation.wrapping_add(1);
                                     stream = Some(open_stream(
@@ -966,10 +997,9 @@ impl CpalCapture {
                                 #[cfg(target_os = "macos")]
                                 open.check_input();
                                 let us = open.buffer.first_callback_us.load(Ordering::Relaxed);
-                                tracing::debug!(
-                                    open_to_first_callback_us = us,
-                                    "microphone startup latency"
-                                );
+                                xflow_core::log("debug", &format!(
+                                    "microphone startup latency open_to_first_callback_us={us}"
+                                ));
                                 let result = open.buffer.take();
                                 open.buffer.limited.store(false, Ordering::Release);
                                 result
@@ -1053,7 +1083,13 @@ fn open_stream(
     opened: Instant,
 ) -> Result<OpenStream> {
     let (device, choice) = selected;
-    tracing::debug!(device_index = ?choice.index, device_id = ?choice.device_id, system_default = choice.is_default, "opening resolved microphone");
+    xflow_core::log(
+        "debug",
+        &format!(
+            "opening resolved microphone device_index={:?} device_id={:?} system_default={}",
+            choice.index, choice.device_id, choice.is_default
+        ),
+    );
     #[cfg(target_os = "macos")]
     let mut choice = choice;
     #[cfg(target_os = "macos")]
@@ -1068,7 +1104,12 @@ fn open_stream(
                 choice.echo_unavailable();
                 static FALLBACK: std::sync::Once = std::sync::Once::new();
                 FALLBACK.call_once(|| {
-                    tracing::warn!(%error, "voice processing unavailable; using the plain microphone")
+                    xflow_core::log(
+                        "warn",
+                        &format!(
+                            "voice processing unavailable; using the plain microphone: {error:#}"
+                        ),
+                    )
                 });
             }
         }
@@ -1421,7 +1462,10 @@ fn open_voice_unit(
             level: 10,
         }),
     ) {
-        tracing::debug!(%error, "voice processing keeps default ducking");
+        xflow_core::log(
+            "debug",
+            &format!("voice processing keeps default ducking: {error}"),
+        );
     }
     unit.start()?;
     Ok(OpenStream {

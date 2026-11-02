@@ -93,8 +93,10 @@ pub fn play(cue: Cue, config: &SoundsConfig) {
         let _guard = guard;
         match tokio::time::timeout(Duration::from_secs(10), playback(cue, &config, &path)).await {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::debug!(%error, "sound playback unavailable"),
-            Err(error) => tracing::debug!(%error, "sound playback timed out"),
+            Ok(Err(error)) => {
+                xflow_core::log("debug", &format!("sound playback unavailable: {error}"))
+            }
+            Err(error) => xflow_core::log("debug", &format!("sound playback timed out: {error}")),
         }
     };
     if let Ok(runtime) = tokio::runtime::Handle::try_current() {

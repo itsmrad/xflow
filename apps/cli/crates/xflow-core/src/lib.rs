@@ -16,6 +16,25 @@ pub mod text;
 pub mod title;
 pub mod words;
 
+/// xflowd's log: stderr (the service's log file), filtered by `XFLOW_LOG`
+/// (error, warn, info, debug; default warn). Shared so platform code logs too.
+pub fn log(level: &str, message: &str) {
+    if log_enabled(level, std::env::var("XFLOW_LOG").ok().as_deref()) {
+        eprintln!("xflowd [{level}]: {message}");
+    }
+}
+
+fn log_enabled(level: &str, configured: Option<&str>) -> bool {
+    let rank = |s| match s {
+        "error" => 0,
+        "warn" => 1,
+        "info" => 2,
+        "debug" => 3,
+        _ => 1,
+    };
+    rank(level) <= rank(configured.unwrap_or("warn"))
+}
+
 /// Maximum uploadable mono 16-bit PCM WAV: 25 MB including the 44-byte header.
 pub const MAX_UPLOAD_WAV_BYTES: usize = 25_000_000;
 pub const MAX_UPLOAD_FRAMES: usize = (MAX_UPLOAD_WAV_BYTES - 44) / 2;
@@ -287,4 +306,20 @@ pub trait GlobalHotkeys: Send {
 #[async_trait]
 pub trait Overlay: Send + Sync {
     async fn update(&self, event: &DesktopEvent) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_enabled;
+
+    #[test]
+    fn xflow_log_debug_shows_platform_debug_lines_and_default_is_warn() {
+        assert!(log_enabled("debug", Some("debug")));
+        assert!(log_enabled("warn", Some("debug")));
+        assert!(!log_enabled("debug", None));
+        assert!(!log_enabled("info", None));
+        assert!(log_enabled("warn", None) && log_enabled("error", None));
+        assert!(!log_enabled("debug", Some("info")));
+        assert!(!log_enabled("debug", Some("bogus")));
+    }
 }

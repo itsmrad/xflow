@@ -30,7 +30,7 @@ use xflow_core::{
         CleanupOutcome, Delivery, FailedAudio, Grant, HistoryEntry, Permissions, Request, Response,
         Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     },
-    AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, FieldEvent,
+    log, AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, FieldEvent,
     GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
     Transcript, TranscriptionOptions, TransformRequest,
 };
@@ -2428,18 +2428,6 @@ fn monotonic_us() -> u64 {
     (t.tv_sec as u64)
         .saturating_mul(1_000_000)
         .saturating_add(t.tv_nsec as u64 / 1000)
-}
-fn log(level: &str, message: &str) {
-    let rank = |s| match s {
-        "error" => 0,
-        "warn" => 1,
-        "info" => 2,
-        "debug" => 3,
-        _ => 1,
-    };
-    if rank(level) <= rank(&std::env::var("XFLOW_LOG").unwrap_or_else(|_| "warn".into())) {
-        eprintln!("xflowd [{level}]: {message}");
-    }
 }
 fn fit_final(r: &mut Response) {
     if serde_json::to_vec(r).is_ok_and(|v| v.len() + 1 > MAX_MESSAGE_BYTES) {
