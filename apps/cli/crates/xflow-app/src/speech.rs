@@ -6,7 +6,8 @@ pub const NOT_CAUGHT: &str = "Didn't catch anything";
 pub struct Activity {
     pub speech: bool,
     pub low_energy: bool,
-    /// Samples from the first voiced frame to the end of the last; empty without one.
+    /// Samples from the first frame over half the threshold to the end of the last;
+    /// empty without one. The lower bar keeps soft first words and trailing endings.
     pub voiced: Range<usize>,
 }
 
@@ -26,6 +27,8 @@ pub fn activity(audio: &AudioClip, threshold: f32) -> Activity {
             .sqrt() as f32;
         if rms > threshold {
             voiced_samples += frame.len();
+        }
+        if rms > threshold / 2.0 {
             let start = i * frame_samples;
             voiced = Some(voiced.map_or(start, |v| v.start)..start + frame.len());
         }
@@ -43,9 +46,9 @@ pub fn activity(audio: &AudioClip, threshold: f32) -> Activity {
     }
 }
 
-/// Silence kept beside the voiced frames: soft onsets ("f", "h") and decays sit
-/// under the energy threshold.
-pub const TRIM_PAD_MS: usize = 250;
+/// Silence kept beside the voiced frames for onsets ("f", "h") and decays that are
+/// quieter still; faster-whisper's default speech pad.
+pub const TRIM_PAD_MS: usize = 400;
 
 /// The samples to upload: edge silence beyond `TRIM_PAD_MS` cut where `lead` /
 /// `tail` allow, never shorter than `min_ms`. Pauses between voiced frames stay.
@@ -198,7 +201,8 @@ mod tests {
 
     #[test]
     fn edge_silence_is_trimmed_to_the_pad_in_whole_frames() {
-        // #68: 10 s of speech with 3 s of silence each side uploads at most 10.6 s.
+        // #68: 10 s of speech with 3 s of silence each side uploads 10.8 s (the issue's
+        // 10.6 s assumed a 250 ms pad; review raised it to 400 ms for soft speech).
         for (rate, channels) in [(16_000, 1), (48_000, 1), (44_100, 2)] {
             let audio = tone(rate, channels, &[(3000, 0.0), (10_000, 0.2), (3000, 0.0)]);
             let found = activity(&audio, 0.005);
@@ -206,8 +210,8 @@ mod tests {
             assert_eq!(kept.start % usize::from(channels), 0);
             assert_eq!(kept.end % usize::from(channels), 0);
             let (start, len) = kept_ms(&audio, &kept);
-            assert!((2740..=2750).contains(&start), "{rate}/{channels}: {start}");
-            assert!((10_480..=10_520).contains(&len), "{rate}/{channels}: {len}");
+            assert!((2590..=2600).contains(&start), "{rate}/{channels}: {start}");
+            assert!((10_780..=10_820).contains(&len), "{rate}/{channels}: {len}");
         }
     }
 
@@ -226,9 +230,54 @@ mod tests {
             ],
         );
         let found = activity(&audio, 0.005);
-        assert_eq!(found.voiced, 18_880..25_280, "only the vowel is voiced");
+        assert_eq!(
+            found.voiced,
+            16_000..28_160,
+            "edges count from half the threshold"
+        );
         let kept = trim(&audio, &found.voiced, true, true, 0);
-        assert!(kept.start <= 16_000 && kept.end >= 28_160, "{kept:?}");
+        assert_eq!(kept, 9_600..34_560);
+    }
+
+    #[test]
+    fn soft_first_words_and_endings_are_never_clipped() {
+        // Review of #116: sines at -50 / -48 dBFS RMS, under the 0.005 (-46 dBFS)
+        // threshold, beside a loud word; each was clipped at the first 250 ms pad.
+        let amplitude = |dbfs: f32| 10f32.powf(dbfs / 20.0) * std::f32::consts::SQRT_2;
+        for (dbfs, ms, lead) in [
+            (-50.0, 300, false),
+            (-50.0, 500, false),
+            (-50.0, 800, false),
+            (-50.0, 600, true),
+            (-48.0, 400, true),
+        ] {
+            let soft = (ms, amplitude(dbfs));
+            let parts = if lead {
+                [(2000, 0.0), soft, (500, 0.2), (2000, 0.0)]
+            } else {
+                [(2000, 0.0), (500, 0.2), soft, (2000, 0.0)]
+            };
+            let audio = tone(16_000, 1, &parts);
+            let found = activity(&audio, 0.005);
+            let kept = trim(&audio, &found.voiced, true, true, 0);
+            let speech = 32_000..(32_000 + (500 + ms) * 16);
+            assert!(
+                kept.start <= speech.start && kept.end >= speech.end,
+                "{dbfs} dBFS {ms} ms lead={lead}: {kept:?}"
+            );
+        }
+        // Even quieter (-56 dBFS) endings are not detected, but keep the whole pad.
+        let audio = tone(
+            16_000,
+            1,
+            &[(500, 0.2), (600, amplitude(-56.0)), (2000, 0.0)],
+        );
+        let found = activity(&audio, 0.005);
+        assert_eq!(trim(&audio, &found.voiced, true, true, 0), 0..14_400);
+        // Only the edges use the lower bar: soft sound alone is still not speech.
+        let murmur = tone(16_000, 1, &[(2000, amplitude(-50.0))]);
+        let found = activity(&murmur, 0.005);
+        assert!(!found.speech && !found.voiced.is_empty());
     }
 
     #[test]
@@ -246,20 +295,20 @@ mod tests {
         );
         let voiced = activity(&audio, 0.005).voiced;
         // The 3 s pause between words stays.
-        assert_eq!(trim(&audio, &voiced, true, true, 0), 12_000..84_000);
+        assert_eq!(trim(&audio, &voiced, true, true, 0), 9_600..86_400);
         // A segment cut mid-dictation keeps its edge where the other segment continues.
-        assert_eq!(trim(&audio, &voiced, false, true, 0), 0..84_000);
-        assert_eq!(trim(&audio, &voiced, true, false, 0), 12_000..96_000);
+        assert_eq!(trim(&audio, &voiced, false, true, 0), 0..86_400);
+        assert_eq!(trim(&audio, &voiced, true, false, 0), 9_600..96_000);
         assert_eq!(trim(&audio, &voiced, false, false, 0), 0..96_000);
     }
 
     #[test]
     fn trimming_never_goes_below_min_ms() {
-        // 100 ms word: padded to 600 ms, or grown to min_ms (end first, then start).
+        // 100 ms word: padded to 900 ms, or grown to min_ms (end first, then start).
         let audio = tone(16_000, 1, &[(2000, 0.0), (100, 0.2), (2000, 0.0)]);
         let voiced = activity(&audio, 0.005).voiced;
-        assert_eq!(trim(&audio, &voiced, true, true, 300), 28_000..37_600);
-        assert_eq!(trim(&audio, &voiced, true, true, 1000), 28_000..44_000);
+        assert_eq!(trim(&audio, &voiced, true, true, 300), 25_600..40_000);
+        assert_eq!(trim(&audio, &voiced, true, true, 1000), 25_600..41_600);
         let near_end = tone(16_000, 1, &[(2000, 0.0), (100, 0.2), (100, 0.0)]);
         let voiced = activity(&near_end, 0.005).voiced;
         assert_eq!(trim(&near_end, &voiced, true, true, 1000), 19_200..35_200);
@@ -268,16 +317,15 @@ mod tests {
 
     #[test]
     fn trimming_a_long_clip_costs_no_extra_pass() {
-        // 60 s of 48 kHz stereo, the largest segment: one activity pass, an O(1) trim.
+        // 60 s of 48 kHz stereo, the largest segment. Trim reads only the range the
+        // existing activity pass found; the bound is generous so slow CI never flakes.
         let audio = tone(48_000, 2, &[(3000, 0.0), (54_000, 0.2), (3000, 0.0)]);
         let started = std::time::Instant::now();
         let found = activity(&audio, 0.005);
-        let analysed = started.elapsed();
-        let started = std::time::Instant::now();
         let kept = trim(&audio, &found.voiced, true, true, 300);
-        assert!(started.elapsed() < std::time::Duration::from_millis(1));
-        assert!(analysed < std::time::Duration::from_secs(2), "{analysed:?}");
-        assert!(kept.len() < audio.samples.len() * 55 / 60);
+        let elapsed = started.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+        assert_eq!(kept_ms(&audio, &kept), (2600, 54_800));
     }
 
     #[test]

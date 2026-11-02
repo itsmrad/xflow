@@ -1155,8 +1155,7 @@ async fn long_dictation_streams_segments_through_the_real_daemon() {
         fs::read_to_string(daemon.sink()).unwrap(),
         WORDS[..uploads.len()].join(" ")
     );
-    // Every input frame reaches the provider exactly once (16 kHz after resampling),
-    // except the final 0.4 s pause, trimmed to its 250 ms pad.
+    // Every input frame reaches the provider exactly once (16 kHz after resampling).
     let frames: usize = uploads
         .iter()
         .map(|upload| {
@@ -1171,7 +1170,7 @@ async fn long_dictation_streams_segments_through_the_real_daemon() {
         })
         .sum();
     assert!(
-        frames.abs_diff(16_000 * 180 - 2_400) <= uploads.len(),
+        frames.abs_diff(16_000 * 180) <= uploads.len(),
         "{frames} frames"
     );
     assert_eq!(done.timings.unwrap().audio_ms, 180_000);

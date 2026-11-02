@@ -3914,11 +3914,11 @@ mod tests {
         assert!(ask(&tx, Request::start()).await.ok);
         assert!(ask(&tx, Request::Stop).await.ok);
         let error = timeout_event_error(&mut events).await;
-        // 250 ms of the silence stays on each side; the provider got nothing else.
+        // 400 ms of the silence stays on each side; the provider got nothing else.
         let sent = stt.clips.lock().unwrap()[0].clone();
-        assert_eq!(sent.samples, samples[12_000..52_000]);
+        assert_eq!(sent.samples, samples[9_600..54_400]);
         // The kept clip (what retry and the backup see) is the one sent.
-        assert_eq!(error.failed_audio.unwrap().audio_ms, 2_500);
+        assert_eq!(error.failed_audio.unwrap().audio_ms, 2_800);
         let kept = retry::audio(&dir, 0).unwrap();
         assert_eq!(kept.samples.len(), sent.samples.len());
         assert!(kept
@@ -3957,7 +3957,7 @@ mod tests {
         let rebuilt: Vec<f32> = clips.iter().flat_map(|c| c.samples.clone()).collect();
         assert_eq!(
             rebuilt,
-            samples[28_000..1_092_000],
+            samples[25_600..1_094_400],
             "no gap or overlap at the cut"
         );
         // The recording's length, not the upload's, is what was dictated.
