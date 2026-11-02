@@ -732,6 +732,7 @@ struct OpenStream {
     microphone: String,
     device_id: Option<u32>,
     // Consecutive drains that saw a HAL render error.
+    #[cfg(target_os = "macos")]
     render_errors: std::cell::Cell<u8>,
 }
 
@@ -1123,6 +1124,7 @@ fn open_stream(
         generation,
         microphone: choice.description(),
         device_id: choice.device_id,
+        #[cfg(target_os = "macos")]
         render_errors: Default::default(),
     })
 }
