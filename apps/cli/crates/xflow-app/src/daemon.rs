@@ -600,6 +600,10 @@ impl Engine {
     }
     fn set_state(&mut self, state: State, message: Option<String>) {
         self.state = state;
+        if state == State::Error {
+            // Status timings describe the last success; after a failure they would read as its.
+            self.last_timings = None;
+        }
         self.quiet &= state == State::Listening;
         self.message = message.map(|s| bounded_message(&s));
         // Before any reply: a holder must see its session live as soon as it learns of it.
@@ -5754,6 +5758,50 @@ mod tests {
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Postgres"]);
         assert!(dictionary.replacements.is_empty());
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_failed_session_clears_the_last_success_timings() {
+        // Hardware test: status kept stt_ms=387 from the last success through HTTP 429s.
+        struct SecondFails(AtomicUsize);
+        #[async_trait]
+        impl SpeechToText for SecondFails {
+            fn name(&self) -> &str {
+                "fixture"
+            }
+            async fn transcribe(
+                &self,
+                _: AudioClip,
+                _: TranscriptionOptions,
+            ) -> Result<Transcript> {
+                if self.0.fetch_add(1, Ordering::SeqCst) > 0 {
+                    bail!("provider returned HTTP 429; response body omitted");
+                }
+                Ok(Transcript {
+                    provider: None,
+                    text: "Postgres is ready.".into(),
+                    language: None,
+                })
+            }
+        }
+        let desktop = Arc::new(RecordingDesktop::default());
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop, unused_store());
+        engine.services.stt = Arc::new(SecondFails(AtomicUsize::new(0)));
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        success(&mut events).await;
+        assert!(ask(&tx, Request::Status).await.timings.is_some());
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        let failed = settled(&mut events).await;
+        assert_eq!(failed.state, State::Error, "{:?}", failed.message);
+        assert!(failed.timings.is_none());
+        let status = ask(&tx, Request::Status).await;
+        assert_eq!(status.state, State::Error);
+        assert!(status.timings.is_none());
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }

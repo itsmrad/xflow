@@ -10,7 +10,7 @@ were performed by Codex. The orchestrator owns integration and release approval.
 The socket implements protocol v3 history paging/search/get/delete/copy/paste,
 stats, reload, existing session commands, and subscriptions. A successful session
 publishes one final event containing text, delivery outcome, optional saved entry,
-and timings. Inactive status retains the last successful timings; an active
+and timings. Inactive status retains the last successful timings until a session fails; an active
 session does not inherit them. `delivery = none` avoids desktop lookup and delivery
 for dictation, while clipboard delivery copies without injecting.
 
