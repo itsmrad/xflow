@@ -1,0 +1,1226 @@
+# canonical	domain	rank	english	source_url	confirmed_by (scripts/lexicon/build.py import)
+array	dsa	1	1	https://en.wikipedia.org/wiki/Array_(data_structure)	wikipedia
+dynamic array	dsa	2	0	https://en.wikipedia.org/wiki/Dynamic_array	wikipedia
+linked list	dsa	1	0	https://en.wikipedia.org/wiki/Linked_list	wikipedia
+singly linked list	dsa	2	0	https://en.wikipedia.org/wiki/Linked_list	wikipedia
+doubly linked list	dsa	2	0	https://en.wikipedia.org/wiki/Doubly_linked_list	wikipedia
+circular linked list	dsa	3	0	https://en.wikipedia.org/wiki/Linked_list	wikipedia
+skip list	dsa	3	0	https://en.wikipedia.org/wiki/Skip_list	wikipedia
+hash map	dsa	1	0	https://en.wikipedia.org/wiki/Hash_table	wikipedia
+hash table	dsa	1	0	https://en.wikipedia.org/wiki/Hash_table	wikipedia
+hash function	dsa	1	0	https://en.wikipedia.org/wiki/Hash_function	wikipedia
+hash collision	dsa	2	0	https://en.wikipedia.org/wiki/Hash_collision	wikipedia
+separate chaining	dsa	3	0	https://en.wikipedia.org/wiki/Hash_table	wikipedia
+open addressing	dsa	3	0	https://en.wikipedia.org/wiki/Open_addressing	wikipedia
+linear probing	dsa	3	0	https://en.wikipedia.org/wiki/Linear_probing	wikipedia
+double hashing	dsa	3	0	https://en.wikipedia.org/wiki/Double_hashing	wikipedia
+consistent hashing	dsa	2	0	https://en.wikipedia.org/wiki/Consistent_hashing	wikipedia
+load factor	dsa	3	0	https://en.wikipedia.org/wiki/Hash_table	wikipedia
+rehashing	dsa	3	0	https://en.wikipedia.org/wiki/Hash_table	wikipedia
+bloom filter	dsa	2	0	https://en.wikipedia.org/wiki/Bloom_filter	wikipedia
+cuckoo hashing	dsa	3	0	https://en.wikipedia.org/wiki/Cuckoo_hashing	wikipedia
+set	dsa	1	1	https://en.wikipedia.org/wiki/Set_(abstract_data_type)	wikipedia
+multiset	dsa	3	0	https://en.wikipedia.org/wiki/Multiset	wikipedia
+map	dsa	1	1	https://en.wikipedia.org/wiki/Associative_array	wikipedia
+dictionary	dsa	1	1	https://en.wikipedia.org/wiki/Associative_array	wikipedia
+tuple	dsa	1	0	https://en.wikipedia.org/wiki/Tuple	wikipedia
+stack	dsa	1	1	https://en.wikipedia.org/wiki/Stack_(abstract_data_type)	wikipedia
+queue	dsa	1	1	https://en.wikipedia.org/wiki/Queue_(abstract_data_type)	wikipedia
+deque	dsa	1	0	https://en.wikipedia.org/wiki/Double-ended_queue	wikipedia
+double-ended queue	dsa	2	0	https://en.wikipedia.org/wiki/Double-ended_queue	wikipedia
+circular queue	dsa	3	0	https://en.wikipedia.org/wiki/Circular_buffer	wikipedia
+circular buffer	dsa	2	0	https://en.wikipedia.org/wiki/Circular_buffer	wikipedia
+ring buffer	dsa	2	0	https://en.wikipedia.org/wiki/Circular_buffer	wikipedia
+monotonic queue	dsa	3	0	https://en.wikipedia.org/wiki/Double-ended_queue	wikipedia
+heap	dsa	1	1	https://en.wikipedia.org/wiki/Heap_(data_structure)	wikipedia
+min-heap	dsa	1	0	https://en.wikipedia.org/wiki/Min-max_heap	wikipedia
+max-heap	dsa	1	0	https://en.wikipedia.org/wiki/Heap_(data_structure)	wikipedia
+binary heap	dsa	2	0	https://en.wikipedia.org/wiki/Binary_heap	wikipedia
+Fibonacci heap	dsa	3	0	https://en.wikipedia.org/wiki/Fibonacci_heap	wikipedia
+binomial heap	dsa	3	0	https://en.wikipedia.org/wiki/Binomial_heap	wikipedia
+pairing heap	dsa	3	0	https://en.wikipedia.org/wiki/Pairing_heap	wikipedia
+priority queue	dsa	1	0	https://en.wikipedia.org/wiki/Priority_queue	wikipedia
+heapify	dsa	2	0	https://en.wikipedia.org/wiki/Binary_heap	wikipedia
+sift down	dsa	3	0	https://en.wikipedia.org/wiki/Binary_heap	wikipedia
+sift up	dsa	3	0	https://en.wikipedia.org/wiki/Binary_heap	wikipedia
+tree	dsa	1	1	https://en.wikipedia.org/wiki/Tree_(abstract_data_type)	wikipedia
+binary tree	dsa	1	0	https://en.wikipedia.org/wiki/Binary_tree	wikipedia
+binary search tree	dsa	1	0	https://en.wikipedia.org/wiki/Binary_search_tree	wikipedia
+BST	dsa	1	0	https://en.wikipedia.org/wiki/Binary_search_tree	wikipedia
+AVL tree	dsa	1	0	https://en.wikipedia.org/wiki/AVL_tree	wikipedia
+red-black tree	dsa	1	0	https://en.wikipedia.org/wiki/Red%E2%80%93black_tree	wikipedia
+splay tree	dsa	3	0	https://en.wikipedia.org/wiki/Splay_tree	wikipedia
+treap	dsa	3	0	https://en.wikipedia.org/wiki/Treap	wikipedia
+scapegoat tree	dsa	3	0	https://en.wikipedia.org/wiki/Scapegoat_tree	wikipedia
+B-tree	dsa	1	0	https://en.wikipedia.org/wiki/B-tree	wikipedia
+B+ tree	dsa	2	0	https://en.wikipedia.org/wiki/B%2B_tree	wikipedia
+2-3 tree	dsa	3	0	https://en.wikipedia.org/wiki/2%E2%80%933_tree	wikipedia
+LSM tree	dsa	2	0	https://en.wikipedia.org/wiki/Log-structured_merge-tree	wikipedia
+trie	dsa	1	0	https://en.wikipedia.org/wiki/Trie	wikipedia
+prefix tree	dsa	2	0	https://en.wikipedia.org/wiki/Trie	wikipedia
+radix tree	dsa	3	0	https://en.wikipedia.org/wiki/Radix_tree	wikipedia
+suffix tree	dsa	3	0	https://en.wikipedia.org/wiki/Suffix_tree	wikipedia
+suffix array	dsa	3	0	https://en.wikipedia.org/wiki/Suffix_array	wikipedia
+Merkle tree	dsa	3	0	https://en.wikipedia.org/wiki/Merkle_tree	wikipedia
+segment tree	dsa	1	0	https://en.wikipedia.org/wiki/Segment_tree	wikipedia
+Fenwick tree	dsa	1	0	https://en.wikipedia.org/wiki/Fenwick_tree	wikipedia
+binary indexed tree	dsa	1	0	https://en.wikipedia.org/wiki/Fenwick_tree	wikipedia
+interval tree	dsa	3	0	https://en.wikipedia.org/wiki/Interval_tree	wikipedia
+k-d tree	dsa	2	0	https://en.wikipedia.org/wiki/K-d_tree	wikipedia
+quadtree	dsa	3	0	https://en.wikipedia.org/wiki/Quadtree	wikipedia
+octree	dsa	3	0	https://en.wikipedia.org/wiki/Octree	wikipedia
+R-tree	dsa	3	0	https://en.wikipedia.org/wiki/R-tree	wikipedia
+ball tree	dsa	3	0	https://en.wikipedia.org/wiki/Ball_tree	wikipedia
+cartesian tree	dsa	3	0	https://en.wikipedia.org/wiki/Cartesian_tree	wikipedia
+heavy-light decomposition	dsa	3	0	https://en.wikipedia.org/wiki/Heavy-light_decomposition	wikipedia
+union-find	dsa	1	0	https://en.wikipedia.org/wiki/Disjoint-set_data_structure	wikipedia
+disjoint set	dsa	1	0	https://en.wikipedia.org/wiki/Disjoint-set_data_structure	wikipedia
+path compression	dsa	2	0	https://en.wikipedia.org/wiki/Disjoint-set_data_structure	wikipedia
+union by rank	dsa	3	0	https://en.wikipedia.org/wiki/Disjoint-set_data_structure	wikipedia
+graph	dsa	1	1	https://en.wikipedia.org/wiki/Graph_(abstract_data_type)	wikipedia
+directed graph	dsa	1	0	https://en.wikipedia.org/wiki/Directed_graph	wikipedia
+undirected graph	dsa	2	0	https://en.wikipedia.org/wiki/Graph_(discrete_mathematics)	wikipedia
+weighted graph	dsa	2	0	https://en.wikipedia.org/wiki/Graph_(discrete_mathematics)	wikipedia
+adjacency list	dsa	1	0	https://en.wikipedia.org/wiki/Adjacency_list	wikipedia
+adjacency matrix	dsa	1	0	https://en.wikipedia.org/wiki/Adjacency_matrix	wikipedia
+incidence matrix	dsa	3	0	https://en.wikipedia.org/wiki/Incidence_matrix	wikipedia
+edge list	dsa	3	0	https://en.wikipedia.org/wiki/Edge_list	wikipedia
+DAG	dsa	1	0	https://en.wikipedia.org/wiki/Directed_acyclic_graph	wikipedia
+directed acyclic graph	dsa	1	0	https://en.wikipedia.org/wiki/Directed_acyclic_graph	wikipedia
+bipartite graph	dsa	2	0	https://en.wikipedia.org/wiki/Bipartite_graph	wikipedia
+complete graph	dsa	3	0	https://en.wikipedia.org/wiki/Complete_graph	wikipedia
+spanning tree	dsa	2	0	https://en.wikipedia.org/wiki/Spanning_tree	wikipedia
+minimum spanning tree	dsa	1	0	https://en.wikipedia.org/wiki/Minimum_spanning_tree	wikipedia
+MST	dsa	1	0	https://en.wikipedia.org/wiki/Minimum_spanning_tree	wikipedia
+cycle	dsa	1	1	https://en.wikipedia.org/wiki/Cycle_(graph_theory)	wikipedia
+strongly connected component	dsa	2	0	https://en.wikipedia.org/wiki/Strongly_connected_component	wikipedia
+connected component	dsa	2	0	https://en.wikipedia.org/wiki/Component_(graph_theory)	wikipedia
+articulation point	dsa	3	0	https://en.wikipedia.org/wiki/Biconnected_component	wikipedia
+bridge	dsa	2	1	https://en.wikipedia.org/wiki/Bridge_(graph_theory)	wikipedia
+bitmask	dsa	2	0	https://en.wikipedia.org/wiki/Mask_(computing)	wikipedia
+bitset	dsa	3	0	https://en.wikipedia.org/wiki/Bit_array	wikipedia
+bit array	dsa	3	0	https://en.wikipedia.org/wiki/Bit_array	wikipedia
+sparse matrix	dsa	3	0	https://en.wikipedia.org/wiki/Sparse_matrix	wikipedia
+matrix	dsa	1	1	https://en.wikipedia.org/wiki/Matrix_(mathematics)	wikipedia
+rope	dsa	3	1	https://en.wikipedia.org/wiki/Rope_(data_structure)	wikipedia
+persistent data structure	dsa	3	0	https://en.wikipedia.org/wiki/Persistent_data_structure	wikipedia
+LRU cache	dsa	1	0	https://en.wikipedia.org/wiki/Cache_replacement_policies	wikipedia-title
+cache eviction	dsa	3	0	https://en.wikipedia.org/wiki/Cache_replacement_policies	wikipedia-title
+abstract data type	dsa	2	0	https://en.wikipedia.org/wiki/Abstract_data_type	wikipedia
+ADT	dsa	3	0	https://en.wikipedia.org/wiki/Abstract_data_type	wikipedia
+BFS	dsa	1	0	https://en.wikipedia.org/wiki/Breadth-first_search	wikipedia
+breadth-first search	dsa	1	0	https://en.wikipedia.org/wiki/Breadth-first_search	wikipedia
+DFS	dsa	1	0	https://en.wikipedia.org/wiki/Depth-first_search	wikipedia
+depth-first search	dsa	1	0	https://en.wikipedia.org/wiki/Depth-first_search	wikipedia
+iterative deepening	dsa	3	0	https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search	wikipedia
+bidirectional search	dsa	3	0	https://en.wikipedia.org/wiki/Bidirectional_search	wikipedia
+inorder traversal	dsa	1	0	https://en.wikipedia.org/wiki/Tree_traversal	wikipedia-title
+preorder traversal	dsa	2	0	https://en.wikipedia.org/wiki/Tree_traversal	wikipedia-title
+postorder traversal	dsa	2	0	https://en.wikipedia.org/wiki/Tree_traversal	wikipedia-title
+Morris traversal	dsa	3	0	https://en.wikipedia.org/wiki/Tree_traversal	wikipedia
+Dijkstra's algorithm	dsa	1	0	https://en.wikipedia.org/wiki/Dijkstra's_algorithm	wikipedia
+Dijkstra	dsa	1	0	https://en.wikipedia.org/wiki/Edsger_W._Dijkstra	wikipedia
+Bellman-Ford	dsa	1	0	https://en.wikipedia.org/wiki/Bellman%E2%80%93Ford_algorithm	wikipedia
+Floyd-Warshall	dsa	1	0	https://en.wikipedia.org/wiki/Floyd%E2%80%93Warshall_algorithm	wikipedia
+Johnson's algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Johnson's_algorithm	wikipedia
+A*	dsa	1	0	https://en.wikipedia.org/wiki/A%2A_search_algorithm	wikipedia
+A* search	dsa	1	0	https://en.wikipedia.org/wiki/A%2A_search_algorithm	wikipedia
+Prim's algorithm	dsa	1	0	https://en.wikipedia.org/wiki/Prim's_algorithm	wikipedia
+Kruskal's algorithm	dsa	1	0	https://en.wikipedia.org/wiki/Kruskal's_algorithm	wikipedia
+Borůvka's algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Bor%C5%AFvka's_algorithm	wikipedia
+topological sort	dsa	1	0	https://en.wikipedia.org/wiki/Topological_sorting	wikipedia
+Kahn's algorithm	dsa	2	0	https://en.wikipedia.org/wiki/Topological_sorting	wikipedia
+Tarjan's algorithm	dsa	1	0	https://en.wikipedia.org/wiki/Tarjan's_strongly_connected_components_algorithm	wikipedia-title
+Kosaraju's algorithm	dsa	2	0	https://en.wikipedia.org/wiki/Kosaraju's_algorithm	wikipedia
+Ford-Fulkerson	dsa	2	0	https://en.wikipedia.org/wiki/Ford%E2%80%93Fulkerson_algorithm	wikipedia
+Edmonds-Karp	dsa	3	0	https://en.wikipedia.org/wiki/Edmonds%E2%80%93Karp_algorithm	wikipedia
+Dinic's algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Dinic's_algorithm	wikipedia
+max flow	dsa	2	0	https://en.wikipedia.org/wiki/Maximum_flow_problem	wikipedia
+min cut	dsa	3	0	https://en.wikipedia.org/wiki/Minimum_cut	wikipedia
+Hopcroft-Karp	dsa	3	0	https://en.wikipedia.org/wiki/Hopcroft%E2%80%93Karp_algorithm	wikipedia
+Hungarian algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Hungarian_algorithm	wikipedia
+Euler path	dsa	3	0	https://en.wikipedia.org/wiki/Eulerian_path	wikipedia-title
+Hamiltonian path	dsa	3	0	https://en.wikipedia.org/wiki/Hamiltonian_path	wikipedia
+PageRank	dsa	2	0	https://en.wikipedia.org/wiki/PageRank	wikipedia
+Lee algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Lee_algorithm	wikipedia
+flood fill	dsa	2	0	https://en.wikipedia.org/wiki/Flood_fill	wikipedia
+KMP	dsa	1	0	https://en.wikipedia.org/wiki/Knuth%E2%80%93Morris%E2%80%93Pratt_algorithm	wikipedia
+Knuth-Morris-Pratt	dsa	1	0	https://en.wikipedia.org/wiki/Knuth%E2%80%93Morris%E2%80%93Pratt_algorithm	wikipedia
+Rabin-Karp	dsa	1	0	https://en.wikipedia.org/wiki/Rabin%E2%80%93Karp_algorithm	wikipedia
+rolling hash	dsa	2	0	https://en.wikipedia.org/wiki/Rolling_hash	wikipedia
+Boyer-Moore	dsa	1	0	https://en.wikipedia.org/wiki/Boyer%E2%80%93Moore_string-search_algorithm	wikipedia
+Boyer-Moore majority vote	dsa	3	0	https://en.wikipedia.org/wiki/Boyer%E2%80%93Moore_majority_vote_algorithm	wikipedia
+Manacher's algorithm	dsa	1	0	https://en.wikipedia.org/wiki/Longest_palindromic_substring	wikipedia
+Aho-Corasick	dsa	2	0	https://en.wikipedia.org/wiki/Aho%E2%80%93Corasick_algorithm	wikipedia
+Levenshtein distance	dsa	2	0	https://en.wikipedia.org/wiki/Levenshtein_distance	wikipedia
+edit distance	dsa	1	0	https://en.wikipedia.org/wiki/Edit_distance	wikipedia
+longest common subsequence	dsa	1	0	https://en.wikipedia.org/wiki/Longest_common_subsequence	wikipedia
+LCS	dsa	1	0	https://en.wikipedia.org/wiki/Longest_common_subsequence	wikipedia
+longest increasing subsequence	dsa	1	0	https://en.wikipedia.org/wiki/Longest_increasing_subsequence	wikipedia
+Huffman coding	dsa	2	0	https://en.wikipedia.org/wiki/Huffman_coding	wikipedia
+run-length encoding	dsa	3	0	https://en.wikipedia.org/wiki/Run-length_encoding	wikipedia
+sliding window	dsa	1	0	https://en.wikipedia.org/wiki/Sliding_window_protocol	wikipedia
+Floyd's cycle detection	dsa	2	0	https://en.wikipedia.org/wiki/Cycle_detection	wikipedia
+tortoise and hare	dsa	2	0	https://en.wikipedia.org/wiki/Cycle_detection	wikipedia
+binary search	dsa	1	0	https://en.wikipedia.org/wiki/Binary_search_algorithm	wikipedia
+ternary search	dsa	3	0	https://en.wikipedia.org/wiki/Ternary_search	wikipedia
+exponential search	dsa	3	0	https://en.wikipedia.org/wiki/Exponential_search	wikipedia
+interpolation search	dsa	3	0	https://en.wikipedia.org/wiki/Interpolation_search	wikipedia
+linear search	dsa	2	0	https://en.wikipedia.org/wiki/Linear_search	wikipedia
+backtracking	dsa	1	0	https://en.wikipedia.org/wiki/Backtracking	wikipedia
+N-Queens	dsa	2	0	https://en.wikipedia.org/wiki/Eight_queens_puzzle	wikipedia
+branch and bound	dsa	3	0	https://en.wikipedia.org/wiki/Branch_and_bound	wikipedia
+dynamic programming	dsa	1	0	https://en.wikipedia.org/wiki/Dynamic_programming	wikipedia
+DP	dsa	1	0	https://en.wikipedia.org/wiki/Dynamic_programming	wikipedia
+memoization	dsa	1	0	https://en.wikipedia.org/wiki/Memoization	wikipedia
+tabulation	dsa	1	0	https://en.wikipedia.org/wiki/Dynamic_programming	wikipedia-title
+top-down	dsa	2	1	https://en.wikipedia.org/wiki/Dynamic_programming	wikipedia
+bottom-up	dsa	2	1	https://en.wikipedia.org/wiki/Dynamic_programming	wikipedia
+overlapping subproblems	dsa	2	0	https://en.wikipedia.org/wiki/Overlapping_subproblems	wikipedia
+optimal substructure	dsa	2	0	https://en.wikipedia.org/wiki/Optimal_substructure	wikipedia
+knapsack problem	dsa	1	0	https://en.wikipedia.org/wiki/Knapsack_problem	wikipedia
+0/1 knapsack	dsa	1	0	https://en.wikipedia.org/wiki/Knapsack_problem	wikipedia
+unbounded knapsack	dsa	3	0	https://en.wikipedia.org/wiki/Knapsack_problem	wikipedia
+coin change	dsa	1	0	https://en.wikipedia.org/wiki/Change-making_problem	wikipedia
+matrix chain multiplication	dsa	3	0	https://en.wikipedia.org/wiki/Matrix_chain_multiplication	wikipedia
+traveling salesman problem	dsa	1	0	https://en.wikipedia.org/wiki/Travelling_salesman_problem	wikipedia
+TSP	dsa	2	0	https://en.wikipedia.org/wiki/Travelling_salesman_problem	wikipedia
+subset sum	dsa	2	0	https://en.wikipedia.org/wiki/Subset_sum_problem	wikipedia
+partition problem	dsa	3	0	https://en.wikipedia.org/wiki/Partition_problem	wikipedia
+Kadane's algorithm	dsa	2	0	https://en.wikipedia.org/wiki/Maximum_subarray_problem	wikipedia
+maximum subarray	dsa	2	0	https://en.wikipedia.org/wiki/Maximum_subarray_problem	wikipedia
+prefix sum	dsa	1	0	https://en.wikipedia.org/wiki/Prefix_sum	wikipedia
+greedy algorithm	dsa	1	0	https://en.wikipedia.org/wiki/Greedy_algorithm	wikipedia
+greedy	dsa	1	1	https://en.wikipedia.org/wiki/Greedy_algorithm	wikipedia
+activity selection	dsa	3	0	https://en.wikipedia.org/wiki/Activity_selection_problem	wikipedia
+interval scheduling	dsa	3	0	https://en.wikipedia.org/wiki/Interval_scheduling	wikipedia
+divide and conquer	dsa	1	0	https://en.wikipedia.org/wiki/Divide-and-conquer_algorithm	wikipedia
+master theorem	dsa	2	0	https://en.wikipedia.org/wiki/Master_theorem_(analysis_of_algorithms)	wikipedia
+recurrence relation	dsa	2	0	https://en.wikipedia.org/wiki/Recurrence_relation	wikipedia
+recursion	dsa	1	1	https://en.wikipedia.org/wiki/Recursion_(computer_science)	wikipedia
+base case	dsa	2	0	https://en.wikipedia.org/wiki/Recursion_(computer_science)	wikipedia
+tail recursion	dsa	2	0	https://en.wikipedia.org/wiki/Tail_call	wikipedia
+tail call optimization	dsa	2	0	https://en.wikipedia.org/wiki/Tail_call	wikipedia-title
+randomized algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Randomized_algorithm	wikipedia
+Monte Carlo	dsa	2	0	https://en.wikipedia.org/wiki/Monte_Carlo_method	wikipedia
+Las Vegas algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Las_Vegas_algorithm	wikipedia
+reservoir sampling	dsa	3	0	https://en.wikipedia.org/wiki/Reservoir_sampling	wikipedia
+Fisher-Yates shuffle	dsa	3	0	https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle	wikipedia
+quicksort	dsa	1	0	https://en.wikipedia.org/wiki/Quicksort	wikipedia
+Lomuto partition	dsa	3	0	https://en.wikipedia.org/wiki/Quicksort	wikipedia
+Hoare partition	dsa	3	0	https://en.wikipedia.org/wiki/Quicksort	wikipedia
+quickselect	dsa	2	0	https://en.wikipedia.org/wiki/Quickselect	wikipedia
+merge sort	dsa	1	0	https://en.wikipedia.org/wiki/Merge_sort	wikipedia
+mergesort	dsa	1	0	https://en.wikipedia.org/wiki/Merge_sort	wikipedia
+heapsort	dsa	1	0	https://en.wikipedia.org/wiki/Heapsort	wikipedia
+heap sort	dsa	1	0	https://en.wikipedia.org/wiki/Heapsort	wikipedia
+bubble sort	dsa	1	0	https://en.wikipedia.org/wiki/Bubble_sort	wikipedia
+insertion sort	dsa	1	0	https://en.wikipedia.org/wiki/Insertion_sort	wikipedia
+selection sort	dsa	1	0	https://en.wikipedia.org/wiki/Selection_sort	wikipedia
+shell sort	dsa	3	0	https://en.wikipedia.org/wiki/Shellsort	wikipedia
+radix sort	dsa	1	0	https://en.wikipedia.org/wiki/Radix_sort	wikipedia
+counting sort	dsa	1	0	https://en.wikipedia.org/wiki/Counting_sort	wikipedia
+bucket sort	dsa	2	0	https://en.wikipedia.org/wiki/Bucket_sort	wikipedia
+timsort	dsa	2	0	https://en.wikipedia.org/wiki/Timsort	wikipedia
+introsort	dsa	3	0	https://en.wikipedia.org/wiki/Introsort	wikipedia
+bitonic sort	dsa	3	0	https://en.wikipedia.org/wiki/Bitonic_sorter	wikipedia
+cycle sort	dsa	3	0	https://en.wikipedia.org/wiki/Cycle_sort	wikipedia
+bogosort	dsa	3	0	https://en.wikipedia.org/wiki/Bogosort	wikipedia
+stable sort	dsa	2	0	https://en.wikipedia.org/wiki/Sorting_algorithm	wikipedia
+in-place	dsa	2	0	https://en.wikipedia.org/wiki/In-place_algorithm	wikipedia
+comparison sort	dsa	3	0	https://en.wikipedia.org/wiki/Comparison_sort	wikipedia
+external sorting	dsa	3	0	https://en.wikipedia.org/wiki/External_sorting	wikipedia
+topological order	dsa	2	0	https://en.wikipedia.org/wiki/Topological_sorting	wikipedia
+pivot	dsa	2	1	https://en.wikipedia.org/wiki/Quicksort	wikipedia
+Gaussian elimination	dsa	3	0	https://en.wikipedia.org/wiki/Gaussian_elimination	wikipedia
+Strassen's algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Strassen_algorithm	wikipedia
+fast Fourier transform	dsa	2	0	https://en.wikipedia.org/wiki/Fast_Fourier_transform	wikipedia
+FFT	dsa	2	0	https://en.wikipedia.org/wiki/Fast_Fourier_transform	wikipedia
+Karatsuba algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Karatsuba_algorithm	wikipedia
+Euclidean algorithm	dsa	2	0	https://en.wikipedia.org/wiki/Euclidean_algorithm	wikipedia
+GCD	dsa	2	0	https://en.wikipedia.org/wiki/Greatest_common_divisor	wikipedia
+sieve of Eratosthenes	dsa	2	0	https://en.wikipedia.org/wiki/Sieve_of_Eratosthenes	wikipedia
+modular exponentiation	dsa	3	0	https://en.wikipedia.org/wiki/Modular_exponentiation	wikipedia
+binary exponentiation	dsa	3	0	https://en.wikipedia.org/wiki/Exponentiation_by_squaring	wikipedia
+Miller-Rabin	dsa	3	0	https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test	wikipedia
+Sprague-Grundy	dsa	3	0	https://en.wikipedia.org/wiki/Sprague%E2%80%93Grundy_theorem	wikipedia
+minimax	dsa	2	0	https://en.wikipedia.org/wiki/Minimax	wikipedia
+alpha-beta pruning	dsa	2	0	https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning	wikipedia
+Monte Carlo tree search	dsa	3	0	https://en.wikipedia.org/wiki/Monte_Carlo_tree_search	wikipedia
+simulated annealing	dsa	3	0	https://en.wikipedia.org/wiki/Simulated_annealing	wikipedia
+genetic algorithm	dsa	2	0	https://en.wikipedia.org/wiki/Genetic_algorithm	wikipedia
+hill climbing	dsa	3	0	https://en.wikipedia.org/wiki/Hill_climbing	wikipedia
+LeetCode	dsa	1	0	https://en.wikipedia.org/wiki/LeetCode	wikipedia
+HackerRank	dsa	3	0	https://en.wikipedia.org/wiki/HackerRank	wikipedia
+Codeforces	dsa	3	0	https://en.wikipedia.org/wiki/Codeforces	wikipedia
+competitive programming	dsa	3	0	https://en.wikipedia.org/wiki/Competitive_programming	wikipedia
+Cracking the Coding Interview	dsa	3	0	https://en.wikipedia.org/wiki/Cracking_the_Coding_Interview	wikipedia
+Lowest Common Ancestor	dsa	2	0	https://en.wikipedia.org/wiki/Lowest_common_ancestor	wikipedia
+LCA	dsa	3	0	https://en.wikipedia.org/wiki/Lowest_common_ancestor	wikipedia
+Word Ladder	dsa	3	0	https://en.wikipedia.org/wiki/Word_ladder	wikipedia
+Fibonacci sequence	dsa	2	0	https://en.wikipedia.org/wiki/Fibonacci_sequence	wikipedia
+Catalan number	dsa	3	0	https://en.wikipedia.org/wiki/Catalan_number	wikipedia
+Pascal's triangle	dsa	3	0	https://en.wikipedia.org/wiki/Pascal's_triangle	wikipedia
+Tower of Hanoi	dsa	2	0	https://en.wikipedia.org/wiki/Tower_of_Hanoi	wikipedia
+Josephus problem	dsa	3	0	https://en.wikipedia.org/wiki/Josephus_problem	wikipedia
+Big O	dsa	1	0	https://en.wikipedia.org/wiki/Big_O_notation	wikipedia
+Big O notation	dsa	1	0	https://en.wikipedia.org/wiki/Big_O_notation	wikipedia
+Big Theta	dsa	2	0	https://en.wikipedia.org/wiki/Big_O_notation	wikipedia
+Big Omega	dsa	2	0	https://en.wikipedia.org/wiki/Big_O_notation	wikipedia
+little o	dsa	3	0	https://en.wikipedia.org/wiki/Big_O_notation	wikipedia
+asymptotic analysis	dsa	2	0	https://en.wikipedia.org/wiki/Asymptotic_analysis	wikipedia
+asymptotic complexity	dsa	3	0	https://en.wikipedia.org/wiki/Computational_complexity	wikipedia
+time complexity	dsa	1	0	https://en.wikipedia.org/wiki/Time_complexity	wikipedia
+space complexity	dsa	1	0	https://en.wikipedia.org/wiki/Space_complexity	wikipedia
+auxiliary space	dsa	3	0	https://en.wikipedia.org/wiki/Space_complexity	wikipedia
+amortized	dsa	1	0	https://en.wikipedia.org/wiki/Amortized_analysis	wikipedia
+amortized analysis	dsa	1	0	https://en.wikipedia.org/wiki/Amortized_analysis	wikipedia
+worst case	dsa	1	0	https://en.wikipedia.org/wiki/Best,_worst_and_average_case	wikipedia
+best case	dsa	2	0	https://en.wikipedia.org/wiki/Best,_worst_and_average_case	wikipedia
+average case	dsa	2	0	https://en.wikipedia.org/wiki/Best,_worst_and_average_case	wikipedia
+O(1)	dsa	1	0	https://en.wikipedia.org/wiki/Time_complexity	wikipedia
+O(n)	dsa	1	0	https://en.wikipedia.org/wiki/Time_complexity	wikipedia
+O(n!)	dsa	2	0	https://en.wikipedia.org/wiki/Time_complexity	wikipedia-title
+logarithmic	dsa	2	0	https://en.wikipedia.org/wiki/Time_complexity	wikipedia
+linearithmic	dsa	3	0	https://en.wikipedia.org/wiki/Time_complexity	wikipedia
+quadratic	dsa	2	0	https://en.wikipedia.org/wiki/Time_complexity	wikipedia
+exponential	dsa	2	1	https://en.wikipedia.org/wiki/Time_complexity	wikipedia
+polynomial time	dsa	2	0	https://en.wikipedia.org/wiki/Time_complexity	wikipedia
+pseudo-polynomial	dsa	3	0	https://en.wikipedia.org/wiki/Pseudo-polynomial_time	wikipedia
+NP-complete	dsa	1	0	https://en.wikipedia.org/wiki/NP-completeness	wikipedia
+NP-hard	dsa	1	0	https://en.wikipedia.org/wiki/NP-hardness	wikipedia
+NP	dsa	1	0	https://en.wikipedia.org/wiki/NP_(complexity)	wikipedia
+P vs NP	dsa	1	0	https://en.wikipedia.org/wiki/P_versus_NP_problem	wikipedia
+P versus NP	dsa	2	0	https://en.wikipedia.org/wiki/P_versus_NP_problem	wikipedia
+P = NP	dsa	2	0	https://en.wikipedia.org/wiki/P_versus_NP_problem	wikipedia
+NP-intermediate	dsa	3	0	https://en.wikipedia.org/wiki/NP-intermediate	wikipedia
+co-NP	dsa	3	0	https://en.wikipedia.org/wiki/Co-NP	wikipedia
+PSPACE	dsa	3	0	https://en.wikipedia.org/wiki/PSPACE	wikipedia
+EXPTIME	dsa	3	0	https://en.wikipedia.org/wiki/EXPTIME	wikipedia
+complexity class	dsa	2	0	https://en.wikipedia.org/wiki/Complexity_class	wikipedia
+polynomial-time reduction	dsa	3	0	https://en.wikipedia.org/wiki/Polynomial-time_reduction	wikipedia
+Cook-Levin theorem	dsa	3	0	https://en.wikipedia.org/wiki/Cook%E2%80%93Levin_theorem	wikipedia
+SAT	dsa	2	0	https://en.wikipedia.org/wiki/Boolean_satisfiability_problem	wikipedia
+3-SAT	dsa	3	0	https://en.wikipedia.org/wiki/Boolean_satisfiability_problem	wikipedia
+boolean satisfiability	dsa	3	0	https://en.wikipedia.org/wiki/Boolean_satisfiability_problem	wikipedia
+SAT solver	dsa	3	0	https://en.wikipedia.org/wiki/SAT_solver	wikipedia
+vertex cover	dsa	3	0	https://en.wikipedia.org/wiki/Vertex_cover	wikipedia
+clique problem	dsa	3	0	https://en.wikipedia.org/wiki/Clique_problem	wikipedia
+independent set	dsa	3	0	https://en.wikipedia.org/wiki/Independent_set_(graph_theory)	wikipedia
+graph coloring	dsa	3	0	https://en.wikipedia.org/wiki/Graph_coloring	wikipedia
+approximation algorithm	dsa	3	0	https://en.wikipedia.org/wiki/Approximation_algorithm	wikipedia
+heuristic	dsa	2	1	https://en.wikipedia.org/wiki/Heuristic_(computer_science)	wikipedia
+decidable	dsa	3	0	https://en.wikipedia.org/wiki/Decidability_(logic)	wikipedia
+undecidable	dsa	2	0	https://en.wikipedia.org/wiki/Undecidable_problem	wikipedia
+computable	dsa	3	0	https://en.wikipedia.org/wiki/Computability	wikipedia-title
+Turing machine	dsa	1	0	https://en.wikipedia.org/wiki/Turing_machine	wikipedia
+Turing complete	dsa	1	0	https://en.wikipedia.org/wiki/Turing_completeness	wikipedia
+Turing completeness	dsa	2	0	https://en.wikipedia.org/wiki/Turing_completeness	wikipedia
+universal Turing machine	dsa	3	0	https://en.wikipedia.org/wiki/Universal_Turing_machine	wikipedia
+halting problem	dsa	1	0	https://en.wikipedia.org/wiki/Halting_problem	wikipedia
+Church-Turing thesis	dsa	2	0	https://en.wikipedia.org/wiki/Church%E2%80%93Turing_thesis	wikipedia
+Rice's theorem	dsa	3	0	https://en.wikipedia.org/wiki/Rice's_theorem	wikipedia
+Gödel's incompleteness theorems	dsa	3	0	https://en.wikipedia.org/wiki/G%C3%B6del's_incompleteness_theorems	wikipedia
+pigeonhole principle	dsa	3	0	https://en.wikipedia.org/wiki/Pigeonhole_principle	wikipedia
+combinatorics	dsa	3	0	https://en.wikipedia.org/wiki/Combinatorics	wikipedia
+permutation	dsa	2	1	https://en.wikipedia.org/wiki/Permutation	wikipedia
+combination	dsa	2	1	https://en.wikipedia.org/wiki/Combination	wikipedia
+power set	dsa	3	0	https://en.wikipedia.org/wiki/Power_set	wikipedia
+Cartesian product	dsa	3	0	https://en.wikipedia.org/wiki/Cartesian_product	wikipedia
+finite state machine	dsa	2	0	https://en.wikipedia.org/wiki/Finite-state_machine	wikipedia-title
+Karnaugh map	dsa	3	0	https://en.wikipedia.org/wiki/Karnaugh_map	wikipedia
+compiler	cs	1	0	https://en.wikipedia.org/wiki/Compiler	wikipedia
+interpreter	cs	1	0	https://en.wikipedia.org/wiki/Interpreter_(computing)	wikipedia
+transpiler	cs	2	0	https://en.wikipedia.org/wiki/Source-to-source_compiler	wikipedia
+JIT	cs	1	0	https://en.wikipedia.org/wiki/Just-in-time_compilation	wikipedia
+just-in-time compilation	cs	2	0	https://en.wikipedia.org/wiki/Just-in-time_compilation	wikipedia
+AOT	cs	2	0	https://en.wikipedia.org/wiki/Ahead-of-time_compilation	wikipedia
+ahead-of-time compilation	cs	3	0	https://en.wikipedia.org/wiki/Ahead-of-time_compilation	wikipedia
+AST	cs	1	0	https://en.wikipedia.org/wiki/Abstract_syntax_tree	wikipedia
+abstract syntax tree	cs	1	0	https://en.wikipedia.org/wiki/Abstract_syntax_tree	wikipedia
+concrete syntax tree	cs	3	0	https://en.wikipedia.org/wiki/Parse_tree	wikipedia
+lexer	cs	1	0	https://en.wikipedia.org/wiki/Lexical_analysis	wikipedia
+lexical analysis	cs	2	0	https://en.wikipedia.org/wiki/Lexical_analysis	wikipedia
+parser	cs	1	0	https://en.wikipedia.org/wiki/Parsing	wikipedia
+parsing	cs	1	0	https://en.wikipedia.org/wiki/Parsing	wikipedia
+recursive descent parser	cs	2	0	https://en.wikipedia.org/wiki/Recursive_descent_parser	wikipedia
+Pratt parser	cs	3	0	https://en.wikipedia.org/wiki/Operator-precedence_parser	wikipedia-title
+LL parser	cs	3	0	https://en.wikipedia.org/wiki/LL_parser	wikipedia
+LR parser	cs	3	0	https://en.wikipedia.org/wiki/LR_parser	wikipedia
+LALR	cs	3	0	https://en.wikipedia.org/wiki/LALR_parser	wikipedia
+PEG	cs	3	0	https://en.wikipedia.org/wiki/Parsing_expression_grammar	wikipedia
+parser combinator	cs	3	0	https://en.wikipedia.org/wiki/Parser_combinator	wikipedia
+context-free grammar	cs	2	0	https://en.wikipedia.org/wiki/Context-free_grammar	wikipedia
+BNF	cs	3	0	https://en.wikipedia.org/wiki/Backus%E2%80%93Naur_form	wikipedia
+Backus-Naur form	cs	3	0	https://en.wikipedia.org/wiki/Backus%E2%80%93Naur_form	wikipedia
+EBNF	cs	3	0	https://en.wikipedia.org/wiki/Extended_Backus%E2%80%93Naur_form	wikipedia
+syntax	cs	1	1	https://en.wikipedia.org/wiki/Syntax_(programming_languages)	wikipedia
+semantics	cs	2	1	https://en.wikipedia.org/wiki/Semantics_(computer_science)	wikipedia
+LLVM	cs	1	0	https://en.wikipedia.org/wiki/LLVM	wikipedia
+LLVM IR	cs	2	0	https://en.wikipedia.org/wiki/LLVM	wikipedia
+Clang	cs	1	0	https://en.wikipedia.org/wiki/Clang	wikipedia
+GCC	cs	1	0	https://en.wikipedia.org/wiki/GNU_Compiler_Collection	wikipedia
+intermediate representation	cs	2	0	https://en.wikipedia.org/wiki/Intermediate_representation	wikipedia
+SSA	cs	3	0	https://en.wikipedia.org/wiki/Static_single-assignment_form	wikipedia
+static single assignment	cs	3	0	https://en.wikipedia.org/wiki/Static_single-assignment_form	wikipedia
+bytecode	cs	1	0	https://en.wikipedia.org/wiki/Bytecode	wikipedia
+byte code	cs	2	0	https://en.wikipedia.org/wiki/Bytecode	wikipedia
+virtual machine	cs	1	0	https://en.wikipedia.org/wiki/Virtual_machine	wikipedia
+JVM	cs	1	0	https://en.wikipedia.org/wiki/Java_virtual_machine	wikipedia
+CLR	cs	3	0	https://en.wikipedia.org/wiki/Common_Language_Runtime	wikipedia
+WebAssembly	cs	1	0	https://en.wikipedia.org/wiki/WebAssembly	wikipedia
+WASM	cs	1	0	https://en.wikipedia.org/wiki/WebAssembly	wikipedia
+dead code elimination	cs	3	0	https://en.wikipedia.org/wiki/Dead-code_elimination	wikipedia
+constant folding	cs	3	0	https://en.wikipedia.org/wiki/Constant_folding	wikipedia
+inlining	cs	2	0	https://en.wikipedia.org/wiki/Inline_expansion	wikipedia
+loop unrolling	cs	3	0	https://en.wikipedia.org/wiki/Loop_unrolling	wikipedia
+register allocation	cs	3	0	https://en.wikipedia.org/wiki/Register_allocation	wikipedia
+linker	cs	2	0	https://en.wikipedia.org/wiki/Linker_(computing)	wikipedia
+loader	cs	3	0	https://en.wikipedia.org/wiki/Loader_(computing)	wikipedia
+dynamic linking	cs	3	0	https://en.wikipedia.org/wiki/Dynamic_linker	wikipedia
+static linking	cs	3	0	https://en.wikipedia.org/wiki/Static_library	wikipedia
+shared library	cs	3	0	https://en.wikipedia.org/wiki/Shared_library	wikipedia
+ELF	cs	3	0	https://en.wikipedia.org/wiki/Executable_and_Linkable_Format	wikipedia
+debugger	cs	2	0	https://en.wikipedia.org/wiki/Debugger	wikipedia
+breakpoint	cs	3	0	https://en.wikipedia.org/wiki/Breakpoint	wikipedia
+GDB	cs	3	0	https://en.wikipedia.org/wiki/GNU_Debugger	wikipedia
+garbage collector	cs	1	0	https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)	wikipedia
+garbage collection	cs	1	0	https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)	wikipedia
+GC	cs	1	0	https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)	wikipedia
+mark and sweep	cs	2	0	https://en.wikipedia.org/wiki/Tracing_garbage_collection	wikipedia
+generational garbage collection	cs	3	0	https://en.wikipedia.org/wiki/Tracing_garbage_collection	wikipedia
+stop-the-world	cs	3	0	https://en.wikipedia.org/wiki/Tracing_garbage_collection	wikipedia
+reference counting	cs	1	0	https://en.wikipedia.org/wiki/Reference_counting	wikipedia
+reference count	cs	2	0	https://en.wikipedia.org/wiki/Reference_counting	wikipedia
+weak reference	cs	3	0	https://en.wikipedia.org/wiki/Weak_reference	wikipedia
+memory leak	cs	1	0	https://en.wikipedia.org/wiki/Memory_leak	wikipedia
+dangling pointer	cs	2	0	https://en.wikipedia.org/wiki/Dangling_pointer	wikipedia
+use-after-free	cs	2	0	https://en.wikipedia.org/wiki/Dangling_pointer	wikipedia
+buffer overflow	cs	1	0	https://en.wikipedia.org/wiki/Buffer_overflow	wikipedia
+stack overflow	cs	1	0	https://en.wikipedia.org/wiki/Stack_overflow	wikipedia
+segmentation fault	cs	1	0	https://en.wikipedia.org/wiki/Segmentation_fault	wikipedia
+segfault	cs	1	0	https://en.wikipedia.org/wiki/Segmentation_fault	wikipedia
+null pointer	cs	1	0	https://en.wikipedia.org/wiki/Null_pointer	wikipedia
+pointer	cs	1	1	https://en.wikipedia.org/wiki/Pointer_(computer_programming)	wikipedia
+dereference	cs	2	0	https://en.wikipedia.org/wiki/Dereference_operator	wikipedia
+memory safety	cs	2	0	https://en.wikipedia.org/wiki/Memory_safety	wikipedia
+borrow checker	cs	1	0	https://en.wikipedia.org/wiki/Rust_(programming_language)	wikipedia
+ownership	cs	2	1	https://en.wikipedia.org/wiki/Rust_(programming_language)	wikipedia
+lifetime	cs	2	1	https://en.wikipedia.org/wiki/Rust_(programming_language)	wikipedia
+RAII	cs	2	0	https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization	wikipedia
+move semantics	cs	3	0	https://en.wikipedia.org/wiki/C%2B%2B11	wikipedia
+copy-on-write	cs	2	0	https://en.wikipedia.org/wiki/Copy-on-write	wikipedia
+stack frame	cs	1	0	https://en.wikipedia.org/wiki/Call_stack	wikipedia
+call stack	cs	1	0	https://en.wikipedia.org/wiki/Call_stack	wikipedia
+stack trace	cs	1	0	https://en.wikipedia.org/wiki/Stack_trace	wikipedia
+stack pointer	cs	3	0	https://en.wikipedia.org/wiki/Stack_register	wikipedia
+return address	cs	3	0	https://en.wikipedia.org/wiki/Return_statement	wikipedia
+calling convention	cs	3	0	https://en.wikipedia.org/wiki/Calling_convention	wikipedia
+ABI	cs	2	0	https://en.wikipedia.org/wiki/Application_binary_interface	wikipedia
+heap allocation	cs	1	0	https://en.wikipedia.org/wiki/Memory_management	wikipedia-title
+malloc	cs	1	0	https://en.wikipedia.org/wiki/C_dynamic_memory_allocation	wikipedia
+free	cs	2	1	https://en.wikipedia.org/wiki/C_dynamic_memory_allocation	wikipedia
+memory allocator	cs	3	0	https://en.wikipedia.org/wiki/Memory_management	wikipedia
+arena allocator	cs	3	0	https://en.wikipedia.org/wiki/Region-based_memory_management	wikipedia-title
+stack allocation	cs	3	0	https://en.wikipedia.org/wiki/Stack-based_memory_allocation	wikipedia-title
+memory fragmentation	cs	3	0	https://en.wikipedia.org/wiki/Fragmentation_(computing)	wikipedia
+alignment	cs	3	1	https://en.wikipedia.org/wiki/Data_structure_alignment	wikipedia
+mutex	cs	1	0	https://en.wikipedia.org/wiki/Mutual_exclusion	wikipedia
+mutual exclusion	cs	2	0	https://en.wikipedia.org/wiki/Mutual_exclusion	wikipedia
+semaphore	cs	1	0	https://en.wikipedia.org/wiki/Semaphore_(programming)	wikipedia
+lock	cs	1	1	https://en.wikipedia.org/wiki/Lock_(computer_science)	wikipedia
+spinlock	cs	2	0	https://en.wikipedia.org/wiki/Spinlock	wikipedia
+read-write lock	cs	3	0	https://en.wikipedia.org/wiki/Readers%E2%80%93writer_lock	wikipedia-title
+critical section	cs	2	0	https://en.wikipedia.org/wiki/Critical_section	wikipedia
+condition variable	cs	2	0	https://en.wikipedia.org/wiki/Monitor_(synchronization)	wikipedia
+monitor	cs	3	1	https://en.wikipedia.org/wiki/Monitor_(synchronization)	wikipedia
+barrier	cs	3	1	https://en.wikipedia.org/wiki/Barrier_(computer_science)	wikipedia
+deadlock	cs	1	0	https://en.wikipedia.org/wiki/Deadlock	wikipedia
+livelock	cs	3	0	https://en.wikipedia.org/wiki/Deadlock	wikipedia-title
+starvation	cs	3	1	https://en.wikipedia.org/wiki/Starvation_(computer_science)	wikipedia
+priority inversion	cs	3	0	https://en.wikipedia.org/wiki/Priority_inversion	wikipedia
+race condition	cs	1	0	https://en.wikipedia.org/wiki/Race_condition	wikipedia
+data race	cs	1	0	https://en.wikipedia.org/wiki/Race_condition	wikipedia
+thread safety	cs	2	0	https://en.wikipedia.org/wiki/Thread_safety	wikipedia
+thread-safe	cs	2	0	https://en.wikipedia.org/wiki/Thread_safety	wikipedia
+atomic	cs	1	0	https://en.wikipedia.org/wiki/Linearizability	wikipedia
+atomic operation	cs	2	0	https://en.wikipedia.org/wiki/Atomicity_(programming)	wikipedia
+lock-free	cs	1	0	https://en.wikipedia.org/wiki/Non-blocking_algorithm	wikipedia
+wait-free	cs	3	0	https://en.wikipedia.org/wiki/Non-blocking_algorithm	wikipedia
+non-blocking	cs	3	0	https://en.wikipedia.org/wiki/Non-blocking_algorithm	wikipedia
+CAS	cs	1	0	https://en.wikipedia.org/wiki/Compare-and-swap	wikipedia
+compare-and-swap	cs	1	0	https://en.wikipedia.org/wiki/Compare-and-swap	wikipedia
+ABA problem	cs	3	0	https://en.wikipedia.org/wiki/ABA_problem	wikipedia
+memory barrier	cs	1	0	https://en.wikipedia.org/wiki/Memory_barrier	wikipedia
+memory fence	cs	3	0	https://en.wikipedia.org/wiki/Memory_barrier	wikipedia
+memory model	cs	2	0	https://en.wikipedia.org/wiki/Memory_model_(programming)	wikipedia
+happens-before	cs	3	0	https://en.wikipedia.org/wiki/Happened-before	wikipedia
+sequential consistency	cs	3	0	https://en.wikipedia.org/wiki/Sequential_consistency	wikipedia
+memory ordering	cs	3	0	https://en.wikipedia.org/wiki/Memory_ordering	wikipedia
+volatile	cs	2	0	https://en.wikipedia.org/wiki/Volatile_(computer_programming)	wikipedia
+thread pool	cs	1	0	https://en.wikipedia.org/wiki/Thread_pool	wikipedia
+worker pool	cs	3	0	https://en.wikipedia.org/wiki/Thread_pool	wikipedia
+thread	cs	1	1	https://en.wikipedia.org/wiki/Thread_(computing)	wikipedia
+process	cs	1	1	https://en.wikipedia.org/wiki/Process_(computing)	wikipedia
+context switch	cs	2	0	https://en.wikipedia.org/wiki/Context_switch	wikipedia
+scheduler	cs	2	0	https://en.wikipedia.org/wiki/Scheduling_(computing)	wikipedia
+round robin	cs	2	0	https://en.wikipedia.org/wiki/Round-robin_scheduling	wikipedia
+preemption	cs	3	0	https://en.wikipedia.org/wiki/Preemption_(computing)	wikipedia
+cooperative multitasking	cs	3	0	https://en.wikipedia.org/wiki/Cooperative_multitasking	wikipedia
+coroutine	cs	1	0	https://en.wikipedia.org/wiki/Coroutine	wikipedia
+goroutine	cs	1	0	https://en.wikipedia.org/wiki/Go_(programming_language)	wikipedia
+green thread	cs	3	0	https://en.wikipedia.org/wiki/Green_threads	wikipedia
+fiber	cs	3	1	https://en.wikipedia.org/wiki/Fiber_(computer_science)	wikipedia
+async/await	cs	1	0	https://en.wikipedia.org/wiki/Async/await	wikipedia
+async	cs	1	0	https://en.wikipedia.org/wiki/Asynchronous_I/O	wikipedia
+await	cs	1	0	https://en.wikipedia.org/wiki/Async/await	wikipedia
+asynchronous	cs	1	0	https://en.wikipedia.org/wiki/Asynchrony_(computer_programming)	wikipedia
+synchronous	cs	2	0	https://en.wikipedia.org/wiki/Synchronization_(computer_science)	wikipedia
+promise	cs	1	1	https://en.wikipedia.org/wiki/Futures_and_promises	wikipedia
+future	cs	2	1	https://en.wikipedia.org/wiki/Futures_and_promises	wikipedia
+callback	cs	1	0	https://en.wikipedia.org/wiki/Callback_(computer_programming)	wikipedia
+event loop	cs	1	0	https://en.wikipedia.org/wiki/Event_loop	wikipedia
+reactor pattern	cs	3	0	https://en.wikipedia.org/wiki/Reactor_pattern	wikipedia
+epoll	cs	2	0	https://en.wikipedia.org/wiki/Epoll	wikipedia
+kqueue	cs	3	0	https://en.wikipedia.org/wiki/Kqueue	wikipedia
+io_uring	cs	3	0	https://en.wikipedia.org/wiki/Io_uring	wikipedia
+libuv	cs	3	0	https://en.wikipedia.org/wiki/Libuv	wikipedia
+non-blocking I/O	cs	2	0	https://en.wikipedia.org/wiki/Asynchronous_I/O	wikipedia
+blocking	cs	2	1	https://en.wikipedia.org/wiki/Blocking_(computing)	wikipedia
+concurrency	cs	1	0	https://en.wikipedia.org/wiki/Concurrency_(computer_science)	wikipedia
+parallelism	cs	1	0	https://en.wikipedia.org/wiki/Parallel_computing	wikipedia
+parallel computing	cs	2	0	https://en.wikipedia.org/wiki/Parallel_computing	wikipedia
+multithreading	cs	1	0	https://en.wikipedia.org/wiki/Multithreading_(computer_architecture)	wikipedia
+multiprocessing	cs	2	0	https://en.wikipedia.org/wiki/Multiprocessing	wikipedia
+GIL	cs	1	0	https://en.wikipedia.org/wiki/Global_interpreter_lock	wikipedia
+global interpreter lock	cs	2	0	https://en.wikipedia.org/wiki/Global_interpreter_lock	wikipedia
+actor model	cs	2	0	https://en.wikipedia.org/wiki/Actor_model	wikipedia
+message passing	cs	2	0	https://en.wikipedia.org/wiki/Message_passing	wikipedia
+channel	cs	2	1	https://en.wikipedia.org/wiki/Channel_(programming)	wikipedia
+producer-consumer	cs	2	0	https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem	wikipedia
+dining philosophers	cs	3	0	https://en.wikipedia.org/wiki/Dining_philosophers_problem	wikipedia
+STM	cs	3	0	https://en.wikipedia.org/wiki/Software_transactional_memory	wikipedia
+RCU	cs	3	0	https://en.wikipedia.org/wiki/Read-copy-update	wikipedia
+work stealing	cs	3	0	https://en.wikipedia.org/wiki/Work_stealing	wikipedia
+fork-join	cs	3	0	https://en.wikipedia.org/wiki/Fork%E2%80%93join_model	wikipedia
+MapReduce	cs	2	0	https://en.wikipedia.org/wiki/MapReduce	wikipedia
+virtual memory	cs	1	0	https://en.wikipedia.org/wiki/Virtual_memory	wikipedia
+physical memory	cs	3	0	https://en.wikipedia.org/wiki/Computer_memory	wikipedia
+address space	cs	2	0	https://en.wikipedia.org/wiki/Address_space	wikipedia
+paging	cs	2	0	https://en.wikipedia.org/wiki/Memory_paging	wikipedia
+page table	cs	2	0	https://en.wikipedia.org/wiki/Page_table	wikipedia
+page fault	cs	1	0	https://en.wikipedia.org/wiki/Page_fault	wikipedia
+page replacement	cs	3	0	https://en.wikipedia.org/wiki/Page_replacement_algorithm	wikipedia
+thrashing	cs	3	0	https://en.wikipedia.org/wiki/Thrashing_(computer_science)	wikipedia
+swap	cs	2	1	https://en.wikipedia.org/wiki/Memory_paging	wikipedia
+TLB	cs	1	0	https://en.wikipedia.org/wiki/Translation_lookaside_buffer	wikipedia
+translation lookaside buffer	cs	3	0	https://en.wikipedia.org/wiki/Translation_lookaside_buffer	wikipedia
+MMU	cs	2	0	https://en.wikipedia.org/wiki/Memory_management_unit	wikipedia
+mmap	cs	2	0	https://en.wikipedia.org/wiki/Mmap	wikipedia
+memory-mapped file	cs	3	0	https://en.wikipedia.org/wiki/Memory-mapped_file	wikipedia
+memory-mapped I/O	cs	3	0	https://en.wikipedia.org/wiki/Memory-mapped_I/O_and_port-mapped_I/O	wikipedia
+huge pages	cs	3	0	https://en.wikipedia.org/wiki/Page_(computer_memory)	wikipedia
+NUMA	cs	3	0	https://en.wikipedia.org/wiki/Non-uniform_memory_access	wikipedia
+cache line	cs	1	0	https://en.wikipedia.org/wiki/CPU_cache	wikipedia
+CPU cache	cs	1	0	https://en.wikipedia.org/wiki/CPU_cache	wikipedia
+cache miss	cs	1	0	https://en.wikipedia.org/wiki/CPU_cache	wikipedia
+cache hit	cs	2	0	https://en.wikipedia.org/wiki/CPU_cache	wikipedia
+cache coherence	cs	2	0	https://en.wikipedia.org/wiki/Cache_coherence	wikipedia
+MESI	cs	3	0	https://en.wikipedia.org/wiki/MESI_protocol	wikipedia
+false sharing	cs	2	0	https://en.wikipedia.org/wiki/False_sharing	wikipedia
+cache locality	cs	2	0	https://en.wikipedia.org/wiki/Locality_of_reference	wikipedia-title
+locality of reference	cs	3	0	https://en.wikipedia.org/wiki/Locality_of_reference	wikipedia
+L1 cache	cs	3	0	https://en.wikipedia.org/wiki/CPU_cache	wikipedia
+branch prediction	cs	2	0	https://en.wikipedia.org/wiki/Branch_predictor	wikipedia
+speculative execution	cs	3	0	https://en.wikipedia.org/wiki/Speculative_execution	wikipedia
+Spectre	cs	3	0	https://en.wikipedia.org/wiki/Spectre_(security_vulnerability)	wikipedia
+Meltdown	cs	3	0	https://en.wikipedia.org/wiki/Meltdown_(security_vulnerability)	wikipedia
+instruction pipeline	cs	3	0	https://en.wikipedia.org/wiki/Instruction_pipelining	wikipedia-title
+out-of-order execution	cs	3	0	https://en.wikipedia.org/wiki/Out-of-order_execution	wikipedia
+superscalar	cs	3	0	https://en.wikipedia.org/wiki/Superscalar_processor	wikipedia
+SIMD	cs	1	0	https://en.wikipedia.org/wiki/Single_instruction,_multiple_data	wikipedia
+vectorization	cs	2	0	https://en.wikipedia.org/wiki/Automatic_vectorization	wikipedia
+AVX	cs	3	0	https://en.wikipedia.org/wiki/Advanced_Vector_Extensions	wikipedia
+SSE	cs	3	0	https://en.wikipedia.org/wiki/Streaming_SIMD_Extensions	wikipedia
+NEON	cs	3	1	https://en.wikipedia.org/wiki/ARM_architecture_family	wikipedia
+GPU	cs	1	0	https://en.wikipedia.org/wiki/Graphics_processing_unit	wikipedia
+CPU	cs	1	0	https://en.wikipedia.org/wiki/Central_processing_unit	wikipedia
+TPU	cs	2	0	https://en.wikipedia.org/wiki/Tensor_Processing_Unit	wikipedia
+FPGA	cs	3	0	https://en.wikipedia.org/wiki/Field-programmable_gate_array	wikipedia
+ASIC	cs	3	0	https://en.wikipedia.org/wiki/Application-specific_integrated_circuit	wikipedia
+CUDA	cs	1	0	https://en.wikipedia.org/wiki/CUDA	wikipedia
+OpenCL	cs	3	0	https://en.wikipedia.org/wiki/OpenCL	wikipedia
+Vulkan	cs	3	0	https://en.wikipedia.org/wiki/Vulkan	wikipedia
+Metal	cs	2	1	https://en.wikipedia.org/wiki/Metal_(API)	wikipedia
+warp	cs	3	1	https://en.wikipedia.org/wiki/Thread_block_(CUDA_programming)	wikipedia
+shared memory	cs	3	0	https://en.wikipedia.org/wiki/Shared_memory	wikipedia
+tensor core	cs	3	0	https://en.wikipedia.org/wiki/Tensor_Core	wikipedia
+kernel	cs	1	1	https://en.wikipedia.org/wiki/Kernel_(operating_system)	wikipedia
+operating system	cs	1	0	https://en.wikipedia.org/wiki/Operating_system	wikipedia
+OS	cs	1	0	https://en.wikipedia.org/wiki/Operating_system	wikipedia
+monolithic kernel	cs	3	0	https://en.wikipedia.org/wiki/Monolithic_kernel	wikipedia
+microkernel	cs	3	0	https://en.wikipedia.org/wiki/Microkernel	wikipedia
+Linux kernel	cs	1	0	https://en.wikipedia.org/wiki/Linux_kernel	wikipedia
+kernel module	cs	3	0	https://en.wikipedia.org/wiki/Loadable_kernel_module	wikipedia
+kernel space	cs	2	0	https://en.wikipedia.org/wiki/User_space_and_kernel_space	wikipedia
+user space	cs	2	0	https://en.wikipedia.org/wiki/User_space_and_kernel_space	wikipedia
+system call	cs	1	0	https://en.wikipedia.org/wiki/System_call	wikipedia
+syscall	cs	1	0	https://en.wikipedia.org/wiki/System_call	wikipedia
+strace	cs	2	0	https://en.wikipedia.org/wiki/Strace	wikipedia
+interrupt	cs	2	1	https://en.wikipedia.org/wiki/Interrupt	wikipedia
+IRQ	cs	3	0	https://en.wikipedia.org/wiki/Interrupt_request	wikipedia
+DMA	cs	3	0	https://en.wikipedia.org/wiki/Direct_memory_access	wikipedia
+device driver	cs	3	0	https://en.wikipedia.org/wiki/Device_driver	wikipedia
+eBPF	cs	2	0	https://en.wikipedia.org/wiki/Berkeley_Packet_Filter	wikipedia
+inode	cs	1	0	https://en.wikipedia.org/wiki/Inode	wikipedia
+filesystem	cs	1	0	https://en.wikipedia.org/wiki/File_system	wikipedia
+file descriptor	cs	1	0	https://en.wikipedia.org/wiki/File_descriptor	wikipedia
+file system	cs	1	0	https://en.wikipedia.org/wiki/File_system	wikipedia
+ext4	cs	3	0	https://en.wikipedia.org/wiki/Ext4	wikipedia
+ZFS	cs	3	0	https://en.wikipedia.org/wiki/ZFS	wikipedia
+Btrfs	cs	3	0	https://en.wikipedia.org/wiki/Btrfs	wikipedia
+APFS	cs	3	0	https://en.wikipedia.org/wiki/Apple_File_System	wikipedia
+NTFS	cs	3	0	https://en.wikipedia.org/wiki/NTFS	wikipedia
+FAT32	cs	3	0	https://en.wikipedia.org/wiki/File_Allocation_Table	wikipedia
+symlink	cs	2	0	https://en.wikipedia.org/wiki/Symbolic_link	wikipedia
+hard link	cs	2	0	https://en.wikipedia.org/wiki/Hard_link	wikipedia
+journaling	cs	3	0	https://en.wikipedia.org/wiki/Journaling_file_system	wikipedia
+page cache	cs	3	0	https://en.wikipedia.org/wiki/Page_cache	wikipedia
+fsync	cs	3	0	https://en.wikipedia.org/wiki/Fsync	wikipedia
+pipe	cs	2	1	https://en.wikipedia.org/wiki/Pipeline_(Unix)	wikipedia
+IPC	cs	2	0	https://en.wikipedia.org/wiki/Inter-process_communication	wikipedia
+socket	cs	1	1	https://en.wikipedia.org/wiki/Network_socket	wikipedia
+signal	cs	2	1	https://en.wikipedia.org/wiki/Signal_(IPC)	wikipedia
+SIGTERM	cs	3	0	https://en.wikipedia.org/wiki/Signal_(IPC)	wikipedia
+SIGKILL	cs	3	0	https://en.wikipedia.org/wiki/Signal_(IPC)	wikipedia
+zombie process	cs	3	0	https://en.wikipedia.org/wiki/Zombie_process	wikipedia
+daemon	cs	2	0	https://en.wikipedia.org/wiki/Daemon_(computing)	wikipedia
+fork	cs	2	1	https://en.wikipedia.org/wiki/Fork_(system_call)	wikipedia
+exec	cs	3	0	https://en.wikipedia.org/wiki/Exec_(system_call)	wikipedia
+POSIX	cs	1	0	https://en.wikipedia.org/wiki/POSIX	wikipedia
+Unix	cs	1	0	https://en.wikipedia.org/wiki/Unix	wikipedia
+Linux	cs	1	0	https://en.wikipedia.org/wiki/Linux	wikipedia
+shell	cs	1	1	https://en.wikipedia.org/wiki/Unix_shell	wikipedia
+bash	cs	1	0	https://en.wikipedia.org/wiki/Bash_(Unix_shell)	wikipedia
+zsh	cs	2	0	https://en.wikipedia.org/wiki/Z_shell	wikipedia
+stdin	cs	2	0	https://en.wikipedia.org/wiki/Standard_streams	wikipedia
+stdout	cs	2	0	https://en.wikipedia.org/wiki/Standard_streams	wikipedia
+stderr	cs	2	0	https://en.wikipedia.org/wiki/Standard_streams	wikipedia
+endianness	cs	1	0	https://en.wikipedia.org/wiki/Endianness	wikipedia
+little-endian	cs	2	0	https://en.wikipedia.org/wiki/Endianness	wikipedia
+big-endian	cs	2	0	https://en.wikipedia.org/wiki/Endianness	wikipedia
+byte order	cs	2	0	https://en.wikipedia.org/wiki/Endianness	wikipedia
+two's complement	cs	1	0	https://en.wikipedia.org/wiki/Two's_complement	wikipedia
+one's complement	cs	3	0	https://en.wikipedia.org/wiki/Ones'_complement	wikipedia-title
+sign bit	cs	3	0	https://en.wikipedia.org/wiki/Sign_bit	wikipedia
+integer overflow	cs	2	0	https://en.wikipedia.org/wiki/Integer_overflow	wikipedia
+integer underflow	cs	3	0	https://en.wikipedia.org/wiki/Integer_overflow	wikipedia
+overflow	cs	2	1	https://en.wikipedia.org/wiki/Integer_overflow	wikipedia
+bitwise	cs	2	0	https://en.wikipedia.org/wiki/Bitwise_operation	wikipedia
+bit manipulation	cs	2	0	https://en.wikipedia.org/wiki/Bit_manipulation	wikipedia
+bit shift	cs	2	0	https://en.wikipedia.org/wiki/Bitwise_operation	wikipedia
+XOR	cs	1	0	https://en.wikipedia.org/wiki/Exclusive_or	wikipedia
+bitwise AND	cs	2	0	https://en.wikipedia.org/wiki/Bitwise_operation	wikipedia
+bitwise OR	cs	2	0	https://en.wikipedia.org/wiki/Bitwise_operation	wikipedia
+popcount	cs	3	0	https://en.wikipedia.org/wiki/Hamming_weight	wikipedia
+Hamming weight	cs	3	0	https://en.wikipedia.org/wiki/Hamming_weight	wikipedia
+Hamming distance	cs	3	0	https://en.wikipedia.org/wiki/Hamming_distance	wikipedia
+byte	cs	1	1	https://en.wikipedia.org/wiki/Byte	wikipedia
+bit	cs	1	1	https://en.wikipedia.org/wiki/Bit	wikipedia
+nibble	cs	3	0	https://en.wikipedia.org/wiki/Nibble	wikipedia
+word size	cs	3	0	https://en.wikipedia.org/wiki/Word_(computer_architecture)	wikipedia
+hexadecimal	cs	2	0	https://en.wikipedia.org/wiki/Hexadecimal	wikipedia
+hex	cs	2	1	https://en.wikipedia.org/wiki/Hexadecimal	wikipedia
+binary	cs	1	1	https://en.wikipedia.org/wiki/Binary_number	wikipedia
+octal	cs	3	0	https://en.wikipedia.org/wiki/Octal	wikipedia
+base64	cs	1	0	https://en.wikipedia.org/wiki/Base64	wikipedia
+UTF-8	cs	1	0	https://en.wikipedia.org/wiki/UTF-8	wikipedia
+UTF-16	cs	2	0	https://en.wikipedia.org/wiki/UTF-16	wikipedia
+Unicode	cs	1	0	https://en.wikipedia.org/wiki/Unicode	wikipedia
+ASCII	cs	1	0	https://en.wikipedia.org/wiki/ASCII	wikipedia
+code point	cs	3	0	https://en.wikipedia.org/wiki/Code_point	wikipedia
+surrogate pair	cs	3	0	https://en.wikipedia.org/wiki/Universal_Character_Set_characters	wikipedia
+grapheme	cs	3	0	https://en.wikipedia.org/wiki/Grapheme	wikipedia
+floating point	cs	1	0	https://en.wikipedia.org/wiki/Floating-point_arithmetic	wikipedia
+floating-point	cs	1	0	https://en.wikipedia.org/wiki/Floating-point_arithmetic	wikipedia
+IEEE 754	cs	1	0	https://en.wikipedia.org/wiki/IEEE_754	wikipedia
+float	cs	1	1	https://en.wikipedia.org/wiki/Single-precision_floating-point_format	wikipedia
+double	cs	1	1	https://en.wikipedia.org/wiki/Double-precision_floating-point_format	wikipedia
+NaN	cs	1	0	https://en.wikipedia.org/wiki/NaN	wikipedia
+infinity	cs	3	1	https://en.wikipedia.org/wiki/Infinity	wikipedia
+machine epsilon	cs	3	0	https://en.wikipedia.org/wiki/Machine_epsilon	wikipedia
+mantissa	cs	3	0	https://en.wikipedia.org/wiki/Significand	wikipedia
+significand	cs	3	0	https://en.wikipedia.org/wiki/Significand	wikipedia
+fixed-point	cs	3	0	https://en.wikipedia.org/wiki/Fixed-point_arithmetic	wikipedia
+bfloat16	cs	2	0	https://en.wikipedia.org/wiki/Bfloat16_floating-point_format	wikipedia
+FP16	cs	2	0	https://en.wikipedia.org/wiki/Half-precision_floating-point_format	wikipedia
+FP8	cs	3	0	https://en.wikipedia.org/wiki/Minifloat	wikipedia
+float32	cs	2	0	https://en.wikipedia.org/wiki/Single-precision_floating-point_format	wikipedia
+float64	cs	2	0	https://en.wikipedia.org/wiki/Double-precision_floating-point_format	wikipedia
+int32	cs	3	0	https://en.wikipedia.org/wiki/Integer_(computer_science)	wikipedia-title
+int64	cs	3	0	https://en.wikipedia.org/wiki/Integer_(computer_science)	wikipedia-title
+rounding error	cs	3	0	https://en.wikipedia.org/wiki/Round-off_error	wikipedia
+precision	cs	2	1	https://en.wikipedia.org/wiki/Floating-point_arithmetic	wikipedia
+regex	cs	1	0	https://en.wikipedia.org/wiki/Regular_expression	wikipedia
+regular expression	cs	1	0	https://en.wikipedia.org/wiki/Regular_expression	wikipedia
+RegExp	cs	2	0	https://en.wikipedia.org/wiki/Regular_expression	wikipedia
+lookahead	cs	3	0	https://en.wikipedia.org/wiki/Regular_expression	wikipedia
+lookbehind	cs	3	0	https://en.wikipedia.org/wiki/Regular_expression	wikipedia
+capture group	cs	3	0	https://en.wikipedia.org/wiki/Regular_expression	wikipedia-title
+ReDoS	cs	3	0	https://en.wikipedia.org/wiki/ReDoS	wikipedia
+finite automaton	cs	1	0	https://en.wikipedia.org/wiki/Finite-state_machine	wikipedia
+finite automata	cs	2	0	https://en.wikipedia.org/wiki/Automata_theory	wikipedia
+DFA	cs	1	0	https://en.wikipedia.org/wiki/Deterministic_finite_automaton	wikipedia
+NFA	cs	1	0	https://en.wikipedia.org/wiki/Nondeterministic_finite_automaton	wikipedia
+deterministic finite automaton	cs	2	0	https://en.wikipedia.org/wiki/Deterministic_finite_automaton	wikipedia
+nondeterministic finite automaton	cs	3	0	https://en.wikipedia.org/wiki/Nondeterministic_finite_automaton	wikipedia
+pushdown automaton	cs	3	0	https://en.wikipedia.org/wiki/Pushdown_automaton	wikipedia
+state machine	cs	1	0	https://en.wikipedia.org/wiki/Finite-state_machine	wikipedia
+Chomsky hierarchy	cs	3	0	https://en.wikipedia.org/wiki/Chomsky_hierarchy	wikipedia
+regular language	cs	3	0	https://en.wikipedia.org/wiki/Regular_language	wikipedia
+pumping lemma	cs	3	0	https://en.wikipedia.org/wiki/Pumping_lemma_for_regular_languages	wikipedia
+lambda calculus	cs	1	0	https://en.wikipedia.org/wiki/Lambda_calculus	wikipedia
+lambda	cs	1	1	https://en.wikipedia.org/wiki/Anonymous_function	wikipedia
+anonymous function	cs	2	0	https://en.wikipedia.org/wiki/Anonymous_function	wikipedia
+Church encoding	cs	3	0	https://en.wikipedia.org/wiki/Church_encoding	wikipedia
+Y combinator	cs	3	0	https://en.wikipedia.org/wiki/Fixed-point_combinator	wikipedia
+fixed-point combinator	cs	3	0	https://en.wikipedia.org/wiki/Fixed-point_combinator	wikipedia
+beta reduction	cs	3	0	https://en.wikipedia.org/wiki/Lambda_calculus	wikipedia-title
+SKI combinator calculus	cs	3	0	https://en.wikipedia.org/wiki/SKI_combinator_calculus	wikipedia
+monad	cs	1	0	https://en.wikipedia.org/wiki/Monad_(functional_programming)	wikipedia
+functor	cs	1	0	https://en.wikipedia.org/wiki/Functor_(functional_programming)	wikipedia
+applicative functor	cs	3	0	https://en.wikipedia.org/wiki/Applicative_functor	wikipedia
+monoid	cs	3	0	https://en.wikipedia.org/wiki/Monoid	wikipedia
+semigroup	cs	3	0	https://en.wikipedia.org/wiki/Semigroup	wikipedia
+category theory	cs	3	0	https://en.wikipedia.org/wiki/Category_theory	wikipedia
+Maybe monad	cs	3	0	https://en.wikipedia.org/wiki/Option_type	wikipedia-title
+Option type	cs	2	0	https://en.wikipedia.org/wiki/Option_type	wikipedia
+Result type	cs	3	0	https://en.wikipedia.org/wiki/Result_type	wikipedia
+algebraic data type	cs	2	0	https://en.wikipedia.org/wiki/Algebraic_data_type	wikipedia
+sum type	cs	3	0	https://en.wikipedia.org/wiki/Tagged_union	wikipedia
+product type	cs	3	0	https://en.wikipedia.org/wiki/Product_type	wikipedia
+tagged union	cs	3	0	https://en.wikipedia.org/wiki/Tagged_union	wikipedia
+pattern matching	cs	2	0	https://en.wikipedia.org/wiki/Pattern_matching	wikipedia
+immutability	cs	2	0	https://en.wikipedia.org/wiki/Immutable_object	wikipedia
+immutable	cs	2	0	https://en.wikipedia.org/wiki/Immutable_object	wikipedia
+mutable	cs	2	0	https://en.wikipedia.org/wiki/Immutable_object	wikipedia
+side effect	cs	1	0	https://en.wikipedia.org/wiki/Side_effect_(computer_science)	wikipedia
+pure function	cs	1	0	https://en.wikipedia.org/wiki/Pure_function	wikipedia
+referential transparency	cs	3	0	https://en.wikipedia.org/wiki/Referential_transparency	wikipedia
+idempotent	cs	1	0	https://en.wikipedia.org/wiki/Idempotence	wikipedia
+idempotency	cs	2	0	https://en.wikipedia.org/wiki/Idempotence	wikipedia-title
+higher-order function	cs	1	0	https://en.wikipedia.org/wiki/Higher-order_function	wikipedia
+first-class function	cs	2	0	https://en.wikipedia.org/wiki/First-class_function	wikipedia
+fold	cs	2	1	https://en.wikipedia.org/wiki/Fold_(higher-order_function)	wikipedia
+closure	cs	1	1	https://en.wikipedia.org/wiki/Closure_(computer_programming)	wikipedia
+lexical scope	cs	2	0	https://en.wikipedia.org/wiki/Scope_(computer_programming)	wikipedia
+scope	cs	1	1	https://en.wikipedia.org/wiki/Scope_(computer_programming)	wikipedia
+hoisting	cs	2	0	https://en.wikipedia.org/wiki/Variable_hoisting	wikipedia
+variable shadowing	cs	3	0	https://en.wikipedia.org/wiki/Variable_shadowing	wikipedia
+currying	cs	1	0	https://en.wikipedia.org/wiki/Currying	wikipedia
+curry	cs	2	1	https://en.wikipedia.org/wiki/Currying	wikipedia
+partial application	cs	2	0	https://en.wikipedia.org/wiki/Partial_application	wikipedia
+function composition	cs	2	0	https://en.wikipedia.org/wiki/Function_composition	wikipedia
+point-free	cs	3	0	https://en.wikipedia.org/wiki/Tacit_programming	wikipedia
+memoize	cs	2	0	https://en.wikipedia.org/wiki/Memoization	wikipedia
+lazy evaluation	cs	2	0	https://en.wikipedia.org/wiki/Lazy_evaluation	wikipedia
+thunk	cs	3	0	https://en.wikipedia.org/wiki/Thunk	wikipedia
+eager evaluation	cs	3	0	https://en.wikipedia.org/wiki/Eager_evaluation	wikipedia
+generator	cs	2	1	https://en.wikipedia.org/wiki/Generator_(computer_programming)	wikipedia
+iterator	cs	1	0	https://en.wikipedia.org/wiki/Iterator	wikipedia
+iterable	cs	2	0	https://en.wikipedia.org/wiki/Iterator	wikipedia
+polymorphism	cs	1	0	https://en.wikipedia.org/wiki/Polymorphism_(computer_science)	wikipedia
+ad hoc polymorphism	cs	3	0	https://en.wikipedia.org/wiki/Ad_hoc_polymorphism	wikipedia
+parametric polymorphism	cs	3	0	https://en.wikipedia.org/wiki/Parametric_polymorphism	wikipedia
+subtype polymorphism	cs	3	0	https://en.wikipedia.org/wiki/Subtyping	wikipedia
+duck typing	cs	2	0	https://en.wikipedia.org/wiki/Duck_typing	wikipedia
+structural typing	cs	3	0	https://en.wikipedia.org/wiki/Structural_type_system	wikipedia
+nominal typing	cs	3	0	https://en.wikipedia.org/wiki/Nominal_type_system	wikipedia
+static typing	cs	2	0	https://en.wikipedia.org/wiki/Type_system	wikipedia
+dynamic typing	cs	2	0	https://en.wikipedia.org/wiki/Type_system	wikipedia
+strong typing	cs	3	0	https://en.wikipedia.org/wiki/Strong_and_weak_typing	wikipedia-title
+type inference	cs	2	0	https://en.wikipedia.org/wiki/Type_inference	wikipedia
+Hindley-Milner	cs	3	0	https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system	wikipedia
+generics	cs	1	0	https://en.wikipedia.org/wiki/Generic_programming	wikipedia
+type erasure	cs	3	0	https://en.wikipedia.org/wiki/Type_erasure	wikipedia
+covariance	cs	3	0	https://en.wikipedia.org/wiki/Covariance_and_contravariance_(computer_science)	wikipedia
+contravariance	cs	3	0	https://en.wikipedia.org/wiki/Covariance_and_contravariance_(computer_science)	wikipedia
+inheritance	cs	1	0	https://en.wikipedia.org/wiki/Inheritance_(object-oriented_programming)	wikipedia
+encapsulation	cs	1	0	https://en.wikipedia.org/wiki/Encapsulation_(computer_programming)	wikipedia
+abstraction	cs	1	1	https://en.wikipedia.org/wiki/Abstraction_(computer_science)	wikipedia
+composition over inheritance	cs	2	0	https://en.wikipedia.org/wiki/Composition_over_inheritance	wikipedia
+object-oriented programming	cs	1	0	https://en.wikipedia.org/wiki/Object-oriented_programming	wikipedia
+OOP	cs	1	0	https://en.wikipedia.org/wiki/Object-oriented_programming	wikipedia
+functional programming	cs	1	0	https://en.wikipedia.org/wiki/Functional_programming	wikipedia
+imperative programming	cs	3	0	https://en.wikipedia.org/wiki/Imperative_programming	wikipedia
+declarative programming	cs	3	0	https://en.wikipedia.org/wiki/Declarative_programming	wikipedia
+procedural programming	cs	3	0	https://en.wikipedia.org/wiki/Procedural_programming	wikipedia
+reactive programming	cs	2	0	https://en.wikipedia.org/wiki/Reactive_programming	wikipedia
+metaprogramming	cs	3	0	https://en.wikipedia.org/wiki/Metaprogramming	wikipedia
+reflection	cs	2	1	https://en.wikipedia.org/wiki/Reflective_programming	wikipedia
+macro	cs	2	1	https://en.wikipedia.org/wiki/Macro_(computer_science)	wikipedia
+homoiconicity	cs	3	0	https://en.wikipedia.org/wiki/Homoiconicity	wikipedia
+Lisp	cs	2	0	https://en.wikipedia.org/wiki/Lisp_(programming_language)	wikipedia
+S-expression	cs	3	0	https://en.wikipedia.org/wiki/S-expression	wikipedia
+dependency injection	cs	1	0	https://en.wikipedia.org/wiki/Dependency_injection	wikipedia
+inversion of control	cs	2	0	https://en.wikipedia.org/wiki/Inversion_of_control	wikipedia
+interface	cs	1	1	https://en.wikipedia.org/wiki/Interface_(computing)	wikipedia
+abstract class	cs	2	0	https://en.wikipedia.org/wiki/Abstract_type	wikipedia
+virtual function	cs	3	0	https://en.wikipedia.org/wiki/Virtual_function	wikipedia
+vtable	cs	3	0	https://en.wikipedia.org/wiki/Virtual_method_table	wikipedia
+dynamic dispatch	cs	3	0	https://en.wikipedia.org/wiki/Dynamic_dispatch	wikipedia
+method overriding	cs	3	0	https://en.wikipedia.org/wiki/Method_overriding	wikipedia
+method overloading	cs	3	0	https://en.wikipedia.org/wiki/Function_overloading	wikipedia
+operator overloading	cs	3	0	https://en.wikipedia.org/wiki/Operator_overloading	wikipedia
+singleton	cs	1	0	https://en.wikipedia.org/wiki/Singleton_pattern	wikipedia
+SOLID	cs	1	0	https://en.wikipedia.org/wiki/SOLID	wikipedia
+single responsibility principle	cs	2	0	https://en.wikipedia.org/wiki/Single-responsibility_principle	wikipedia
+open-closed principle	cs	3	0	https://en.wikipedia.org/wiki/Open%E2%80%93closed_principle	wikipedia
+Liskov substitution principle	cs	2	0	https://en.wikipedia.org/wiki/Liskov_substitution_principle	wikipedia
+interface segregation principle	cs	3	0	https://en.wikipedia.org/wiki/Interface_segregation_principle	wikipedia
+dependency inversion principle	cs	3	0	https://en.wikipedia.org/wiki/Dependency_inversion_principle	wikipedia
+DRY	cs	1	0	https://en.wikipedia.org/wiki/Don't_repeat_yourself	wikipedia
+KISS	cs	2	0	https://en.wikipedia.org/wiki/KISS_principle	wikipedia
+YAGNI	cs	2	0	https://en.wikipedia.org/wiki/You_aren't_gonna_need_it	wikipedia
+Law of Demeter	cs	3	0	https://en.wikipedia.org/wiki/Law_of_Demeter	wikipedia
+separation of concerns	cs	2	0	https://en.wikipedia.org/wiki/Separation_of_concerns	wikipedia
+coupling	cs	2	1	https://en.wikipedia.org/wiki/Coupling_(computer_programming)	wikipedia
+cohesion	cs	2	1	https://en.wikipedia.org/wiki/Cohesion_(computer_science)	wikipedia
+design pattern	cs	1	0	https://en.wikipedia.org/wiki/Software_design_pattern	wikipedia
+Gang of Four	cs	2	0	https://en.wikipedia.org/wiki/Design_Patterns	wikipedia
+factory pattern	cs	1	0	https://en.wikipedia.org/wiki/Factory_method_pattern	wikipedia
+abstract factory	cs	3	0	https://en.wikipedia.org/wiki/Abstract_factory_pattern	wikipedia
+builder pattern	cs	2	0	https://en.wikipedia.org/wiki/Builder_pattern	wikipedia
+prototype pattern	cs	3	0	https://en.wikipedia.org/wiki/Prototype_pattern	wikipedia
+observer pattern	cs	1	0	https://en.wikipedia.org/wiki/Observer_pattern	wikipedia
+pub/sub	cs	1	0	https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern	wikipedia
+publish-subscribe	cs	2	0	https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern	wikipedia
+strategy pattern	cs	2	0	https://en.wikipedia.org/wiki/Strategy_pattern	wikipedia
+decorator pattern	cs	2	0	https://en.wikipedia.org/wiki/Decorator_pattern	wikipedia
+adapter pattern	cs	2	0	https://en.wikipedia.org/wiki/Adapter_pattern	wikipedia
+facade pattern	cs	2	0	https://en.wikipedia.org/wiki/Facade_pattern	wikipedia
+proxy pattern	cs	2	0	https://en.wikipedia.org/wiki/Proxy_pattern	wikipedia
+command pattern	cs	3	0	https://en.wikipedia.org/wiki/Command_pattern	wikipedia
+iterator pattern	cs	3	0	https://en.wikipedia.org/wiki/Iterator_pattern	wikipedia
+visitor pattern	cs	2	0	https://en.wikipedia.org/wiki/Visitor_pattern	wikipedia
+state pattern	cs	3	0	https://en.wikipedia.org/wiki/State_pattern	wikipedia
+template method pattern	cs	3	0	https://en.wikipedia.org/wiki/Template_method_pattern	wikipedia
+chain of responsibility	cs	3	0	https://en.wikipedia.org/wiki/Chain-of-responsibility_pattern	wikipedia
+mediator pattern	cs	3	0	https://en.wikipedia.org/wiki/Mediator_pattern	wikipedia
+memento pattern	cs	3	0	https://en.wikipedia.org/wiki/Memento_pattern	wikipedia
+composite pattern	cs	3	0	https://en.wikipedia.org/wiki/Composite_pattern	wikipedia
+flyweight pattern	cs	3	0	https://en.wikipedia.org/wiki/Flyweight_pattern	wikipedia
+bridge pattern	cs	3	0	https://en.wikipedia.org/wiki/Bridge_pattern	wikipedia
+unit of work	cs	3	0	https://en.wikipedia.org/wiki/Unit_of_work	wikipedia
+MVC	cs	1	0	https://en.wikipedia.org/wiki/Model%E2%80%93view%E2%80%93controller	wikipedia
+MVVM	cs	2	0	https://en.wikipedia.org/wiki/Model%E2%80%93view%E2%80%93viewmodel	wikipedia
+model-view-controller	cs	2	0	https://en.wikipedia.org/wiki/Model%E2%80%93view%E2%80%93controller	wikipedia
+CQRS	cs	2	0	https://en.wikipedia.org/wiki/Command%E2%80%93query_separation	wikipedia
+anti-pattern	cs	2	0	https://en.wikipedia.org/wiki/Anti-pattern	wikipedia
+god object	cs	3	0	https://en.wikipedia.org/wiki/God_object	wikipedia
+spaghetti code	cs	2	0	https://en.wikipedia.org/wiki/Spaghetti_code	wikipedia
+code smell	cs	2	0	https://en.wikipedia.org/wiki/Code_smell	wikipedia
+refactoring	cs	1	0	https://en.wikipedia.org/wiki/Code_refactoring	wikipedia
+technical debt	cs	1	0	https://en.wikipedia.org/wiki/Technical_debt	wikipedia
+cyclomatic complexity	cs	3	0	https://en.wikipedia.org/wiki/Cyclomatic_complexity	wikipedia
+Conway's Law	cs	3	0	https://en.wikipedia.org/wiki/Conway's_law	wikipedia
+Brooks's law	cs	3	0	https://en.wikipedia.org/wiki/Brooks's_law	wikipedia
+Amdahl's law	cs	2	0	https://en.wikipedia.org/wiki/Amdahl's_law	wikipedia
+Moore's law	cs	2	0	https://en.wikipedia.org/wiki/Moore's_law	wikipedia
+Gustafson's law	cs	3	0	https://en.wikipedia.org/wiki/Gustafson's_law	wikipedia
+Little's law	cs	3	0	https://en.wikipedia.org/wiki/Little's_law	wikipedia
+CAP theorem	cs	1	0	https://en.wikipedia.org/wiki/CAP_theorem	wikipedia
+eventual consistency	cs	2	0	https://en.wikipedia.org/wiki/Eventual_consistency	wikipedia
+linearizability	cs	3	0	https://en.wikipedia.org/wiki/Linearizability	wikipedia
+Paxos	cs	2	0	https://en.wikipedia.org/wiki/Paxos_(computer_science)	wikipedia
+Raft	cs	2	0	https://en.wikipedia.org/wiki/Raft_(algorithm)	wikipedia
+consensus algorithm	cs	2	0	https://en.wikipedia.org/wiki/Consensus_(computer_science)	wikipedia
+Byzantine fault tolerance	cs	3	0	https://en.wikipedia.org/wiki/Byzantine_fault	wikipedia
+two-phase commit	cs	3	0	https://en.wikipedia.org/wiki/Two-phase_commit_protocol	wikipedia
+vector clock	cs	3	0	https://en.wikipedia.org/wiki/Vector_clock	wikipedia
+Lamport timestamp	cs	3	0	https://en.wikipedia.org/wiki/Lamport_timestamp	wikipedia
+CRDT	cs	2	0	https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type	wikipedia
+gossip protocol	cs	3	0	https://en.wikipedia.org/wiki/Gossip_protocol	wikipedia
+sharding	cs	1	0	https://en.wikipedia.org/wiki/Shard_(database_architecture)	wikipedia
+replication	cs	2	0	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia
+load balancer	cs	1	0	https://en.wikipedia.org/wiki/Load_balancing_(computing)	wikipedia
+rate limiter	cs	2	0	https://en.wikipedia.org/wiki/Rate_limiting	wikipedia
+token bucket	cs	3	0	https://en.wikipedia.org/wiki/Token_bucket	wikipedia
+leaky bucket	cs	3	0	https://en.wikipedia.org/wiki/Leaky_bucket	wikipedia
+backpressure	cs	2	0	https://en.wikipedia.org/wiki/Back_pressure	wikipedia
+circuit breaker	cs	2	0	https://en.wikipedia.org/wiki/Circuit_breaker_design_pattern	wikipedia
+ACID	cs	1	0	https://en.wikipedia.org/wiki/ACID	wikipedia
+isolation level	cs	3	0	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia
+serializable	cs	3	0	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia
+MVCC	cs	3	0	https://en.wikipedia.org/wiki/Multiversion_concurrency_control	wikipedia
+write-ahead log	cs	3	0	https://en.wikipedia.org/wiki/Write-ahead_logging	wikipedia
+WAL	cs	3	0	https://en.wikipedia.org/wiki/Write-ahead_logging	wikipedia
+B-tree index	cs	3	0	https://en.wikipedia.org/wiki/B-tree	wikipedia
+big data	cs	2	0	https://en.wikipedia.org/wiki/Big_data	wikipedia
+machine learning	ml	1	0	https://en.wikipedia.org/wiki/Machine_learning	wikipedia
+ML	ml	1	0	https://en.wikipedia.org/wiki/Machine_learning	wikipedia
+deep learning	ml	1	0	https://en.wikipedia.org/wiki/Deep_learning	wikipedia
+neural network	ml	1	0	https://en.wikipedia.org/wiki/Neural_network_(machine_learning)	wikipedia
+neural net	ml	2	0	https://en.wikipedia.org/wiki/Neural_network_(machine_learning)	wikipedia-title
+artificial intelligence	ml	1	0	https://en.wikipedia.org/wiki/Artificial_intelligence	wikipedia
+supervised learning	ml	2	0	https://en.wikipedia.org/wiki/Supervised_learning	wikipedia
+unsupervised learning	ml	2	0	https://en.wikipedia.org/wiki/Unsupervised_learning	wikipedia
+self-supervised learning	ml	2	0	https://en.wikipedia.org/wiki/Self-supervised_learning	wikipedia
+semi-supervised learning	ml	3	0	https://en.wikipedia.org/wiki/Weak_supervision	wikipedia
+reinforcement learning	ml	1	0	https://en.wikipedia.org/wiki/Reinforcement_learning	wikipedia
+transfer learning	ml	2	0	https://en.wikipedia.org/wiki/Transfer_learning	wikipedia
+few-shot learning	ml	2	0	https://en.wikipedia.org/wiki/Few-shot_learning	wikipedia
+zero-shot	ml	2	0	https://en.wikipedia.org/wiki/Zero-shot_learning	wikipedia
+one-shot learning	ml	3	0	https://en.wikipedia.org/wiki/One-shot_learning_(computer_vision)	wikipedia
+in-context learning	ml	2	0	https://en.wikipedia.org/wiki/Prompt_engineering	wikipedia
+gradient descent	ml	1	0	https://en.wikipedia.org/wiki/Gradient_descent	wikipedia
+stochastic gradient descent	ml	1	0	https://en.wikipedia.org/wiki/Stochastic_gradient_descent	wikipedia
+SGD	ml	1	0	https://en.wikipedia.org/wiki/Stochastic_gradient_descent	wikipedia
+mini-batch	ml	2	0	https://en.wikipedia.org/wiki/Stochastic_gradient_descent	wikipedia
+batch size	ml	1	0	https://en.wikipedia.org/wiki/Batch_normalization	wikipedia
+learning rate	ml	1	0	https://en.wikipedia.org/wiki/Learning_rate	wikipedia
+learning rate schedule	ml	3	0	https://en.wikipedia.org/wiki/Learning_rate	wikipedia
+warmup	ml	3	0	https://en.wikipedia.org/wiki/Learning_rate	wikipedia-title
+backpropagation	ml	1	0	https://en.wikipedia.org/wiki/Backpropagation	wikipedia
+backprop	ml	1	0	https://en.wikipedia.org/wiki/Backpropagation	wikipedia-title
+chain rule	ml	2	0	https://en.wikipedia.org/wiki/Chain_rule	wikipedia
+forward pass	ml	1	0	https://en.wikipedia.org/wiki/Forward_pass	wikipedia
+backward pass	ml	2	0	https://en.wikipedia.org/wiki/Backpropagation	wikipedia-title
+gradient	ml	1	1	https://en.wikipedia.org/wiki/Gradient	wikipedia
+vanishing gradient	ml	2	0	https://en.wikipedia.org/wiki/Vanishing_gradient_problem	wikipedia
+exploding gradient	ml	3	0	https://en.wikipedia.org/wiki/Vanishing_gradient_problem	wikipedia
+automatic differentiation	ml	2	0	https://en.wikipedia.org/wiki/Automatic_differentiation	wikipedia
+loss function	ml	1	0	https://en.wikipedia.org/wiki/Loss_function	wikipedia
+cost function	ml	3	0	https://en.wikipedia.org/wiki/Loss_function	wikipedia
+cross-entropy	ml	1	0	https://en.wikipedia.org/wiki/Cross-entropy	wikipedia
+mean squared error	ml	2	0	https://en.wikipedia.org/wiki/Mean_squared_error	wikipedia
+MSE	ml	2	0	https://en.wikipedia.org/wiki/Mean_squared_error	wikipedia
+KL divergence	ml	2	0	https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence	wikipedia
+Kullback-Leibler	ml	3	0	https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence	wikipedia
+perplexity	ml	2	0	https://en.wikipedia.org/wiki/Perplexity	wikipedia
+entropy	ml	2	1	https://en.wikipedia.org/wiki/Entropy_(information_theory)	wikipedia
+softmax	ml	1	0	https://en.wikipedia.org/wiki/Softmax_function	wikipedia
+sigmoid	ml	1	0	https://en.wikipedia.org/wiki/Sigmoid_function	wikipedia
+tanh	ml	2	0	https://en.wikipedia.org/wiki/Hyperbolic_functions	wikipedia
+ReLU	ml	1	0	https://en.wikipedia.org/wiki/Rectifier_(neural_networks)	wikipedia
+Leaky ReLU	ml	3	0	https://en.wikipedia.org/wiki/Rectifier_(neural_networks)	wikipedia
+GELU	ml	2	0	https://en.wikipedia.org/wiki/Gaussian_error_linear_unit	wikipedia-title
+SiLU	ml	3	0	https://en.wikipedia.org/wiki/Swish_function	wikipedia
+SwiGLU	ml	3	0	https://en.wikipedia.org/wiki/Gated_linear_unit	wikipedia-title
+activation function	ml	1	0	https://en.wikipedia.org/wiki/Activation_function	wikipedia
+nonlinearity	ml	3	0	https://en.wikipedia.org/wiki/Nonlinear_system	wikipedia
+neuron	ml	2	1	https://en.wikipedia.org/wiki/Artificial_neuron	wikipedia
+perceptron	ml	2	0	https://en.wikipedia.org/wiki/Perceptron	wikipedia
+multilayer perceptron	ml	2	0	https://en.wikipedia.org/wiki/Multilayer_perceptron	wikipedia
+MLP	ml	2	0	https://en.wikipedia.org/wiki/Multilayer_perceptron	wikipedia
+feedforward	ml	3	0	https://en.wikipedia.org/wiki/Feedforward_neural_network	wikipedia
+hidden layer	ml	2	0	https://en.wikipedia.org/wiki/Hidden_layer	wikipedia
+bias	ml	2	1	https://en.wikipedia.org/wiki/Bias_(statistics)	wikipedia
+parameters	ml	1	1	https://en.wikipedia.org/wiki/Parameter	wikipedia
+hyperparameter	ml	1	0	https://en.wikipedia.org/wiki/Hyperparameter_(machine_learning)	wikipedia
+hyperparameter tuning	ml	2	0	https://en.wikipedia.org/wiki/Hyperparameter_optimization	wikipedia-title
+grid search	ml	3	0	https://en.wikipedia.org/wiki/Hyperparameter_optimization	wikipedia
+overfitting	ml	1	0	https://en.wikipedia.org/wiki/Overfitting	wikipedia
+underfitting	ml	2	0	https://en.wikipedia.org/wiki/Overfitting	wikipedia
+generalization	ml	2	1	https://en.wikipedia.org/wiki/Generalization_error	wikipedia
+bias-variance tradeoff	ml	2	0	https://en.wikipedia.org/wiki/Bias%E2%80%93variance_tradeoff	wikipedia
+regularization	ml	1	0	https://en.wikipedia.org/wiki/Regularization_(mathematics)	wikipedia
+L1 regularization	ml	3	0	https://en.wikipedia.org/wiki/Lasso_(statistics)	wikipedia
+L2 regularization	ml	3	0	https://en.wikipedia.org/wiki/Ridge_regression	wikipedia
+weight decay	ml	2	0	https://en.wikipedia.org/wiki/Weight_decay	wikipedia-title
+dropout	ml	1	0	https://en.wikipedia.org/wiki/Dilution_(neural_networks)	wikipedia
+batch normalization	ml	1	0	https://en.wikipedia.org/wiki/Batch_normalization	wikipedia
+layer normalization	ml	2	0	https://en.wikipedia.org/wiki/Layer_normalization	wikipedia
+RMSNorm	ml	3	0	https://en.wikipedia.org/wiki/Root_mean_square_layer_normalization	wikipedia-title
+early stopping	ml	2	0	https://en.wikipedia.org/wiki/Early_stopping	wikipedia
+data augmentation	ml	2	0	https://en.wikipedia.org/wiki/Data_augmentation	wikipedia
+training set	ml	1	0	https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets	wikipedia
+validation set	ml	2	0	https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets	wikipedia
+test set	ml	2	0	https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets	wikipedia
+cross-validation	ml	2	0	https://en.wikipedia.org/wiki/Cross-validation_(statistics)	wikipedia
+epoch	ml	1	0	https://en.wikipedia.org/wiki/Epoch_(machine_learning)	wikipedia-title
+iteration	ml	3	1	https://en.wikipedia.org/wiki/Iteration	wikipedia
+convergence	ml	2	1	https://en.wikipedia.org/wiki/Convergence_(mathematics)	wikipedia
+local minimum	ml	2	0	https://en.wikipedia.org/wiki/Maximum_and_minimum	wikipedia
+saddle point	ml	3	0	https://en.wikipedia.org/wiki/Saddle_point	wikipedia
+optimizer	ml	1	0	https://en.wikipedia.org/wiki/Mathematical_optimization	wikipedia
+Adam	ml	1	0	https://en.wikipedia.org/wiki/Stochastic_gradient_descent	wikipedia
+AdamW	ml	2	0	https://en.wikipedia.org/wiki/Stochastic_gradient_descent	wikipedia
+momentum	ml	2	1	https://en.wikipedia.org/wiki/Stochastic_gradient_descent	wikipedia
+RMSprop	ml	3	0	https://en.wikipedia.org/wiki/Stochastic_gradient_descent	wikipedia
+Adagrad	ml	3	0	https://en.wikipedia.org/wiki/Stochastic_gradient_descent	wikipedia
+Muon optimizer	ml	3	0	https://en.wikipedia.org/wiki/Stochastic_gradient_descent	wikipedia-title
+L-BFGS	ml	3	0	https://en.wikipedia.org/wiki/Limited-memory_BFGS	wikipedia
+Newton's method	ml	3	0	https://en.wikipedia.org/wiki/Newton's_method	wikipedia
+Hessian	ml	3	0	https://en.wikipedia.org/wiki/Hessian_matrix	wikipedia
+Jacobian	ml	3	0	https://en.wikipedia.org/wiki/Jacobian_matrix_and_determinant	wikipedia
+transformer	ml	1	0	https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)	wikipedia
+Transformer architecture	ml	2	0	https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)	wikipedia
+attention	ml	1	1	https://en.wikipedia.org/wiki/Attention_(machine_learning)	wikipedia
+self-attention	ml	1	0	https://en.wikipedia.org/wiki/Attention_(machine_learning)	wikipedia
+multi-head attention	ml	1	0	https://en.wikipedia.org/wiki/Attention_(machine_learning)	wikipedia
+cross-attention	ml	2	0	https://en.wikipedia.org/wiki/Attention_(machine_learning)	wikipedia
+grouped-query attention	ml	3	0	https://en.wikipedia.org/wiki/Attention_(machine_learning)	wikipedia-title
+GQA	ml	3	0	https://en.wikipedia.org/wiki/Attention_(machine_learning)	wikipedia-title
+FlashAttention	ml	2	0	https://en.wikipedia.org/wiki/FlashAttention	wikipedia
+KV cache	ml	2	0	https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)	wikipedia
+positional encoding	ml	2	0	https://en.wikipedia.org/wiki/Positional_encoding	wikipedia
+RoPE	ml	2	0	https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)	wikipedia
+residual connection	ml	2	0	https://en.wikipedia.org/wiki/Residual_neural_network	wikipedia
+skip connection	ml	3	0	https://en.wikipedia.org/wiki/Residual_neural_network	wikipedia
+ResNet	ml	2	0	https://en.wikipedia.org/wiki/Residual_neural_network	wikipedia
+encoder	ml	1	1	https://en.wikipedia.org/wiki/Autoencoder	wikipedia
+decoder	ml	1	1	https://en.wikipedia.org/wiki/Autoencoder	wikipedia
+encoder-decoder	ml	2	0	https://en.wikipedia.org/wiki/Seq2seq	wikipedia
+encoder-only	ml	3	0	https://en.wikipedia.org/wiki/BERT_(language_model)	wikipedia
+seq2seq	ml	3	0	https://en.wikipedia.org/wiki/Seq2seq	wikipedia
+RNN	ml	1	0	https://en.wikipedia.org/wiki/Recurrent_neural_network	wikipedia
+recurrent neural network	ml	2	0	https://en.wikipedia.org/wiki/Recurrent_neural_network	wikipedia
+LSTM	ml	1	0	https://en.wikipedia.org/wiki/Long_short-term_memory	wikipedia
+GRU	ml	2	0	https://en.wikipedia.org/wiki/Gated_recurrent_unit	wikipedia
+Mamba	ml	3	0	https://en.wikipedia.org/wiki/Mamba_(deep_learning_architecture)	wikipedia
+state space model	ml	3	0	https://en.wikipedia.org/wiki/State-space_representation	wikipedia-title
+CNN	ml	1	0	https://en.wikipedia.org/wiki/Convolutional_neural_network	wikipedia
+convolutional neural network	ml	2	0	https://en.wikipedia.org/wiki/Convolutional_neural_network	wikipedia
+convolution	ml	2	1	https://en.wikipedia.org/wiki/Convolution	wikipedia
+pooling	ml	3	1	https://en.wikipedia.org/wiki/Pooling_layer	wikipedia
+stride	ml	3	1	https://en.wikipedia.org/wiki/Convolutional_neural_network	wikipedia
+GAN	ml	1	0	https://en.wikipedia.org/wiki/Generative_adversarial_network	wikipedia
+generative adversarial network	ml	2	0	https://en.wikipedia.org/wiki/Generative_adversarial_network	wikipedia
+VAE	ml	2	0	https://en.wikipedia.org/wiki/Variational_autoencoder	wikipedia
+variational autoencoder	ml	3	0	https://en.wikipedia.org/wiki/Variational_autoencoder	wikipedia
+autoencoder	ml	2	0	https://en.wikipedia.org/wiki/Autoencoder	wikipedia
+latent space	ml	2	0	https://en.wikipedia.org/wiki/Latent_space	wikipedia
+diffusion	ml	1	1	https://en.wikipedia.org/wiki/Diffusion_model	wikipedia
+diffusion model	ml	1	0	https://en.wikipedia.org/wiki/Diffusion_model	wikipedia
+Stable Diffusion	ml	1	0	https://en.wikipedia.org/wiki/Stable_Diffusion	wikipedia
+DDPM	ml	3	0	https://en.wikipedia.org/wiki/Diffusion_model	wikipedia
+denoising	ml	3	0	https://en.wikipedia.org/wiki/Noise_reduction	wikipedia
+U-Net	ml	3	0	https://en.wikipedia.org/wiki/U-Net	wikipedia
+flow matching	ml	3	0	https://en.wikipedia.org/wiki/Flow-based_generative_model	wikipedia-title
+ControlNet	ml	3	0	https://en.wikipedia.org/wiki/Stable_Diffusion	wikipedia
+LLM	ml	1	0	https://en.wikipedia.org/wiki/Large_language_model	wikipedia
+large language model	ml	1	0	https://en.wikipedia.org/wiki/Large_language_model	wikipedia
+language model	ml	1	0	https://en.wikipedia.org/wiki/Language_model	wikipedia
+GPT	ml	1	0	https://en.wikipedia.org/wiki/Generative_pre-trained_transformer	wikipedia
+BERT	ml	1	0	https://en.wikipedia.org/wiki/BERT_(language_model)	wikipedia
+T5	ml	3	0	https://en.wikipedia.org/wiki/T5_(language_model)	wikipedia
+LLaMA	ml	1	0	https://en.wikipedia.org/wiki/Llama_(language_model)	wikipedia
+Mistral	ml	2	0	https://en.wikipedia.org/wiki/Mistral_AI	wikipedia
+Mixtral	ml	3	0	https://en.wikipedia.org/wiki/Mixtral_8x7B	wikipedia
+mixture of experts	ml	1	0	https://en.wikipedia.org/wiki/Mixture_of_experts	wikipedia
+MoE	ml	1	0	https://en.wikipedia.org/wiki/Mixture_of_experts	wikipedia
+expert	ml	3	1	https://en.wikipedia.org/wiki/Mixture_of_experts	wikipedia
+embedding	ml	1	0	https://en.wikipedia.org/wiki/Word_embedding	wikipedia
+embeddings	ml	1	0	https://en.wikipedia.org/wiki/Word_embedding	wikipedia
+vector embedding	ml	2	0	https://en.wikipedia.org/wiki/Word_embedding	wikipedia-title
+word embedding	ml	2	0	https://en.wikipedia.org/wiki/Word_embedding	wikipedia
+word2vec	ml	2	0	https://en.wikipedia.org/wiki/Word2vec	wikipedia
+GloVe	ml	3	0	https://en.wikipedia.org/wiki/GloVe	wikipedia
+sentence embedding	ml	3	0	https://en.wikipedia.org/wiki/Sentence_embedding	wikipedia
+cosine similarity	ml	1	0	https://en.wikipedia.org/wiki/Cosine_similarity	wikipedia
+dot product	ml	2	0	https://en.wikipedia.org/wiki/Dot_product	wikipedia
+Euclidean distance	ml	3	0	https://en.wikipedia.org/wiki/Euclidean_distance	wikipedia
+nearest neighbor	ml	2	0	https://en.wikipedia.org/wiki/Nearest_neighbor_search	wikipedia
+k-nearest neighbors	ml	2	0	https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm	wikipedia
+KNN	ml	2	0	https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm	wikipedia
+approximate nearest neighbor	ml	2	0	https://en.wikipedia.org/wiki/Nearest_neighbor_search	wikipedia
+HNSW	ml	2	0	https://en.wikipedia.org/wiki/Hierarchical_navigable_small_world	wikipedia
+IVF	ml	3	0	https://en.wikipedia.org/wiki/Nearest_neighbor_search	wikipedia-title
+FAISS	ml	2	0	https://en.wikipedia.org/wiki/FAISS	wikipedia
+vector database	ml	1	0	https://en.wikipedia.org/wiki/Vector_database	wikipedia
+vector search	ml	2	0	https://en.wikipedia.org/wiki/Vector_database	wikipedia
+Pinecone	ml	2	0	https://en.wikipedia.org/wiki/Pinecone_(vector_database)	wikipedia-title
+Chroma	ml	3	0	https://en.wikipedia.org/wiki/Chroma_(vector_database)	wikipedia
+Qdrant	ml	3	0	https://en.wikipedia.org/wiki/Qdrant	wikipedia-title
+Milvus	ml	3	0	https://en.wikipedia.org/wiki/Milvus_(vector_database)	wikipedia
+pgvector	ml	2	0	https://en.wikipedia.org/wiki/PostgreSQL	wikipedia-title
+semantic search	ml	2	0	https://en.wikipedia.org/wiki/Semantic_search	wikipedia
+RAG	ml	1	0	https://en.wikipedia.org/wiki/Retrieval-augmented_generation	wikipedia
+retrieval-augmented generation	ml	1	0	https://en.wikipedia.org/wiki/Retrieval-augmented_generation	wikipedia
+chunking	ml	2	0	https://en.wikipedia.org/wiki/Chunking_(computing)	wikipedia
+BM25	ml	3	0	https://en.wikipedia.org/wiki/Okapi_BM25	wikipedia
+TF-IDF	ml	3	0	https://en.wikipedia.org/wiki/Tf%E2%80%93idf	wikipedia
+hallucination	ml	1	0	https://en.wikipedia.org/wiki/Hallucination_(artificial_intelligence)	wikipedia
+tokenizer	ml	1	0	https://en.wikipedia.org/wiki/Large_language_model	wikipedia
+tokenization	ml	1	0	https://en.wikipedia.org/wiki/Lexical_analysis	wikipedia
+token	ml	1	1	https://en.wikipedia.org/wiki/Lexical_analysis	wikipedia
+BPE	ml	2	0	https://en.wikipedia.org/wiki/Byte_pair_encoding	wikipedia
+byte pair encoding	ml	2	0	https://en.wikipedia.org/wiki/Byte_pair_encoding	wikipedia-title
+vocabulary	ml	2	1	https://en.wikipedia.org/wiki/Vocabulary	wikipedia
+context window	ml	1	0	https://en.wikipedia.org/wiki/Large_language_model	wikipedia
+context length	ml	2	0	https://en.wikipedia.org/wiki/Large_language_model	wikipedia
+prompt	ml	1	1	https://en.wikipedia.org/wiki/Prompt_engineering	wikipedia
+prompt engineering	ml	1	0	https://en.wikipedia.org/wiki/Prompt_engineering	wikipedia
+system prompt	ml	1	0	https://en.wikipedia.org/wiki/Prompt_engineering	wikipedia-title
+chain of thought	ml	1	0	https://en.wikipedia.org/wiki/Prompt_engineering	wikipedia
+CoT	ml	2	0	https://en.wikipedia.org/wiki/Prompt_engineering	wikipedia
+inference	ml	1	1	https://en.wikipedia.org/wiki/Inference	wikipedia
+temperature	ml	1	1	https://en.wikipedia.org/wiki/Softmax_function	wikipedia
+top-p	ml	2	0	https://en.wikipedia.org/wiki/Top-p_sampling	wikipedia
+top-k	ml	2	0	https://en.wikipedia.org/wiki/Top-k_sampling	wikipedia
+beam search	ml	2	0	https://en.wikipedia.org/wiki/Beam_search	wikipedia
+sampling	ml	2	1	https://en.wikipedia.org/wiki/Sampling_(statistics)	wikipedia
+autoregressive	ml	2	0	https://en.wikipedia.org/wiki/Autoregressive_model	wikipedia
+masked language modeling	ml	3	0	https://en.wikipedia.org/wiki/BERT_(language_model)	wikipedia
+logits	ml	2	0	https://en.wikipedia.org/wiki/Logit	wikipedia
+logprobs	ml	3	0	https://en.wikipedia.org/wiki/Logit	wikipedia-title
+speculative decoding	ml	3	0	https://en.wikipedia.org/wiki/Speculative_decoding	wikipedia
+vLLM	ml	2	0	https://en.wikipedia.org/wiki/VLLM	wikipedia-title
+PagedAttention	ml	3	0	https://en.wikipedia.org/wiki/VLLM	wikipedia
+ONNX	ml	3	0	https://en.wikipedia.org/wiki/Open_Neural_Network_Exchange	wikipedia
+GGUF	ml	3	0	https://en.wikipedia.org/wiki/Llama.cpp	wikipedia
+GGML	ml	3	0	https://en.wikipedia.org/wiki/Llama.cpp	wikipedia
+llama.cpp	ml	2	0	https://en.wikipedia.org/wiki/Llama.cpp	wikipedia
+Ollama	ml	2	0	https://en.wikipedia.org/wiki/Ollama	wikipedia
+fine-tuning	ml	1	0	https://en.wikipedia.org/wiki/Fine-tuning_(deep_learning)	wikipedia
+fine-tune	ml	1	0	https://en.wikipedia.org/wiki/Fine-tuning_(deep_learning)	wikipedia
+base model	ml	2	0	https://en.wikipedia.org/wiki/Foundation_model	wikipedia-title
+foundation model	ml	2	0	https://en.wikipedia.org/wiki/Foundation_model	wikipedia
+instruction tuning	ml	2	0	https://en.wikipedia.org/wiki/Fine-tuning_(deep_learning)	wikipedia-title
+LoRA	ml	1	0	https://en.wikipedia.org/wiki/Low-rank_adaptation	wikipedia-title
+adapter	ml	3	1	https://en.wikipedia.org/wiki/Adapter_(deep_learning)	wikipedia-title
+catastrophic forgetting	ml	3	0	https://en.wikipedia.org/wiki/Catastrophic_interference	wikipedia
+RLHF	ml	1	0	https://en.wikipedia.org/wiki/Reinforcement_learning_from_human_feedback	wikipedia
+reinforcement learning from human feedback	ml	2	0	https://en.wikipedia.org/wiki/Reinforcement_learning_from_human_feedback	wikipedia
+reward model	ml	2	0	https://en.wikipedia.org/wiki/Reinforcement_learning_from_human_feedback	wikipedia
+PPO	ml	2	0	https://en.wikipedia.org/wiki/Proximal_policy_optimization	wikipedia
+proximal policy optimization	ml	3	0	https://en.wikipedia.org/wiki/Proximal_policy_optimization	wikipedia
+DPO	ml	2	0	https://en.wikipedia.org/wiki/Direct_preference_optimization	wikipedia
+RLAIF	ml	3	0	https://en.wikipedia.org/wiki/Reinforcement_learning_from_human_feedback	wikipedia
+Constitutional AI	ml	3	0	https://en.wikipedia.org/wiki/Constitutional_AI	wikipedia
+policy gradient	ml	3	0	https://en.wikipedia.org/wiki/Policy_gradient_method	wikipedia
+Q-learning	ml	3	0	https://en.wikipedia.org/wiki/Q-learning	wikipedia
+reward hacking	ml	3	0	https://en.wikipedia.org/wiki/Reward_hacking	wikipedia
+distillation	ml	2	0	https://en.wikipedia.org/wiki/Knowledge_distillation	wikipedia
+knowledge distillation	ml	2	0	https://en.wikipedia.org/wiki/Knowledge_distillation	wikipedia
+quantization	ml	1	0	https://en.wikipedia.org/wiki/Quantization_(signal_processing)	wikipedia
+quantized	ml	2	0	https://en.wikipedia.org/wiki/Quantization_(signal_processing)	wikipedia
+4-bit	ml	2	0	https://en.wikipedia.org/wiki/Quantization_(signal_processing)	wikipedia-title
+8-bit	ml	2	0	https://en.wikipedia.org/wiki/Quantization_(signal_processing)	wikipedia
+AWQ	ml	3	0	https://en.wikipedia.org/wiki/Quantization_(signal_processing)	wikipedia-title
+pruning	ml	3	1	https://en.wikipedia.org/wiki/Pruning_(artificial_neural_network)	wikipedia
+sparsity	ml	3	0	https://en.wikipedia.org/wiki/Sparse_network	wikipedia
+mixed precision	ml	2	0	https://en.wikipedia.org/wiki/Mixed-precision_arithmetic	wikipedia
+data parallelism	ml	2	0	https://en.wikipedia.org/wiki/Data_parallelism	wikipedia
+pipeline parallelism	ml	3	0	https://en.wikipedia.org/wiki/Parallel_computing	wikipedia-title
+DeepSpeed	ml	2	0	https://en.wikipedia.org/wiki/DeepSpeed	wikipedia
+ZeRO	ml	3	0	https://en.wikipedia.org/wiki/DeepSpeed	wikipedia
+NCCL	ml	3	0	https://en.wikipedia.org/wiki/NCCL	wikipedia
+all-reduce	ml	3	0	https://en.wikipedia.org/wiki/Collective_operation	wikipedia
+tensor	ml	1	0	https://en.wikipedia.org/wiki/Tensor	wikipedia
+PyTorch	ml	1	0	https://en.wikipedia.org/wiki/PyTorch	wikipedia
+TensorFlow	ml	1	0	https://en.wikipedia.org/wiki/TensorFlow	wikipedia
+JAX	ml	2	0	https://en.wikipedia.org/wiki/Google_JAX	wikipedia
+Keras	ml	2	0	https://en.wikipedia.org/wiki/Keras	wikipedia
+XLA	ml	3	0	https://en.wikipedia.org/wiki/Accelerated_Linear_Algebra	wikipedia
+scikit-learn	ml	1	0	https://en.wikipedia.org/wiki/Scikit-learn	wikipedia
+sklearn	ml	2	0	https://en.wikipedia.org/wiki/Scikit-learn	wikipedia
+NumPy	ml	1	0	https://en.wikipedia.org/wiki/NumPy	wikipedia
+pandas	ml	1	0	https://en.wikipedia.org/wiki/Pandas_(software)	wikipedia
+SciPy	ml	2	0	https://en.wikipedia.org/wiki/SciPy	wikipedia
+Hugging Face	ml	1	0	https://en.wikipedia.org/wiki/Hugging_Face	wikipedia
+Transformers library	ml	3	0	https://en.wikipedia.org/wiki/Hugging_Face	wikipedia
+LangChain	ml	2	0	https://en.wikipedia.org/wiki/LangChain	wikipedia
+LlamaIndex	ml	3	0	https://en.wikipedia.org/wiki/LlamaIndex	wikipedia
+agent	ml	1	1	https://en.wikipedia.org/wiki/Intelligent_agent	wikipedia
+tool use	ml	2	0	https://en.wikipedia.org/wiki/Function_calling	wikipedia-title
+MCP	ml	1	0	https://en.wikipedia.org/wiki/Model_Context_Protocol	wikipedia
+Model Context Protocol	ml	2	0	https://en.wikipedia.org/wiki/Model_Context_Protocol	wikipedia
+multimodal	ml	2	0	https://en.wikipedia.org/wiki/Multimodal_learning	wikipedia
+vision transformer	ml	2	0	https://en.wikipedia.org/wiki/Vision_transformer	wikipedia
+ViT	ml	3	0	https://en.wikipedia.org/wiki/Vision_transformer	wikipedia
+CLIP	ml	2	0	https://en.wikipedia.org/wiki/Contrastive_Language-Image_Pre-training	wikipedia
+contrastive learning	ml	3	0	https://en.wikipedia.org/wiki/Contrastive_learning	wikipedia
+Whisper	ml	1	0	https://en.wikipedia.org/wiki/Whisper_(speech_recognition_system)	wikipedia
+ASR	ml	1	0	https://en.wikipedia.org/wiki/Speech_recognition	wikipedia
+speech recognition	ml	1	0	https://en.wikipedia.org/wiki/Speech_recognition	wikipedia
+speech-to-text	ml	1	0	https://en.wikipedia.org/wiki/Speech_recognition	wikipedia
+text-to-speech	ml	2	0	https://en.wikipedia.org/wiki/Speech_synthesis	wikipedia
+TTS	ml	2	0	https://en.wikipedia.org/wiki/Speech_synthesis	wikipedia
+word error rate	ml	2	0	https://en.wikipedia.org/wiki/Word_error_rate	wikipedia
+WER	ml	2	0	https://en.wikipedia.org/wiki/Word_error_rate	wikipedia
+CTC	ml	3	0	https://en.wikipedia.org/wiki/Connectionist_temporal_classification	wikipedia
+MFCC	ml	3	0	https://en.wikipedia.org/wiki/Mel-frequency_cepstrum	wikipedia
+voice activity detection	ml	2	0	https://en.wikipedia.org/wiki/Voice_activity_detection	wikipedia
+VAD	ml	2	0	https://en.wikipedia.org/wiki/Voice_activity_detection	wikipedia
+diarization	ml	3	0	https://en.wikipedia.org/wiki/Speaker_diarisation	wikipedia
+Conformer	ml	3	0	https://en.wikipedia.org/wiki/Conformer_(machine_learning)	wikipedia-title
+Parakeet	ml	3	0	https://en.wikipedia.org/wiki/Automatic_speech_recognition	wikipedia-title
+classification	ml	2	1	https://en.wikipedia.org/wiki/Statistical_classification	wikipedia
+regression	ml	2	1	https://en.wikipedia.org/wiki/Regression_analysis	wikipedia
+linear regression	ml	1	0	https://en.wikipedia.org/wiki/Linear_regression	wikipedia
+logistic regression	ml	1	0	https://en.wikipedia.org/wiki/Logistic_regression	wikipedia
+decision tree	ml	1	0	https://en.wikipedia.org/wiki/Decision_tree_learning	wikipedia
+random forest	ml	1	0	https://en.wikipedia.org/wiki/Random_forest	wikipedia
+gradient boosting	ml	1	0	https://en.wikipedia.org/wiki/Gradient_boosting	wikipedia
+XGBoost	ml	1	0	https://en.wikipedia.org/wiki/XGBoost	wikipedia
+LightGBM	ml	2	0	https://en.wikipedia.org/wiki/LightGBM	wikipedia
+CatBoost	ml	3	0	https://en.wikipedia.org/wiki/CatBoost	wikipedia
+boosting	ml	2	1	https://en.wikipedia.org/wiki/Boosting_(machine_learning)	wikipedia
+bagging	ml	2	0	https://en.wikipedia.org/wiki/Bootstrap_aggregating	wikipedia
+ensemble	ml	2	1	https://en.wikipedia.org/wiki/Ensemble_learning	wikipedia
+AdaBoost	ml	3	0	https://en.wikipedia.org/wiki/AdaBoost	wikipedia
+SVM	ml	1	0	https://en.wikipedia.org/wiki/Support_vector_machine	wikipedia
+support vector machine	ml	2	0	https://en.wikipedia.org/wiki/Support_vector_machine	wikipedia
+kernel trick	ml	3	0	https://en.wikipedia.org/wiki/Kernel_method	wikipedia
+k-means	ml	1	0	https://en.wikipedia.org/wiki/K-means_clustering	wikipedia
+clustering	ml	2	0	https://en.wikipedia.org/wiki/Cluster_analysis	wikipedia
+DBSCAN	ml	3	0	https://en.wikipedia.org/wiki/DBSCAN	wikipedia
+hierarchical clustering	ml	3	0	https://en.wikipedia.org/wiki/Hierarchical_clustering	wikipedia
+Gaussian mixture model	ml	3	0	https://en.wikipedia.org/wiki/Mixture_model	wikipedia
+expectation maximization	ml	3	0	https://en.wikipedia.org/wiki/Expectation%E2%80%93maximization_algorithm	wikipedia
+PCA	ml	1	0	https://en.wikipedia.org/wiki/Principal_component_analysis	wikipedia
+principal component analysis	ml	2	0	https://en.wikipedia.org/wiki/Principal_component_analysis	wikipedia
+SVD	ml	2	0	https://en.wikipedia.org/wiki/Singular_value_decomposition	wikipedia
+singular value decomposition	ml	3	0	https://en.wikipedia.org/wiki/Singular_value_decomposition	wikipedia
+eigenvector	ml	3	0	https://en.wikipedia.org/wiki/Eigenvalues_and_eigenvectors	wikipedia
+eigenvalue	ml	3	0	https://en.wikipedia.org/wiki/Eigenvalues_and_eigenvectors	wikipedia
+t-SNE	ml	3	0	https://en.wikipedia.org/wiki/T-distributed_stochastic_neighbor_embedding	wikipedia
+dimensionality reduction	ml	2	0	https://en.wikipedia.org/wiki/Dimensionality_reduction	wikipedia
+feature engineering	ml	2	0	https://en.wikipedia.org/wiki/Feature_engineering	wikipedia
+feature extraction	ml	3	0	https://en.wikipedia.org/wiki/Feature_extraction	wikipedia
+one-hot encoding	ml	2	0	https://en.wikipedia.org/wiki/One-hot	wikipedia
+normalization	ml	2	0	https://en.wikipedia.org/wiki/Normalization_(statistics)	wikipedia
+standardization	ml	3	0	https://en.wikipedia.org/wiki/Standard_score	wikipedia
+precision and recall	ml	2	0	https://en.wikipedia.org/wiki/Precision_and_recall	wikipedia
+F1 score	ml	2	0	https://en.wikipedia.org/wiki/F-score	wikipedia
+accuracy	ml	2	1	https://en.wikipedia.org/wiki/Accuracy_and_precision	wikipedia
+confusion matrix	ml	2	0	https://en.wikipedia.org/wiki/Confusion_matrix	wikipedia
+ROC curve	ml	3	0	https://en.wikipedia.org/wiki/Receiver_operating_characteristic	wikipedia
+AUC	ml	3	0	https://en.wikipedia.org/wiki/Receiver_operating_characteristic	wikipedia
+benchmark	ml	2	1	https://en.wikipedia.org/wiki/Benchmark_(computing)	wikipedia
+MMLU	ml	3	0	https://en.wikipedia.org/wiki/MMLU	wikipedia
+BLEU	ml	3	0	https://en.wikipedia.org/wiki/BLEU	wikipedia
+ROUGE	ml	3	0	https://en.wikipedia.org/wiki/ROUGE_(metric)	wikipedia
+red teaming	ml	3	0	https://en.wikipedia.org/wiki/Red_team	wikipedia
+jailbreak	ml	2	0	https://en.wikipedia.org/wiki/Prompt_injection	wikipedia
+prompt injection	ml	2	0	https://en.wikipedia.org/wiki/Prompt_injection	wikipedia
+data leakage	ml	3	0	https://en.wikipedia.org/wiki/Leakage_(machine_learning)	wikipedia
+synthetic data	ml	3	0	https://en.wikipedia.org/wiki/Synthetic_data	wikipedia
+scaling laws	ml	2	0	https://en.wikipedia.org/wiki/Neural_scaling_law	wikipedia
+Chinchilla	ml	3	0	https://en.wikipedia.org/wiki/Chinchilla_(language_model)	wikipedia
+emergent abilities	ml	3	0	https://en.wikipedia.org/wiki/Large_language_model	wikipedia
+AGI	ml	2	0	https://en.wikipedia.org/wiki/Artificial_general_intelligence	wikipedia
+artificial general intelligence	ml	3	0	https://en.wikipedia.org/wiki/Artificial_general_intelligence	wikipedia
+GPU memory	ml	3	0	https://en.wikipedia.org/wiki/Graphics_processing_unit	wikipedia-title
+VRAM	ml	2	0	https://en.wikipedia.org/wiki/Video_random-access_memory	wikipedia
+out of memory	ml	2	0	https://en.wikipedia.org/wiki/Out_of_memory	wikipedia
+OOM	ml	2	0	https://en.wikipedia.org/wiki/Out_of_memory	wikipedia
+FLOPS	ml	3	0	https://en.wikipedia.org/wiki/FLOPS	wikipedia
+TFLOPS	ml	3	0	https://en.wikipedia.org/wiki/FLOPS	wikipedia-title
+H100	ml	2	0	https://en.wikipedia.org/wiki/Hopper_(microarchitecture)	wikipedia
+A100	ml	2	0	https://en.wikipedia.org/wiki/Ampere_(microarchitecture)	wikipedia
+NVIDIA	ml	2	0	https://en.wikipedia.org/wiki/Nvidia	wikipedia
+Apple Silicon	ml	2	0	https://en.wikipedia.org/wiki/Apple_silicon	wikipedia
+MLX	ml	2	0	https://en.wikipedia.org/wiki/MLX_(software)	wikipedia
+Core ML	ml	3	0	https://en.wikipedia.org/wiki/Core_ML	wikipedia
+Metal Performance Shaders	ml	3	0	https://en.wikipedia.org/wiki/Metal_(API)	wikipedia
+on-device	ml	2	0	https://en.wikipedia.org/wiki/Edge_computing	wikipedia
+edge inference	ml	3	0	https://en.wikipedia.org/wiki/Edge_computing	wikipedia-title
+Markov chain	ml	3	0	https://en.wikipedia.org/wiki/Markov_chain	wikipedia
+Bayes' theorem	ml	2	0	https://en.wikipedia.org/wiki/Bayes'_theorem	wikipedia
+Naive Bayes	ml	2	0	https://en.wikipedia.org/wiki/Naive_Bayes_classifier	wikipedia
+Bayesian	ml	2	0	https://en.wikipedia.org/wiki/Bayesian_probability	wikipedia
+Gaussian	ml	2	0	https://en.wikipedia.org/wiki/Normal_distribution	wikipedia
+normal distribution	ml	2	0	https://en.wikipedia.org/wiki/Normal_distribution	wikipedia

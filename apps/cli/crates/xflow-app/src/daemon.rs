@@ -185,9 +185,12 @@ pub struct Engine {
     job: Option<JoinHandle<()>>,
     /// The focused app, and terms from its window title (`privacy.window_terms`).
     context_job: Option<JoinHandle<(AppContext, Vec<String>)>>,
-    /// The last focused (app id, terminal) the context read found; picks the
-    /// shipped hint domains without waiting on the current read.
-    focus: Arc<std::sync::Mutex<(Option<String>, bool)>>,
+    /// Shipped hint terms picked off the actor at key-down from the focused app,
+    /// window title and recent terms; uploads take the last pick without waiting.
+    /// None until the first context read, or after the config changes.
+    hints: Arc<std::sync::Mutex<Option<Vec<&'static str>>>>,
+    /// Lexicon terms from recent deliveries, in memory only (`hints::Recent`).
+    recent: Arc<std::sync::Mutex<xflow_core::hints::Recent>>,
     context_abort: Option<tokio::task::AbortHandle>,
     warm_job: Option<JoinHandle<()>>,
     /// Ends the observation of the last pasted field (see `observe`).
@@ -281,7 +284,8 @@ impl Engine {
             live: watch::Sender::new(None),
             job: None,
             context_job: None,
-            focus: Default::default(),
+            hints: Default::default(),
+            recent: Default::default(),
             context_abort: None,
             warm_job: None,
             observing: None,
@@ -511,14 +515,25 @@ impl Engine {
         self.transcribe(sent, 0, None, Instant::now(), keep, completion.clone());
         Ok(())
     }
-    /// Shipped hint terms for the last known focus. ponytail: a segment sent
-    /// before this dictation's focus read finishes uses the previous app's.
+    /// Shipped hint terms for the last known context. ponytail: a segment sent
+    /// before this dictation's context read finishes uses the previous pick.
     fn domain_hints(&self) -> Vec<&'static str> {
-        let focus = self
-            .focus
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        xflow_core::hints::select(&self.config, focus.1, focus.0.as_deref())
+        if !self.config.stt.domain_hints {
+            return vec![];
+        }
+        let hints = lock(&self.hints);
+        match &*hints {
+            Some(hints) => hints.clone(),
+            None => xflow_core::hints::select(&self.config, &Default::default()),
+        }
+    }
+    /// Forgets the last pick and the recent terms when the config no longer
+    /// allows them; called on every config change.
+    fn reset_hints(&self) {
+        *lock(&self.hints) = None;
+        if !self.config.privacy.history || !self.config.stt.domain_hints {
+            lock(&self.recent).clear();
+        }
     }
     fn active(&self) -> bool {
         matches!(self.state, State::Listening | State::Processing)
@@ -739,7 +754,22 @@ impl Engine {
         let desktop = self.services.desktop.clone();
         let window_terms =
             self.config.privacy.window_terms && self.config.formatting.snap_to_dictionary;
-        let focus = self.focus.clone();
+        let (hints, recent) = (self.hints.clone(), self.recent.clone());
+        let config = self.config.clone();
+        let remember = config.privacy.history && config.stt.domain_hints;
+        // Recent terms survive a daemon restart through history, read once, lazily.
+        if remember && !std::mem::replace(&mut lock(&self.recent).seeded, true) {
+            let (store, recent) = (self.store.clone(), self.recent.clone());
+            tokio::spawn(async move {
+                if let Ok((rows, _)) = store.history(50, 0, None).await {
+                    let mut recent = lock(&recent);
+                    // Oldest first, so the newest dictation's terms end up first.
+                    for row in rows.iter().rev() {
+                        recent.note(&row.text);
+                    }
+                }
+            });
+        }
         // A hold with text selected may rewrite it; the read shares the context's focus walk.
         let rewrite = mode == Mode::Dictation
             && !hands_free
@@ -773,12 +803,25 @@ impl Engine {
                 // Never rewrite in a terminal, whatever the desktop reports.
                 target.selected_text = None;
             }
-            *focus
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = (
-                target.app_id.clone(),
-                xflow_platform::terminal_context(&target),
-            );
+            // Microseconds, during the recording; never on the stop path. The pick
+            // is published before the title read, then refined with its terms.
+            let recent = if remember {
+                lock(&recent).terms().to_vec()
+            } else {
+                Vec::new()
+            };
+            let pick = |title: &[String]| {
+                xflow_core::hints::select(
+                    &config,
+                    &xflow_core::hints::Signals {
+                        terminal: xflow_platform::terminal_context(&target),
+                        app: target.app_id.as_deref(),
+                        title,
+                        recent: &recent,
+                    },
+                )
+            };
+            *lock(&hints) = Some(pick(&[]));
             // Editor and terminal apps only, by app id: other titles name documents, mail and
             // private tabs, including a browser whose web terminal has focus.
             // A read past 100 ms is dropped so it never holds the context back.
@@ -794,6 +837,9 @@ impl Engine {
             } else {
                 Vec::new()
             };
+            if !terms.is_empty() {
+                *lock(&hints) = Some(pick(&terms));
+            }
             (target, terms)
         });
         self.context_abort = Some(task.abort_handle());
@@ -1525,7 +1571,7 @@ impl Engine {
                         if matches!(request, Request::PasteLast | Request::HistoryPaste { .. }) && self.active() { let _ = reply.send(Response::error(self.state, "wait for the current recording before pasting")); continue; }
                         if matches!(request, Request::ClearHistory) {
                             if self.active() { let _ = self.cancel().await; } else { self.advance(); }
-                            self.last = None; self.last_timings = None; pending = None;
+                            self.last = None; self.last_timings = None; pending = None; lock(&self.recent).clear();
                             if let Err(e) = self.discard_kept() { log("warn", &format!("could not delete kept failed audio: {e:#}")); }
                         }
                         let status = self.status(); let store = self.store.clone(); let desktop = self.services.desktop.clone(); let last = self.last.clone();
@@ -1589,7 +1635,7 @@ impl Engine {
                     Completion::Reloaded { result, reply } => {
                         self.reloading = false;
                         let learned = self.learned_during_reload.take();
-                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys_blind = !self.permissions.as_ref().is_some_and(|p| p.events()); retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.load_kept(); self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
+                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.reset_hints(); self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys_blind = !self.permissions.as_ref().is_some_and(|p| p.events()); retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.load_kept(); self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
                         let _ = reply.send(r);
                     }
                     Completion::Rearmed(result) => {
@@ -1605,6 +1651,7 @@ impl Engine {
                         // Event only: the state and status message stay with the current session.
                         if self.reloading { self.learned_during_reload = Some(dictionary.clone()); }
                         self.config.dictionary = dictionary;
+                        self.reset_hints();
                         // Rebuild the snap index now, not on the next dictation.
                         xflow_core::snap::prepare(&self.config);
                         let mut r = self.status(); r.message = Some(message.clone()); let _ = self.events.send(r);
@@ -1615,6 +1662,7 @@ impl Engine {
                     let mut processed = pending.take().unwrap();
                     if self.state != State::Processing { continue; }
                     let generation = self.generation; let delivery = self.delivery; let desktop = self.services.desktop.clone(); let store = self.store.clone(); let tx = completion_tx.clone();
+                    let recent = (self.config.privacy.history && self.config.stt.domain_hints).then(|| self.recent.clone());
                     self.delivering = true;
                     deliveries.spawn(async move {
                         let start = Instant::now();
@@ -1625,7 +1673,10 @@ impl Engine {
                         if delivery != Delivery::None { processed.timings.inject_ms = Some(ms(start.elapsed())); }
                         processed.timings.total_ms = ms(processed.stopped.elapsed());
                         if let Some(entry) = &mut processed.entry { entry.latency_ms = Some(processed.timings.total_ms as u64); if store.set_latency(entry.id, processed.timings.total_ms as u64).await.is_err() { add_warning(&mut processed.warning, "History latency update failed"); } }
+                        // After delivery: the terms it mentions lead the next dictation's hints.
+                        let text = recent.as_ref().map(|_| processed.text.clone());
                         let _ = tx.send(Completion::Finished { generation, processed, result }).await;
+                        if let (Some(recent), Some(text)) = (recent, text) { lock(&recent).note(&text); }
                     });
                 }
                 _ = queries.join_next(), if !queries.is_empty() => (),
@@ -2325,6 +2376,12 @@ fn vocabulary(config: &Config) -> Vec<String> {
         }
     }
     words
+}
+/// A poisoned lock still holds usable hint state.
+fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 /// Test-support builds record segment sends against capture stop. The e2e
 /// test compares that order; production builds never write it.
@@ -6170,7 +6227,14 @@ mod tests {
         let domain = stt.1.lock().unwrap().clone();
         assert_eq!(
             domain,
-            xflow_core::hints::select(&config, terminal, Some(app))
+            xflow_core::hints::select(
+                &config,
+                &xflow_core::hints::Signals {
+                    terminal,
+                    app: Some(app),
+                    ..Default::default()
+                }
+            )
         );
         assert!(!domain
             .iter()
@@ -6711,7 +6775,13 @@ mod tests {
         assert_eq!(sent.domain[0], "XLOOKUP");
         assert_eq!(
             sent.domain,
-            xflow_core::hints::select(&config, false, Some("com.microsoft.Excel"))
+            xflow_core::hints::select(
+                &config,
+                &xflow_core::hints::Signals {
+                    app: Some("com.microsoft.Excel"),
+                    ..Default::default()
+                }
+            )
         );
         // A focus read that never returns: the upload goes at once with the
         // last known focus (none yet), never waiting for it.
@@ -6720,7 +6790,10 @@ mod tests {
             ..excel()
         };
         let sent = first_upload(blocked, Config::default()).await;
-        assert_eq!(sent.domain, xflow_core::hints::select(&config, false, None));
+        assert_eq!(
+            sent.domain,
+            xflow_core::hints::select(&config, &Default::default())
+        );
         assert!(!sent.domain.contains(&"XLOOKUP"));
         let mut off = Config::default();
         off.stt.domain_hints = false;

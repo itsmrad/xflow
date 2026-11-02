@@ -141,3 +141,23 @@ python3 benchmarks/devterms/hints.py --self-test   # no network
 XFLOW_BIN=path/to/xflow python3 benchmarks/devterms/hints.py
 python3 benchmarks/devterms/hints.py --summary
 ```
+
+## Lexicon term coverage
+
+`terms.py` measures the ~3k-term lexicon (`scripts/lexicon/build.py`). `terms.tsv`
+holds 150 `say` phrases, 15 per section (AWS, GCP, Azure, cloud, DevOps, system
+design, databases, DSA, CS, ML), two terms each: one from the section's top 30
+and one from ranks 30-120. Hints come from the production selector
+(`cargo run -p xflow-core --example hints`) for a terminal, cut to the provider's
+100-token share, under four conditions: off, before (focused app only, #117's
+selection), section (two other terms from the section dictated earlier) and
+repeat (the clip's own terms dictated earlier). 4 requests a clip, about
+$0.0005 each:
+
+```sh
+python3 benchmarks/devterms/terms.py --make-corpus   # after a lexicon rebuild
+python3 benchmarks/devterms/terms.py --self-test     # no network
+XFLOW_BIN=path/to/xflow python3 benchmarks/devterms/terms.py --per-section 5 \
+    --sections aws,gcp,azure,devops,sysdesign,dsa
+python3 benchmarks/devterms/terms.py --summary
+```

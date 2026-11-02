@@ -1,0 +1,945 @@
+# canonical	domain	rank	english	source_url	confirmed_by (scripts/lexicon/build.py import)
+CAP theorem	sysdesign	1	0	https://en.wikipedia.org/wiki/CAP_theorem	wikipedia
+PACELC	sysdesign	2	0	https://en.wikipedia.org/wiki/PACELC_theorem	wikipedia
+Eventual consistency	sysdesign	1	0	https://en.wikipedia.org/wiki/Eventual_consistency	wikipedia
+Strong consistency	sysdesign	1	0	https://en.wikipedia.org/wiki/Strong_consistency	wikipedia
+Linearizability	sysdesign	2	0	https://en.wikipedia.org/wiki/Linearizability	wikipedia
+Linearizable	sysdesign	2	0	https://en.wikipedia.org/wiki/Linearizability	wikipedia
+Serializability	sysdesign	2	0	https://en.wikipedia.org/wiki/Serializability	wikipedia
+Serializable	sysdesign	1	0	https://en.wikipedia.org/wiki/Serializability	wikipedia
+Snapshot isolation	sysdesign	2	0	https://en.wikipedia.org/wiki/Snapshot_isolation	wikipedia
+Serializable snapshot isolation	sysdesign	3	0	https://en.wikipedia.org/wiki/Snapshot_isolation	wikipedia
+Sequential consistency	sysdesign	3	0	https://en.wikipedia.org/wiki/Sequential_consistency	wikipedia
+Causal consistency	sysdesign	2	0	https://en.wikipedia.org/wiki/Causal_consistency	wikipedia
+Read-your-writes	sysdesign	2	0	https://en.wikipedia.org/wiki/Consistency_model	wikipedia
+Read committed	sysdesign	2	0	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia
+Read uncommitted	sysdesign	3	0	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia
+Repeatable read	sysdesign	2	0	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia
+Write skew	sysdesign	2	0	https://en.wikipedia.org/wiki/Snapshot_isolation	wikipedia
+Phantom read	sysdesign	3	0	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia
+Dirty read	sysdesign	3	0	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia
+Lost update	sysdesign	3	0	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia-title
+Isolation level	sysdesign	2	0	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia
+Raft	sysdesign	1	1	https://en.wikipedia.org/wiki/Raft_(algorithm)	wikipedia
+Paxos	sysdesign	1	0	https://en.wikipedia.org/wiki/Paxos_(computer_science)	wikipedia
+Multi-Paxos	sysdesign	3	0	https://en.wikipedia.org/wiki/Paxos_(computer_science)	wikipedia
+Fast Paxos	sysdesign	3	0	https://en.wikipedia.org/wiki/Paxos_(computer_science)	wikipedia
+ZAB	sysdesign	3	0	https://en.wikipedia.org/wiki/Atomic_broadcast	wikipedia
+Byzantine fault tolerance	sysdesign	2	0	https://en.wikipedia.org/wiki/Byzantine_fault_tolerance	wikipedia
+Byzantine generals	sysdesign	3	0	https://en.wikipedia.org/wiki/Byzantine_fault	wikipedia
+PBFT	sysdesign	3	0	https://en.wikipedia.org/wiki/Byzantine_fault	wikipedia
+FLP impossibility	sysdesign	3	0	https://en.wikipedia.org/wiki/Consensus_(computer_science)	wikipedia
+Consensus algorithm	sysdesign	1	1	https://en.wikipedia.org/wiki/Consensus_(computer_science)	wikipedia
+Distributed consensus	sysdesign	2	1	https://en.wikipedia.org/wiki/Consensus_(computer_science)	wikipedia-title
+Leader election	sysdesign	1	1	https://en.wikipedia.org/wiki/Leader_election	wikipedia
+Split brain	sysdesign	2	1	https://en.wikipedia.org/wiki/Split-brain_(computing)	wikipedia
+Distributed lock	sysdesign	2	1	https://en.wikipedia.org/wiki/Distributed_lock_manager	wikipedia
+Lease	sysdesign	3	1	https://en.wikipedia.org/wiki/Lease_(computer_science)	wikipedia
+Heartbeat	sysdesign	2	1	https://en.wikipedia.org/wiki/Heartbeat_(computing)	wikipedia
+Failure detector	sysdesign	3	0	https://en.wikipedia.org/wiki/Failure_detector	wikipedia
+Quorum	sysdesign	1	1	https://en.wikipedia.org/wiki/Quorum_(distributed_computing)	wikipedia
+Read repair	sysdesign	3	0	https://en.wikipedia.org/wiki/Eventual_consistency	wikipedia
+Sharding	sysdesign	1	0	https://en.wikipedia.org/wiki/Shard_(database_architecture)	wikipedia
+Shard	sysdesign	1	0	https://en.wikipedia.org/wiki/Shard_(database_architecture)	wikipedia
+Partitioning	sysdesign	1	1	https://en.wikipedia.org/wiki/Partition_(database)	wikipedia
+Consistent hashing	sysdesign	1	0	https://en.wikipedia.org/wiki/Consistent_hashing	wikipedia
+Rendezvous hashing	sysdesign	3	0	https://en.wikipedia.org/wiki/Rendezvous_hashing	wikipedia
+Hash ring	sysdesign	2	0	https://en.wikipedia.org/wiki/Consistent_hashing	wikipedia-title
+Virtual nodes	sysdesign	3	0	https://en.wikipedia.org/wiki/Consistent_hashing	wikipedia
+Range partitioning	sysdesign	2	0	https://en.wikipedia.org/wiki/Partition_(database)	wikipedia
+Hash partitioning	sysdesign	2	0	https://en.wikipedia.org/wiki/Partition_(database)	wikipedia
+Hot key	sysdesign	2	1	https://en.wikipedia.org/wiki/Hot_key	wikipedia
+Hot spot	sysdesign	2	1	https://en.wikipedia.org/wiki/Hot_spot	wikipedia
+Rebalancing	sysdesign	3	1	https://en.wikipedia.org/wiki/Rebalancing	wikipedia
+Replication	sysdesign	1	1	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia
+Leader-follower	sysdesign	1	0	https://en.wikipedia.org/wiki/Multi-master_replication	wikipedia-title
+Single-leader	sysdesign	3	0	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia
+Primary-replica	sysdesign	2	0	https://en.wikipedia.org/wiki/Master%E2%80%93slave_(technology)	wikipedia
+Master-slave	sysdesign	2	0	https://en.wikipedia.org/wiki/Master%E2%80%93slave_(technology)	wikipedia
+Synchronous replication	sysdesign	2	0	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia
+Asynchronous replication	sysdesign	2	0	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia
+Semi-synchronous replication	sysdesign	3	0	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia
+Replication lag	sysdesign	1	0	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia
+Log shipping	sysdesign	3	0	https://en.wikipedia.org/wiki/Log_shipping	wikipedia
+Failover	sysdesign	1	0	https://en.wikipedia.org/wiki/Failover	wikipedia
+Failback	sysdesign	3	0	https://en.wikipedia.org/wiki/Failover	wikipedia
+Switchover	sysdesign	3	0	https://en.wikipedia.org/wiki/Failover	wikipedia
+Conflict-free replicated data type	sysdesign	2	0	https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type	wikipedia
+CRDT	sysdesign	2	0	https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type	wikipedia
+Operational transformation	sysdesign	3	0	https://en.wikipedia.org/wiki/Operational_transformation	wikipedia
+Conflict resolution	sysdesign	2	1	https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type	wikipedia-title
+Idempotency	sysdesign	1	0	https://en.wikipedia.org/wiki/Idempotence	wikipedia-title
+Idempotent	sysdesign	1	0	https://en.wikipedia.org/wiki/Idempotence	wikipedia
+At-least-once	sysdesign	1	0	https://en.wikipedia.org/wiki/Message_queue	wikipedia
+Deduplication	sysdesign	2	1	https://en.wikipedia.org/wiki/Data_deduplication	wikipedia
+Backpressure	sysdesign	1	0	https://en.wikipedia.org/wiki/Back_pressure	wikipedia
+Flow control	sysdesign	3	1	https://en.wikipedia.org/wiki/Flow_control_(data)	wikipedia
+Load shedding	sysdesign	2	0	https://en.wikipedia.org/wiki/Load_shedding	wikipedia
+Graceful degradation	sysdesign	2	1	https://en.wikipedia.org/wiki/Fault_tolerance	wikipedia
+Rate limiting	sysdesign	1	0	https://en.wikipedia.org/wiki/Rate_limiting	wikipedia
+Rate limiter	sysdesign	1	0	https://en.wikipedia.org/wiki/Rate_limiting	wikipedia
+Throttling	sysdesign	2	1	https://en.wikipedia.org/wiki/Rate_limiting	wikipedia
+Token bucket	sysdesign	1	0	https://en.wikipedia.org/wiki/Token_bucket	wikipedia
+Leaky bucket	sysdesign	1	0	https://en.wikipedia.org/wiki/Leaky_bucket	wikipedia
+Fixed window counter	sysdesign	3	0	https://en.wikipedia.org/wiki/Rate_limiting	wikipedia
+Sliding window log	sysdesign	3	0	https://en.wikipedia.org/wiki/Rate_limiting	wikipedia
+Sliding window counter	sysdesign	3	0	https://en.wikipedia.org/wiki/Rate_limiting	wikipedia
+Generic cell rate algorithm	sysdesign	3	0	https://en.wikipedia.org/wiki/Generic_cell_rate_algorithm	wikipedia
+Circuit breaker	sysdesign	1	0	https://en.wikipedia.org/wiki/Circuit_breaker_design_pattern	wikipedia
+Half-open	sysdesign	3	0	https://en.wikipedia.org/wiki/Circuit_breaker_design_pattern	wikipedia
+Bulkhead	sysdesign	1	1	https://en.wikipedia.org/wiki/Bulkhead_pattern	wikipedia
+Exponential backoff	sysdesign	1	0	https://en.wikipedia.org/wiki/Exponential_backoff	wikipedia
+Jitter	sysdesign	2	1	https://en.wikipedia.org/wiki/Exponential_backoff	wikipedia-title
+Thundering herd	sysdesign	1	0	https://en.wikipedia.org/wiki/Thundering_herd_problem	wikipedia
+Cache stampede	sysdesign	2	0	https://en.wikipedia.org/wiki/Cache_stampede	wikipedia
+Cascading failure	sysdesign	2	1	https://en.wikipedia.org/wiki/Cascading_failure	wikipedia
+Timeout	sysdesign	1	1	https://en.wikipedia.org/wiki/Timeout_(computing)	wikipedia
+Dead letter queue	sysdesign	1	0	https://en.wikipedia.org/wiki/Dead_letter_queue	wikipedia
+DLQ	sysdesign	2	0	https://en.wikipedia.org/wiki/Dead_letter_queue	wikipedia
+Poison message	sysdesign	3	0	https://en.wikipedia.org/wiki/Dead_letter_queue	wikipedia
+Saga	sysdesign	1	1	https://en.wikipedia.org/wiki/Long-running_transaction	wikipedia
+Saga pattern	sysdesign	1	0	https://en.wikipedia.org/wiki/Long-running_transaction	wikipedia-title
+Compensating transaction	sysdesign	3	0	https://en.wikipedia.org/wiki/Compensating_transaction	wikipedia
+Choreography	sysdesign	3	1	https://en.wikipedia.org/wiki/Service_choreography	wikipedia
+Orchestration	sysdesign	2	1	https://en.wikipedia.org/wiki/Orchestration_(computing)	wikipedia
+CQRS	sysdesign	1	0	https://en.wikipedia.org/wiki/Command_Query_Responsibility_Segregation	wikipedia
+Command Query Responsibility Segregation	sysdesign	2	0	https://en.wikipedia.org/wiki/Command_Query_Responsibility_Segregation	wikipedia
+Event store	sysdesign	3	0	https://en.wikipedia.org/wiki/Event_store	wikipedia
+Event-driven architecture	sysdesign	1	0	https://en.wikipedia.org/wiki/Event-driven_architecture	wikipedia
+Domain-driven design	sysdesign	1	0	https://en.wikipedia.org/wiki/Domain-driven_design	wikipedia
+DDD	sysdesign	2	0	https://en.wikipedia.org/wiki/Domain-driven_design	wikipedia
+Bounded context	sysdesign	2	0	https://en.wikipedia.org/wiki/Domain-driven_design	wikipedia
+Aggregate root	sysdesign	3	0	https://en.wikipedia.org/wiki/Domain-driven_design	wikipedia
+Hexagonal architecture	sysdesign	3	0	https://en.wikipedia.org/wiki/Hexagonal_architecture_(software)	wikipedia
+Microservices	sysdesign	1	0	https://en.wikipedia.org/wiki/Microservices	wikipedia
+Monolith	sysdesign	1	1	https://en.wikipedia.org/wiki/Monolithic_application	wikipedia
+Modular monolith	sysdesign	2	0	https://en.wikipedia.org/wiki/Monolithic_application	wikipedia
+Strangler fig pattern	sysdesign	3	0	https://en.wikipedia.org/wiki/Strangler_fig_pattern	wikipedia
+Service-oriented architecture	sysdesign	2	0	https://en.wikipedia.org/wiki/Service-oriented_architecture	wikipedia
+SOA	sysdesign	3	0	https://en.wikipedia.org/wiki/Service-oriented_architecture	wikipedia
+Service discovery	sysdesign	1	0	https://en.wikipedia.org/wiki/Service_discovery	wikipedia
+Service mesh	sysdesign	1	0	https://en.wikipedia.org/wiki/Service_mesh	wikipedia
+Sidecar	sysdesign	2	1	https://en.wikipedia.org/wiki/Service_mesh	wikipedia-title
+Control plane	sysdesign	2	1	https://en.wikipedia.org/wiki/Control_plane	wikipedia
+Data plane	sysdesign	2	1	https://en.wikipedia.org/wiki/Data_plane	wikipedia
+API gateway	sysdesign	1	0	https://en.wikipedia.org/wiki/API_management	wikipedia-title
+Backend for frontend	sysdesign	3	0	https://samnewman.io/patterns/architectural/bff/	page
+BFF	sysdesign	3	0	https://samnewman.io/patterns/architectural/bff/	page
+Load balancer	sysdesign	1	0	https://en.wikipedia.org/wiki/Load_balancing_(computing)	wikipedia
+Load balancing	sysdesign	1	0	https://en.wikipedia.org/wiki/Load_balancing_(computing)	wikipedia
+Layer 4	sysdesign	2	0	https://en.wikipedia.org/wiki/Transport_layer	wikipedia
+Layer 7	sysdesign	2	0	https://en.wikipedia.org/wiki/Application_layer	wikipedia-title
+Round robin	sysdesign	1	1	https://en.wikipedia.org/wiki/Round-robin_scheduling	wikipedia
+Least connections	sysdesign	2	1	https://en.wikipedia.org/wiki/Load_balancing_(computing)	wikipedia
+Weighted round robin	sysdesign	3	1	https://en.wikipedia.org/wiki/Round-robin_scheduling	wikipedia-title
+Power of two choices	sysdesign	3	1	https://en.wikipedia.org/wiki/Load_balancing_(computing)	wikipedia
+Reverse proxy	sysdesign	1	0	https://en.wikipedia.org/wiki/Reverse_proxy	wikipedia
+Forward proxy	sysdesign	3	0	https://en.wikipedia.org/wiki/Proxy_server	wikipedia
+TLS termination	sysdesign	2	0	https://en.wikipedia.org/wiki/TLS_termination_proxy	wikipedia
+CDN	sysdesign	1	0	https://en.wikipedia.org/wiki/Content_delivery_network	wikipedia
+Content delivery network	sysdesign	2	0	https://en.wikipedia.org/wiki/Content_delivery_network	wikipedia
+Edge cache	sysdesign	3	1	https://en.wikipedia.org/wiki/Content_delivery_network	wikipedia-title
+Point of presence	sysdesign	3	1	https://en.wikipedia.org/wiki/Point_of_presence	wikipedia
+Edge computing	sysdesign	2	1	https://en.wikipedia.org/wiki/Edge_computing	wikipedia
+Anycast	sysdesign	2	0	https://en.wikipedia.org/wiki/Anycast	wikipedia
+Origin shield	sysdesign	3	0	https://en.wikipedia.org/wiki/Content_delivery_network	wikipedia
+Cache invalidation	sysdesign	1	0	https://en.wikipedia.org/wiki/Cache_invalidation	wikipedia
+Cache	sysdesign	1	1	https://en.wikipedia.org/wiki/Cache_(computing)	wikipedia
+Caching	sysdesign	1	1	https://en.wikipedia.org/wiki/Cache_(computing)	wikipedia
+Write-through	sysdesign	1	0	https://en.wikipedia.org/wiki/Cache_(computing)	wikipedia
+Write-back	sysdesign	1	0	https://en.wikipedia.org/wiki/Cache_(computing)	wikipedia
+Write-behind	sysdesign	3	0	https://en.wikipedia.org/wiki/Cache_(computing)	wikipedia-title
+Write-around	sysdesign	3	0	https://en.wikipedia.org/wiki/Cache_(computing)	wikipedia
+Read-through	sysdesign	2	0	https://en.wikipedia.org/wiki/Cache_(computing)	wikipedia-title
+Lazy loading	sysdesign	3	1	https://en.wikipedia.org/wiki/Lazy_loading	wikipedia
+TTL	sysdesign	1	0	https://en.wikipedia.org/wiki/Time_to_live	wikipedia
+Time to live	sysdesign	2	1	https://en.wikipedia.org/wiki/Time_to_live	wikipedia
+LRU	sysdesign	1	0	https://en.wikipedia.org/wiki/Cache_replacement_policies	wikipedia
+LFU	sysdesign	2	0	https://en.wikipedia.org/wiki/Cache_replacement_policies	wikipedia
+FIFO	sysdesign	2	0	https://en.wikipedia.org/wiki/FIFO_(computing_and_electronics)	wikipedia
+LIFO	sysdesign	3	0	https://en.wikipedia.org/wiki/Stack_(abstract_data_type)	wikipedia
+Least recently used	sysdesign	2	1	https://en.wikipedia.org/wiki/Cache_replacement_policies	wikipedia
+Least frequently used	sysdesign	3	1	https://en.wikipedia.org/wiki/Cache_replacement_policies	wikipedia
+Cache hit ratio	sysdesign	2	0	https://en.wikipedia.org/wiki/Cache_(computing)	wikipedia-title
+Cache miss	sysdesign	2	0	https://en.wikipedia.org/wiki/Cache_(computing)	wikipedia
+Cold start	sysdesign	2	1	https://en.wikipedia.org/wiki/Cold_start_(computing)	wikipedia
+Bloom filter	sysdesign	1	0	https://en.wikipedia.org/wiki/Bloom_filter	wikipedia
+Cuckoo filter	sysdesign	3	0	https://en.wikipedia.org/wiki/Cuckoo_filter	wikipedia
+HyperLogLog	sysdesign	1	0	https://en.wikipedia.org/wiki/HyperLogLog	wikipedia
+Count-Min Sketch	sysdesign	1	0	https://en.wikipedia.org/wiki/Count-Min_Sketch	wikipedia
+Probabilistic data structure	sysdesign	2	0	https://en.wikipedia.org/wiki/Bloom_filter	wikipedia
+T-Digest	sysdesign	3	0	https://en.wikipedia.org/wiki/Quantile	wikipedia
+Skip list	sysdesign	2	0	https://en.wikipedia.org/wiki/Skip_list	wikipedia
+Merkle tree	sysdesign	1	0	https://en.wikipedia.org/wiki/Merkle_tree	wikipedia
+Hash tree	sysdesign	3	1	https://en.wikipedia.org/wiki/Merkle_tree	wikipedia
+Trie	sysdesign	2	0	https://en.wikipedia.org/wiki/Trie	wikipedia
+Radix tree	sysdesign	3	0	https://en.wikipedia.org/wiki/Radix_tree	wikipedia
+Vector clock	sysdesign	1	0	https://en.wikipedia.org/wiki/Vector_clock	wikipedia
+Lamport clock	sysdesign	1	0	https://en.wikipedia.org/wiki/Lamport_timestamp	wikipedia
+Lamport timestamp	sysdesign	3	0	https://en.wikipedia.org/wiki/Lamport_timestamp	wikipedia
+Logical clock	sysdesign	2	1	https://en.wikipedia.org/wiki/Logical_clock	wikipedia
+Version vector	sysdesign	3	0	https://en.wikipedia.org/wiki/Version_vector	wikipedia
+Happens-before	sysdesign	2	0	https://en.wikipedia.org/wiki/Happened-before	wikipedia
+TrueTime	sysdesign	2	0	https://en.wikipedia.org/wiki/Spanner_(database)	wikipedia
+Clock skew	sysdesign	2	1	https://en.wikipedia.org/wiki/Clock_skew	wikipedia
+Clock drift	sysdesign	3	1	https://en.wikipedia.org/wiki/Clock_drift	wikipedia
+NTP	sysdesign	3	0	https://en.wikipedia.org/wiki/Network_Time_Protocol	wikipedia
+Gossip protocol	sysdesign	1	0	https://en.wikipedia.org/wiki/Gossip_protocol	wikipedia
+Gossip	sysdesign	2	1	https://en.wikipedia.org/wiki/Gossip_protocol	wikipedia
+Epidemic protocol	sysdesign	3	1	https://en.wikipedia.org/wiki/Gossip_protocol	wikipedia
+SWIM protocol	sysdesign	3	0	https://en.wikipedia.org/wiki/SWIM_Protocol	wikipedia
+Two-phase commit	sysdesign	1	0	https://en.wikipedia.org/wiki/Two-phase_commit_protocol	wikipedia
+2PC	sysdesign	2	0	https://en.wikipedia.org/wiki/Two-phase_commit_protocol	wikipedia
+Three-phase commit	sysdesign	3	0	https://en.wikipedia.org/wiki/Three-phase_commit_protocol	wikipedia
+3PC	sysdesign	3	0	https://en.wikipedia.org/wiki/Three-phase_commit_protocol	wikipedia
+Two-phase locking	sysdesign	3	0	https://en.wikipedia.org/wiki/Two-phase_locking	wikipedia
+Distributed transaction	sysdesign	1	1	https://en.wikipedia.org/wiki/Distributed_transaction	wikipedia
+XA transaction	sysdesign	3	0	https://en.wikipedia.org/wiki/X/Open_XA	wikipedia
+Percolator	sysdesign	3	0	https://research.google/pubs/large-scale-incremental-processing-using-distributed-transactions-and-notifications/	page
+Optimistic concurrency control	sysdesign	2	0	https://en.wikipedia.org/wiki/Optimistic_concurrency_control	wikipedia
+Pessimistic locking	sysdesign	2	0	https://en.wikipedia.org/wiki/Lock_(computer_science)	wikipedia
+Optimistic locking	sysdesign	2	0	https://en.wikipedia.org/wiki/Optimistic_concurrency_control	wikipedia
+Compare-and-swap	sysdesign	2	0	https://en.wikipedia.org/wiki/Compare-and-swap	wikipedia
+CAS	sysdesign	3	0	https://en.wikipedia.org/wiki/Compare-and-swap	wikipedia
+Lock-free	sysdesign	2	0	https://en.wikipedia.org/wiki/Non-blocking_algorithm	wikipedia
+Wait-free	sysdesign	3	0	https://en.wikipedia.org/wiki/Non-blocking_algorithm	wikipedia
+Deadlock	sysdesign	1	1	https://en.wikipedia.org/wiki/Deadlock_(computer_science)	wikipedia
+Livelock	sysdesign	3	0	https://en.wikipedia.org/wiki/Deadlock_(computer_science)	wikipedia
+Race condition	sysdesign	1	1	https://en.wikipedia.org/wiki/Race_condition	wikipedia
+Mutex	sysdesign	2	0	https://en.wikipedia.org/wiki/Lock_(computer_science)	wikipedia
+Semaphore	sysdesign	2	1	https://en.wikipedia.org/wiki/Semaphore_(programming)	wikipedia
+Actor model	sysdesign	2	0	https://en.wikipedia.org/wiki/Actor_model	wikipedia
+Akka	sysdesign	3	0	https://en.wikipedia.org/wiki/Akka_(toolkit)	wikipedia
+CSP	sysdesign	3	0	https://en.wikipedia.org/wiki/Content_Security_Policy	wikipedia
+Pub/sub	sysdesign	1	0	https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern	wikipedia
+Publish-subscribe	sysdesign	2	0	https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern	wikipedia
+Message queue	sysdesign	1	1	https://en.wikipedia.org/wiki/Message_queue	wikipedia
+Message broker	sysdesign	1	1	https://en.wikipedia.org/wiki/Message_broker	wikipedia
+Event streaming	sysdesign	2	1	https://en.wikipedia.org/wiki/Event_stream_processing	wikipedia
+Stream processing	sysdesign	1	1	https://en.wikipedia.org/wiki/Stream_processing	wikipedia
+Batch processing	sysdesign	1	1	https://en.wikipedia.org/wiki/Batch_processing	wikipedia
+MapReduce	sysdesign	2	0	https://en.wikipedia.org/wiki/MapReduce	wikipedia
+Lambda architecture	sysdesign	3	0	https://en.wikipedia.org/wiki/Lambda_architecture	wikipedia
+Kappa architecture	sysdesign	3	0	https://en.wikipedia.org/wiki/Lambda_architecture	wikipedia
+Watermark	sysdesign	3	1	https://en.wikipedia.org/wiki/Stream_processing	wikipedia-title
+Event time	sysdesign	3	1	https://en.wikipedia.org/wiki/Stream_processing	wikipedia-title
+Consumer group	sysdesign	1	0	https://en.wikipedia.org/wiki/Apache_Kafka	wikipedia-title
+Offset	sysdesign	2	1	https://en.wikipedia.org/wiki/Apache_Kafka	wikipedia
+Fan-out	sysdesign	2	0	https://en.wikipedia.org/wiki/Fan-out_(software)	wikipedia
+Fan-in	sysdesign	3	0	https://en.wikipedia.org/wiki/Fan-in	wikipedia
+Push model	sysdesign	3	1	https://en.wikipedia.org/wiki/Push_technology	wikipedia-title
+Long polling	sysdesign	2	0	https://en.wikipedia.org/wiki/Push_technology	wikipedia
+WAL	db	1	0	https://en.wikipedia.org/wiki/Write-ahead_logging	wikipedia
+Write-ahead log	db	1	0	https://en.wikipedia.org/wiki/Write-ahead_logging	wikipedia
+LSM tree	db	1	0	https://en.wikipedia.org/wiki/Log-structured_merge-tree	wikipedia
+Log-structured merge-tree	db	2	0	https://en.wikipedia.org/wiki/Log-structured_merge-tree	wikipedia
+Compaction	db	1	1	https://en.wikipedia.org/wiki/Log-structured_merge-tree	wikipedia
+Write amplification	db	2	0	https://en.wikipedia.org/wiki/Write_amplification	wikipedia
+Tombstone	db	2	1	https://en.wikipedia.org/wiki/Tombstone_(data_store)	wikipedia
+B-tree	db	1	0	https://en.wikipedia.org/wiki/B-tree	wikipedia
+B+ tree	db	1	0	https://en.wikipedia.org/wiki/B%2B_tree	wikipedia
+B-tree index	db	2	0	https://en.wikipedia.org/wiki/B-tree	wikipedia
+Bitmap index	db	3	0	https://en.wikipedia.org/wiki/Bitmap_index	wikipedia
+Inverted index	db	1	0	https://en.wikipedia.org/wiki/Inverted_index	wikipedia
+GiST	db	3	0	https://en.wikipedia.org/wiki/GiST	wikipedia
+BRIN	db	3	0	https://en.wikipedia.org/wiki/Block_Range_Index	wikipedia
+Covering index	db	2	0	https://en.wikipedia.org/wiki/Database_index	wikipedia
+Composite index	db	2	0	https://en.wikipedia.org/wiki/Database_index	wikipedia
+Partial index	db	3	0	https://en.wikipedia.org/wiki/Database_index	wikipedia
+Secondary index	db	2	0	https://en.wikipedia.org/wiki/Database_index	wikipedia
+Clustered index	db	2	0	https://en.wikipedia.org/wiki/Database_index	wikipedia
+Index scan	db	3	1	https://en.wikipedia.org/wiki/Database_index	wikipedia
+Full table scan	db	2	0	https://en.wikipedia.org/wiki/Full_table_scan	wikipedia
+Sequential scan	db	3	1	https://en.wikipedia.org/wiki/Full_table_scan	wikipedia
+Query planner	db	2	0	https://en.wikipedia.org/wiki/Query_plan	wikipedia-title
+Query optimizer	db	2	0	https://en.wikipedia.org/wiki/Query_optimization	wikipedia
+Execution plan	db	2	1	https://en.wikipedia.org/wiki/Query_plan	wikipedia
+N+1	db	2	0	https://en.wikipedia.org/wiki/Object%E2%80%93relational_mapping	wikipedia-title
+MVCC	db	1	0	https://en.wikipedia.org/wiki/Multiversion_concurrency_control	wikipedia
+ACID	db	1	0	https://en.wikipedia.org/wiki/ACID	wikipedia
+BASE	db	2	1	https://en.wikipedia.org/wiki/Eventual_consistency	wikipedia
+Atomicity	db	2	0	https://en.wikipedia.org/wiki/ACID	wikipedia
+Durability	db	2	1	https://en.wikipedia.org/wiki/Durability_(database_systems)	wikipedia
+Transaction	db	1	1	https://en.wikipedia.org/wiki/Database_transaction	wikipedia
+Savepoint	db	3	0	https://en.wikipedia.org/wiki/Savepoint	wikipedia
+Rollback	db	2	1	https://en.wikipedia.org/wiki/Rollback_(data_management)	wikipedia
+Commit	db	2	1	https://en.wikipedia.org/wiki/Commit_(data_management)	wikipedia
+Two-phase commit protocol	db	3	0	https://en.wikipedia.org/wiki/Two-phase_commit_protocol	wikipedia
+OLTP	db	1	0	https://en.wikipedia.org/wiki/Online_transaction_processing	wikipedia
+OLAP	db	1	0	https://en.wikipedia.org/wiki/Online_analytical_processing	wikipedia
+HTAP	db	3	0	https://en.wikipedia.org/wiki/Hybrid_transactional/analytical_processing	wikipedia
+Column-oriented	db	2	0	https://en.wikipedia.org/wiki/Column-oriented_DBMS	wikipedia
+Row-oriented	db	3	0	https://en.wikipedia.org/wiki/Column-oriented_DBMS	wikipedia
+Data lake	db	1	0	https://en.wikipedia.org/wiki/Data_lake	wikipedia
+Lakehouse	db	1	0	https://en.wikipedia.org/wiki/Data_lakehouse	wikipedia-title
+Data warehouse	db	1	0	https://en.wikipedia.org/wiki/Data_warehouse	wikipedia
+Data mart	db	3	1	https://en.wikipedia.org/wiki/Data_mart	wikipedia
+Data mesh	db	2	0	https://en.wikipedia.org/wiki/Data_mesh	wikipedia
+Data pipeline	db	1	1	https://en.wikipedia.org/wiki/Pipeline_(computing)	wikipedia
+ETL	db	1	0	https://en.wikipedia.org/wiki/Extract,_transform,_load	wikipedia
+ELT	db	1	0	https://en.wikipedia.org/wiki/Extract,_load,_transform	wikipedia
+CDC	db	1	0	https://en.wikipedia.org/wiki/Change_data_capture	wikipedia
+Change data capture	db	1	0	https://en.wikipedia.org/wiki/Change_data_capture	wikipedia
+Debezium	db	2	0	https://debezium.io/	page
+Binlog	db	2	0	https://en.wikipedia.org/wiki/MySQL	wikipedia
+Point-in-time recovery	db	2	0	https://en.wikipedia.org/wiki/Point-in-time_recovery	wikipedia
+PITR	db	3	0	https://en.wikipedia.org/wiki/Point-in-time_recovery	wikipedia
+Checkpoint	db	3	1	https://en.wikipedia.org/wiki/Application_checkpointing	wikipedia
+fsync	db	2	0	https://en.wikipedia.org/wiki/Sync_(Unix)	wikipedia
+Buffer pool	db	2	0	https://en.wikipedia.org/wiki/Buffer_pool	wikipedia-title
+Page cache	db	3	0	https://en.wikipedia.org/wiki/Page_cache	wikipedia
+Vacuum	db	2	1	https://www.postgresql.org/docs/current/routine-vacuuming.html	page
+Autovacuum	db	3	0	https://www.postgresql.org/docs/current/routine-vacuuming.html	page
+Connection pooling	db	1	0	https://en.wikipedia.org/wiki/Connection_pool	wikipedia
+Connection pool	db	2	0	https://en.wikipedia.org/wiki/Connection_pool	wikipedia
+PgBouncer	db	2	0	https://www.pgbouncer.org/	page
+Normalization	db	2	0	https://en.wikipedia.org/wiki/Database_normalization	wikipedia
+Denormalization	db	2	0	https://en.wikipedia.org/wiki/Denormalization	wikipedia
+Materialized view	db	2	0	https://en.wikipedia.org/wiki/Materialized_view	wikipedia
+Stored procedure	db	3	0	https://en.wikipedia.org/wiki/Stored_procedure	wikipedia
+Trigger	db	3	1	https://en.wikipedia.org/wiki/Database_trigger	wikipedia
+Foreign key	db	2	1	https://en.wikipedia.org/wiki/Foreign_key	wikipedia
+Primary key	db	1	1	https://en.wikipedia.org/wiki/Primary_key	wikipedia
+Surrogate key	db	3	0	https://en.wikipedia.org/wiki/Surrogate_key	wikipedia
+Composite key	db	3	1	https://en.wikipedia.org/wiki/Composite_key	wikipedia
+Upsert	db	2	0	https://en.wikipedia.org/wiki/Merge_(SQL)	wikipedia
+UUID	db	1	0	https://en.wikipedia.org/wiki/Universally_unique_identifier	wikipedia
+Snowflake ID	db	2	0	https://en.wikipedia.org/wiki/Snowflake_ID	wikipedia
+Sequence	db	3	1	https://en.wikipedia.org/wiki/Surrogate_key	wikipedia
+Cardinality	db	2	1	https://en.wikipedia.org/wiki/Cardinality_(SQL_statements)	wikipedia
+Schema migration	db	2	1	https://en.wikipedia.org/wiki/Schema_migration	wikipedia
+Zero-downtime migration	db	2	0	https://en.wikipedia.org/wiki/Schema_migration	wikipedia
+NoSQL	db	1	0	https://en.wikipedia.org/wiki/NoSQL	wikipedia
+NewSQL	db	2	0	https://en.wikipedia.org/wiki/NewSQL	wikipedia
+Distributed SQL	db	2	0	https://en.wikipedia.org/wiki/NewSQL	wikipedia
+Relational database	db	1	1	https://en.wikipedia.org/wiki/Relational_database	wikipedia
+Key-value store	db	1	0	https://en.wikipedia.org/wiki/Key%E2%80%93value_database	wikipedia
+Document database	db	1	0	https://en.wikipedia.org/wiki/Document-oriented_database	wikipedia
+Wide-column store	db	2	0	https://en.wikipedia.org/wiki/Wide-column_store	wikipedia
+Graph database	db	2	0	https://en.wikipedia.org/wiki/Graph_database	wikipedia
+Time-series database	db	2	0	https://en.wikipedia.org/wiki/Time_series_database	wikipedia
+TSDB	db	3	0	https://en.wikipedia.org/wiki/Time_series_database	wikipedia
+Vector database	db	1	0	https://en.wikipedia.org/wiki/Vector_database	wikipedia
+Embeddings	db	2	1	https://en.wikipedia.org/wiki/Word_embedding	wikipedia
+HNSW	db	2	0	https://en.wikipedia.org/wiki/Hierarchical_navigable_small_world	wikipedia
+Approximate nearest neighbor	db	2	0	https://en.wikipedia.org/wiki/Nearest_neighbor_search	wikipedia
+IVF	db	3	0	https://en.wikipedia.org/wiki/Nearest_neighbor_search	wikipedia-title
+FAISS	db	2	0	https://github.com/facebookresearch/faiss	page
+pgvector	db	1	0	https://github.com/pgvector/pgvector	page
+Pinecone	db	2	0	https://www.pinecone.io/	page
+Weaviate	db	2	0	https://weaviate.io/	page
+Qdrant	db	2	0	https://qdrant.tech/	page
+Milvus	db	2	0	https://milvus.io/	wikipedia-title
+PostgreSQL	db	1	0	https://www.postgresql.org/	page
+Postgres	db	1	0	https://www.postgresql.org/	page
+MySQL	db	1	0	https://www.mysql.com/	wikipedia-title
+MariaDB	db	2	0	https://mariadb.org/	page
+SQLite	db	1	0	https://www.sqlite.org/	page
+libSQL	db	3	0	https://github.com/tursodatabase/libsql	page
+Turso	db	3	0	https://turso.tech/	page
+Microsoft SQL Server	db	2	0	https://en.wikipedia.org/wiki/Microsoft_SQL_Server	wikipedia
+SQL Server	db	2	0	https://en.wikipedia.org/wiki/Microsoft_SQL_Server	wikipedia
+Oracle Database	db	2	0	https://en.wikipedia.org/wiki/Oracle_Database	wikipedia
+Cassandra	db	1	0	https://cassandra.apache.org/	page
+Apache Cassandra	db	2	0	https://cassandra.apache.org/	page
+ScyllaDB	db	1	0	https://www.scylladb.com/	page
+CockroachDB	db	1	0	https://www.cockroachlabs.com/	page
+TiDB	db	1	0	https://www.pingcap.com/tidb/	page
+TiKV	db	2	0	https://tikv.org/	page
+YugabyteDB	db	1	0	https://www.yugabyte.com/	page
+DynamoDB	db	1	0	https://aws.amazon.com/dynamodb/	page
+Amazon DynamoDB	db	2	0	https://aws.amazon.com/dynamodb/	page
+Dynamo	db	2	1	https://en.wikipedia.org/wiki/Dynamo_(storage_system)	wikipedia
+MongoDB	db	1	0	https://www.mongodb.com/	page
+Mongo	db	2	0	https://en.wikipedia.org/wiki/MongoDB	wikipedia
+Elasticsearch	db	1	0	https://www.elastic.co/elasticsearch	page
+Elastic	db	3	0	https://en.wikipedia.org/wiki/Elasticsearch	wikipedia
+OpenSearch	db	2	0	https://opensearch.org/	page
+Lucene	db	2	0	https://en.wikipedia.org/wiki/Apache_Lucene	wikipedia
+Solr	db	3	0	https://en.wikipedia.org/wiki/Apache_Solr	wikipedia
+Meilisearch	db	3	0	https://www.meilisearch.com/	page
+Typesense	db	3	0	https://typesense.org/	page
+ClickHouse	db	1	0	https://clickhouse.com/	page
+DuckDB	db	1	0	https://duckdb.org/	page
+Apache Druid	db	3	0	https://en.wikipedia.org/wiki/Apache_Druid	wikipedia
+Apache Pinot	db	3	0	https://en.wikipedia.org/wiki/Apache_Pinot	wikipedia
+Apache Doris	db	3	0	https://doris.apache.org/	page
+StarRocks	db	3	0	https://www.starrocks.io/	page
+Redis	db	1	0	https://redis.io/	page
+Valkey	db	2	0	https://valkey.io/	page
+KeyDB	db	3	0	https://docs.keydb.dev/	page
+Dragonfly	db	3	1	https://www.dragonflydb.io/	page
+Memcached	db	1	0	https://memcached.org/	page
+Memcache	db	3	0	https://en.wikipedia.org/wiki/Memcached	wikipedia-title
+Hazelcast	db	3	0	https://en.wikipedia.org/wiki/Hazelcast	wikipedia
+Aerospike	db	3	0	https://en.wikipedia.org/wiki/Aerospike_(database)	wikipedia
+etcd	db	1	0	https://etcd.io/	page
+ZooKeeper	db	1	0	https://zookeeper.apache.org/	page
+Apache ZooKeeper	db	3	0	https://en.wikipedia.org/wiki/Apache_ZooKeeper	wikipedia
+Consul	db	2	0	https://www.consul.io/	page
+Neo4j	db	2	0	https://neo4j.com/	page
+JanusGraph	db	3	0	https://en.wikipedia.org/wiki/JanusGraph	wikipedia
+FoundationDB	db	2	0	https://www.foundationdb.org/	page
+Google Spanner	db	2	0	https://cloud.google.com/spanner	wikipedia-title
+Spanner	db	2	0	https://cloud.google.com/spanner	page
+Bigtable	db	2	0	https://cloud.google.com/bigtable	page
+HBase	db	2	0	https://en.wikipedia.org/wiki/Apache_HBase	wikipedia
+Apache HBase	db	3	0	https://en.wikipedia.org/wiki/Apache_HBase	wikipedia
+Amazon Aurora	db	2	0	https://en.wikipedia.org/wiki/Amazon_Aurora	wikipedia
+Aurora	db	2	0	https://en.wikipedia.org/wiki/Amazon_Aurora	wikipedia
+Vitess	db	2	0	https://vitess.io/	page
+PlanetScale	db	2	0	https://planetscale.com/	page
+Citus	db	3	0	https://www.citusdata.com/	page
+TimescaleDB	db	2	0	https://www.timescale.com/	page
+InfluxDB	db	2	0	https://www.influxdata.com/	page
+Prometheus	db	2	0	https://prometheus.io/	page
+VictoriaMetrics	db	3	0	https://victoriametrics.com/	page
+QuestDB	db	3	0	https://en.wikipedia.org/wiki/QuestDB	wikipedia
+Couchbase	db	3	0	https://en.wikipedia.org/wiki/Couchbase	wikipedia
+CouchDB	db	3	0	https://en.wikipedia.org/wiki/Apache_CouchDB	wikipedia
+RethinkDB	db	3	0	https://en.wikipedia.org/wiki/RethinkDB	wikipedia
+ArangoDB	db	3	0	https://en.wikipedia.org/wiki/ArangoDB	wikipedia
+SurrealDB	db	3	0	https://surrealdb.com/	page
+Firestore	db	2	0	https://firebase.google.com/docs/firestore	page
+Firebase	db	2	0	https://en.wikipedia.org/wiki/Firebase	wikipedia
+Supabase	db	2	0	https://supabase.com/	page
+Neon	db	2	0	https://neon.tech/	page
+Snowflake	db	1	1	https://www.snowflake.com/	page
+BigQuery	db	1	0	https://cloud.google.com/bigquery	page
+Redshift	db	2	0	https://en.wikipedia.org/wiki/Amazon_Redshift	wikipedia
+Databricks	db	2	0	https://www.databricks.com/	page
+Delta Lake	db	2	0	https://delta.io/	page
+Apache Iceberg	db	2	0	https://iceberg.apache.org/	page
+Iceberg	db	2	0	https://iceberg.apache.org/	page
+Apache Hudi	db	3	0	https://hudi.apache.org/	page
+Hudi	db	3	0	https://hudi.apache.org/	page
+Apache Parquet	db	2	0	https://parquet.apache.org/	page
+Parquet	db	1	0	https://parquet.apache.org/	page
+Apache ORC	db	3	0	https://en.wikipedia.org/wiki/Apache_ORC	wikipedia
+ORC	db	3	0	https://en.wikipedia.org/wiki/Apache_ORC	wikipedia
+Apache Arrow	db	2	0	https://en.wikipedia.org/wiki/Apache_Arrow	wikipedia
+Arrow	db	3	1	https://en.wikipedia.org/wiki/Apache_Arrow	wikipedia
+Avro	db	2	0	https://avro.apache.org/	page
+Protocol Buffers	db	1	0	https://protobuf.dev/	page
+Protobuf	db	1	0	https://protobuf.dev/	page
+Apache Thrift	net	3	0	https://en.wikipedia.org/wiki/Apache_Thrift	wikipedia
+Thrift	net	3	0	https://en.wikipedia.org/wiki/Apache_Thrift	wikipedia
+Cap'n Proto	net	3	0	https://en.wikipedia.org/wiki/Cap%27n_Proto	wikipedia
+FlatBuffers	net	3	0	https://en.wikipedia.org/wiki/FlatBuffers	wikipedia
+MessagePack	net	3	0	https://en.wikipedia.org/wiki/MessagePack	wikipedia
+Apache Spark	db	2	0	https://spark.apache.org/	page
+Spark	db	2	1	https://spark.apache.org/	page
+Apache Flink	db	2	0	https://flink.apache.org/	page
+Flink	db	2	0	https://flink.apache.org/	page
+Apache Hadoop	db	3	0	https://en.wikipedia.org/wiki/Apache_Hadoop	wikipedia
+Hadoop	db	2	0	https://en.wikipedia.org/wiki/Apache_Hadoop	wikipedia
+HDFS	db	3	0	https://en.wikipedia.org/wiki/Apache_Hadoop	wikipedia
+Apache Hive	db	3	0	https://en.wikipedia.org/wiki/Apache_Hive	wikipedia
+Hive	db	3	1	https://en.wikipedia.org/wiki/Apache_Hive	wikipedia
+Presto	db	3	0	https://en.wikipedia.org/wiki/Presto_(SQL_query_engine)	wikipedia
+Trino	db	2	0	https://trino.io/	page
+Apache Beam	db	3	0	https://en.wikipedia.org/wiki/Apache_Beam	wikipedia
+Dask	db	3	0	https://en.wikipedia.org/wiki/Dask_(software)	wikipedia
+Polars	db	2	0	https://en.wikipedia.org/wiki/Polars_(software)	wikipedia
+dbt	db	1	0	https://www.getdbt.com/	page
+Apache Airflow	db	2	0	https://airflow.apache.org/	page
+Airflow	db	2	0	https://airflow.apache.org/	page
+Dagster	db	3	0	https://dagster.io/	page
+Prefect	db	3	0	https://www.prefect.io/	page
+Temporal	db	2	1	https://temporal.io/	page
+Fivetran	db	3	0	https://www.fivetran.com/	page
+Airbyte	db	3	0	https://en.wikipedia.org/wiki/Airbyte	wikipedia
+Apache NiFi	db	3	0	https://en.wikipedia.org/wiki/Apache_NiFi	wikipedia
+Kafka Connect	db	2	0	https://en.wikipedia.org/wiki/Apache_Kafka	wikipedia
+RocksDB	db	1	0	https://rocksdb.org/	page
+LevelDB	db	2	0	https://github.com/google/leveldb	page
+LMDB	db	3	0	https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database	wikipedia
+BadgerDB	db	3	0	https://github.com/dgraph-io/badger	page
+Pebble	db	3	1	https://en.wikipedia.org/wiki/CockroachDB	wikipedia-title
+WiredTiger	db	3	0	https://en.wikipedia.org/wiki/WiredTiger	wikipedia
+InnoDB	db	2	0	https://dev.mysql.com/doc/refman/8.0/en/innodb-storage-engine.html	wikipedia-title
+MyISAM	db	3	0	https://en.wikipedia.org/wiki/MyISAM	wikipedia
+Isolation	db	3	1	https://en.wikipedia.org/wiki/Isolation_(database_systems)	wikipedia
+Advisory lock	db	3	0	https://en.wikipedia.org/wiki/Lock_(database)	wikipedia-title
+Prepared statement	db	3	0	https://en.wikipedia.org/wiki/Prepared_statement	wikipedia
+Window function	db	3	1	https://en.wikipedia.org/wiki/Window_function_(SQL)	wikipedia
+CTE	db	3	0	https://en.wikipedia.org/wiki/Hierarchical_and_recursive_queries_in_SQL	wikipedia
+Common table expression	db	3	0	https://en.wikipedia.org/wiki/Hierarchical_and_recursive_queries_in_SQL	wikipedia
+JSONB	db	2	0	https://en.wikipedia.org/wiki/PostgreSQL	wikipedia
+Row-level security	db	2	0	https://en.wikipedia.org/wiki/Row-level_security	wikipedia
+Multi-tenancy	db	2	0	https://en.wikipedia.org/wiki/Multitenancy	wikipedia-title
+Multitenant	db	2	0	https://en.wikipedia.org/wiki/Multitenancy	wikipedia
+Tenant isolation	db	3	0	https://en.wikipedia.org/wiki/Multitenancy	wikipedia
+Database sharding	db	2	0	https://en.wikipedia.org/wiki/Shard_(database_architecture)	wikipedia
+Scatter-gather	db	3	0	https://en.wikipedia.org/wiki/Fan-out_(software)	wikipedia-title
+Hot standby	db	3	0	https://en.wikipedia.org/wiki/Hot_standby	wikipedia
+Backup and restore	db	3	1	https://en.wikipedia.org/wiki/Backup	wikipedia-title
+Snapshot	db	2	1	https://en.wikipedia.org/wiki/Snapshot_(computer_storage)	wikipedia
+Kafka	sysdesign	1	0	https://kafka.apache.org/	page
+Apache Kafka	sysdesign	1	0	https://kafka.apache.org/	page
+Kafka Streams	sysdesign	2	0	https://en.wikipedia.org/wiki/Apache_Kafka	wikipedia
+Confluent	sysdesign	3	0	https://en.wikipedia.org/wiki/Confluent	wikipedia
+Apache Pulsar	sysdesign	2	0	https://pulsar.apache.org/	page
+Pulsar	sysdesign	2	0	https://pulsar.apache.org/	page
+Apache BookKeeper	sysdesign	3	0	https://bookkeeper.apache.org/	page
+RabbitMQ	sysdesign	1	0	https://www.rabbitmq.com/	page
+NATS	sysdesign	1	0	https://nats.io/	page
+Redpanda	sysdesign	2	0	https://www.redpanda.com/	page
+Apache ActiveMQ	sysdesign	3	0	https://en.wikipedia.org/wiki/Apache_ActiveMQ	wikipedia
+ActiveMQ	sysdesign	3	0	https://en.wikipedia.org/wiki/Apache_ActiveMQ	wikipedia
+ZeroMQ	sysdesign	3	0	https://en.wikipedia.org/wiki/ZeroMQ	wikipedia
+Amazon SQS	sysdesign	2	0	https://aws.amazon.com/sqs/	page
+SQS	sysdesign	1	0	https://aws.amazon.com/sqs/	page
+SNS	sysdesign	2	0	https://aws.amazon.com/sns/	page
+Amazon Kinesis	sysdesign	3	0	https://en.wikipedia.org/wiki/Amazon_Kinesis	wikipedia
+Kinesis	sysdesign	2	0	https://aws.amazon.com/kinesis/	page
+EventBridge	sysdesign	3	0	https://aws.amazon.com/eventbridge/	page
+Azure Service Bus	sysdesign	3	0	https://en.wikipedia.org/wiki/Microsoft_Azure	wikipedia
+AMQP	net	2	0	https://en.wikipedia.org/wiki/Advanced_Message_Queuing_Protocol	wikipedia
+MQTT	net	2	0	https://en.wikipedia.org/wiki/MQTT	wikipedia
+JMS	sysdesign	3	0	https://en.wikipedia.org/wiki/Jakarta_Messaging	wikipedia
+STOMP	net	3	0	https://en.wikipedia.org/wiki/Streaming_Text_Oriented_Messaging_Protocol	wikipedia
+CloudEvents	sysdesign	3	0	https://cloudevents.io/	page
+gRPC	net	1	0	https://grpc.io/	page
+REST	net	1	1	https://en.wikipedia.org/wiki/REST	wikipedia
+RESTful	net	1	0	https://en.wikipedia.org/wiki/REST	wikipedia
+REST API	net	1	0	https://en.wikipedia.org/wiki/REST	wikipedia-title
+RPC	net	1	0	https://en.wikipedia.org/wiki/Remote_procedure_call	wikipedia
+GraphQL	net	1	0	https://graphql.org/	page
+tRPC	net	2	0	https://trpc.io/	page
+JSON-RPC	net	3	0	https://en.wikipedia.org/wiki/JSON-RPC	wikipedia
+OpenAPI	net	1	0	https://www.openapis.org/	page
+Swagger	net	2	0	https://en.wikipedia.org/wiki/Swagger_(software)	wikipedia
+AsyncAPI	net	3	0	https://www.asyncapi.com/	page
+WebSocket	net	1	0	https://en.wikipedia.org/wiki/WebSocket	wikipedia
+WebSockets	net	1	0	https://en.wikipedia.org/wiki/WebSocket	wikipedia
+SSE	net	1	0	https://en.wikipedia.org/wiki/Server-sent_events	wikipedia
+Server-sent events	net	1	0	https://en.wikipedia.org/wiki/Server-sent_events	wikipedia
+WebRTC	net	2	0	https://en.wikipedia.org/wiki/WebRTC	wikipedia
+WebTransport	net	3	0	https://www.w3.org/TR/webtransport/	page
+STUN	net	3	0	https://en.wikipedia.org/wiki/STUN	wikipedia
+TURN	net	3	0	https://en.wikipedia.org/wiki/Traversal_Using_Relays_around_NAT	wikipedia
+ICE	net	3	0	https://en.wikipedia.org/wiki/Interactive_Connectivity_Establishment	wikipedia
+HTTP	net	1	0	https://en.wikipedia.org/wiki/HTTP	wikipedia
+HTTP/1.1	net	1	0	https://en.wikipedia.org/wiki/HTTP/1.1	wikipedia
+HTTP/2	net	1	0	https://en.wikipedia.org/wiki/HTTP/2	wikipedia
+HTTP/3	net	1	0	https://en.wikipedia.org/wiki/HTTP/3	wikipedia
+HTTPS	net	1	0	https://en.wikipedia.org/wiki/HTTPS	wikipedia
+QUIC	net	1	0	https://en.wikipedia.org/wiki/QUIC	wikipedia
+TCP	net	1	0	https://en.wikipedia.org/wiki/Transmission_Control_Protocol	wikipedia
+UDP	net	1	0	https://en.wikipedia.org/wiki/User_Datagram_Protocol	wikipedia
+TCP/IP	net	2	0	https://en.wikipedia.org/wiki/Internet_protocol_suite	wikipedia
+IP	net	3	0	https://en.wikipedia.org/wiki/Internet_Protocol	wikipedia
+IPv4	net	2	0	https://en.wikipedia.org/wiki/IPv4	wikipedia
+IPv6	net	2	0	https://en.wikipedia.org/wiki/IPv6	wikipedia
+TCP handshake	net	2	0	https://en.wikipedia.org/wiki/Transmission_Control_Protocol	wikipedia
+Three-way handshake	net	2	0	https://en.wikipedia.org/wiki/Transmission_Control_Protocol	wikipedia
+SYN flood	net	3	0	https://en.wikipedia.org/wiki/SYN_flood	wikipedia
+TCP congestion control	net	2	0	https://en.wikipedia.org/wiki/TCP_congestion_control	wikipedia
+Congestion control	net	2	1	https://en.wikipedia.org/wiki/TCP_congestion_control	wikipedia
+BBR	net	3	0	https://en.wikipedia.org/wiki/TCP_congestion_control	wikipedia
+CUBIC	net	3	0	https://en.wikipedia.org/wiki/CUBIC_TCP	wikipedia
+Slow start	net	3	1	https://en.wikipedia.org/wiki/TCP_congestion_control	wikipedia
+Nagle's algorithm	net	3	0	https://en.wikipedia.org/wiki/Nagle%27s_algorithm	wikipedia
+TCP_NODELAY	net	3	0	https://en.wikipedia.org/wiki/Nagle%27s_algorithm	wikipedia
+Keep-alive	net	2	0	https://en.wikipedia.org/wiki/Keepalive	wikipedia
+Head-of-line blocking	net	2	0	https://en.wikipedia.org/wiki/Head-of-line_blocking	wikipedia
+Multiplexing	net	2	1	https://en.wikipedia.org/wiki/Multiplexing	wikipedia
+HPACK	net	3	0	https://en.wikipedia.org/wiki/HPACK	wikipedia
+TLS	net	1	0	https://en.wikipedia.org/wiki/Transport_Layer_Security	wikipedia
+SSL	net	2	0	https://en.wikipedia.org/wiki/Transport_Layer_Security	wikipedia
+TLS handshake	net	2	0	https://en.wikipedia.org/wiki/Transport_Layer_Security	wikipedia
+TLS 1.3	net	2	0	https://en.wikipedia.org/wiki/Transport_Layer_Security	wikipedia
+0-RTT	net	3	0	https://en.wikipedia.org/wiki/Transport_Layer_Security	wikipedia
+Round trip time	net	2	1	https://en.wikipedia.org/wiki/Round-trip_delay	wikipedia-title
+RTT	net	2	0	https://en.wikipedia.org/wiki/Round-trip_delay	wikipedia
+mTLS	security	1	0	https://en.wikipedia.org/wiki/Mutual_authentication	wikipedia
+Mutual TLS	security	1	0	https://en.wikipedia.org/wiki/Mutual_authentication	wikipedia
+SNI	net	3	0	https://en.wikipedia.org/wiki/Server_Name_Indication	wikipedia
+ALPN	net	3	0	https://en.wikipedia.org/wiki/Application-Layer_Protocol_Negotiation	wikipedia
+Certificate pinning	security	3	0	https://en.wikipedia.org/wiki/HTTP_Public_Key_Pinning	wikipedia
+OCSP stapling	security	3	0	https://en.wikipedia.org/wiki/OCSP_stapling	wikipedia
+Certificate authority	security	2	0	https://en.wikipedia.org/wiki/Certificate_authority	wikipedia
+Let's Encrypt	security	2	0	https://letsencrypt.org/	page
+ACME	security	3	0	https://en.wikipedia.org/wiki/Automatic_Certificate_Management_Environment	wikipedia
+X.509	security	3	0	https://en.wikipedia.org/wiki/X.509	wikipedia
+PKI	security	2	0	https://en.wikipedia.org/wiki/Public_key_infrastructure	wikipedia
+Public key infrastructure	security	3	0	https://en.wikipedia.org/wiki/Public_key_infrastructure	wikipedia
+CSR	security	3	0	https://en.wikipedia.org/wiki/Certificate_signing_request	wikipedia
+OAuth 2.0	security	1	0	https://oauth.net/2/	page
+OAuth	security	1	0	https://oauth.net/2/	page
+OAuth 2.1	security	3	0	https://en.wikipedia.org/wiki/OAuth	wikipedia
+OIDC	security	1	0	https://openid.net/connect/	wikipedia-title
+OpenID Connect	security	1	0	https://openid.net/connect/	page
+JWT	security	1	0	https://jwt.io/	page
+JSON Web Token	security	2	0	https://jwt.io/	page
+SAML	security	1	0	https://en.wikipedia.org/wiki/Security_Assertion_Markup_Language	wikipedia
+SSO	security	1	0	https://en.wikipedia.org/wiki/Single_sign-on	wikipedia
+Single sign-on	security	2	0	https://en.wikipedia.org/wiki/Single_sign-on	wikipedia
+MFA	security	2	0	https://en.wikipedia.org/wiki/Multi-factor_authentication	wikipedia
+2FA	security	2	0	https://en.wikipedia.org/wiki/Multi-factor_authentication	wikipedia
+TOTP	security	3	0	https://en.wikipedia.org/wiki/Time-based_one-time_password	wikipedia
+WebAuthn	security	2	0	https://www.w3.org/TR/webauthn-2/	page
+FIDO2	security	3	0	https://fidoalliance.org/fido2/	page
+Passkey	security	2	0	https://en.wikipedia.org/wiki/Passkey_(credential)	wikipedia
+PKCE	security	2	0	https://en.wikipedia.org/wiki/OAuth	wikipedia
+Client credentials	security	3	0	https://en.wikipedia.org/wiki/OAuth	wikipedia
+Access token	security	1	1	https://en.wikipedia.org/wiki/Access_token	wikipedia
+Refresh token	security	1	1	https://en.wikipedia.org/wiki/OAuth	wikipedia
+Bearer token	security	2	0	https://en.wikipedia.org/wiki/OAuth	wikipedia
+API key	security	1	0	https://en.wikipedia.org/wiki/API_key	wikipedia
+Session cookie	security	2	1	https://en.wikipedia.org/wiki/HTTP_cookie	wikipedia
+Session token	security	3	1	https://en.wikipedia.org/wiki/Session_(computer_science)	wikipedia
+Identity provider	security	2	1	https://en.wikipedia.org/wiki/Identity_provider	wikipedia
+IdP	security	3	0	https://en.wikipedia.org/wiki/Identity_provider	wikipedia
+Service provider	security	3	1	https://en.wikipedia.org/wiki/Security_Assertion_Markup_Language	wikipedia
+Okta	security	2	0	https://www.okta.com/	page
+Auth0	security	2	0	https://auth0.com/	page
+Keycloak	security	2	0	https://www.keycloak.org/	page
+Active Directory	security	2	1	https://en.wikipedia.org/wiki/Active_Directory	wikipedia
+LDAP	security	2	0	https://en.wikipedia.org/wiki/Lightweight_Directory_Access_Protocol	wikipedia
+Kerberos	security	3	0	https://en.wikipedia.org/wiki/Kerberos_(protocol)	wikipedia
+SCIM	security	3	0	https://en.wikipedia.org/wiki/System_for_Cross-domain_Identity_Management	wikipedia
+RBAC	security	1	0	https://en.wikipedia.org/wiki/Role-based_access_control	wikipedia
+ABAC	security	1	0	https://en.wikipedia.org/wiki/Attribute-based_access_control	wikipedia
+ReBAC	security	3	0	https://en.wikipedia.org/wiki/Relationship-based_access_control	wikipedia
+Role-based access control	security	2	0	https://en.wikipedia.org/wiki/Role-based_access_control	wikipedia
+Attribute-based access control	security	2	0	https://en.wikipedia.org/wiki/Attribute-based_access_control	wikipedia
+ACL	security	2	0	https://en.wikipedia.org/wiki/Access-control_list	wikipedia
+Access control list	security	2	0	https://en.wikipedia.org/wiki/Access-control_list	wikipedia-title
+Zanzibar	security	3	0	https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/	page
+SpiceDB	security	3	0	https://authzed.com/spicedb	page
+OpenFGA	security	3	0	https://openfga.dev/	page
+Open Policy Agent	security	2	0	https://www.openpolicyagent.org/	page
+OPA	security	2	0	https://www.openpolicyagent.org/	page
+Rego	security	3	0	https://www.openpolicyagent.org/	page
+Cedar	security	3	1	https://www.cedarpolicy.com/	page
+Zero trust	security	1	0	https://en.wikipedia.org/wiki/Zero_trust_security_model	wikipedia
+Zero-trust architecture	security	2	0	https://en.wikipedia.org/wiki/Zero_trust_security_model	wikipedia
+BeyondCorp	security	3	0	https://en.wikipedia.org/wiki/BeyondCorp	wikipedia
+Defense in depth	security	2	0	https://en.wikipedia.org/wiki/Defense_in_depth_(computing)	wikipedia
+Least privilege	security	1	1	https://en.wikipedia.org/wiki/Principle_of_least_privilege	wikipedia
+Principle of least privilege	security	2	1	https://en.wikipedia.org/wiki/Principle_of_least_privilege	wikipedia
+IAM	security	1	0	https://en.wikipedia.org/wiki/Identity_management	wikipedia
+Identity and access management	security	2	0	https://en.wikipedia.org/wiki/Identity_management	wikipedia
+Service account	security	2	1	https://en.wikipedia.org/wiki/Service_account	wikipedia
+SPIFFE	security	3	0	https://spiffe.io/	page
+Vault	security	2	1	https://www.vaultproject.io/	page
+KMS	security	1	0	https://en.wikipedia.org/wiki/Key_management	wikipedia
+HSM	security	2	0	https://en.wikipedia.org/wiki/Hardware_security_module	wikipedia
+Envelope encryption	security	2	0	https://en.wikipedia.org/wiki/Key_management	wikipedia-title
+End-to-end encryption	security	2	0	https://en.wikipedia.org/wiki/End-to-end_encryption	wikipedia
+E2EE	security	3	0	https://en.wikipedia.org/wiki/End-to-end_encryption	wikipedia
+AES	security	2	0	https://en.wikipedia.org/wiki/Advanced_Encryption_Standard	wikipedia
+AES-GCM	security	3	0	https://en.wikipedia.org/wiki/Galois/Counter_Mode	wikipedia
+RSA	security	2	0	https://en.wikipedia.org/wiki/RSA_cryptosystem	wikipedia
+ECDSA	security	3	0	https://en.wikipedia.org/wiki/Elliptic_Curve_Digital_Signature_Algorithm	wikipedia
+Ed25519	security	3	0	https://en.wikipedia.org/wiki/EdDSA	wikipedia
+ECDH	security	3	0	https://en.wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman	wikipedia
+Diffie-Hellman	security	3	0	https://en.wikipedia.org/wiki/Diffie%E2%80%93Hellman_key_exchange	wikipedia
+ChaCha20	security	3	0	https://en.wikipedia.org/wiki/Salsa20	wikipedia
+SHA-256	security	2	0	https://en.wikipedia.org/wiki/SHA-2	wikipedia
+SHA-3	security	3	0	https://en.wikipedia.org/wiki/SHA-3	wikipedia
+MD5	security	3	0	https://en.wikipedia.org/wiki/MD5	wikipedia
+HMAC	security	2	0	https://en.wikipedia.org/wiki/HMAC	wikipedia
+bcrypt	security	2	0	https://en.wikipedia.org/wiki/Bcrypt	wikipedia
+scrypt	security	3	0	https://en.wikipedia.org/wiki/Scrypt	wikipedia
+Argon2	security	2	0	https://en.wikipedia.org/wiki/Argon2	wikipedia
+PBKDF2	security	3	0	https://en.wikipedia.org/wiki/PBKDF2	wikipedia
+Salting	security	3	1	https://en.wikipedia.org/wiki/Salt_(cryptography)	wikipedia
+Salt	security	3	1	https://en.wikipedia.org/wiki/Salt_(cryptography)	wikipedia
+Pepper	security	3	1	https://en.wikipedia.org/wiki/Pepper_(cryptography)	wikipedia
+Hash function	security	2	1	https://en.wikipedia.org/wiki/Hash_function	wikipedia
+Digital signature	security	2	1	https://en.wikipedia.org/wiki/Digital_signature	wikipedia
+Symmetric encryption	security	3	1	https://en.wikipedia.org/wiki/Symmetric-key_algorithm	wikipedia-title
+Asymmetric encryption	security	3	0	https://en.wikipedia.org/wiki/Public-key_cryptography	wikipedia
+Public key cryptography	security	3	0	https://en.wikipedia.org/wiki/Public-key_cryptography	wikipedia
+Nonce	security	3	0	https://en.wikipedia.org/wiki/Cryptographic_nonce	wikipedia
+Initialization vector	security	3	0	https://en.wikipedia.org/wiki/Initialization_vector	wikipedia
+CORS	security	1	0	https://en.wikipedia.org/wiki/Cross-origin_resource_sharing	wikipedia
+CSRF	security	1	0	https://en.wikipedia.org/wiki/Cross-site_request_forgery	wikipedia
+XSS	security	1	0	https://en.wikipedia.org/wiki/Cross-site_scripting	wikipedia
+SQL injection	security	1	0	https://en.wikipedia.org/wiki/SQL_injection	wikipedia
+SSRF	security	2	0	https://en.wikipedia.org/wiki/Server-side_request_forgery	wikipedia
+XXE	security	3	0	https://en.wikipedia.org/wiki/XML_external_entity_attack	wikipedia
+RCE	security	2	0	https://en.wikipedia.org/wiki/Arbitrary_code_execution	wikipedia
+Remote code execution	security	2	1	https://en.wikipedia.org/wiki/Arbitrary_code_execution	wikipedia
+Command injection	security	3	1	https://en.wikipedia.org/wiki/Code_injection	wikipedia
+Path traversal	security	3	0	https://en.wikipedia.org/wiki/Directory_traversal_attack	wikipedia
+OWASP	security	1	0	https://owasp.org/	page
+OWASP Top 10	security	2	0	https://owasp.org/www-project-top-ten/	page
+CVE	security	1	0	https://en.wikipedia.org/wiki/Common_Vulnerabilities_and_Exposures	wikipedia
+CVSS	security	2	0	https://en.wikipedia.org/wiki/Common_Vulnerability_Scoring_System	wikipedia
+CWE	security	3	0	https://en.wikipedia.org/wiki/Common_Weakness_Enumeration	wikipedia
+STRIDE	security	3	1	https://en.wikipedia.org/wiki/STRIDE_model	wikipedia
+Threat modeling	security	2	1	https://en.wikipedia.org/wiki/Threat_model	wikipedia
+Threat model	security	2	1	https://en.wikipedia.org/wiki/Threat_model	wikipedia
+Attack surface	security	2	1	https://en.wikipedia.org/wiki/Attack_surface	wikipedia
+Blast radius	sysdesign	1	1	https://en.wikipedia.org/wiki/Fault_tolerance	wikipedia-title
+Cell-based architecture	sysdesign	3	0	https://en.wikipedia.org/wiki/Cell-based_architecture	wikipedia
+Penetration testing	security	2	1	https://en.wikipedia.org/wiki/Penetration_test	wikipedia
+Pentest	security	3	0	https://en.wikipedia.org/wiki/Penetration_test	wikipedia
+WAF	security	1	0	https://en.wikipedia.org/wiki/Web_application_firewall	wikipedia
+Firewall	security	2	1	https://en.wikipedia.org/wiki/Firewall_(computing)	wikipedia
+NACL	security	3	0	https://en.wikipedia.org/wiki/Access-control_list	wikipedia-title
+DDoS	security	1	0	https://en.wikipedia.org/wiki/Denial-of-service_attack	wikipedia
+DoS	security	2	0	https://en.wikipedia.org/wiki/Denial-of-service_attack	wikipedia
+VPN	security	2	0	https://en.wikipedia.org/wiki/Virtual_private_network	wikipedia
+WireGuard	security	2	0	https://www.wireguard.com/	page
+IPsec	security	3	0	https://en.wikipedia.org/wiki/IPsec	wikipedia
+Tailscale	security	3	0	https://tailscale.com/	page
+Bastion host	security	3	0	https://en.wikipedia.org/wiki/Bastion_host	wikipedia
+SIEM	security	2	0	https://en.wikipedia.org/wiki/Security_information_and_event_management	wikipedia
+SOC 2	security	2	0	https://en.wikipedia.org/wiki/System_and_Organization_Controls	wikipedia
+GDPR	security	2	0	https://en.wikipedia.org/wiki/General_Data_Protection_Regulation	wikipedia
+HIPAA	security	3	0	https://en.wikipedia.org/wiki/Health_Insurance_Portability_and_Accountability_Act	wikipedia
+PCI DSS	security	3	0	https://en.wikipedia.org/wiki/Payment_Card_Industry_Data_Security_Standard	wikipedia
+PII	security	2	0	https://en.wikipedia.org/wiki/Personal_data	wikipedia
+ISO 27001	security	3	0	https://en.wikipedia.org/wiki/ISO/IEC_27001	wikipedia
+SBOM	security	2	0	https://en.wikipedia.org/wiki/Software_supply_chain	wikipedia
+Sigstore	security	3	0	https://www.sigstore.dev/	page
+Supply chain attack	security	2	1	https://en.wikipedia.org/wiki/Supply_chain_attack	wikipedia
+Dependabot	security	3	0	https://github.com/dependabot	page
+Snyk	security	3	0	https://en.wikipedia.org/wiki/Snyk	wikipedia
+Trivy	security	3	0	https://en.wikipedia.org/wiki/Trivy	wikipedia
+Content Security Policy	security	2	0	https://en.wikipedia.org/wiki/Content_Security_Policy	wikipedia
+HSTS	security	3	0	https://en.wikipedia.org/wiki/HTTP_Strict_Transport_Security	wikipedia
+SameSite cookie	security	3	0	https://en.wikipedia.org/wiki/HTTP_cookie	wikipedia-title
+HttpOnly	security	3	0	https://en.wikipedia.org/wiki/HTTP_cookie	wikipedia
+Rate limit	sysdesign	2	1	https://en.wikipedia.org/wiki/Rate_limiting	wikipedia-title
+429 Too Many Requests	net	3	0	https://en.wikipedia.org/wiki/List_of_HTTP_status_codes	wikipedia
+DNS	net	1	0	https://en.wikipedia.org/wiki/Domain_Name_System	wikipedia
+DNS resolver	net	3	0	https://en.wikipedia.org/wiki/Domain_Name_System	wikipedia
+DNSSEC	net	3	0	https://en.wikipedia.org/wiki/Domain_Name_System_Security_Extensions	wikipedia
+GeoDNS	net	3	0	https://en.wikipedia.org/wiki/Domain_Name_System	wikipedia-title
+DNS round robin	net	3	0	https://en.wikipedia.org/wiki/Round-robin_DNS	wikipedia-title
+Route 53	net	2	0	https://en.wikipedia.org/wiki/Amazon_Route_53	wikipedia
+BGP	net	2	0	https://en.wikipedia.org/wiki/Border_Gateway_Protocol	wikipedia
+NAT	net	2	0	https://en.wikipedia.org/wiki/Network_address_translation	wikipedia
+CIDR	net	2	0	https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing	wikipedia
+Subnet	net	2	1	https://en.wikipedia.org/wiki/Subnet	wikipedia
+VPC	net	1	0	https://en.wikipedia.org/wiki/Virtual_private_cloud	wikipedia
+VLAN	net	3	0	https://en.wikipedia.org/wiki/VLAN	wikipedia
+VXLAN	net	3	0	https://en.wikipedia.org/wiki/Virtual_Extensible_LAN	wikipedia
+Overlay network	net	3	1	https://en.wikipedia.org/wiki/Overlay_network	wikipedia
+MTU	net	3	0	https://en.wikipedia.org/wiki/Maximum_transmission_unit	wikipedia
+Latency	net	1	1	https://en.wikipedia.org/wiki/Latency_(engineering)	wikipedia
+Bandwidth	net	2	1	https://en.wikipedia.org/wiki/Bandwidth_(computing)	wikipedia
+Packet loss	net	2	1	https://en.wikipedia.org/wiki/Packet_loss	wikipedia
+Jitter buffer	net	3	0	https://en.wikipedia.org/wiki/Jitter_buffer	wikipedia-title
+eBPF	net	2	0	https://en.wikipedia.org/wiki/EBPF	wikipedia
+Cilium	net	3	0	https://cilium.io/	page
+Envoy	net	1	0	https://www.envoyproxy.io/	page
+Istio	net	1	0	https://istio.io/	page
+Linkerd	net	2	0	https://linkerd.io/	page
+NGINX	net	1	0	https://nginx.org/	page
+HAProxy	net	2	0	https://www.haproxy.org/	page
+Traefik	net	2	0	https://traefik.io/	page
+Kong	net	2	0	https://konghq.com/	page
+Caddy	net	3	0	https://caddyserver.com/	page
+Apache HTTP Server	net	3	0	https://en.wikipedia.org/wiki/Apache_HTTP_Server	wikipedia
+Cloudflare	net	1	0	https://www.cloudflare.com/	page
+Cloudflare Workers	net	2	0	https://en.wikipedia.org/wiki/Cloudflare	wikipedia
+Fastly	net	3	0	https://en.wikipedia.org/wiki/Fastly	wikipedia
+Akamai	net	3	0	https://en.wikipedia.org/wiki/Akamai_Technologies	wikipedia
+CloudFront	net	2	0	https://en.wikipedia.org/wiki/Amazon_CloudFront	wikipedia
+Ingress	net	2	0	https://en.wikipedia.org/wiki/Kubernetes	wikipedia
+Egress	net	2	0	https://en.wikipedia.org/wiki/Egress_filtering	wikipedia
+North-south traffic	net	3	0	https://en.wikipedia.org/wiki/North-south_traffic	wikipedia
+East-west traffic	net	3	0	https://en.wikipedia.org/wiki/East-west_traffic	wikipedia
+Proxy	net	2	1	https://en.wikipedia.org/wiki/Proxy_server	wikipedia
+Gateway	net	3	1	https://en.wikipedia.org/wiki/Gateway_(telecommunications)	wikipedia
+Slowloris	security	3	0	https://en.wikipedia.org/wiki/Slowloris_(computer_security)	wikipedia
+Man-in-the-middle	security	3	0	https://en.wikipedia.org/wiki/Man-in-the-middle_attack	wikipedia
+MITM	security	3	0	https://en.wikipedia.org/wiki/Man-in-the-middle_attack	wikipedia
+Replay attack	security	3	1	https://en.wikipedia.org/wiki/Replay_attack	wikipedia
+Brute force	security	3	1	https://en.wikipedia.org/wiki/Brute-force_attack	wikipedia
+Credential stuffing	security	3	0	https://en.wikipedia.org/wiki/Credential_stuffing	wikipedia
+Privilege escalation	security	2	1	https://en.wikipedia.org/wiki/Privilege_escalation	wikipedia
+Lateral movement	security	3	1	https://en.wikipedia.org/wiki/Lateral_movement_(cybersecurity)	wikipedia
+Honeypot	security	3	1	https://en.wikipedia.org/wiki/Honeypot_(computing)	wikipedia
+Audit log	security	2	1	https://en.wikipedia.org/wiki/Audit_trail	wikipedia
+Audit trail	security	3	1	https://en.wikipedia.org/wiki/Audit_trail	wikipedia
+Tokenization	security	3	1	https://en.wikipedia.org/wiki/Tokenization_(data_security)	wikipedia
+Data residency	security	3	1	https://en.wikipedia.org/wiki/Data_localization	wikipedia
+Data sovereignty	security	3	1	https://en.wikipedia.org/wiki/Data_sovereignty	wikipedia
+p50	sysdesign	2	0	https://en.wikipedia.org/wiki/Percentile	wikipedia
+Tail latency	sysdesign	1	0	https://en.wikipedia.org/wiki/Tail_latency	wikipedia
+Percentile	sysdesign	2	1	https://en.wikipedia.org/wiki/Percentile	wikipedia
+Throughput	sysdesign	1	1	https://en.wikipedia.org/wiki/Throughput	wikipedia
+QPS	sysdesign	1	0	https://en.wikipedia.org/wiki/Queries_per_second	wikipedia
+RPS	sysdesign	1	0	https://en.wikipedia.org/wiki/Requests_per_second	wikipedia
+TPS	sysdesign	2	0	https://en.wikipedia.org/wiki/Transactions_per_second	wikipedia
+IOPS	sysdesign	2	0	https://en.wikipedia.org/wiki/IOPS	wikipedia
+Queries per second	sysdesign	2	1	https://en.wikipedia.org/wiki/Queries_per_second	wikipedia
+Requests per second	sysdesign	2	1	https://en.wikipedia.org/wiki/Requests_per_second	wikipedia
+SLO	sysdesign	1	0	https://en.wikipedia.org/wiki/Service-level_objective	wikipedia
+SLA	sysdesign	1	0	https://en.wikipedia.org/wiki/Service-level_agreement	wikipedia
+SLI	sysdesign	1	0	https://en.wikipedia.org/wiki/Service-level_indicator	wikipedia
+Burn rate	sysdesign	3	1	https://en.wikipedia.org/wiki/Site_reliability_engineering	wikipedia-title
+Service level objective	sysdesign	2	1	https://en.wikipedia.org/wiki/Service-level_objective	wikipedia-title
+Service level agreement	sysdesign	2	1	https://en.wikipedia.org/wiki/Service-level_agreement	wikipedia
+Service level indicator	sysdesign	3	1	https://en.wikipedia.org/wiki/Service-level_indicator	wikipedia
+SRE	sysdesign	2	0	https://en.wikipedia.org/wiki/Site_reliability_engineering	wikipedia
+Site reliability engineering	sysdesign	2	1	https://en.wikipedia.org/wiki/Site_reliability_engineering	wikipedia
+MTTR	sysdesign	2	0	https://en.wikipedia.org/wiki/Mean_time_to_recovery	wikipedia
+MTBF	sysdesign	3	0	https://en.wikipedia.org/wiki/Mean_time_between_failures	wikipedia
+Disaster recovery	sysdesign	1	1	https://en.wikipedia.org/wiki/Disaster_recovery	wikipedia
+High availability	sysdesign	1	1	https://en.wikipedia.org/wiki/High_availability	wikipedia
+Fault tolerance	sysdesign	1	1	https://en.wikipedia.org/wiki/Fault_tolerance	wikipedia
+Resilience	sysdesign	2	1	https://en.wikipedia.org/wiki/Resilience_(engineering_and_construction)	wikipedia
+Redundancy	sysdesign	2	1	https://en.wikipedia.org/wiki/Redundancy_(engineering)	wikipedia
+Single point of failure	sysdesign	1	1	https://en.wikipedia.org/wiki/Single_point_of_failure	wikipedia
+SPOF	sysdesign	2	0	https://en.wikipedia.org/wiki/Single_point_of_failure	wikipedia
+Nines of availability	sysdesign	3	1	https://en.wikipedia.org/wiki/High_availability	wikipedia
+Five nines	sysdesign	2	0	https://en.wikipedia.org/wiki/High_availability	wikipedia
+Availability zone	sysdesign	1	0	https://en.wikipedia.org/wiki/Availability_zone	wikipedia
+Geo-replication	sysdesign	2	0	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia-title
+Failure domain	sysdesign	3	1	https://en.wikipedia.org/wiki/Fault_tolerance	wikipedia-title
+Horizontal scaling	sysdesign	1	1	https://en.wikipedia.org/wiki/Scalability	wikipedia-title
+Vertical scaling	sysdesign	1	1	https://en.wikipedia.org/wiki/Scalability	wikipedia
+Scale out	sysdesign	2	1	https://en.wikipedia.org/wiki/Scalability	wikipedia
+Scale up	sysdesign	2	1	https://en.wikipedia.org/wiki/Scalability	wikipedia
+Autoscaling	sysdesign	1	0	https://en.wikipedia.org/wiki/Autoscaling	wikipedia
+Elasticity	sysdesign	3	1	https://en.wikipedia.org/wiki/Elasticity_(cloud_computing)	wikipedia
+Capacity planning	sysdesign	2	1	https://en.wikipedia.org/wiki/Capacity_planning	wikipedia
+Back-of-the-envelope	sysdesign	1	1	https://en.wikipedia.org/wiki/Back-of-the-envelope_calculation	wikipedia
+Blue-green deployment	sysdesign	1	0	https://en.wikipedia.org/wiki/Blue%E2%80%93green_deployment	wikipedia
+Blue-green	sysdesign	1	0	https://en.wikipedia.org/wiki/Blue%E2%80%93green_deployment	wikipedia
+Canary deployment	sysdesign	1	0	https://en.wikipedia.org/wiki/Feature_toggle	wikipedia
+Canary	sysdesign	1	1	https://en.wikipedia.org/wiki/Feature_toggle	wikipedia
+Rolling update	sysdesign	1	1	https://en.wikipedia.org/wiki/Rolling_release	wikipedia
+Feature flag	sysdesign	1	1	https://en.wikipedia.org/wiki/Feature_toggle	wikipedia
+Feature toggle	sysdesign	2	1	https://en.wikipedia.org/wiki/Feature_toggle	wikipedia
+A/B testing	sysdesign	2	1	https://en.wikipedia.org/wiki/A/B_testing	wikipedia
+Chaos engineering	sysdesign	1	1	https://en.wikipedia.org/wiki/Chaos_engineering	wikipedia
+Chaos Monkey	sysdesign	2	1	https://en.wikipedia.org/wiki/Chaos_engineering	wikipedia
+Fault injection	sysdesign	2	1	https://en.wikipedia.org/wiki/Fault_injection	wikipedia
+Game day	sysdesign	3	1	https://en.wikipedia.org/wiki/Chaos_engineering	wikipedia
+Load testing	sysdesign	1	1	https://en.wikipedia.org/wiki/Load_testing	wikipedia
+Stress testing	sysdesign	2	1	https://en.wikipedia.org/wiki/Stress_testing_(software)	wikipedia
+Soak test	sysdesign	3	1	https://en.wikipedia.org/wiki/Soak_testing	wikipedia
+k6	sysdesign	3	0	https://en.wikipedia.org/wiki/K6_(software)	wikipedia
+Locust	sysdesign	3	1	https://locust.io/	page
+JMeter	sysdesign	3	0	https://en.wikipedia.org/wiki/Apache_JMeter	wikipedia
+Observability	sysdesign	1	0	https://en.wikipedia.org/wiki/Observability_(software)	wikipedia
+Distributed tracing	sysdesign	1	1	https://en.wikipedia.org/wiki/Tracing_(software)	wikipedia
+OpenTelemetry	sysdesign	1	0	https://opentelemetry.io/	page
+Jaeger	sysdesign	2	0	https://www.jaegertracing.io/	page
+Zipkin	sysdesign	3	0	https://zipkin.io/	page
+Grafana	sysdesign	2	0	https://grafana.com/	page
+Loki	sysdesign	3	0	https://en.wikipedia.org/wiki/Grafana	wikipedia
+Datadog	sysdesign	2	0	https://en.wikipedia.org/wiki/Datadog	wikipedia
+Honeycomb	sysdesign	3	0	https://www.honeycomb.io/	page
+Sentry	sysdesign	2	0	https://sentry.io/	page
+PagerDuty	sysdesign	3	0	https://en.wikipedia.org/wiki/PagerDuty	wikipedia
+Log aggregation	sysdesign	2	1	https://en.wikipedia.org/wiki/Log_management	wikipedia
+ELK stack	sysdesign	3	0	https://en.wikipedia.org/wiki/Elasticsearch	wikipedia
+Logstash	sysdesign	3	0	https://en.wikipedia.org/wiki/Elasticsearch	wikipedia
+Kibana	sysdesign	3	0	https://en.wikipedia.org/wiki/Kibana	wikipedia
+Incident response	sysdesign	2	1	https://en.wikipedia.org/wiki/Incident_management	wikipedia
+Postmortem	sysdesign	2	1	https://en.wikipedia.org/wiki/Postmortem_documentation	wikipedia
+On-call	sysdesign	2	1	https://en.wikipedia.org/wiki/On-call	wikipedia
+Runbook	sysdesign	3	1	https://en.wikipedia.org/wiki/Runbook	wikipedia
+Kubernetes	sysdesign	1	0	https://kubernetes.io/	page
+K8s	sysdesign	1	0	https://kubernetes.io/	page
+Docker	sysdesign	1	0	https://www.docker.com/	page
+Container	sysdesign	2	1	https://en.wikipedia.org/wiki/OS-level_virtualization	wikipedia
+Pod	sysdesign	2	1	https://en.wikipedia.org/wiki/Kubernetes	wikipedia
+DaemonSet	sysdesign	3	0	https://en.wikipedia.org/wiki/Kubernetes	wikipedia
+Operator pattern	sysdesign	3	1	https://kubernetes.io/docs/concepts/extend-kubernetes/operator/	page
+Helm	sysdesign	2	0	https://helm.sh/	page
+Terraform	sysdesign	2	0	https://www.terraform.io/	page
+Infrastructure as code	sysdesign	2	1	https://en.wikipedia.org/wiki/Infrastructure_as_code	wikipedia
+IaC	sysdesign	3	0	https://en.wikipedia.org/wiki/Infrastructure_as_code	wikipedia
+GitOps	sysdesign	2	0	https://en.wikipedia.org/wiki/DevOps	wikipedia
+Argo CD	sysdesign	3	0	https://argo-cd.readthedocs.io/	page
+Serverless	sysdesign	1	1	https://en.wikipedia.org/wiki/Serverless_computing	wikipedia
+AWS Lambda	sysdesign	2	0	https://en.wikipedia.org/wiki/AWS_Lambda	wikipedia
+Lambda	sysdesign	2	1	https://en.wikipedia.org/wiki/AWS_Lambda	wikipedia
+FaaS	sysdesign	3	0	https://en.wikipedia.org/wiki/Function_as_a_service	wikipedia-title
+Amazon S3	sysdesign	2	0	https://en.wikipedia.org/wiki/Amazon_S3	wikipedia
+S3	sysdesign	1	0	https://en.wikipedia.org/wiki/Amazon_S3	wikipedia
+Object storage	sysdesign	1	1	https://en.wikipedia.org/wiki/Object_storage	wikipedia
+Blob storage	sysdesign	2	1	https://en.wikipedia.org/wiki/Object_storage	wikipedia
+Block storage	sysdesign	3	1	https://en.wikipedia.org/wiki/Block-level_storage	wikipedia
+File storage	sysdesign	3	1	https://en.wikipedia.org/wiki/File_server	wikipedia-title
+EBS	sysdesign	3	0	https://en.wikipedia.org/wiki/Amazon_Elastic_Block_Store	wikipedia
+EFS	sysdesign	3	0	https://en.wikipedia.org/wiki/Amazon_Elastic_File_System	wikipedia
+EC2	sysdesign	2	0	https://en.wikipedia.org/wiki/Amazon_Elastic_Compute_Cloud	wikipedia
+Fallacies of distributed computing	sysdesign	3	0	https://en.wikipedia.org/wiki/Fallacies_of_distributed_computing	wikipedia
+Network partition	sysdesign	1	1	https://en.wikipedia.org/wiki/Network_partition	wikipedia
+Byzantine failure	sysdesign	3	0	https://en.wikipedia.org/wiki/Byzantine_fault	wikipedia
+Fail-stop	sysdesign	3	0	https://en.wikipedia.org/wiki/Fail-stop	wikipedia
+Fail-fast	sysdesign	3	0	https://en.wikipedia.org/wiki/Fail-fast_system	wikipedia
+Fail-safe	sysdesign	3	0	https://en.wikipedia.org/wiki/Fail-safe	wikipedia
+Stateless	sysdesign	1	1	https://en.wikipedia.org/wiki/Stateless_protocol	wikipedia
+Stateful	sysdesign	2	1	https://en.wikipedia.org/wiki/State_(computer_science)	wikipedia
+Shared nothing	sysdesign	2	1	https://en.wikipedia.org/wiki/Shared-nothing_architecture	wikipedia
+Shared-nothing architecture	sysdesign	3	1	https://en.wikipedia.org/wiki/Shared-nothing_architecture	wikipedia
+Monorepo	sysdesign	2	0	https://en.wikipedia.org/wiki/Monorepo	wikipedia
+Polyglot persistence	sysdesign	3	0	https://en.wikipedia.org/wiki/Polyglot_persistence	wikipedia
+Data locality	sysdesign	3	1	https://en.wikipedia.org/wiki/Locality_of_reference	wikipedia
+Colocation	sysdesign	3	1	https://en.wikipedia.org/wiki/Colocation_centre	wikipedia
+Pipelining	sysdesign	3	1	https://en.wikipedia.org/wiki/Pipeline_(computing)	wikipedia
+Zero-copy	sysdesign	3	0	https://en.wikipedia.org/wiki/Zero-copy	wikipedia
+Tiered storage	db	3	1	https://en.wikipedia.org/wiki/Tiered_storage	wikipedia
+Cold storage	db	3	1	https://en.wikipedia.org/wiki/Cold_storage	wikipedia
+Data retention	db	3	1	https://en.wikipedia.org/wiki/Data_retention	wikipedia
+Back pressure	sysdesign	2	1	https://en.wikipedia.org/wiki/Back_pressure	wikipedia
+Total order broadcast	sysdesign	3	0	https://en.wikipedia.org/wiki/Atomic_broadcast	wikipedia
+Atomic broadcast	sysdesign	3	0	https://en.wikipedia.org/wiki/Atomic_broadcast	wikipedia
+Causal broadcast	sysdesign	3	0	https://en.wikipedia.org/wiki/Causal_consistency	wikipedia
+State machine replication	sysdesign	2	0	https://en.wikipedia.org/wiki/State_machine_replication	wikipedia
+Replicated state machine	sysdesign	3	0	https://en.wikipedia.org/wiki/State_machine_replication	wikipedia
+Term	sysdesign	3	1	https://en.wikipedia.org/wiki/Raft_(algorithm)	wikipedia
+Epoch	sysdesign	3	1	https://en.wikipedia.org/wiki/Raft_(algorithm)	wikipedia-title
+Candidate	sysdesign	3	1	https://en.wikipedia.org/wiki/Raft_(algorithm)	wikipedia
+Follower	sysdesign	3	1	https://en.wikipedia.org/wiki/Raft_(algorithm)	wikipedia
+Leader	sysdesign	3	1	https://en.wikipedia.org/wiki/Raft_(algorithm)	wikipedia
+Learner	sysdesign	3	1	https://en.wikipedia.org/wiki/Paxos_(computer_science)	wikipedia
+Acceptor	sysdesign	3	0	https://en.wikipedia.org/wiki/Paxos_(computer_science)	wikipedia
+Proposer	sysdesign	3	0	https://en.wikipedia.org/wiki/Paxos_(computer_science)	wikipedia
+Joint consensus	sysdesign	3	0	https://en.wikipedia.org/wiki/Raft_(algorithm)	wikipedia
+Chain replication	sysdesign	3	0	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia
+Primary-backup	sysdesign	3	0	https://en.wikipedia.org/wiki/Replication_(computing)	wikipedia
+Distributed hash table	sysdesign	2	0	https://en.wikipedia.org/wiki/Distributed_hash_table	wikipedia
+DHT	sysdesign	3	0	https://en.wikipedia.org/wiki/Distributed_hash_table	wikipedia
+Chord	sysdesign	3	1	https://en.wikipedia.org/wiki/Chord_(peer-to-peer)	wikipedia
+Kademlia	sysdesign	3	0	https://en.wikipedia.org/wiki/Kademlia	wikipedia
+Peer-to-peer	sysdesign	2	1	https://en.wikipedia.org/wiki/Peer-to-peer	wikipedia
+P2P	sysdesign	3	0	https://en.wikipedia.org/wiki/Peer-to-peer	wikipedia
+Blockchain	sysdesign	2	1	https://en.wikipedia.org/wiki/Blockchain	wikipedia
+Proof of work	sysdesign	3	1	https://en.wikipedia.org/wiki/Proof_of_work	wikipedia
+Proof of stake	sysdesign	3	1	https://en.wikipedia.org/wiki/Proof_of_stake	wikipedia
+Notification system	sysdesign	2	1	https://en.wikipedia.org/wiki/Push_technology	wikipedia-title
+URL shortener	sysdesign	1	0	https://en.wikipedia.org/wiki/URL_shortening	wikipedia
+Base62	sysdesign	3	0	https://en.wikipedia.org/wiki/Base62	wikipedia
+News feed	sysdesign	2	1	https://en.wikipedia.org/wiki/News_feed	wikipedia
+Web crawler	sysdesign	2	1	https://en.wikipedia.org/wiki/Web_crawler	wikipedia
+Typeahead	sysdesign	3	0	https://en.wikipedia.org/wiki/Autocomplete	wikipedia-title
+Autocomplete	sysdesign	3	1	https://en.wikipedia.org/wiki/Autocomplete	wikipedia
+Geohash	sysdesign	3	0	https://en.wikipedia.org/wiki/Geohash	wikipedia
+Quadtree	sysdesign	3	0	https://en.wikipedia.org/wiki/Quadtree	wikipedia
+S2 geometry	sysdesign	3	0	https://s2geometry.io/	page
+H3	sysdesign	3	0	https://h3geo.org/	page
+R-tree	db	3	0	https://en.wikipedia.org/wiki/R-tree	wikipedia
+Chandy-Lamport	sysdesign	3	0	https://en.wikipedia.org/wiki/Chandy%E2%80%93Lamport_algorithm	wikipedia
+Little's law	sysdesign	2	0	https://en.wikipedia.org/wiki/Little%27s_law	wikipedia
+Amdahl's law	sysdesign	2	0	https://en.wikipedia.org/wiki/Amdahl%27s_law	wikipedia
+Queueing theory	sysdesign	3	1	https://en.wikipedia.org/wiki/Queueing_theory	wikipedia
+Utilization	sysdesign	3	1	https://en.wikipedia.org/wiki/Utilization	wikipedia
+Overprovisioning	sysdesign	3	1	https://en.wikipedia.org/wiki/Overprovisioning	wikipedia
+Thundering herd problem	sysdesign	2	0	https://en.wikipedia.org/wiki/Thundering_herd_problem	wikipedia
+Noisy neighbor	sysdesign	2	1	https://en.wikipedia.org/wiki/Cloud_computing_issues	wikipedia
+Multi-cloud	sysdesign	3	0	https://en.wikipedia.org/wiki/Multicloud	wikipedia
+Hybrid cloud	sysdesign	3	1	https://en.wikipedia.org/wiki/Cloud_computing	wikipedia
+Vendor lock-in	sysdesign	2	1	https://en.wikipedia.org/wiki/Vendor_lock-in	wikipedia
+Technical debt	sysdesign	3	1	https://en.wikipedia.org/wiki/Technical_debt	wikipedia
+Architecture decision record	sysdesign	2	0	https://en.wikipedia.org/wiki/Architectural_decision	wikipedia
+ADR	sysdesign	3	0	https://en.wikipedia.org/wiki/Architectural_decision	wikipedia
+RFC	sysdesign	2	0	https://en.wikipedia.org/wiki/Request_for_Comments	wikipedia
+Design doc	sysdesign	2	0	https://en.wikipedia.org/wiki/Design_document	wikipedia-title
+C4 model	sysdesign	3	0	https://en.wikipedia.org/wiki/C4_model	wikipedia
+UML	sysdesign	3	0	https://en.wikipedia.org/wiki/Unified_Modeling_Language	wikipedia
+Sequence diagram	sysdesign	3	1	https://en.wikipedia.org/wiki/Sequence_diagram	wikipedia

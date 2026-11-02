@@ -1,0 +1,31 @@
+xflow term lexicon data (data/*.tsv, data/hand/*.txt) and the generated
+apps/cli/crates/xflow-core/src/hints/lexicon.txt
+
+Each row is a name: a product, service, company, function or technical term,
+plus the domain and rank xflow uses to pick hints, and the public URL that
+confirmed the name. Names are facts. No descriptions, documentation text,
+glossary definitions, taxonomy labels, logos or page text were copied.
+
+hand/*.txt were written by hand for xflow (PR #117).
+
+The *.tsv files were drafted for xflow (names, domains and ranks are editorial
+judgement), then kept only where `scripts/lexicon/build.py import` found the
+exact name on one of these public pages, recorded per row:
+- index: official vendor product and documentation indexes: the AWS product
+  directory, documentation landing page, glossary, region list, service
+  endpoint list, service authorization reference and service terms; Google
+  Cloud products, documentation, service terms, gcloud reference and IAM roles
+  pages; Azure products and pricing pages, Microsoft Learn Azure hub,
+  glossary, resource abbreviations, built-in roles and resource providers
+  pages; and the Microsoft and Google cross-cloud service comparison pages.
+- page: the row's own cited page (vendor or project documentation).
+- wikipedia: the cited English Wikipedia article (via the MediaWiki API).
+- wikipedia-title: an English Wikipedia article (or redirect, not a
+  disambiguation page) titled with the exact name.
+Only the fact that a name appears was used; nothing from those pages is
+redistributed. Wikipedia text is CC BY-SA 4.0 and is not included.
+
+Everyday-English filtering uses SCOWL (../../../apps/cli/crates/xflow-core/src/SCOWL-LICENSE.txt)
+and the test-only list ../../../apps/cli/crates/xflow-core/src/vocab/english-extra.txt.
+
+Product and company names are trademarks of their owners.

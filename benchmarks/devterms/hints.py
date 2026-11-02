@@ -25,7 +25,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from run import hits, tokens  # noqa: E402
 
-HINTS = ROOT / '../../apps/cli/crates/xflow-core/src/hints'
+HINTS = ROOT / '../../scripts/lexicon/data/hand'
 DOMAINS = ['dev', 'corp', 'sheet', 'finance']
 MAX = 100
 TERMINAL, MAIL, EXCEL = 'com.apple.Terminal', 'com.apple.mail', 'com.microsoft.Excel'

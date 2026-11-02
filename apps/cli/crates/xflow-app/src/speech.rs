@@ -426,7 +426,13 @@ mod tests {
         assert!(suspect("OpenResty, ZenML.", &config, &[]));
         assert!(!suspect("OpenResty is ready", &config, &[]));
         // Shipped domain hints are echoes too.
-        let domain = xflow_core::hints::select(&Config::default(), true, None);
+        let domain = xflow_core::hints::select(
+            &Config::default(),
+            &xflow_core::hints::Signals {
+                terminal: true,
+                ..Default::default()
+            },
+        );
         assert!(!suspect("Supabase, Vercel.", &config, &[]));
         assert!(suspect("Supabase, Vercel.", &config, &domain));
         assert!(!suspect("Supabase is ready", &config, &domain));

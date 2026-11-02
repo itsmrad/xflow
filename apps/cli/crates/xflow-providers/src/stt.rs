@@ -1389,7 +1389,13 @@ mod prompt_tests {
     #[test]
     fn domain_terms_fill_only_what_user_words_leave() {
         let config = xflow_core::config::Config::default();
-        let domain = xflow_core::hints::select(&config, true, None);
+        let domain = xflow_core::hints::select(
+            &config,
+            &xflow_core::hints::Signals {
+                terminal: true,
+                ..Default::default()
+            },
+        );
         let user = vec!["Zorblax".to_owned(), "Éva".into(), "XFlow".into()];
         for (id, model, path) in [
             ("groq", None, "/x"),

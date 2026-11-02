@@ -1,0 +1,554 @@
+# canonical	domain	rank	english	source_url	confirmed_by (scripts/lexicon/build.py import)
+Google Cloud	gcp	1	1	https://cloud.google.com/docs/overview	index
+Google Cloud Platform	gcp	2	1	https://cloud.google.com/docs/overview	index
+GCP	gcp	3	0	https://cloud.google.com/docs/overview	index
+gcloud	gcp	4	0	https://cloud.google.com/sdk/gcloud	index
+Google Cloud CLI	gcp	5	1	https://cloud.google.com/sdk/docs	index
+Compute Engine	gcp	6	1	https://cloud.google.com/compute/docs	index
+Google Kubernetes Engine	gcp	7	1	https://cloud.google.com/kubernetes-engine/docs	index
+GKE	gcp	8	0	https://cloud.google.com/kubernetes-engine/docs	index
+Cloud Run	gcp	9	1	https://cloud.google.com/run/docs	index
+Cloud Functions	gcp	10	1	https://cloud.google.com/functions/docs	index
+Artifact Registry	gcp	11	1	https://cloud.google.com/artifact-registry/docs	index
+Cloud Build	gcp	12	1	https://cloud.google.com/build/docs	index
+Cloud SQL	gcp	13	0	https://cloud.google.com/sql/docs	index
+Spanner	gcp	14	1	https://cloud.google.com/spanner/docs	index
+Bigtable	gcp	15	0	https://cloud.google.com/bigtable/docs	index
+Firestore	gcp	16	0	https://cloud.google.com/firestore/docs	index
+BigQuery	gcp	17	0	https://cloud.google.com/bigquery/docs	index
+Dataflow	gcp	18	0	https://cloud.google.com/dataflow/docs	index
+Pub/Sub	gcp	19	0	https://cloud.google.com/pubsub/docs	index
+Vertex AI	gcp	20	0	https://cloud.google.com/vertex-ai/docs	index
+Gemini	gcp	21	0	https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models	index
+Gemini API	gcp	22	0	https://ai.google.dev/gemini-api/docs	index
+Cloud Storage	gcp	23	1	https://cloud.google.com/storage/docs	index
+VPC	gcp	24	0	https://cloud.google.com/vpc/docs	index
+IAM	gcp	25	0	https://cloud.google.com/iam/docs	index
+Secret Manager	gcp	26	1	https://cloud.google.com/secret-manager/docs	index
+Cloud Logging	gcp	27	1	https://cloud.google.com/logging/docs	index
+Cloud Monitoring	gcp	28	1	https://cloud.google.com/monitoring/docs	index
+Firebase	gcp	29	0	https://firebase.google.com/docs	index
+Firebase Authentication	gcp	30	0	https://firebase.google.com/docs/auth	index
+Kubernetes	gcp	32	0	https://kubernetes.io/docs/home/	index
+kubectl	gcp	33	0	https://kubernetes.io/docs/reference/kubectl/	index
+project	gcp	34	1	https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy	index
+project ID	gcp	35	1	https://cloud.google.com/resource-manager/docs/creating-managing-projects	index
+region	gcp	36	1	https://cloud.google.com/compute/docs/regions-zones	index
+zone	gcp	37	1	https://cloud.google.com/compute/docs/regions-zones	index
+service account	gcp	38	1	https://cloud.google.com/iam/docs/service-account-overview	index
+bucket	gcp	39	1	https://cloud.google.com/storage/docs/buckets	page
+gsutil	gcp	40	0	https://cloud.google.com/storage/docs/gsutil	index
+bq	gcp	41	0	https://cloud.google.com/bigquery/docs/bq-command-line-tool	index
+Cloud Console	gcp	42	1	https://cloud.google.com/cloud-console	index
+Google Cloud console	gcp	43	1	https://cloud.google.com/cloud-console	index
+Cloud Shell	gcp	44	1	https://cloud.google.com/shell/docs	index
+GKE Autopilot	gcp	45	0	https://cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview	index
+Cloud Run functions	gcp	46	1	https://cloud.google.com/functions/docs	index
+App Engine	gcp	47	1	https://cloud.google.com/appengine/docs	index
+TPU	gcp	48	0	https://cloud.google.com/tpu/docs	index
+Spot VMs	gcp	49	1	https://cloud.google.com/compute/docs/instances/spot	index
+Persistent Disk	gcp	50	1	https://cloud.google.com/compute/docs/disks	index
+Cloud SQL Auth Proxy	gcp	51	0	https://cloud.google.com/sql/docs/postgres/sql-proxy	page
+AlloyDB	gcp	52	0	https://cloud.google.com/alloydb/docs	index
+Cloud Spanner	gcp	53	1	https://cloud.google.com/spanner/docs	index
+Cloud Bigtable	gcp	54	0	https://cloud.google.com/bigtable/docs	index
+Cloud Firestore	gcp	55	0	https://firebase.google.com/docs/firestore	index
+Memorystore	gcp	56	0	https://cloud.google.com/memorystore/docs	index
+Memorystore for Redis	gcp	57	0	https://cloud.google.com/memorystore/docs/redis	index
+Firebase Realtime Database	gcp	58	0	https://firebase.google.com/docs/database	index
+Dataproc	gcp	59	0	https://cloud.google.com/dataproc/docs	index
+Cloud Composer	gcp	60	1	https://cloud.google.com/composer/docs	index
+Looker	gcp	61	1	https://cloud.google.com/looker/docs	index
+Looker Studio	gcp	62	1	https://cloud.google.com/looker-studio	index
+Gemini Pro	gcp	64	0	https://cloud.google.com/vertex-ai/generative-ai/docs/models	wikipedia-title
+Gemini CLI	gcp	65	0	https://github.com/google-gemini/gemini-cli	page
+Google AI Studio	gcp	66	1	https://aistudio.google.com/	page
+Speech-to-Text	gcp	67	0	https://cloud.google.com/speech-to-text/docs	index
+Text-to-Speech	gcp	68	0	https://cloud.google.com/text-to-speech/docs	index
+Virtual Private Cloud	gcp	70	1	https://cloud.google.com/vpc/docs	index
+Cloud Load Balancing	gcp	71	1	https://cloud.google.com/load-balancing/docs	index
+Cloud CDN	gcp	72	0	https://cloud.google.com/cdn/docs	index
+Cloud DNS	gcp	73	0	https://cloud.google.com/dns/docs	index
+Cloud NAT	gcp	74	0	https://cloud.google.com/nat/docs	index
+Cloud Armor	gcp	75	1	https://cloud.google.com/armor/docs	index
+Shared VPC	gcp	76	0	https://cloud.google.com/vpc/docs/shared-vpc	page
+VPC Service Controls	gcp	77	0	https://cloud.google.com/vpc-service-controls/docs	index
+Cloud IAM	gcp	78	0	https://cloud.google.com/iam/docs	index
+Identity and Access Management	gcp	79	1	https://cloud.google.com/iam/docs	index
+Identity-Aware Proxy	gcp	80	1	https://cloud.google.com/iap/docs	index
+Cloud KMS	gcp	81	0	https://cloud.google.com/kms/docs	index
+Cloud Audit Logs	gcp	82	1	https://cloud.google.com/logging/docs/audit	index
+Workload Identity Federation	gcp	83	1	https://cloud.google.com/iam/docs/workload-identity-federation	index
+Workload Identity	gcp	84	1	https://cloud.google.com/kubernetes-engine/docs/concepts/workload-identity	index
+Cloud Scheduler	gcp	85	1	https://cloud.google.com/scheduler/docs	index
+Cloud Tasks	gcp	86	1	https://cloud.google.com/tasks/docs	index
+Apigee	gcp	87	0	https://cloud.google.com/apigee/docs	index
+Firebase Hosting	gcp	88	0	https://firebase.google.com/docs/hosting	index
+Firebase Crashlytics	gcp	89	0	https://firebase.google.com/docs/crashlytics	index
+Crashlytics	gcp	90	0	https://firebase.google.com/docs/crashlytics	index
+Firebase Cloud Messaging	gcp	91	0	https://firebase.google.com/docs/cloud-messaging	index
+FCM	gcp	92	0	https://firebase.google.com/docs/cloud-messaging	page
+Firebase CLI	gcp	93	0	https://firebase.google.com/docs/cli	page
+Firebase Admin SDK	gcp	94	0	https://firebase.google.com/docs/admin/setup	page
+Firebase Security Rules	gcp	95	0	https://firebase.google.com/docs/rules	index
+Firebase Cloud Functions	gcp	96	0	https://firebase.google.com/docs/functions	page
+OAuth 2.0	gcp	97	0	https://developers.google.com/identity/protocols/oauth2	page
+Flutter	gcp	98	1	https://docs.flutter.dev/	index
+gRPC	gcp	99	0	https://grpc.io/docs/	page
+k8s	gcp	100	0	https://kubernetes.io/docs/home/	page
+Application Default Credentials	gcp	101	1	https://cloud.google.com/docs/authentication/application-default-credentials	page
+billing account	gcp	102	1	https://cloud.google.com/billing/docs/how-to/manage-billing-account	index
+us-central1	gcp	103	0	https://cloud.google.com/compute/docs/regions-zones	page
+IAM role	gcp	106	0	https://cloud.google.com/iam/docs/roles-overview	index
+organization policy	gcp	107	1	https://cloud.google.com/resource-manager/docs/organization-policy/overview	index
+API key	gcp	108	1	https://cloud.google.com/docs/authentication/api-keys	page
+access token	gcp	109	1	https://cloud.google.com/docs/authentication/token-types	index
+ID token	gcp	110	1	https://cloud.google.com/docs/authentication/token-types	page
+subnet	gcp	112	1	https://cloud.google.com/vpc/docs/subnets	page
+firewall rule	gcp	113	1	https://cloud.google.com/firewall/docs/firewalls	page
+machine type	gcp	114	1	https://cloud.google.com/compute/docs/machine-resource	page
+node pool	gcp	115	1	https://cloud.google.com/kubernetes-engine/docs/concepts/node-pools	page
+topic	gcp	116	1	https://cloud.google.com/pubsub/docs/overview	index
+subscription	gcp	117	1	https://cloud.google.com/pubsub/docs/subscriber	index
+dataset	gcp	118	1	https://cloud.google.com/bigquery/docs/datasets-intro	page
+Google Cloud SDK	gcp	119	0	https://cloud.google.com/sdk/docs	index
+Cloud APIs	gcp	120	1	https://cloud.google.com/apis	index
+Terraform on Google Cloud	gcp	121	1	https://cloud.google.com/docs/terraform	index
+Cloud Run jobs	gcp	124	1	https://cloud.google.com/run/docs/create-jobs	page
+Cloud TPU	gcp	125	0	https://cloud.google.com/tpu/docs	index
+Preemptible VMs	gcp	126	1	https://cloud.google.com/compute/docs/instances/preemptible	page
+Managed Instance Groups	gcp	127	1	https://cloud.google.com/compute/docs/instance-groups	page
+Instance Templates	gcp	128	1	https://cloud.google.com/compute/docs/instance-templates	page
+Hyperdisk	gcp	129	0	https://cloud.google.com/compute/docs/disks/hyperdisk-volumes	index
+Local SSD	gcp	130	1	https://cloud.google.com/compute/docs/disks/local-ssd	index
+OS Login	gcp	132	1	https://cloud.google.com/compute/docs/oslogin	index
+Container Registry	gcp	133	1	https://cloud.google.com/container-registry/docs	index
+Cloud Deploy	gcp	135	1	https://cloud.google.com/deploy/docs	index
+Anthos	gcp	136	0	https://cloud.google.com/anthos	index
+Cloud Service Mesh	gcp	137	1	https://cloud.google.com/service-mesh/docs	index
+Istio	gcp	138	0	https://istio.io/latest/docs/	index
+Fleet	gcp	139	1	https://cloud.google.com/kubernetes-engine/fleet-management/docs	index
+cloud-sql-proxy	gcp	140	0	https://cloud.google.com/sql/docs/postgres/sql-proxy	page
+Datastore	gcp	141	1	https://cloud.google.com/datastore/docs	index
+Database Migration Service	gcp	142	1	https://cloud.google.com/database-migration/docs	index
+Datastream	gcp	143	0	https://cloud.google.com/datastream/docs	index
+Realtime Database	gcp	144	1	https://firebase.google.com/docs/database	index
+BigQuery ML	gcp	145	0	https://cloud.google.com/bigquery/docs/bqml-introduction	page
+Apache Beam	gcp	146	0	https://beam.apache.org/documentation/	page
+Composer	gcp	147	1	https://cloud.google.com/composer/docs	index
+LookML	gcp	148	0	https://cloud.google.com/looker/docs/what-is-lookml	index
+Dataplex	gcp	149	0	https://cloud.google.com/dataplex/docs	index
+Dataform	gcp	150	0	https://cloud.google.com/dataform/docs	index
+Colab	gcp	151	0	https://colab.research.google.com/	index
+Vertex AI Studio	gcp	152	0	https://cloud.google.com/vertex-ai/generative-ai/docs/start/quickstarts/quickstart-multimodal	index
+Vertex AI Search	gcp	156	0	https://cloud.google.com/generative-ai-app-builder/docs	index
+Model Garden	gcp	158	1	https://cloud.google.com/vertex-ai/generative-ai/docs/model-garden/explore-models	index
+Gemini Code Assist	gcp	159	0	https://cloud.google.com/gemini/docs/codeassist/overview	index
+Imagen	gcp	161	0	https://cloud.google.com/vertex-ai/generative-ai/docs/image/overview	index
+Veo	gcp	162	0	https://cloud.google.com/vertex-ai/generative-ai/docs/video/overview	index
+Agent Development Kit	gcp	163	1	https://google.github.io/adk-docs/	index
+ADK	gcp	164	0	https://google.github.io/adk-docs/	index
+Genkit	gcp	165	0	https://firebase.google.com/docs/genkit	page
+Document AI	gcp	166	0	https://cloud.google.com/document-ai/docs	index
+Cloud Vision API	gcp	167	1	https://cloud.google.com/vision/docs	index
+Cloud Translation	gcp	168	1	https://cloud.google.com/translate/docs	index
+Dialogflow	gcp	169	0	https://cloud.google.com/dialogflow/docs	index
+TensorFlow	gcp	170	0	https://www.tensorflow.org/	index
+Filestore	gcp	171	0	https://cloud.google.com/filestore/docs	index
+Cloud Storage FUSE	gcp	172	0	https://cloud.google.com/storage/docs/cloud-storage-fuse/overview	page
+Application Load Balancer	gcp	173	1	https://cloud.google.com/load-balancing/docs/application-load-balancer	index
+Cloud Router	gcp	174	1	https://cloud.google.com/network-connectivity/docs/router	index
+Cloud VPN	gcp	175	0	https://cloud.google.com/network-connectivity/docs/vpn	index
+Cloud Interconnect	gcp	176	1	https://cloud.google.com/network-connectivity/docs/interconnect	index
+Private Service Connect	gcp	177	1	https://cloud.google.com/vpc/docs/private-service-connect	index
+Private Google Access	gcp	178	1	https://cloud.google.com/vpc/docs/private-google-access	page
+Serverless VPC Access	gcp	179	1	https://cloud.google.com/vpc/docs/serverless-vpc-access	index
+VPC Network Peering	gcp	180	0	https://cloud.google.com/vpc/docs/vpc-peering	page
+VPC Flow Logs	gcp	181	0	https://cloud.google.com/vpc/docs/flow-logs	index
+IAP	gcp	183	0	https://cloud.google.com/iap/docs	index
+Security Command Center	gcp	184	1	https://cloud.google.com/security-command-center/docs	index
+reCAPTCHA Enterprise	gcp	185	0	https://cloud.google.com/recaptcha/docs	index
+reCAPTCHA	gcp	186	0	https://developers.google.com/recaptcha	index
+Cloud Identity	gcp	187	1	https://cloud.google.com/identity/docs	index
+Resource Manager	gcp	188	1	https://cloud.google.com/resource-manager/docs	index
+Workflows	gcp	189	1	https://cloud.google.com/workflows/docs	index
+Eventarc	gcp	190	0	https://cloud.google.com/eventarc/docs	index
+API Gateway	gcp	191	1	https://cloud.google.com/api-gateway/docs	index
+Cloud Trace	gcp	192	1	https://cloud.google.com/trace/docs	index
+Error Reporting	gcp	193	1	https://cloud.google.com/error-reporting/docs	index
+Google Cloud Observability	gcp	194	1	https://cloud.google.com/products/observability	index
+Cloud Operations	gcp	195	1	https://cloud.google.com/products/observability	page
+Stackdriver	gcp	196	0	https://cloud.google.com/products/observability	page
+Logs Explorer	gcp	197	1	https://cloud.google.com/logging/docs/view/logs-explorer-interface	page
+Cloud Billing	gcp	198	1	https://cloud.google.com/billing/docs	index
+Firebase App Hosting	gcp	199	0	https://firebase.google.com/docs/app-hosting	index
+Cloud Storage for Firebase	gcp	200	0	https://firebase.google.com/docs/storage	index
+Firebase Storage	gcp	201	0	https://firebase.google.com/docs/storage	index
+Firebase Remote Config	gcp	202	0	https://firebase.google.com/docs/remote-config	index
+Remote Config	gcp	203	1	https://firebase.google.com/docs/remote-config	index
+Firebase App Check	gcp	205	0	https://firebase.google.com/docs/app-check	index
+firebase-tools	gcp	207	0	https://firebase.google.com/docs/cli	page
+Firestore Security Rules	gcp	208	0	https://firebase.google.com/docs/firestore/security/get-started	page
+Cloud Functions for Firebase	gcp	210	0	https://firebase.google.com/docs/functions	index
+Google Maps Platform	gcp	211	1	https://developers.google.com/maps	index
+Google Workspace	gcp	212	1	https://developers.google.com/workspace	index
+Google Apps Script	gcp	213	1	https://developers.google.com/apps-script	page
+Sign in with Google	gcp	214	1	https://developers.google.com/identity/gsi/web	page
+OAuth consent screen	gcp	215	1	https://developers.google.com/identity/protocols/oauth2	page
+OIDC	gcp	216	0	https://developers.google.com/identity/openid-connect/openid-connect	page
+Android Studio	gcp	217	1	https://developer.android.com/studio	index
+Jetpack Compose	gcp	218	1	https://developer.android.com/compose	page
+Dart	gcp	219	1	https://dart.dev/	page
+Protocol Buffers	gcp	220	1	https://protobuf.dev/	page
+protobuf	gcp	221	0	https://protobuf.dev/	page
+ADC	gcp	222	0	https://cloud.google.com/docs/authentication/application-default-credentials	page
+GOOGLE_APPLICATION_CREDENTIALS	gcp	223	0	https://cloud.google.com/docs/authentication/application-default-credentials	page
+project number	gcp	225	1	https://cloud.google.com/resource-manager/docs/creating-managing-projects	page
+organization	gcp	226	1	https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy	index
+folder	gcp	227	1	https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy	index
+resource hierarchy	gcp	228	1	https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy	page
+multi-region	gcp	229	1	https://cloud.google.com/storage/docs/locations	page
+us-east1	gcp	230	0	https://cloud.google.com/compute/docs/regions-zones	page
+europe-west1	gcp	232	0	https://cloud.google.com/compute/docs/regions-zones	page
+service account key	gcp	233	1	https://cloud.google.com/iam/docs/keys-create-delete	page
+service account impersonation	gcp	234	1	https://cloud.google.com/iam/docs/service-account-impersonation	page
+predefined roles	gcp	235	1	https://cloud.google.com/iam/docs/roles-overview	page
+basic roles	gcp	236	1	https://cloud.google.com/iam/docs/roles-overview	page
+custom roles	gcp	237	1	https://cloud.google.com/iam/docs/custom-roles-permissions-support	index
+principal	gcp	238	1	https://cloud.google.com/iam/docs/principals-overview	index
+least privilege	gcp	239	1	https://cloud.google.com/iam/docs/using-iam-securely	page
+Owner	gcp	240	1	https://cloud.google.com/iam/docs/roles-overview	page
+Editor	gcp	241	1	https://cloud.google.com/iam/docs/roles-overview	index
+Viewer	gcp	242	1	https://cloud.google.com/iam/docs/roles-overview	page
+OAuth scopes	gcp	243	1	https://cloud.google.com/compute/docs/access/service-accounts	page
+host project	gcp	244	1	https://cloud.google.com/vpc/docs/shared-vpc	page
+service project	gcp	245	1	https://cloud.google.com/vpc/docs/shared-vpc	page
+network tags	gcp	246	1	https://cloud.google.com/vpc/docs/add-remove-network-tags	page
+external IP	gcp	247	1	https://cloud.google.com/compute/docs/ip-addresses	page
+static IP	gcp	248	1	https://cloud.google.com/compute/docs/ip-addresses/reserve-static-external-ip-address	page
+health check	gcp	249	1	https://cloud.google.com/load-balancing/docs/health-check-concepts	page
+E2	gcp	250	0	https://cloud.google.com/compute/docs/general-purpose-machines	page
+N2	gcp	251	0	https://cloud.google.com/compute/docs/general-purpose-machines	page
+vCPU	gcp	252	0	https://cloud.google.com/compute/docs/cpu-platforms	page
+committed use discount	gcp	253	1	https://cloud.google.com/docs/cuds	page
+snapshot	gcp	254	1	https://cloud.google.com/compute/docs/disks/create-snapshots	page
+boot disk	gcp	255	1	https://cloud.google.com/compute/docs/disks	page
+startup script	gcp	256	1	https://cloud.google.com/compute/docs/instances/startup-scripts	page
+control plane	gcp	258	1	https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-architecture	index
+cluster autoscaler	gcp	259	1	https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-autoscaler	page
+Horizontal Pod Autoscaler	gcp	260	1	https://cloud.google.com/kubernetes-engine/docs/concepts/horizontalpodautoscaler	page
+revision	gcp	261	1	https://cloud.google.com/run/docs/managing/revisions	page
+traffic splitting	gcp	262	1	https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration	page
+min instances	gcp	263	1	https://cloud.google.com/run/docs/configuring/min-instances	page
+max instances	gcp	264	1	https://cloud.google.com/run/docs/configuring/max-instances	page
+cold start	gcp	265	1	https://cloud.google.com/run/docs/tips/general	page
+concurrency	gcp	266	1	https://cloud.google.com/run/docs/about-concurrency	page
+partitioned table	gcp	267	1	https://cloud.google.com/bigquery/docs/partitioned-tables	page
+slot	gcp	268	1	https://cloud.google.com/bigquery/docs/slots	page
+GoogleSQL	gcp	269	0	https://cloud.google.com/bigquery/docs/introduction-sql	page
+row key	gcp	270	1	https://cloud.google.com/bigtable/docs/schema-design	page
+collection	gcp	271	1	https://firebase.google.com/docs/firestore/data-model	index
+document	gcp	272	1	https://firebase.google.com/docs/firestore/data-model	index
+object	gcp	273	1	https://cloud.google.com/storage/docs/objects	index
+storage class	gcp	274	1	https://cloud.google.com/storage/docs/storage-classes	page
+signed URL	gcp	275	1	https://cloud.google.com/storage/docs/access-control/signed-urls	page
+log sink	gcp	276	1	https://cloud.google.com/logging/docs/export/configure_export_v2	page
+alerting policy	gcp	277	1	https://cloud.google.com/monitoring/alerts	page
+labels	gcp	278	1	https://cloud.google.com/resource-manager/docs/labels-overview	index
+CMEK	gcp	279	0	https://cloud.google.com/kms/docs/cmek	page
+customer-managed encryption keys	gcp	280	1	https://cloud.google.com/kms/docs/cmek	page
+secret version	gcp	281	1	https://cloud.google.com/secret-manager/docs/add-secret-version	page
+service perimeter	gcp	282	1	https://cloud.google.com/vpc-service-controls/docs/service-perimeters	page
+free tier	gcp	283	1	https://cloud.google.com/free	index
+cbt	gcp	284	0	https://cloud.google.com/bigtable/docs/cbt-overview	page
+Cloud Shell Editor	gcp	285	1	https://cloud.google.com/shell/docs/editor-overview	index
+Cloud Code	gcp	286	1	https://cloud.google.com/code/docs	index
+Cloud Workstations	gcp	287	1	https://cloud.google.com/workstations/docs	index
+Service Usage	gcp	288	1	https://cloud.google.com/service-usage/docs	index
+Cloud Client Libraries	gcp	289	1	https://cloud.google.com/apis/docs/cloud-client-libraries	index
+Infrastructure Manager	gcp	290	1	https://cloud.google.com/infrastructure-manager/docs	index
+Deployment Manager	gcp	291	1	https://cloud.google.com/deployment-manager/docs	index
+Config Connector	gcp	292	1	https://cloud.google.com/config-connector/docs/overview	index
+GKE Standard	gcp	293	0	https://cloud.google.com/kubernetes-engine/docs/concepts/choose-cluster-mode	page
+App Engine standard environment	gcp	294	1	https://cloud.google.com/appengine/docs/standard	page
+App Engine flexible environment	gcp	295	1	https://cloud.google.com/appengine/docs/flexible	index
+MIG	gcp	297	0	https://cloud.google.com/compute/docs/instance-groups	index
+Shielded VMs	gcp	298	1	https://cloud.google.com/security/shielded-cloud/shielded-vm	page
+Sole-tenant nodes	gcp	299	1	https://cloud.google.com/compute/docs/nodes/sole-tenant-nodes	page
+VM Manager	gcp	300	1	https://cloud.google.com/compute/docs/vm-manager	index
+Google Cloud VMware Engine	gcp	301	1	https://cloud.google.com/vmware-engine/docs	index
+Migrate to Virtual Machines	gcp	302	1	https://cloud.google.com/migrate/virtual-machines/docs	index
+Migration Center	gcp	303	1	https://cloud.google.com/migration-center/docs	index
+Google Distributed Cloud	gcp	304	1	https://cloud.google.com/distributed-cloud	index
+Google Cloud Marketplace	gcp	305	1	https://cloud.google.com/marketplace/docs	index
+Cloud Source Repositories	gcp	307	1	https://cloud.google.com/source-repositories/docs	index
+Skaffold	gcp	308	0	https://skaffold.dev/docs	page
+Knative	gcp	309	0	https://knative.dev/docs/	index
+Config Sync	gcp	310	1	https://cloud.google.com/kubernetes-engine/enterprise/config-sync/docs/overview	index
+Policy Controller	gcp	311	1	https://cloud.google.com/kubernetes-engine/enterprise/policy-controller/docs/overview	index
+Binary Authorization	gcp	312	1	https://cloud.google.com/binary-authorization/docs	index
+Gateway API	gcp	313	1	https://cloud.google.com/kubernetes-engine/docs/concepts/gateway-api	index
+Buildpacks	gcp	314	1	https://cloud.google.com/docs/buildpacks/overview	index
+Functions Framework	gcp	315	1	https://cloud.google.com/functions/docs/functions-framework	page
+AlloyDB Omni	gcp	316	0	https://cloud.google.com/alloydb/omni/docs	index
+Memorystore for Redis Cluster	gcp	318	0	https://cloud.google.com/memorystore/docs/cluster	index
+Memorystore for Valkey	gcp	319	0	https://cloud.google.com/memorystore/docs/valkey	index
+Memorystore for Memcached	gcp	320	0	https://cloud.google.com/memorystore/docs/memcached	index
+BigQuery BI Engine	gcp	322	0	https://cloud.google.com/bigquery/docs/bi-engine-intro	page
+BigQuery Data Transfer Service	gcp	324	0	https://cloud.google.com/bigquery/docs/dts-introduction	index
+BigLake	gcp	325	0	https://cloud.google.com/bigquery/docs/biglake-intro	index
+Managed Service for Apache Kafka	gcp	326	0	https://cloud.google.com/managed-service-for-apache-kafka/docs	index
+Data Studio	gcp	327	1	https://cloud.google.com/looker-studio	index
+Dataplex Universal Catalog	gcp	328	0	https://cloud.google.com/dataplex/docs	index
+Data Catalog	gcp	329	1	https://cloud.google.com/data-catalog/docs	index
+Cloud Data Fusion	gcp	330	0	https://cloud.google.com/data-fusion/docs	index
+Analytics Hub	gcp	331	1	https://cloud.google.com/bigquery/docs/analytics-hub-introduction	page
+Sensitive Data Protection	gcp	332	1	https://cloud.google.com/sensitive-data-protection/docs	index
+Cloud DLP	gcp	333	0	https://cloud.google.com/sensitive-data-protection/docs	page
+Colab Enterprise	gcp	334	0	https://cloud.google.com/colab/docs	index
+Kaggle	gcp	335	0	https://www.kaggle.com/docs	page
+Vertex AI Workbench	gcp	336	0	https://cloud.google.com/vertex-ai/docs/workbench	index
+Vertex AI RAG Engine	gcp	337	0	https://cloud.google.com/vertex-ai/generative-ai/docs/rag-overview	index
+AutoML	gcp	342	0	https://cloud.google.com/vertex-ai/docs/beginner/beginners-guide	index
+Gemini Nano	gcp	344	0	https://developer.android.com/ai/gemini-nano	page
+Gemini Live API	gcp	345	0	https://ai.google.dev/gemini-api/docs/live	index
+Gemini Enterprise	gcp	346	0	https://cloud.google.com/gemini-enterprise	index
+Gemini for Google Cloud	gcp	347	0	https://cloud.google.com/gemini/docs/overview	index
+Gemini Embedding	gcp	348	0	https://ai.google.dev/gemini-api/docs/embeddings	page
+Nano Banana	gcp	349	0	https://ai.google.dev/gemini-api/docs/image-generation	page
+Google Antigravity	gcp	350	0	https://antigravity.google/	page
+Jules	gcp	351	1	https://jules.google/	wikipedia-title
+Agent2Agent Protocol	gcp	352	0	https://a2a-protocol.org/	page
+A2A	gcp	353	0	https://a2a-protocol.org/	page
+Firebase AI Logic	gcp	354	0	https://firebase.google.com/docs/ai-logic	index
+Firebase Studio	gcp	355	0	https://firebase.google.com/docs/studio	page
+Natural Language API	gcp	356	1	https://cloud.google.com/natural-language/docs	index
+Dialogflow CX	gcp	357	0	https://cloud.google.com/dialogflow/cx/docs	index
+JAX	gcp	358	0	https://docs.jax.dev/	page
+Keras	gcp	359	0	https://keras.io/	page
+gcsfuse	gcp	360	0	https://cloud.google.com/storage/docs/cloud-storage-fuse/overview	page
+Storage Transfer Service	gcp	361	1	https://cloud.google.com/storage-transfer/docs	index
+Backup and DR Service	gcp	362	0	https://cloud.google.com/backup-disaster-recovery/docs	index
+Autoclass	gcp	363	0	https://cloud.google.com/storage/docs/autoclass	page
+Nearline	gcp	364	0	https://cloud.google.com/storage/docs/storage-classes	page
+Coldline	gcp	365	0	https://cloud.google.com/storage/docs/storage-classes	page
+Network Load Balancer	gcp	366	1	https://cloud.google.com/load-balancing/docs/network	page
+HA VPN	gcp	367	0	https://cloud.google.com/network-connectivity/docs/vpn/concepts/overview	page
+Dedicated Interconnect	gcp	368	1	https://cloud.google.com/network-connectivity/docs/interconnect/concepts/dedicated-overview	index
+Partner Interconnect	gcp	369	1	https://cloud.google.com/network-connectivity/docs/interconnect/concepts/partner-overview	index
+Network Connectivity Center	gcp	370	1	https://cloud.google.com/network-connectivity/docs/network-connectivity-center	index
+Direct VPC egress	gcp	373	0	https://cloud.google.com/run/docs/configuring/vpc-direct-vpc	page
+Certificate Manager	gcp	374	1	https://cloud.google.com/certificate-manager/docs	index
+Cloud HSM	gcp	375	0	https://cloud.google.com/kms/docs/hsm	index
+Certificate Authority Service	gcp	376	1	https://cloud.google.com/certificate-authority-service/docs	index
+Google Security Operations	gcp	377	1	https://cloud.google.com/security/products/security-operations	index
+Google SecOps	gcp	378	0	https://cloud.google.com/security/products/security-operations	page
+Mandiant	gcp	379	0	https://cloud.google.com/security/mandiant	index
+VirusTotal	gcp	380	0	https://docs.virustotal.com/	page
+Assured Workloads	gcp	381	1	https://cloud.google.com/assured-workloads/docs	index
+Workforce Identity Federation	gcp	382	1	https://cloud.google.com/iam/docs/workforce-identity-federation	page
+BeyondCorp Enterprise	gcp	383	0	https://cloud.google.com/beyondcorp-enterprise/docs	index
+Access Context Manager	gcp	385	1	https://cloud.google.com/access-context-manager/docs	index
+Confidential Computing	gcp	386	1	https://cloud.google.com/confidential-computing/docs	index
+Artifact Analysis	gcp	387	1	https://cloud.google.com/artifact-analysis/docs	index
+Cloud Asset Inventory	gcp	388	1	https://cloud.google.com/asset-inventory/docs	index
+Organization Policy Service	gcp	389	1	https://cloud.google.com/resource-manager/docs/organization-policy/overview	index
+Cloud Key Management Service	gcp	390	1	https://cloud.google.com/kms/docs	index
+Cloud Endpoints	gcp	391	1	https://cloud.google.com/endpoints/docs	index
+Apigee X	gcp	392	0	https://cloud.google.com/apigee/docs	index
+Cloud Profiler	gcp	393	1	https://cloud.google.com/profiler/docs	index
+Ops Agent	gcp	394	0	https://cloud.google.com/stackdriver/docs/solutions/agents/ops-agent	page
+Google Cloud Managed Service for Prometheus	gcp	395	0	https://cloud.google.com/stackdriver/docs/managed-prometheus	page
+Log Analytics	gcp	396	1	https://cloud.google.com/logging/docs/log-analytics	page
+Log Router	gcp	397	1	https://cloud.google.com/logging/docs/routing/overview	page
+Metrics Explorer	gcp	398	1	https://cloud.google.com/monitoring/charts/metrics-explorer	page
+Cloud Quotas	gcp	399	1	https://cloud.google.com/docs/quotas	index
+Pricing Calculator	gcp	400	1	https://cloud.google.com/products/calculator	page
+Google Analytics for Firebase	gcp	401	0	https://firebase.google.com/docs/analytics	index
+Firebase Performance Monitoring	gcp	402	0	https://firebase.google.com/docs/perf-mon	index
+Firebase Test Lab	gcp	403	0	https://firebase.google.com/docs/test-lab	index
+Firebase App Distribution	gcp	404	0	https://firebase.google.com/docs/app-distribution	index
+Firebase Extensions	gcp	405	0	https://firebase.google.com/docs/extensions	index
+Firebase Data Connect	gcp	406	0	https://firebase.google.com/docs/data-connect	index
+Firebase Local Emulator Suite	gcp	409	0	https://firebase.google.com/docs/emulator-suite	page
+Places API	gcp	410	1	https://developers.google.com/maps/documentation/places/web-service/overview	page
+Google Sheets API	gcp	411	1	https://developers.google.com/sheets/api	page
+Gmail API	gcp	412	0	https://developers.google.com/gmail/api	page
+Google Drive API	gcp	413	1	https://developers.google.com/drive/api	page
+Google Calendar API	gcp	414	1	https://developers.google.com/calendar/api	page
+Google Play Console	gcp	416	1	https://play.google.com/console	page
+Google Analytics 4	gcp	417	1	https://developers.google.com/analytics	wikipedia-title
+GA4	gcp	418	0	https://developers.google.com/analytics	page
+Google Tag Manager	gcp	419	1	https://developers.google.com/tag-platform/tag-manager	page
+YouTube Data API	gcp	420	1	https://developers.google.com/youtube/v3	page
+Bazel	gcp	421	0	https://bazel.build/	page
+gke-gcloud-auth-plugin	gcp	422	0	https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl	page
+dual-region	gcp	423	1	https://cloud.google.com/storage/docs/locations	page
+Service Account Token Creator	gcp	425	1	https://cloud.google.com/iam/docs/service-account-permissions	page
+service agent	gcp	426	1	https://cloud.google.com/iam/docs/service-agents	index
+allow policy	gcp	427	1	https://cloud.google.com/iam/docs/policies	page
+deny policy	gcp	428	1	https://cloud.google.com/iam/docs/deny-overview	page
+IAM Conditions	gcp	429	0	https://cloud.google.com/iam/docs/conditions-overview	index
+custom mode VPC	gcp	431	0	https://cloud.google.com/vpc/docs/vpc	page
+auto mode VPC	gcp	432	0	https://cloud.google.com/vpc/docs/vpc	page
+alias IP ranges	gcp	433	1	https://cloud.google.com/vpc/docs/alias-ip	page
+forwarding rule	gcp	434	1	https://cloud.google.com/load-balancing/docs/forwarding-rule-concepts	page
+backend service	gcp	435	1	https://cloud.google.com/load-balancing/docs/backend-service	page
+managed zone	gcp	436	1	https://cloud.google.com/dns/docs/zones	page
+custom machine type	gcp	437	1	https://cloud.google.com/compute/docs/instances/creating-instance-with-custom-machine-type	page
+N2D	gcp	438	0	https://cloud.google.com/compute/docs/general-purpose-machines	page
+N4	gcp	439	0	https://cloud.google.com/compute/docs/general-purpose-machines	page
+C3	gcp	440	0	https://cloud.google.com/compute/docs/compute-optimized-machines	page
+C4	gcp	441	0	https://cloud.google.com/compute/docs/general-purpose-machines	page
+A3	gcp	442	0	https://cloud.google.com/compute/docs/gpus	page
+CUD	gcp	443	0	https://cloud.google.com/docs/cuds	index
+sustained use discount	gcp	444	1	https://cloud.google.com/compute/docs/sustained-use-discounts	page
+custom image	gcp	445	1	https://cloud.google.com/compute/docs/images	page
+instance metadata	gcp	446	1	https://cloud.google.com/compute/docs/metadata/overview	page
+metadata server	gcp	447	1	https://cloud.google.com/compute/docs/metadata/overview	page
+regional cluster	gcp	448	1	https://cloud.google.com/kubernetes-engine/docs/concepts/regional-clusters	page
+zonal cluster	gcp	449	1	https://cloud.google.com/kubernetes-engine/docs/concepts/types-of-clusters	page
+VPC-native cluster	gcp	450	0	https://cloud.google.com/kubernetes-engine/docs/concepts/alias-ips	page
+release channel	gcp	451	1	https://cloud.google.com/kubernetes-engine/docs/concepts/release-channels	page
+push subscription	gcp	453	1	https://cloud.google.com/pubsub/docs/push	page
+pull subscription	gcp	454	1	https://cloud.google.com/pubsub/docs/pull	page
+dead-letter topic	gcp	455	1	https://cloud.google.com/pubsub/docs/handling-failures	page
+ack deadline	gcp	456	1	https://cloud.google.com/pubsub/docs/lease-management	page
+exactly-once delivery	gcp	457	1	https://cloud.google.com/pubsub/docs/exactly-once-delivery	page
+clustered table	gcp	458	1	https://cloud.google.com/bigquery/docs/clustered-tables	page
+materialized view	gcp	460	1	https://cloud.google.com/bigquery/docs/materialized-views-intro	page
+authorized view	gcp	461	1	https://cloud.google.com/bigquery/docs/authorized-views	page
+external table	gcp	462	1	https://cloud.google.com/bigquery/docs/external-tables	page
+time travel	gcp	463	1	https://cloud.google.com/bigquery/docs/time-travel	page
+Storage Write API	gcp	464	1	https://cloud.google.com/bigquery/docs/write-api	page
+INFORMATION_SCHEMA	gcp	465	0	https://cloud.google.com/bigquery/docs/information-schema-intro	page
+column family	gcp	466	1	https://cloud.google.com/bigtable/docs/overview	page
+processing units	gcp	467	1	https://cloud.google.com/spanner/docs/compute-capacity	index
+composite index	gcp	468	1	https://firebase.google.com/docs/firestore/query-data/indexing	page
+uniform bucket-level access	gcp	469	1	https://cloud.google.com/storage/docs/uniform-bucket-level-access	page
+lifecycle rule	gcp	470	1	https://cloud.google.com/storage/docs/lifecycle	page
+object versioning	gcp	471	1	https://cloud.google.com/storage/docs/object-versioning	page
+log bucket	gcp	472	1	https://cloud.google.com/logging/docs/buckets	page
+log-based metric	gcp	473	1	https://cloud.google.com/logging/docs/logs-based-metrics	page
+notification channel	gcp	474	1	https://cloud.google.com/monitoring/support/notification-options	page
+uptime check	gcp	475	1	https://cloud.google.com/monitoring/uptime-checks	page
+PromQL	gcp	476	0	https://cloud.google.com/monitoring/promql	page
+SLO	gcp	477	0	https://cloud.google.com/monitoring/service-monitoring	page
+key ring	gcp	478	1	https://cloud.google.com/kms/docs/resource-hierarchy	page
+envelope encryption	gcp	479	1	https://cloud.google.com/kms/docs/envelope-encryption	page
+access level	gcp	480	1	https://cloud.google.com/access-context-manager/docs/overview	page
+data exfiltration	gcp	481	1	https://cloud.google.com/vpc-service-controls/docs/overview	index
+data residency	gcp	482	1	https://cloud.google.com/assured-workloads/docs/overview	page
+landing zone	gcp	483	1	https://cloud.google.com/architecture/landing-zones	index
+availability zone	gcp	484	1	https://cloud.google.com/compute/docs/regions-zones	wikipedia-title
+SLA	gcp	485	0	https://cloud.google.com/terms/sla	index
+Always Free	gcp	486	1	https://cloud.google.com/free/docs/free-cloud-features	page
+Gemini Cloud Assist	gcp	487	1	https://cloud.google.com/products/gemini/cloud-assist	index
+Config Controller	gcp	488	1	https://cloud.google.com/anthos-config-management/docs/concepts/config-controller-overview	index
+Cloud Foundation Toolkit	gcp	489	1	https://cloud.google.com/docs/terraform/blueprints/terraform-blueprints	index
+Ironwood	gcp	490	1	https://cloud.google.com/tpu/docs	page
+Trillium	gcp	491	1	https://cloud.google.com/tpu/docs	wikipedia-title
+Bare Metal Solution	gcp	492	1	https://cloud.google.com/bare-metal/docs	index
+Workload Manager	gcp	493	1	https://cloud.google.com/workload-manager/docs	index
+Cloud Run Admin API	gcp	494	1	https://cloud.google.com/run/docs/reference/rest	page
+Backup for GKE	gcp	495	0	https://cloud.google.com/kubernetes-engine/docs/add-on/backup-for-gke	index
+Jib	gcp	496	0	https://github.com/GoogleContainerTools/jib	page
+Kaniko	gcp	497	0	https://github.com/GoogleContainerTools/kaniko	page
+Firestore with MongoDB compatibility	gcp	499	0	https://cloud.google.com/firestore/mongodb-compatibility/docs/overview	index
+Database Center	gcp	500	1	https://cloud.google.com/database-center/docs	index
+Oracle Database@Google Cloud	gcp	501	0	https://cloud.google.com/oracle/database/docs	index
+Spanner Graph	gcp	502	0	https://cloud.google.com/spanner/docs/graph/overview	page
+BigQuery Omni	gcp	503	0	https://cloud.google.com/bigquery/docs/omni-introduction	index
+BigQuery sandbox	gcp	504	0	https://cloud.google.com/bigquery/docs/sandbox	page
+BigQuery DataFrames	gcp	505	0	https://cloud.google.com/bigquery/docs/bigquery-dataframes-introduction	page
+Dataproc Metastore	gcp	506	0	https://cloud.google.com/dataproc-metastore/docs	index
+Google Cloud Serverless for Apache Spark	gcp	507	0	https://cloud.google.com/dataproc-serverless/docs	page
+Pub/Sub Lite	gcp	508	0	https://cloud.google.com/pubsub/lite/docs	index
+Looker Studio Pro	gcp	509	1	https://cloud.google.com/looker-studio	index
+Dataprep	gcp	510	0	https://cloud.google.com/dataprep	index
+Vertex AI Feature Store	gcp	512	0	https://cloud.google.com/vertex-ai/docs/featurestore	page
+Vertex AI Experiments	gcp	513	0	https://cloud.google.com/vertex-ai/docs/experiments/intro-vertex-ai-experiments	page
+Vertex AI TensorBoard	gcp	514	0	https://cloud.google.com/vertex-ai/docs/experiments/tensorboard-introduction	index
+Gen AI evaluation service	gcp	515	0	https://cloud.google.com/vertex-ai/generative-ai/docs/models/evaluation-overview	page
+Lyria	gcp	516	0	https://cloud.google.com/vertex-ai/generative-ai/docs/music/overview	index
+Chirp	gcp	517	1	https://cloud.google.com/speech-to-text/v2/docs/chirp-model	page
+Model Armor	gcp	518	1	https://cloud.google.com/security-command-center/docs/model-armor-overview	index
+Project IDX	gcp	519	0	https://developers.google.com/idx	page
+Video Intelligence API	gcp	520	1	https://cloud.google.com/video-intelligence/docs	index
+Customer Engagement Suite	gcp	521	1	https://cloud.google.com/customer-engagement-ai	index
+Conversational Agents	gcp	522	1	https://cloud.google.com/dialogflow/cx/docs	index
+Recommendations AI	gcp	523	1	https://cloud.google.com/retail/docs	index
+Cloud Healthcare API	gcp	524	1	https://cloud.google.com/healthcare-api/docs	index
+Deep Learning VM	gcp	525	1	https://cloud.google.com/deep-learning-vm/docs	index
+Deep Learning Containers	gcp	526	1	https://cloud.google.com/deep-learning-containers/docs	index
+Parallelstore	gcp	527	0	https://cloud.google.com/parallelstore/docs	index
+Managed Lustre	gcp	528	0	https://cloud.google.com/managed-lustre/docs	index
+Transfer Appliance	gcp	529	1	https://cloud.google.com/transfer-appliance/docs	index
+Google Cloud NetApp Volumes	gcp	530	0	https://cloud.google.com/netapp/volumes/docs	index
+Anywhere Cache	gcp	531	1	https://cloud.google.com/storage/docs/anywhere-cache	page
+Archive storage	gcp	532	1	https://cloud.google.com/storage/docs/storage-classes	page
+Storage Insights	gcp	533	1	https://cloud.google.com/storage/docs/insights/storage-insights	index
+Media CDN	gcp	534	0	https://cloud.google.com/media-cdn/docs	index
+Cross-Cloud Interconnect	gcp	535	1	https://cloud.google.com/network-connectivity/docs/interconnect/concepts/cci-overview	index
+Network Intelligence Center	gcp	536	1	https://cloud.google.com/network-intelligence-center/docs	index
+Connectivity Tests	gcp	537	1	https://cloud.google.com/network-intelligence-center/docs/connectivity-tests/concepts/overview	page
+Cloud IDS	gcp	538	0	https://cloud.google.com/intrusion-detection-system/docs	index
+Cloud NGFW	gcp	539	0	https://cloud.google.com/firewall/docs	index
+Traffic Director	gcp	540	1	https://cloud.google.com/traffic-director/docs	page
+Service Directory	gcp	541	1	https://cloud.google.com/service-directory/docs	index
+Secure Web Proxy	gcp	542	1	https://cloud.google.com/secure-web-proxy/docs	index
+Cloud Domains	gcp	543	1	https://cloud.google.com/domains/docs	index
+Network Service Tiers	gcp	544	1	https://cloud.google.com/network-tiers/docs	index
+Packet Mirroring	gcp	545	1	https://cloud.google.com/vpc/docs/packet-mirroring	index
+Service Extensions	gcp	546	1	https://cloud.google.com/service-extensions/docs	index
+Cloud External Key Manager	gcp	547	1	https://cloud.google.com/kms/docs/ekm	index
+Chronicle	gcp	548	1	https://cloud.google.com/security/products/security-operations	page
+Web Risk	gcp	549	1	https://cloud.google.com/web-risk/docs	index
+Access Transparency	gcp	550	1	https://cloud.google.com/assured-workloads/access-transparency/docs	index
+Access Approval	gcp	551	1	https://cloud.google.com/assured-workloads/access-approval/docs	index
+Policy Intelligence	gcp	552	1	https://cloud.google.com/policy-intelligence/docs	index
+Policy Analyzer	gcp	553	1	https://cloud.google.com/policy-intelligence/docs/policy-analyzer-overview	index
+IAM Recommender	gcp	555	0	https://cloud.google.com/policy-intelligence/docs/role-recommendations-overview	page
+Active Assist	gcp	556	1	https://cloud.google.com/recommender/docs/whatis-activeassist	index
+Google Cloud Directory Sync	gcp	557	1	https://support.google.com/a/answer/106368	page
+Managed Service for Microsoft Active Directory	gcp	558	1	https://cloud.google.com/managed-microsoft-ad/docs	index
+Confidential Space	gcp	559	1	https://cloud.google.com/confidential-computing/confidential-space/docs	index
+Container Threat Detection	gcp	560	1	https://cloud.google.com/security-command-center/docs/concepts-container-threat-detection-overview	index
+Event Threat Detection	gcp	561	1	https://cloud.google.com/security-command-center/docs/concepts-event-threat-detection-overview	page
+Security Health Analytics	gcp	562	1	https://cloud.google.com/security-command-center/docs/concepts-security-health-analytics	page
+Web Security Scanner	gcp	563	1	https://cloud.google.com/security-command-center/docs/concepts-web-security-scanner-overview	index
+Autokey	gcp	564	0	https://cloud.google.com/kms/docs/autokey-overview	page
+Sovereign Cloud	gcp	565	1	https://cloud.google.com/sovereign-cloud	index
+Application Integration	gcp	566	1	https://cloud.google.com/application-integration/docs	index
+Integration Connectors	gcp	567	1	https://cloud.google.com/integration-connectors/docs	index
+Apigee hybrid	gcp	568	0	https://cloud.google.com/apigee/docs/hybrid	index
+Cloud Run domain mappings	gcp	569	1	https://cloud.google.com/run/docs/mapping-custom-domains	page
+Service Health	gcp	570	1	https://cloud.google.com/service-health/docs	index
+FinOps hub	gcp	572	0	https://cloud.google.com/billing/docs/how-to/finops-hub	page
+Cloud Hub	gcp	573	1	https://cloud.google.com/cloud-hub/docs	index
+App Hub	gcp	574	1	https://cloud.google.com/app-hub/docs	index
+Application Design Center	gcp	575	1	https://cloud.google.com/application-design-center/docs	index
+Carbon Footprint	gcp	576	1	https://cloud.google.com/carbon-footprint/docs	index
+Google Cloud Support	gcp	577	1	https://cloud.google.com/support	index
+Firebase In-App Messaging	gcp	578	0	https://firebase.google.com/docs/in-app-messaging	index
+Firebase A/B Testing	gcp	579	0	https://firebase.google.com/docs/ab-testing	index
+Firebase Dynamic Links	gcp	580	0	https://firebase.google.com/support/dynamic-links-faq	index
+Firebase ML	gcp	581	0	https://firebase.google.com/docs/ml	page
+clasp	gcp	582	1	https://github.com/google/clasp	page
+Google Play Billing	gcp	583	1	https://developer.android.com/google/play/billing	page
+Google Ads API	gcp	584	1	https://developers.google.com/google-ads/api/docs/start	page
+gVisor	gcp	585	0	https://gvisor.dev/docs/	page
+Premium Tier	gcp	586	1	https://cloud.google.com/network-tiers/docs/overview	index
+T2A	gcp	587	0	https://cloud.google.com/compute/docs/general-purpose-machines	page
+C4A	gcp	588	0	https://cloud.google.com/compute/docs/general-purpose-machines	page
+Axion	gcp	589	0	https://cloud.google.com/products/axion	page
+A4	gcp	590	0	https://cloud.google.com/compute/docs/gpus	page
+G2	gcp	591	0	https://cloud.google.com/compute/docs/gpus	page
+live migration	gcp	592	1	https://cloud.google.com/compute/docs/instances/live-migration-process	page
+startup CPU boost	gcp	593	1	https://cloud.google.com/run/docs/configuring/services/cpu	page
+ordering key	gcp	594	1	https://cloud.google.com/pubsub/docs/ordering	page
+TrueTime	gcp	595	0	https://cloud.google.com/spanner/docs/true-time-external-consistency	page
+Monitoring Query Language	gcp	596	1	https://cloud.google.com/monitoring/mql	page
+Cloud Architecture Center	gcp	597	1	https://cloud.google.com/architecture	index
+Google Cloud Well-Architected Framework	gcp	598	1	https://cloud.google.com/architecture/framework	page
+Qwiklabs	gcp	600	0	https://www.cloudskillsboost.google/	page

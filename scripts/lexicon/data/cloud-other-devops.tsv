@@ -1,0 +1,669 @@
+# canonical	domain	rank	english	source_url	confirmed_by (scripts/lexicon/build.py import)
+Apache Kafka	cloud	1	0	https://docs.confluent.io	page
+Cloudflare	cloud	1	0	https://developers.cloudflare.com/products/	page
+Cloudflare Workers	cloud	1	0	https://developers.cloudflare.com/products/	page
+Databricks	cloud	1	0	https://docs.databricks.com	page
+DigitalOcean	cloud	1	0	https://docs.digitalocean.com/products/	page
+Droplet	cloud	1	1	https://docs.digitalocean.com/products/	page
+Droplets	cloud	1	1	https://docs.digitalocean.com/products/	page
+Fly.io	cloud	1	0	https://fly.io/docs/	page
+Heroku	cloud	1	0	https://devcenter.heroku.com/	page
+Kafka	cloud	1	0	https://docs.confluent.io	page
+MongoDB	cloud	1	0	https://www.mongodb.com/docs/	page
+MongoDB Atlas	cloud	1	0	https://www.mongodb.com/docs/	page
+Neon	cloud	1	1	https://neon.com/docs	page
+Netlify	cloud	1	0	https://docs.netlify.com	page
+Next.js	cloud	1	0	https://vercel.com/docs	page
+R2	cloud	1	0	https://developers.cloudflare.com/products/	page
+Railway	cloud	1	1	https://docs.railway.com	page
+Redis	cloud	1	0	https://redis.io/docs/	page
+Render	cloud	1	1	https://render.com/docs	page
+Snowflake	cloud	1	1	https://docs.snowflake.com	page
+Supabase	cloud	1	0	https://supabase.com/docs	page
+Vercel	cloud	1	0	https://vercel.com/docs	page
+Workers	cloud	1	1	https://developers.cloudflare.com/products/	page
+Ansible	devops	1	0	https://docs.ansible.com/	page
+Argo CD	devops	1	0	https://argo-cd.readthedocs.io/	page
+CircleCI	devops	1	0	https://circleci.com/docs/	page
+ConfigMap	devops	1	0	https://kubernetes.io/docs/	page
+Deployment	devops	1	1	https://kubernetes.io/docs/	page
+DevOps	devops	1	0	https://dora.dev/	wikipedia-title
+Docker	devops	1	1	https://docs.docker.com/	page
+Docker Compose	devops	1	0	https://docs.docker.com/	page
+docker-compose	devops	1	0	https://docs.docker.com/	page
+Dockerfile	devops	1	0	https://docs.docker.com/	wikipedia-title
+Envoy	devops	1	1	https://www.envoyproxy.io/docs/	page
+etcd	devops	1	0	https://etcd.io/docs/	page
+Flux	devops	1	1	https://fluxcd.io/flux/	page
+GitHub Actions	devops	1	0	https://docs.github.com/en/actions	page
+GitHub Actions workflow	devops	1	0	https://docs.github.com/en/actions	page
+GitLab	devops	1	0	https://docs.gitlab.com/ee/ci/	page
+GitLab CI	devops	1	0	https://docs.gitlab.com/ee/ci/	page
+GitLab CI/CD	devops	1	0	https://docs.gitlab.com/ee/ci/	page
+GitOps	devops	1	0	https://fluxcd.io/flux/	page
+gRPC	devops	1	0	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+HashiCorp	devops	1	0	https://developer.hashicorp.com/	page
+Helm	devops	1	1	https://helm.sh/docs/	page
+Helm chart	devops	1	0	https://helm.sh/docs/	wikipedia-title
+infrastructure as code	devops	1	1	https://developer.hashicorp.com/terraform/docs	page
+Ingress	devops	1	1	https://kubernetes.io/docs/	page
+Istio	devops	1	0	https://istio.io/latest/docs/	page
+Jenkins	devops	1	0	https://www.jenkins.io/doc/	page
+k8s	devops	1	0	https://kubernetes.io/docs/	page
+kubectl	devops	1	0	https://kubernetes.io/docs/	page
+Kubernetes	devops	1	0	https://kubernetes.io/docs/	page
+Let's Encrypt	devops	1	0	https://letsencrypt.org/docs/	page
+Namespace	devops	1	1	https://kubernetes.io/docs/	page
+NGINX	devops	1	0	https://nginx.org/en/docs/	page
+OpenTofu	devops	1	0	https://opentofu.org/docs/	page
+Pod	devops	1	1	https://kubernetes.io/docs/	page
+Pulumi	devops	1	0	https://www.pulumi.com/docs/	page
+rollback	devops	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+service mesh	devops	1	1	https://istio.io/latest/docs/	page
+systemd	devops	1	0	https://systemd.io/	page
+Tailscale	devops	1	0	https://tailscale.com/kb	page
+Terraform	devops	1	0	https://developer.hashicorp.com/terraform/docs	page
+Vault	devops	1	1	https://developer.hashicorp.com/	page
+autoscaling	sre	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+blue-green	sre	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+blue-green deployment	sre	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+chaos engineering	sre	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Datadog	sre	1	0	https://docs.datadoghq.com/	wikipedia-title
+Elastic	sre	1	1	https://www.elastic.co/docs	page
+Elasticsearch	sre	1	0	https://www.elastic.co/docs	page
+failover	sre	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+feature flag	sre	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Grafana	sre	1	0	https://grafana.com/docs/	page
+high availability	sre	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+load testing	sre	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+New Relic	sre	1	0	https://docs.newrelic.com/	page
+on-call	sre	1	1	https://sre.google/sre-book/table-of-contents/	page
+OpenTelemetry	sre	1	0	https://opentelemetry.io/docs/	page
+OTel	sre	1	0	https://opentelemetry.io/docs/	page
+PagerDuty	sre	1	0	https://support.pagerduty.com/	page
+postmortem	sre	1	1	https://sre.google/sre-book/table-of-contents/	page
+Prometheus	sre	1	1	https://prometheus.io/docs/	page
+runbook	sre	1	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Sentry	sre	1	1	https://docs.sentry.io/	page
+site reliability engineering	sre	1	1	https://sre.google/sre-book/table-of-contents/	page
+Splunk	sre	1	0	https://docs.splunk.com/	page
+SRE	sre	1	0	https://sre.google/sre-book/table-of-contents/	page
+AI SDK	cloud	2	0	https://vercel.com/docs	page
+Akamai	cloud	2	0	https://www.akamai.com/products	wikipedia-title
+Alibaba Cloud	cloud	2	0	https://www.alibabacloud.com/product	page
+Apache Spark	cloud	2	0	https://docs.databricks.com	page
+App Platform	cloud	2	0	https://docs.digitalocean.com/products/	page
+Atlas	cloud	2	1	https://www.mongodb.com/docs/	page
+ClickHouse	cloud	2	0	https://clickhouse.com/docs	page
+Cloudflare Pages	cloud	2	0	https://developers.cloudflare.com/products/	wikipedia-title
+Cloudflare Tunnel	cloud	2	0	https://developers.cloudflare.com/products/	page
+Confluent	cloud	2	0	https://docs.confluent.io	page
+Confluent Cloud	cloud	2	0	https://docs.confluent.io	page
+consumer group	cloud	2	1	https://docs.confluent.io	page
+D1	cloud	2	0	https://developers.cloudflare.com/products/	page
+dbt	cloud	2	0	https://docs.getdbt.com/	page
+Durable Objects	cloud	2	0	https://developers.cloudflare.com/products/	page
+flyctl	cloud	2	0	https://fly.io/docs/	page
+Heroku Postgres	cloud	2	0	https://devcenter.heroku.com/	page
+Hetzner	cloud	2	0	https://docs.hetzner.com/	wikipedia-title
+IBM Cloud	cloud	2	0	https://cloud.ibm.com/docs	page
+Kafka Connect	cloud	2	0	https://docs.confluent.io	page
+KV	cloud	2	0	https://developers.cloudflare.com/products/	page
+Linode	cloud	2	0	https://www.akamai.com/products	wikipedia-title
+MLflow	cloud	2	0	https://docs.databricks.com	page
+Mongoose	cloud	2	0	https://mongoosejs.com/docs/	page
+Netlify Functions	cloud	2	0	https://docs.netlify.com	page
+OCI	cloud	2	0	https://docs.oracle.com/en-us/iaas/Content/services.htm	page
+Oracle Cloud Infrastructure	cloud	2	0	https://docs.oracle.com/en-us/iaas/Content/services.htm	page
+OVH	cloud	2	0	https://www.ovhcloud.com/en/public-cloud/	page
+OVHcloud	cloud	2	0	https://www.ovhcloud.com/en/public-cloud/	page
+pgvector	cloud	2	0	https://supabase.com/docs	wikipedia-title
+PlanetScale	cloud	2	0	https://planetscale.com/docs	page
+Procfile	cloud	2	0	https://devcenter.heroku.com/	page
+PySpark	cloud	2	0	https://docs.databricks.com	wikipedia-title
+Qwen	cloud	2	0	https://www.alibabacloud.com/product	page
+RabbitMQ	cloud	2	0	https://www.rabbitmq.com/docs	page
+Row Level Security	cloud	2	0	https://supabase.com/docs	page
+sharding	cloud	2	1	https://www.mongodb.com/docs/	wikipedia-title
+Spark	cloud	2	1	https://docs.databricks.com	page
+Turso	cloud	2	0	https://docs.turso.tech	page
+Unity Catalog	cloud	2	0	https://docs.databricks.com	page
+Upstash	cloud	2	0	https://upstash.com/docs	page
+v0	cloud	2	0	https://vercel.com/docs	page
+Vercel Functions	cloud	2	0	https://vercel.com/docs	page
+Vultr	cloud	2	0	https://www.vultr.com/products/	wikipedia-title
+watsonx	cloud	2	0	https://cloud.ibm.com/docs	wikipedia-title
+Workers AI	cloud	2	0	https://developers.cloudflare.com/products/	page
+Wrangler	cloud	2	0	https://developers.cloudflare.com/products/	page
+.gitlab-ci.yml	devops	2	0	https://docs.gitlab.com/ee/ci/	page
+Airflow	devops	2	1	https://airflow.apache.org/docs/	page
+Amazon ECR	devops	2	0	https://docs.aws.amazon.com/AmazonECR/latest/userguide/	page
+Apache Airflow	devops	2	0	https://airflow.apache.org/docs/	page
+Argo	devops	2	0	https://argo-cd.readthedocs.io/	page
+Auth0	devops	2	0	https://auth0.com/docs	page
+Azure DevOps	devops	2	0	https://learn.microsoft.com/azure/devops/	page
+Azure Pipelines	devops	2	0	https://learn.microsoft.com/azure/devops/	page
+Bazel	devops	2	0	https://bazel.build/docs	page
+Buildkite	devops	2	0	https://buildkite.com/docs	page
+Caddy	devops	2	1	https://caddyserver.com/docs/	page
+cert-manager	devops	2	0	https://cert-manager.io/docs/	page
+Chef	devops	2	1	https://docs.chef.io/	page
+Cilium	devops	2	0	https://docs.cilium.io/	page
+Consul	devops	2	1	https://developer.hashicorp.com/	page
+containerd	devops	2	0	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+CoreDNS	devops	2	0	https://coredns.io/manual/toc/	page
+CronJob	devops	2	0	https://kubernetes.io/docs/	page
+Crossplane	devops	2	0	https://docs.crossplane.io/	wikipedia-title
+DaemonSet	devops	2	0	https://kubernetes.io/docs/	page
+Dapr	devops	2	0	https://docs.dapr.io/	page
+DevSecOps	devops	2	0	https://dora.dev/	wikipedia-title
+Docker Desktop	devops	2	0	https://docs.docker.com/	wikipedia-title
+Docker Hub	devops	2	0	https://docs.docker.com/	wikipedia-title
+eBPF	devops	2	0	https://ebpf.io/what-is-ebpf/	page
+ECR	devops	2	0	https://docs.aws.amazon.com/AmazonECR/latest/userguide/	page
+Falco	devops	2	0	https://falco.org/docs/	page
+Fluent Bit	devops	2	0	https://docs.fluentbit.io/	page
+Fluentd	devops	2	0	https://docs.fluentd.org/	page
+Gateway API	devops	2	0	https://kubernetes.io/docs/	page
+HAProxy	devops	2	0	https://docs.haproxy.org/	page
+Harbor	devops	2	1	https://goharbor.io/docs/	page
+hotfix	devops	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+IaC	devops	2	0	https://developer.hashicorp.com/terraform/docs	wikipedia-title
+iptables	devops	2	0	https://docs.kernel.org/	wikipedia-title
+Jenkins Pipeline	devops	2	0	https://www.jenkins.io/doc/	page
+journalctl	devops	2	0	https://systemd.io/	wikipedia-title
+k3s	devops	2	0	https://docs.k3s.io/	page
+k9s	devops	2	0	https://k9scli.io/	page
+Karpenter	devops	2	0	https://karpenter.sh/docs/	page
+KEDA	devops	2	0	https://keda.sh/docs/	page
+Keycloak	devops	2	0	https://www.keycloak.org/documentation	page
+Knative	devops	2	0	https://knative.dev/docs/	page
+kubeconfig	devops	2	0	https://kubernetes.io/docs/	page
+kubelet	devops	2	0	https://kubernetes.io/docs/	page
+Kustomize	devops	2	0	https://kubernetes.io/docs/	page
+Kyverno	devops	2	0	https://kyverno.io/docs/	page
+LaunchDarkly	devops	2	0	https://docs.launchdarkly.com/	page
+least privilege	devops	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Linkerd	devops	2	0	https://linkerd.io/2/overview/	page
+minikube	devops	2	0	https://kubernetes.io/docs/	page
+MinIO	devops	2	0	https://min.io/docs/minio/linux/index.html	page
+mTLS	devops	2	0	https://istio.io/latest/docs/	wikipedia-title
+Nomad	devops	2	1	https://developer.hashicorp.com/	page
+Okta	devops	2	0	https://developer.okta.com/docs/	page
+OPA	devops	2	0	https://www.openpolicyagent.org/docs/latest/	page
+Open Policy Agent	devops	2	0	https://www.openpolicyagent.org/docs/latest/	page
+OpenShift	devops	2	0	https://docs.openshift.com/	wikipedia-title
+Packer	devops	2	1	https://developer.hashicorp.com/	page
+platform engineering	devops	2	1	https://dora.dev/	wikipedia-title
+Podman	devops	2	0	https://docs.podman.io/	page
+Puppet	devops	2	1	https://www.puppet.com/docs	page
+PVC	devops	2	0	https://kubernetes.io/docs/	wikipedia-title
+RBAC	devops	2	0	https://kubernetes.io/docs/	page
+ReplicaSet	devops	2	0	https://kubernetes.io/docs/	page
+self-hosted runner	devops	2	1	https://docs.github.com/en/actions	page
+ServiceAccount	devops	2	0	https://kubernetes.io/docs/	page
+sidecar	devops	2	1	https://kubernetes.io/docs/	page
+Snyk	devops	2	0	https://docs.snyk.io/	page
+StatefulSet	devops	2	0	https://kubernetes.io/docs/	page
+Terraform provider	devops	2	0	https://developer.hashicorp.com/terraform/docs	page
+tofu	devops	2	1	https://opentofu.org/docs/	wikipedia-title
+Traefik	devops	2	0	https://doc.traefik.io/traefik/	page
+Trivy	devops	2	0	https://trivy.dev/latest/docs/	page
+Turborepo	devops	2	0	https://vercel.com/docs	page
+WireGuard	devops	2	0	https://www.wireguard.com/	page
+zero trust	devops	2	1	https://developers.cloudflare.com/products/	page
+alert fatigue	sre	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Alertmanager	sre	2	0	https://prometheus.io/docs/	page
+canary release	sre	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+capacity planning	sre	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+circuit breaker	sre	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Dynatrace	sre	2	0	https://docs.dynatrace.com/	page
+exponential backoff	sre	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+feature toggle	sre	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Honeycomb	sre	2	1	https://docs.honeycomb.io/	page
+idempotency	sre	2	0	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Jaeger	sre	2	0	https://www.jaegertracing.io/docs/	page
+k6	sre	2	0	https://grafana.com/docs/	page
+Kibana	sre	2	0	https://www.elastic.co/docs	page
+Loki	sre	2	1	https://grafana.com/docs/	page
+OpenSearch	sre	2	0	https://opensearch.org/docs/	page
+Opsgenie	sre	2	0	https://www.atlassian.com/software	page
+PromQL	sre	2	0	https://prometheus.io/docs/	page
+rate limiting	sre	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+rolling update	sre	2	1	https://kubernetes.io/docs/	page
+root cause analysis	sre	2	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Tempo	sre	2	1	https://grafana.com/docs/	page
+1.1.1.1	cloud	3	0	https://developers.cloudflare.com/products/	page
+AI Gateway	cloud	3	0	https://developers.cloudflare.com/products/	page
+Airbyte	cloud	3	0	https://docs.airbyte.com/	page
+Aliyun	cloud	3	0	https://www.alibabacloud.com/product	wikipedia-title
+Apache Flink	cloud	3	0	https://nightlies.apache.org/flink/flink-docs-stable/	page
+Apache Iceberg	cloud	3	0	https://iceberg.apache.org/docs/latest/	page
+BSON	cloud	3	0	https://www.mongodb.com/docs/	wikipedia-title
+CDC	cloud	3	0	https://debezium.io/documentation/	page
+CockroachDB	cloud	3	0	https://www.cockroachlabs.com/docs/	page
+Confluent Platform	cloud	3	0	https://docs.confluent.io	page
+Databricks SQL	cloud	3	0	https://docs.databricks.com	page
+Db2	cloud	3	0	https://cloud.ibm.com/docs	wikipedia-title
+Debezium	cloud	3	0	https://debezium.io/documentation/	page
+Fly Machines	cloud	3	0	https://fly.io/docs/	page
+fly.toml	cloud	3	0	https://fly.io/docs/	page
+GraalVM	cloud	3	0	https://www.graalvm.org/latest/docs/	page
+Heroku CLI	cloud	3	0	https://devcenter.heroku.com/	page
+Hyperdrive	cloud	3	1	https://developers.cloudflare.com/products/	page
+IBM Watson	cloud	3	0	https://cloud.ibm.com/docs	wikipedia-title
+Incremental Static Regeneration	cloud	3	0	https://vercel.com/docs	page
+Kafka Streams	cloud	3	0	https://docs.confluent.io	page
+KRaft	cloud	3	0	https://docs.confluent.io	page
+ksqlDB	cloud	3	0	https://docs.confluent.io	page
+Lakehouse	cloud	3	1	https://docs.databricks.com	page
+libSQL	cloud	3	0	https://docs.turso.tech	page
+MongoDB Compass	cloud	3	0	https://www.mongodb.com/docs/	page
+Netlify CLI	cloud	3	0	https://docs.netlify.com	page
+OpenStack	cloud	3	0	https://docs.openstack.org/	page
+QStash	cloud	3	0	https://upstash.com/docs	page
+Redpanda	cloud	3	0	https://docs.redpanda.com/	page
+Schema Registry	cloud	3	1	https://docs.confluent.io	page
+Snowpark	cloud	3	0	https://docs.snowflake.com	page
+Snowpipe	cloud	3	0	https://docs.snowflake.com	page
+Spaces	cloud	3	1	https://docs.digitalocean.com/products/	page
+Supabase CLI	cloud	3	0	https://supabase.com/docs	page
+Tencent Cloud	cloud	3	0	https://www.tencentcloud.com/products	wikipedia-title
+Time Travel	cloud	3	1	https://docs.snowflake.com	page
+Trino	cloud	3	0	https://trino.io/docs/current/	page
+Turnstile	cloud	3	1	https://developers.cloudflare.com/products/	page
+Valkey	cloud	3	0	https://valkey.io/docs/	page
+Vectorize	cloud	3	0	https://developers.cloudflare.com/products/	page
+Vercel Blob	cloud	3	0	https://vercel.com/docs	page
+vercel.json	cloud	3	0	https://vercel.com/docs	page
+WARP	cloud	3	0	https://developers.cloudflare.com/products/	page
+ZooKeeper	cloud	3	0	https://docs.confluent.io	page
+ACME	devops	3	0	https://letsencrypt.org/docs/	page
+ACR	devops	3	0	https://learn.microsoft.com/azure/container-registry/	page
+admission controller	devops	3	1	https://kubernetes.io/docs/	page
+Ansible Automation Platform	devops	3	0	https://docs.ansible.com/	page
+AWS CodePipeline	devops	3	0	https://docs.aws.amazon.com/codepipeline/	page
+Azure Container Registry	devops	3	0	https://learn.microsoft.com/azure/container-registry/	page
+Bitbucket	devops	3	0	https://www.atlassian.com/software	page
+Calico	devops	3	0	https://docs.tigera.io/calico/latest/about/	page
+Ceph	devops	3	0	https://docs.ceph.com/	page
+Certbot	devops	3	0	https://eff-certbot.readthedocs.io/	page
+cgroups	devops	3	0	https://docs.kernel.org/	wikipedia-title
+Chainguard	devops	3	0	https://edu.chainguard.dev/	page
+Chef Infra	devops	3	0	https://docs.chef.io/	page
+Chef InSpec	devops	3	0	https://docs.chef.io/	page
+Cloud Build	devops	3	0	https://cloud.google.com/build/docs	page
+ClusterRole	devops	3	0	https://kubernetes.io/docs/	page
+CodeQL	devops	3	0	https://docs.github.com/en/actions	wikipedia-title
+cookbook	devops	3	1	https://docs.chef.io/	page
+Cosign	devops	3	0	https://docs.sigstore.dev/	page
+CSI	devops	3	0	https://kubernetes.io/docs/	page
+CustomResourceDefinition	devops	3	0	https://kubernetes.io/docs/	page
+Dagger	devops	3	1	https://docs.dagger.io/	page
+Distroless	devops	3	0	https://github.com/GoogleContainerTools/distroless	page
+Docker Swarm	devops	3	0	https://docs.docker.com/	wikipedia-title
+External Secrets Operator	devops	3	0	https://external-secrets.io/latest/	page
+Firecracker	devops	3	1	https://firecracker-microvm.github.io/	page
+Gatekeeper	devops	3	1	https://www.openpolicyagent.org/docs/latest/	page
+GitHub Codespaces	devops	3	0	https://docs.github.com/en/actions	wikipedia-title
+GitHub Packages	devops	3	0	https://docs.github.com/en/actions	page
+Harness	devops	3	1	https://developer.harness.io/docs/	page
+HashiCorp Cloud Platform	devops	3	0	https://developer.hashicorp.com/	page
+HCP	devops	3	0	https://developer.hashicorp.com/	page
+helmfile	devops	3	0	https://github.com/helmfile/helmfile	page
+HorizontalPodAutoscaler	devops	3	0	https://kubernetes.io/docs/	page
+init container	devops	3	1	https://kubernetes.io/docs/	page
+JFrog	devops	3	0	https://jfrog.com/help/	page
+journald	devops	3	0	https://systemd.io/	page
+Kong	devops	3	1	https://docs.konghq.com/	page
+kube-apiserver	devops	3	0	https://kubernetes.io/docs/	page
+kube-proxy	devops	3	0	https://kubernetes.io/docs/	page
+kube-scheduler	devops	3	0	https://kubernetes.io/docs/	page
+kubeadm	devops	3	0	https://kubernetes.io/docs/	page
+kubectx	devops	3	0	https://github.com/ahmetb/kubectx	page
+Kubeflow	devops	3	0	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+kubens	devops	3	0	https://github.com/ahmetb/kubectx	page
+Lens	devops	3	1	https://docs.k8slens.dev/	page
+MetalLB	devops	3	0	https://metallb.io/	page
+mkcert	devops	3	0	https://github.com/FiloSottile/mkcert	page
+NetworkPolicy	devops	3	0	https://kubernetes.io/docs/	page
+Nexus Repository	devops	3	0	https://help.sonatype.com/	page
+nftables	devops	3	0	https://docs.kernel.org/	wikipedia-title
+Nix	devops	3	1	https://nixos.org/manual/nix/stable/	page
+NixOS	devops	3	0	https://nixos.org/manual/nix/stable/	page
+Nx	devops	3	0	https://nx.dev/getting-started/intro	page
+OCI image	devops	3	0	https://opencontainers.org/	page
+OPA Gatekeeper	devops	3	0	https://www.openpolicyagent.org/docs/latest/	page
+Open Container Initiative	devops	3	0	https://opencontainers.org/	page
+OpenVPN	devops	3	0	https://openvpn.net/community-resources/	page
+OrbStack	devops	3	0	https://docs.orbstack.dev/	page
+PersistentVolume	devops	3	0	https://kubernetes.io/docs/	page
+PersistentVolumeClaim	devops	3	0	https://kubernetes.io/docs/	page
+PodDisruptionBudget	devops	3	0	https://kubernetes.io/docs/	page
+Portainer	devops	3	0	https://docs.portainer.io/	page
+PostHog	devops	3	0	https://posthog.com/docs	page
+Pulumi Cloud	devops	3	0	https://www.pulumi.com/docs/	page
+Quay	devops	3	0	https://docs.quay.io/	page
+Quay.io	devops	3	0	https://docs.quay.io/	page
+Rancher	devops	3	1	https://ranchermanager.docs.rancher.com/	page
+Rego	devops	3	0	https://www.openpolicyagent.org/docs/latest/	page
+Renovate	devops	3	0	https://docs.renovatebot.com/	page
+RoleBinding	devops	3	0	https://kubernetes.io/docs/	page
+SaltStack	devops	3	0	https://docs.saltproject.io/	wikipedia-title
+SBOM	devops	3	0	https://slsa.dev/spec/	wikipedia-title
+Sealed Secrets	devops	3	0	https://github.com/bitnami-labs/sealed-secrets	page
+SELinux	devops	3	0	https://docs.kernel.org/	wikipedia-title
+Semgrep	devops	3	0	https://semgrep.dev/docs/	page
+Sigstore	devops	3	0	https://docs.sigstore.dev/	page
+Skaffold	devops	3	0	https://skaffold.dev/docs/	page
+SonarQube	devops	3	0	https://docs.sonarsource.com/	page
+Sonatype Nexus	devops	3	0	https://help.sonatype.com/	page
+SOPS	devops	3	0	https://getsops.io/docs/	page
+Spinnaker	devops	3	0	https://spinnaker.io/docs/	page
+StorageClass	devops	3	0	https://kubernetes.io/docs/	page
+tailnet	devops	3	0	https://tailscale.com/kb	page
+taints and tolerations	devops	3	1	https://kubernetes.io/docs/	page
+TeamCity	devops	3	0	https://www.jetbrains.com/help/teamcity/	page
+Tekton	devops	3	0	https://tekton.dev/docs/	page
+Teleport	devops	3	1	https://goteleport.com/docs/	page
+Temporal	devops	3	1	https://docs.temporal.io/	page
+Terraform Registry	devops	3	0	https://developer.hashicorp.com/terraform/docs	page
+Terragrunt	devops	3	0	https://terragrunt.gruntwork.io/docs/	page
+Tilt	devops	3	1	https://docs.tilt.dev/	page
+Travis CI	devops	3	0	https://docs.travis-ci.com/	wikipedia-title
+trunk-based development	devops	3	1	https://dora.dev/	wikipedia-title
+Turbopack	devops	3	0	https://vercel.com/docs	page
+Vagrant	devops	3	0	https://developer.hashicorp.com/	page
+Velero	devops	3	0	https://velero.io/docs/	page
+AppDynamics	sre	3	0	https://docs.appdynamics.com/	wikipedia-title
+backpressure	sre	3	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Better Stack	sre	3	0	https://betterstack.com/docs/	page
+burn rate	sre	3	1	https://sre.google/workbook/table-of-contents/	wikipedia-title
+cardinality	sre	3	1	https://prometheus.io/docs/	wikipedia-title
+Chaos Monkey	sre	3	0	https://netflix.github.io/chaosmonkey/	page
+Elastic Cloud	sre	3	0	https://www.elastic.co/docs	page
+FinOps	sre	3	0	https://www.finops.org/introduction/what-is-finops/	page
+graceful degradation	sre	3	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Grafana Alloy	sre	3	0	https://grafana.com/docs/	page
+Grafana Cloud	sre	3	0	https://grafana.com/docs/	page
+Grafana Labs	sre	3	0	https://grafana.com/docs/	page
+Gremlin	sre	3	1	https://www.gremlin.com/docs/	page
+incident commander	sre	3	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+incident.io	sre	3	0	https://help.incident.io/	page
+InfluxDB	sre	3	0	https://docs.influxdata.com/	wikipedia-title
+Jira Service Management	sre	3	0	https://www.atlassian.com/software	page
+jitter	sre	3	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+kill switch	sre	3	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Logstash	sre	3	0	https://www.elastic.co/docs	page
+Mimir	sre	3	0	https://grafana.com/docs/	page
+MTBF	sre	3	0	https://dora.dev/	wikipedia-title
+Node Exporter	sre	3	0	https://prometheus.io/docs/	page
+NRQL	sre	3	0	https://docs.newrelic.com/	page
+OTLP	sre	3	0	https://opentelemetry.io/docs/	page
+ServiceNow	sre	3	0	https://docs.servicenow.com/	page
+SigNoz	sre	3	0	https://signoz.io/docs/	page
+SPL	sre	3	0	https://docs.splunk.com/	page
+Splunk Cloud	sre	3	0	https://docs.splunk.com/	page
+Splunk Enterprise	sre	3	0	https://docs.splunk.com/	page
+Statuspage	sre	3	0	https://www.atlassian.com/software	page
+stress testing	sre	3	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Sumo Logic	sre	3	0	https://help.sumologic.com/	page
+synthetic monitoring	sre	3	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+tail latency	sre	3	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Thanos	sre	3	0	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+toil	sre	3	1	https://sre.google/sre-book/table-of-contents/	page
+Vector	sre	3	1	https://vector.dev/docs/	page
+VictoriaMetrics	sre	3	0	https://docs.victoriametrics.com/	page
+Zipkin	sre	3	0	https://zipkin.io/	page
+Akamai Connected Cloud	cloud	4	0	https://www.akamai.com/products	wikipedia-title
+Apache Pulsar	cloud	4	0	https://pulsar.apache.org/docs/	page
+Atlas CLI	cloud	4	0	https://www.mongodb.com/docs/	page
+Cloudflare Images	cloud	4	0	https://developers.cloudflare.com/products/	page
+Confluent CLI	cloud	4	0	https://docs.confluent.io	page
+Dagster	cloud	4	0	https://docs.dagster.io/	page
+DBFS	cloud	4	0	https://docs.databricks.com	wikipedia-title
+Elastic Compute Service	cloud	4	0	https://www.alibabacloud.com/product	page
+Exadata	cloud	4	0	https://docs.oracle.com/en-us/iaas/Content/services.htm	wikipedia-title
+Fivetran	cloud	4	0	https://fivetran.com/docs	page
+Fly Volumes	cloud	4	0	https://fly.io/docs/	page
+Genie	cloud	4	1	https://docs.databricks.com	page
+GPU Droplets	cloud	4	0	https://docs.digitalocean.com/products/	page
+Hunyuan	cloud	4	0	https://www.tencentcloud.com/products	wikipedia-title
+IBM Cloud Object Storage	cloud	4	0	https://cloud.ibm.com/docs	wikipedia-title
+IBM MQ	cloud	4	0	https://cloud.ibm.com/docs	wikipedia-title
+IBM Z	cloud	4	0	https://cloud.ibm.com/docs	wikipedia-title
+Instana	cloud	4	0	https://cloud.ibm.com/docs	wikipedia-title
+librdkafka	cloud	4	0	https://docs.confluent.io	page
+LiteFS	cloud	4	0	https://fly.io/docs/	page
+Oracle APEX	cloud	4	0	https://docs.oracle.com/en-us/iaas/Content/services.htm	wikipedia-title
+Oracle Linux	cloud	4	0	https://docs.oracle.com/en-us/iaas/Content/services.htm	wikipedia-title
+OVHcloud Public Cloud	cloud	4	0	https://www.ovhcloud.com/en/public-cloud/	page
+Photon	cloud	4	1	https://docs.databricks.com	wikipedia-title
+Prefect	cloud	4	0	https://docs.prefect.io/	page
+pscale	cloud	4	0	https://planetscale.com/docs	page
+Railpack	cloud	4	0	https://docs.railway.com	page
+Railway CLI	cloud	4	0	https://docs.railway.com	page
+Realm	cloud	4	1	https://www.mongodb.com/docs/	page
+Render Postgres	cloud	4	0	https://render.com/docs	page
+render.yaml	cloud	4	0	https://render.com/docs	page
+TiDB	cloud	4	0	https://docs.pingcap.com/tidb/stable	page
+Tigris	cloud	4	1	https://www.tigrisdata.com/docs/	page
+Tongyi Qianwen	cloud	4	0	https://www.alibabacloud.com/product	wikipedia-title
+Vercel Sandbox	cloud	4	0	https://vercel.com/docs	page
+Voyage AI	cloud	4	0	https://www.mongodb.com/docs/	page
+WarpStream	cloud	4	0	https://docs.confluent.io	page
+YugabyteDB	cloud	4	0	https://docs.yugabyte.com/	page
+act	devops	4	1	https://nektosact.com/	page
+Actions Runner Controller	devops	4	0	https://docs.github.com/en/actions	page
+age	devops	4	1	https://github.com/FiloSottile/age	page
+Anchore	devops	4	0	https://anchore.com/opensource/	page
+AppArmor	devops	4	0	https://docs.kernel.org/	wikipedia-title
+Aqua Security	devops	4	0	https://www.aquasec.com/	page
+Atlantis	devops	4	1	https://www.runatlantis.io/docs/	page
+Authentik	devops	4	0	https://docs.goauthentik.io/	page
+AWX	devops	4	0	https://docs.ansible.com/	wikipedia-title
+Bitbucket Pipelines	devops	4	0	https://www.atlassian.com/software	page
+Boundary	devops	4	1	https://developer.hashicorp.com/	page
+CDK for Terraform	devops	4	0	https://developer.hashicorp.com/terraform/docs	page
+CDKTF	devops	4	0	https://developer.hashicorp.com/terraform/docs	page
+Checkov	devops	4	0	https://www.checkov.io/	page
+Chef Workstation	devops	4	0	https://docs.chef.io/	page
+Cloud Deploy	devops	4	0	https://cloud.google.com/build/docs	page
+ClusterRoleBinding	devops	4	0	https://kubernetes.io/docs/	page
+Codecov	devops	4	0	https://docs.codecov.com/	page
+Codefresh	devops	4	0	https://codefresh.io/docs/	page
+Coder	devops	4	1	https://coder.com/docs	page
+Colima	devops	4	0	https://github.com/abiosoft/colima	page
+CRI	devops	4	0	https://kubernetes.io/docs/	page
+CUE	devops	4	1	https://cuelang.org/docs/	page
+Earthly	devops	4	1	https://docs.earthly.dev/	page
+Flagger	devops	4	0	https://fluxcd.io/flux/	page
+Flannel	devops	4	0	https://github.com/flannel-io/flannel	page
+Flatcar	devops	4	0	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Gitea	devops	4	0	https://docs.gitea.com/	page
+Gitpod	devops	4	0	https://www.gitpod.io/docs	page
+Grype	devops	4	0	https://anchore.com/opensource/	page
+gVisor	devops	4	0	https://gvisor.dev/docs/	page
+Hiera	devops	4	0	https://www.puppet.com/docs	wikipedia-title
+Hubble	devops	4	1	https://docs.cilium.io/	page
+Infracost	devops	4	0	https://www.infracost.io/docs/	page
+InSpec	devops	4	0	https://docs.chef.io/	page
+Jsonnet	devops	4	0	https://jsonnet.org/	page
+Kaniko	devops	4	0	https://github.com/GoogleContainerTools/kaniko	page
+Knife	devops	4	1	https://docs.chef.io/	wikipedia-title
+ko	devops	4	0	https://ko.build/	page
+kOps	devops	4	0	https://kops.sigs.k8s.io/	page
+kube-controller-manager	devops	4	0	https://kubernetes.io/docs/	page
+Lima	devops	4	1	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Moby	devops	4	1	https://docs.docker.com/	wikipedia-title
+Molecule	devops	4	1	https://docs.ansible.com/	wikipedia-title
+Octopus Deploy	devops	4	0	https://octopus.com/docs	page
+OKD	devops	4	0	https://docs.openshift.com/	wikipedia-title
+OpenBao	devops	4	0	https://openbao.org/docs/	page
+Paketo	devops	4	0	https://paketo.io/docs/	page
+Puppet Enterprise	devops	4	0	https://www.puppet.com/docs	page
+Puppet Forge	devops	4	0	https://www.puppet.com/docs	page
+ResourceQuota	devops	4	0	https://kubernetes.io/docs/	page
+Salt	devops	4	1	https://docs.saltproject.io/	wikipedia-title
+seccomp	devops	4	0	https://docs.kernel.org/	wikipedia-title
+SLSA	devops	4	0	https://slsa.dev/spec/	page
+SonarCloud	devops	4	0	https://docs.sonarsource.com/	page
+Sourcegraph	devops	4	0	https://sourcegraph.com/docs	page
+Spacelift	devops	4	0	https://docs.spacelift.io/	page
+Statsig	devops	4	0	https://docs.statsig.com/	page
+Syft	devops	4	0	https://anchore.com/opensource/	page
+Tekton Pipelines	devops	4	0	https://tekton.dev/docs/	page
+Telepresence	devops	4	0	https://telepresence.io/docs/	page
+TFLint	devops	4	0	https://github.com/terraform-linters/tflint	page
+Unleash	devops	4	1	https://docs.getunleash.io/	page
+vcluster	devops	4	0	https://www.vcluster.com/docs	page
+Wolfi	devops	4	0	https://edu.chainguard.dev/	page
+workflow_dispatch	devops	4	0	https://docs.github.com/en/actions	page
+ZeroTier	devops	4	0	https://docs.zerotier.com/	page
+Axiom	sre	4	1	https://axiom.co/docs	page
+Bugsnag	sre	4	0	https://docs.bugsnag.com/	page
+cAdvisor	sre	4	0	https://prometheus.io/docs/	page
+Chronosphere	sre	4	0	https://docs.chronosphere.io/	page
+Cribl	sre	4	0	https://docs.cribl.io/	page
+FireHydrant	sre	4	0	https://docs.firehydrant.com/	page
+five whys	sre	4	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+follow-the-sun	sre	4	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+FullStory	sre	4	0	https://help.fullstory.com/	page
+Graphite	sre	4	1	https://graphiteapp.org/	page
+load shedding	sre	4	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+LogRocket	sre	4	0	https://docs.logrocket.com/	page
+Nagios	sre	4	0	https://www.nagios.org/documentation/	page
+Netdata	sre	4	0	https://learn.netdata.cloud/	page
+OneAgent	sre	4	0	https://docs.dynatrace.com/	page
+OpenSearch Dashboards	sre	4	0	https://opensearch.org/docs/	page
+Pingdom	sre	4	0	https://documentation.solarwinds.com/en/success_center/pingdom/	wikipedia-title
+Pushgateway	sre	4	0	https://prometheus.io/docs/	page
+Pyroscope	sre	4	0	https://grafana.com/docs/	page
+Rollbar	sre	4	0	https://docs.rollbar.com/	page
+Rootly	sre	4	0	https://docs.rootly.com/	page
+StatsD	sre	4	0	https://github.com/statsd/statsd	page
+ThousandEyes	sre	4	0	https://docs.thousandeyes.com/	page
+UptimeRobot	sre	4	0	https://uptimerobot.com/api/	page
+Zabbix	sre	4	0	https://www.zabbix.com/documentation/	page
+Analytics Engine	cloud	5	0	https://developers.cloudflare.com/products/	page
+Atlas Charts	cloud	5	0	https://www.mongodb.com/docs/	page
+Cloudant	cloud	5	0	https://cloud.ibm.com/docs	wikipedia-title
+Cluster Linking	cloud	5	1	https://docs.confluent.io	page
+DBRX	cloud	5	0	https://docs.databricks.com	wikipedia-title
+Deploy Requests	cloud	5	1	https://planetscale.com/docs	page
+Fly Launch	cloud	5	0	https://fly.io/docs/	page
+Fly Proxy	cloud	5	0	https://fly.io/docs/	page
+Kimsufi	cloud	5	0	https://www.ovhcloud.com/en/public-cloud/	page
+Kora	cloud	5	0	https://docs.confluent.io	page
+Lakebase	cloud	5	0	https://docs.databricks.com	page
+LinuxONE	cloud	5	0	https://cloud.ibm.com/docs	wikipedia-title
+Neon Auth	cloud	5	0	https://neon.com/docs	page
+Neon Data API	cloud	5	0	https://neon.com/docs	page
+PlanetScale Metal	cloud	5	0	https://planetscale.com/docs	page
+Render Key Value	cloud	5	0	https://render.com/docs	page
+Snowflake Native Apps	cloud	5	0	https://docs.snowflake.com	page
+Snowflake Openflow	cloud	5	0	https://docs.snowflake.com	page
+SoYouStart	cloud	5	0	https://www.ovhcloud.com/en/public-cloud/	page
+Speed Insights	cloud	5	1	https://vercel.com/docs	page
+Tableflow	cloud	5	0	https://docs.confluent.io	page
+Turbonomic	cloud	5	0	https://cloud.ibm.com/docs	wikipedia-title
+Vercel Firewall	cloud	5	0	https://vercel.com/docs	page
+Vercel Flags	cloud	5	0	https://vercel.com/docs	page
+Workers for Platforms	cloud	5	0	https://developers.cloudflare.com/products/	page
+Akuity	devops	5	0	https://docs.akuity.io/	page
+Antrea	devops	5	0	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Apache APISIX	devops	5	0	https://apisix.apache.org/docs/	page
+ARC	devops	5	0	https://docs.github.com/en/actions	page
+Authelia	devops	5	0	https://www.authelia.com/overview/prologue/introduction/	page
+Bamboo	devops	5	1	https://www.atlassian.com/software	page
+Blue Ocean	devops	5	1	https://www.jenkins.io/doc/	page
+Buck2	devops	5	0	https://buck2.build/docs/	page
+Carvel	devops	5	0	https://carvel.dev/	page
+CFEngine	devops	5	0	https://docs.cfengine.com/	page
+Chef Habitat	devops	5	0	https://docs.chef.io/	page
+Clair	devops	5	0	https://quay.github.io/clair/	page
+ConfigCat	devops	5	0	https://configcat.com/docs/	page
+Coveralls	devops	5	0	https://docs.coveralls.io/	page
+DevPod	devops	5	0	https://devpod.sh/docs/	page
+DevSpace	devops	5	0	https://www.devspace.sh/docs/	page
+Dragonfly	devops	5	1	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Drone CI	devops	5	0	https://docs.drone.io/	page
+env0	devops	5	0	https://docs.env0.com/	page
+Facter	devops	5	0	https://www.puppet.com/docs	wikipedia-title
+Flagsmith	devops	5	0	https://docs.flagsmith.com/	page
+Flipt	devops	5	0	https://docs.flipt.io/	page
+Forgejo	devops	5	0	https://forgejo.org/docs/	page
+Fulcio	devops	5	0	https://docs.sigstore.dev/	page
+Garden	devops	5	1	https://docs.garden.io/	page
+Gerrit	devops	5	0	https://gerrit-review.googlesource.com/Documentation/	page
+GrowthBook	devops	5	0	https://docs.growthbook.io/	page
+Headlamp	devops	5	0	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Humanitec	devops	5	0	https://developer.humanitec.com/	page
+Jib	devops	5	0	https://github.com/GoogleContainerTools/jib	page
+Kargo	devops	5	0	https://docs.kargo.io/	page
+Kasten	devops	5	0	https://docs.kasten.io/	page
+Keptn	devops	5	0	https://keptn.sh/stable/docs/	page
+kube-vip	devops	5	0	https://kube-vip.io/docs/	page
+Kubespray	devops	5	0	https://kubespray.io/	page
+Multus	devops	5	0	https://github.com/k8snetworkplumbingwg/multus-cni	page
+Nebula	devops	5	1	https://nebula.defined.net/docs/	page
+NetBird	devops	5	0	https://docs.netbird.io/	page
+Notation	devops	5	1	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Okteto	devops	5	0	https://www.okteto.com/docs/	page
+OpsLevel	devops	5	0	https://docs.opslevel.com/	page
+Optimizely	devops	5	0	https://docs.developers.optimizely.com/	page
+ORAS	devops	5	0	https://oras.land/docs/	page
+Ory	devops	5	0	https://www.ory.sh/docs/	page
+Pants	devops	5	1	https://www.pantsbuild.org/	page
+Pod Security Admission	devops	5	0	https://kubernetes.io/docs/	page
+Pomerium	devops	5	0	https://www.pomerium.com/docs	page
+PuppetDB	devops	5	0	https://www.puppet.com/docs	page
+Rekor	devops	5	0	https://docs.sigstore.dev/	page
+Rundeck	devops	5	0	https://docs.rundeck.com/	page
+Scalr	devops	5	0	https://docs.scalr.io/	page
+Semaphore	devops	5	1	https://docs.semaphoreci.com/	page
+step-ca	devops	5	0	https://smallstep.com/docs/	page
+Submariner	devops	5	0	https://submariner.io/	page
+Tetragon	devops	5	0	https://docs.cilium.io/	wikipedia-title
+TiKV	devops	5	0	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Tinkerbell	devops	5	1	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Vault Radar	devops	5	0	https://developer.hashicorp.com/	page
+Volcano	devops	5	1	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Waypoint	devops	5	1	https://developer.hashicorp.com/	page
+ytt	devops	5	0	https://carvel.dev/	page
+Zitadel	devops	5	0	https://zitadel.com/docs	page
+ztunnel	devops	5	0	https://istio.io/latest/docs/	page
+Airbrake	sre	5	1	https://docs.airbrake.io/	page
+Apache SkyWalking	sre	5	0	https://skywalking.apache.org/docs/	page
+BigPanda	sre	5	0	https://docs.bigpanda.io/	page
+CAST AI	sre	5	0	https://docs.cast.ai/	page
+Chaos Toolkit	sre	5	0	https://chaostoolkit.org/	page
+Checkmk	sre	5	0	https://docs.checkmk.com/	page
+Coroot	sre	5	0	https://docs.coroot.com/	page
+Davis AI	sre	5	0	https://docs.dynatrace.com/	page
+DQL	sre	5	0	https://docs.dynatrace.com/	page
+Dynatrace Grail	sre	5	0	https://docs.dynatrace.com/	page
+Grafana Beyla	sre	5	0	https://grafana.com/docs/	page
+Groundcover	sre	5	0	https://docs.groundcover.com/	page
+HyperDX	sre	5	0	https://www.hyperdx.io/docs	page
+Icinga	sre	5	0	https://icinga.com/docs/	wikipedia-title
+Instatus	sre	5	0	https://instatus.com/help	page
+Lightstep	sre	5	0	https://docs.lightstep.com/	page
+Loggly	sre	5	0	https://documentation.solarwinds.com/en/success_center/loggly/	wikipedia-title
+Logtail	sre	5	1	https://betterstack.com/docs/	page
+Logz.io	sre	5	0	https://docs.logz.io/	page
+Mezmo	sre	5	0	https://docs.mezmo.com/	page
+Odigos	sre	5	0	https://docs.odigos.io/	page
+OpenCensus	sre	5	0	https://opentelemetry.io/docs/	page
+OpenTracing	sre	5	0	https://opentelemetry.io/docs/	page
+Papertrail	sre	5	0	https://www.papertrail.com/help/	page
+Parca	sre	5	0	https://www.parca.dev/docs/	page
+Pixie	sre	5	1	https://github.com/cncf/landscape/blob/master/landscape.yml	wikipedia-title
+Raygun	sre	5	1	https://raygun.com/documentation/	page
+SignalFx	sre	5	0	https://docs.splunk.com/	wikipedia-title
+soak test	sre	5	1	https://sre.google/sre-book/table-of-contents/	wikipedia-title
+Splunk SOAR	sre	5	0	https://docs.splunk.com/	page
+Squadcast	sre	5	0	https://support.squadcast.com/	page
+Uptrace	sre	5	0	https://uptrace.dev/get/	page
+Vantage	sre	5	1	https://docs.vantage.sh/	page
+xMatters	sre	5	0	https://help.xmatters.com/	page

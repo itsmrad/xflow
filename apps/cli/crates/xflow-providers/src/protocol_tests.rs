@@ -855,7 +855,13 @@ async fn whisper_prompt_fallback_preserves_audio_and_retries_once() {
 
 #[tokio::test]
 async fn rejected_shipped_terms_are_retried_once_without_them() {
-    let domain = xflow_core::hints::select(&xflow_core::config::Config::default(), true, None);
+    let domain = xflow_core::hints::select(
+        &xflow_core::config::Config::default(),
+        &xflow_core::hints::Signals {
+            terminal: true,
+            ..Default::default()
+        },
+    );
     let options = |domain: Vec<&'static str>| TranscriptionOptions {
         vocabulary: vec!["Zorblax".into()],
         domain,
