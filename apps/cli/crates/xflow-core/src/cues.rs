@@ -302,7 +302,12 @@ fn allowed<'a>(
         return None;
     }
     let input = &text[tokens[i].start..tokens[end - 1].end];
-    let words = || config.dictionary.words.iter().chain(&config.stt.vocabulary);
+    // Window-title names (`title::apply`) count as the user's own spellings.
+    let words = || {
+        (config.dictionary.words.iter())
+            .chain(&config.stt.vocabulary)
+            .chain(&config.title_terms)
+    };
     let target = words()
         .find(|w| w.eq_ignore_ascii_case(row[0]))
         .map_or(row[0], String::as_str);
@@ -962,6 +967,17 @@ mod tests {
             "our soc2 report"
         );
         config.dictionary.words.clear();
+        // A window-title name is never corrected by a pack.
+        config.title_terms = vec!["nextjs".into()];
+        assert_eq!(
+            before_cleanup("open the nextjs folder", &config, false),
+            "open the nextjs folder"
+        );
+        config.title_terms.clear();
+        assert_eq!(
+            before_cleanup("open the nextjs folder", &config, false),
+            "open the Next.js folder"
+        );
         config.dictionary.replacements = vec![Replacement {
             from: "ebitda".into(),
             to: "earnings".into(),
