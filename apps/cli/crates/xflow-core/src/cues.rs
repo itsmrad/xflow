@@ -97,10 +97,13 @@ fn index() -> &'static (Vec<(usize, &'static str)>, Forms) {
         for (row, &(_, line)) in rows.iter().enumerate() {
             for (form, cued) in heard(&fields(line)) {
                 let first = form.split(' ').next().unwrap_or_default();
-                forms.push((first, form, row as u32, cued));
+                // Insert in place (a few hundred forms, once): no sort code in
+                // the binary, and equal keys keep file order.
+                let key = (first, std::cmp::Reverse(words(form)));
+                let at = forms.partition_point(|f| (f.0, std::cmp::Reverse(words(f.1))) <= key);
+                forms.insert(at, (first, form, row as u32, cued));
             }
         }
-        forms.sort_by(|a, b| a.0.cmp(b.0).then(words(b.1).cmp(&words(a.1))));
         (rows, forms)
     })
 }
@@ -246,7 +249,7 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool, app: Option<&st
             out.push_str(&text[cursor..tokens[i].start]);
             let input = &text[tokens[i].start..tokens[end - 1].end];
             if shouting {
-                out.push_str(&term.to_uppercase());
+                out.push_str(&term.to_ascii_uppercase());
             } else if input.starts_with(char::is_uppercase) && term.starts_with(char::is_lowercase)
             {
                 // Never lowercase a capital: "Kube ctl" becomes "Kubectl".
