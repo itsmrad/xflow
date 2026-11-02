@@ -80,7 +80,7 @@ never_learn = []             # removed learned words, never learned again
 # Your dictionary words and never_learn always win.
 dev = true                   # developer and AI terms everywhere (always on in terminals and editors)
 corp = true                  # business and SaaS terms: OKR, SOC 2, Salesforce, Jira
-sheet = false                # spreadsheet functions everywhere (always on in Excel, Numbers, Calc)
+sheet = false                # spreadsheet functions everywhere (always on in Excel, Numbers, LibreOffice Calc)
 finance = false              # banking and accounting terms: EBITDA, GAAP, IBAN, KYC
 
 [sounds]

@@ -3,18 +3,23 @@
 use crate::config::Config;
 use std::{collections::HashMap, sync::OnceLock};
 
-/// (data, focused-app substrings that turn the pack on). The first pack wins a
-/// heard form two active packs share.
+/// (data, focused app ids that turn the pack on). An entry matches as a
+/// substring of the lowercase app id, or exactly with a leading `=`
+/// (Linux desktop ids, without `.desktop`). The first pack wins a heard form
+/// two active packs share.
 const PACKS: [(&str, &[&str]); 4] = [
     (
         include_str!("vocab/dev.tsv"),
         &[
             "vscode",
             "vscodium",
-            "cursor",
-            "todesktop",
-            "zed",
-            "xcode",
+            "=code",
+            "=code-oss",
+            "=codium",
+            "com.todesktop.",
+            "dev.zed.",
+            "=zed",
+            "com.apple.dt.xcode",
             "jetbrains",
             "sublime",
             "windsurf",
@@ -24,7 +29,12 @@ const PACKS: [(&str, &[&str]); 4] = [
     (include_str!("vocab/corp.tsv"), &[]),
     (
         include_str!("vocab/sheet.tsv"),
-        &["excel", "numbers", "calc"],
+        &[
+            "com.microsoft.excel",
+            "com.apple.iwork.numbers",
+            "libreoffice-calc",
+            "libreoffice.calc",
+        ],
     ),
     (include_str!("vocab/finance.tsv"), &[]),
 ];
@@ -93,13 +103,20 @@ fn index() -> &'static (Vec<(usize, &'static str)>, Forms) {
 
 fn active(config: &Config, terminal: bool, app: Option<&str>) -> [bool; 4] {
     let app = app.unwrap_or_default().to_lowercase();
+    let app = app.strip_suffix(".desktop").unwrap_or(&app);
     let on = [
         config.vocab.dev || terminal,
         config.vocab.corp,
         config.vocab.sheet,
         config.vocab.finance,
     ];
-    std::array::from_fn(|i| on[i] || PACKS[i].1.iter().any(|a| app.contains(a)))
+    std::array::from_fn(|i| {
+        on[i]
+            || PACKS[i].1.iter().any(|id| match id.strip_prefix('=') {
+                Some(id) => app == id,
+                None => app.contains(id),
+            })
+    })
 }
 
 // Conservatively protect a whole user phrase when a shorter shipped form overlaps it.
@@ -194,6 +211,18 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool, app: Option<&st
             if !active[pack] || end > tokens.len() || !matches(&lower, &tokens[i..end], form) {
                 continue;
             }
+            // Speech-to-text already chose the case of a capitalised word
+            // ("SWIFT code", "Swift code"); only lowercase everyday words change.
+            if cued
+                && !shouting
+                && text[tokens[i].start..tokens[end - 1].end]
+                    .chars()
+                    .any(char::is_uppercase)
+            {
+                // Like a blocked phrase, it must not fall back to a shorter form.
+                longest = count;
+                continue;
+            }
             longest = count;
             let row = fields(line);
             if let Some(term) = allowed(
@@ -275,6 +304,7 @@ fn allowed<'a>(
 mod tests {
     use super::*;
     use crate::{config::Replacement, text::before_cleanup};
+    use std::collections::HashSet;
 
     #[test]
     fn dev_terms_need_neighbouring_evidence() {
@@ -287,41 +317,40 @@ mod tests {
             ("cloud sonnet", "Claude sonnet"),
             ("codecs agent", "Codex agent"),
             ("cursor editor", "Cursor editor"),
-            ("cube cuddle get pods", "kubectl get pods"),
-            ("cube control apply", "kubectl apply"),
+            ("kube control get pods", "kubectl get pods"),
+            ("kube ctl apply", "kubectl apply"),
             ("post gress database", "Postgres database"),
             ("post gress sql server", "PostgreSQL server"),
             ("next JS app", "Next.js app"),
-            ("versal deployment", "Vercel deployment"),
+            ("vercell deployment", "Vercel deployment"),
             ("super base auth", "Supabase auth"),
             ("n p m install", "npm install"),
             ("p n p m install", "pnpm install"),
             ("git hub pull request", "GitHub pull request"),
-            ("git lab merge request", "GitLab merge request"),
+            ("gitlab merge request", "GitLab merge request"),
             ("oh auth token", "OAuth token"),
             ("jason payload", "JSON payload"),
             ("yammel config", "YAML config"),
             ("engine x proxy", "nginx proxy"),
-            ("sequel lite database", "SQLite database"),
+            ("sql lite database", "SQLite database"),
             ("reddis cache", "Redis cache"),
             ("kafka topic", "Kafka topic"),
-            ("terra form plan", "Terraform plan"),
+            ("terraform plan", "Terraform plan"),
             ("anthro pic api", "Anthropic API"),
             ("open ai sdk", "OpenAI SDK"),
-            ("gemini model", "Gemini model"),
+            ("gemini api", "Gemini API"),
             ("llama weights", "Llama weights"),
-            ("oh llama serve", "Ollama serve"),
+            ("o llama serve", "Ollama serve"),
             ("hugging face hub", "Hugging Face hub"),
-            ("pie torch tensor", "PyTorch tensor"),
+            ("py torch tensor", "PyTorch tensor"),
             ("type script compiler", "TypeScript compiler"),
             ("tail wind css", "Tailwind CSS"),
-            ("tail wind classes", "Tailwind classes"),
-            ("my web socket is broken", "my WebSocket is broken"),
-            ("pie torch café", "PyTorch café"),
+            ("tail wind config", "Tailwind config"),
+            ("py torch café", "PyTorch café"),
             ("shad cn components", "shadcn components"),
             ("t r p c router", "tRPC router"),
             ("g r p c service", "gRPC service"),
-            ("web socket connection", "WebSocket connection"),
+            ("websocket connection", "WebSocket connection"),
             ("dogger container", "Docker container"),
             ("use snake case cloud code", "use cloud_code"),
         ];
@@ -544,7 +573,7 @@ mod tests {
             "ask Claude to review"
         );
         assert_eq!(
-            before_cleanup("cube cuddle get pods", &config, true),
+            before_cleanup("kube control get pods", &config, true),
             "kubectl get pods"
         );
     }
@@ -556,51 +585,132 @@ mod tests {
         config
     }
 
+    /// Names and words that SCOWL and some system dictionaries miss; each was
+    /// a false correction in review.
+    const EXTRA_ENGLISH: &str = "claud lora yamil kagel cagle kegel jeera geera tablo \
+        tableau eban kron kates rike lotti lotty pardo clavijo samel uri grr swot sec apr \
+        aum wack kegger zapper luau svelte storybook redux ghosty docker debbie jango kuda \
+        carass keros naven navan seby adian lerna ansible midjourney blackline cols diff dif";
+
+    /// Cue words too common to signal technical or finance context alone.
+    const GENERIC_CUES: &str = "a an the in on at to from into onto with without via over \
+        under for of by as and or but not no so than then this that these those it its our \
+        your my their his her we you they i me us them all any some each every one two use \
+        uses used using run runs ran running write writes wrote written learn learned open \
+        opened make made get got take took go went do did is are was were be been have has \
+        had can could will would should app apps application applications code project \
+        projects data file files account accounts page pages team teams call calls meeting \
+        meetings message messages chat link links model models program programs library \
+        libraries developer developers version versions system systems service services \
+        server servers tool tools platform user users report reports number numbers rate \
+        rates time line lines list type types test tests check checks build builds key keys \
+        document documents docs doc table tables function functions formula formulas \
+        statement statements thread threads post posts group groups board boards card cards \
+        price prices product products customer customers business company companies room \
+        rooms web site sites search results result window job jobs task tasks work process \
+        field fields record records note notes value values range object objects shape new \
+        real good great big little first last annual daily total net growth help support \
+        state stack view views mode part parts set step steps top end start";
+
+    /// SCOWL plus, where installed, the system word and name lists (required on
+    /// macOS, so the macOS CI job checks them).
+    fn english() -> HashSet<String> {
+        let mut words: HashSet<String> =
+            EXTRA_ENGLISH.split_whitespace().map(String::from).collect();
+        let mut found = false;
+        for path in [
+            "/usr/share/dict/words",
+            "/usr/share/dict/propernames",
+            "/usr/share/dict/connectives",
+        ] {
+            if let Ok(list) = std::fs::read_to_string(path) {
+                found = true;
+                words.extend(list.lines().map(|w| w.trim().to_lowercase()));
+            }
+        }
+        assert!(
+            found || !cfg!(target_os = "macos"),
+            "missing /usr/share/dict"
+        );
+        words
+    }
+
     #[test]
     fn shipped_data_is_small_unique_and_gated() {
         use crate::words::{common, name};
-        use std::collections::{HashMap, HashSet};
-        let everyday = |w: &str| common(w) || name(w);
+        let english = english();
+        // A word, not a spelled letter or a digit: "a w s" is not ordinary speech.
+        let word = |w: &str| match w.len() {
+            1 => w == "a" || w == "i",
+            _ => {
+                !w.bytes().all(|c| c.is_ascii_digit())
+                    && (common(w) || name(w) || english.contains(w))
+            }
+        };
+        let ordinary = |form: &str| form.split(' ').all(word);
+        let generic: HashSet<_> = GENERIC_CUES.split_whitespace().collect();
+        let normal = |s: &str| {
+            s.to_lowercase()
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         let bytes: usize = PACKS.iter().map(|(data, _)| data.len()).sum();
         eprintln!("vocab packs: {bytes} bytes");
         assert!(bytes < 400_000);
         let mut counts = [0; 4];
+        let mut wrong = Vec::new();
         let mut terms = HashSet::new();
         let mut packs_forms: Vec<HashMap<&str, &str>> = vec![HashMap::new(); 4];
         // heard form -> (canonical, cued) across packs
         let mut shared: HashMap<&str, Vec<(&str, bool)>> = HashMap::new();
         for (pack, line) in lines() {
             let f = fields(line);
-            assert!(line.split('\t').count() <= 8, "{line}");
+            let mut bad = |why: String| wrong.push(format!("{why}: {line}"));
             counts[pack] += 1;
-            assert!(f[0].is_ascii() && !f[0].starts_with('#'), "{line}");
-            assert!(
-                terms.insert((pack, f[0].to_lowercase())),
-                "duplicate: {line}"
-            );
+            if line.split('\t').count() > 8 || !f[0].is_ascii() || f[0].starts_with('#') {
+                bad("shape".into());
+            }
+            if !terms.insert((pack, f[0].to_lowercase())) {
+                bad("duplicate canonical".into());
+            }
             let cued = heard(&f).any(|(_, cued)| cued);
-            let cues = !f[3].is_empty() || !f[4].is_empty();
             // A cued form needs a cue to ever fire; a cue without one is dead data.
-            assert_eq!(cued, cues, "{line}");
-            assert!(heard(&f).next().is_some(), "{line}");
+            if cued != (!f[3].is_empty() || !f[4].is_empty()) || heard(&f).next().is_none() {
+                bad("cues and cued forms disagree".into());
+            }
+            for cue in f[3].split('|').chain(f[4].split('|')) {
+                if !cue.is_empty() && cue.split(' ').all(|w| generic.contains(w)) {
+                    bad(format!("generic cue {cue:?}"));
+                }
+            }
+            let forms: Vec<_> = heard(&f).map(|(form, _)| form).collect();
+            let canonical = normal(f[0]);
             for (form, cued) in heard(&f) {
-                assert!(
-                    form.split(' ').all(|w| !w.is_empty()
+                if !form.split(' ').all(|w| {
+                    !w.is_empty()
                         && w.bytes()
-                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())),
-                    "{line}"
-                );
-                assert_ne!(form, f[0], "{line}");
-                // Everyday English or a name is never a safe form; a canonical
-                // that is everyday English ("cursor", "react") needs a cue.
-                assert!(
-                    cued || form.contains(' ') || !everyday(form),
-                    "{form}: {line}"
-                );
-                assert!(
-                    packs_forms[pack].insert(form, f[0]).is_none(),
-                    "duplicate {form}: {line}"
-                );
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                }) || form == f[0]
+                {
+                    bad(format!("form {form:?}"));
+                }
+                // Ordinary speech (every word English or a name) is never safe.
+                if !cued && ordinary(form) {
+                    bad(format!("ordinary safe form {form:?}"));
+                }
+                // A form must not add or drop a plural: "monorepos" -> "monorepo".
+                for base in forms.iter().copied().chain([canonical.as_str()]) {
+                    let plural =
+                        |a: &str, b: &str| !b.ends_with('s') && a.strip_suffix('s') == Some(b);
+                    if base != form && (plural(form, base) || plural(base, form)) {
+                        bad(format!("plural {form:?} vs {base:?}"));
+                    }
+                }
+                if packs_forms[pack].insert(form, f[0]).is_some() {
+                    bad(format!("duplicate form {form:?}"));
+                }
                 shared.entry(form).or_default().push((f[0], cued));
             }
         }
@@ -608,18 +718,79 @@ mod tests {
         // ("Swift" and "SWIFT") must both wait for their cues.
         for (form, owners) in shared {
             let spellings: HashSet<_> = owners.iter().map(|(t, _)| *t).collect();
-            assert!(
-                spellings.len() == 1 || owners.iter().all(|(_, cued)| *cued),
-                "{form}: {owners:?}"
-            );
+            if spellings.len() > 1 && !owners.iter().all(|(_, cued)| *cued) {
+                wrong.push(format!("{form}: {owners:?}"));
+            }
         }
+        assert!(wrong.is_empty(), "{wrong:#?}");
         eprintln!("vocab rows dev/corp/sheet/finance: {counts:?}");
         for (count, range) in counts
             .into_iter()
-            .zip([600..=1000, 150..=250, 150..=250, 200..=300])
+            .zip([600..=1000, 150..=250, 100..=250, 200..=300])
         {
             assert!(range.contains(&count), "{count} rows");
         }
+    }
+
+    /// The 315 sentences from the PR #113 review (ordinary prose, adversarial
+    /// near-misses and cue traps) in every pack combination and app context.
+    /// Only the technical acronyms and "v lookup" change, and only where their pack is on.
+    #[test]
+    fn review_prose_is_unchanged_in_every_pack_combination() {
+        let changes = [
+            (
+                "We spoke about the api after lunch.",
+                "We spoke about the API after lunch.",
+                0,
+            ),
+            (
+                "We need to import html into the archive.",
+                "We need to import HTML into the archive.",
+                0,
+            ),
+            (
+                "The client asked us to import xml today.",
+                "The client asked us to import XML today.",
+                0,
+            ),
+            (
+                "Use a v lookup for the customer list.",
+                "Use a VLOOKUP for the customer list.",
+                2,
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for mask in 0..16 {
+            let mut config = Config::default();
+            config.vocab.dev = mask & 1 != 0;
+            config.vocab.corp = mask & 2 != 0;
+            config.vocab.sheet = mask & 4 != 0;
+            config.vocab.finance = mask & 8 != 0;
+            for (terminal, app) in [
+                (false, None),
+                (true, Some("com.apple.Terminal")),
+                (false, Some("com.microsoft.VSCode")),
+                (false, Some("com.microsoft.Excel")),
+                (false, Some("com.apple.mail")),
+            ] {
+                let on = active(&config, terminal, app);
+                for text in include_str!("vocab/review-prose.txt").lines() {
+                    let expected = changes
+                        .iter()
+                        .find(|(input, out, pack)| {
+                            *input == text
+                                && on[*pack]
+                                && !(terminal && input.eq_ignore_ascii_case(out))
+                        })
+                        .map_or(text, |(_, out, _)| out);
+                    let got = apply(text, &config, terminal, app);
+                    if got != expected {
+                        wrong.push(format!("mask {mask} {app:?}: {text} -> {got}"));
+                    }
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{} changed: {wrong:#?}", wrong.len());
     }
 
     #[test]
@@ -637,84 +808,64 @@ mod tests {
         let fixed = [
             // dev
             (
-                "deploy the kubernetes cluster with cube control",
+                "deploy the kubernetes cluster with kube control",
                 "deploy the Kubernetes cluster with kubectl",
             ),
             (
                 "we moved from my sequel database to post gress",
                 "we moved from MySQL database to Postgres",
             ),
-            (
-                "the react component re-renders",
-                "the React component re-renders",
-            ),
-            ("written in rust", "written in Rust"),
+            ("the react component renders", "the React component renders"),
+            ("rewritten in rust", "rewritten in Rust"),
             ("the rust compiler is slow", "the Rust compiler is slow"),
-            ("a swift ui view", "a SwiftUI view"),
-            ("swift package manager", "Swift package manager"),
-            ("ask chat gpt and open a i", "ask ChatGPT and OpenAI"),
+            ("the swift compiler", "the Swift compiler"),
+            ("ask chat gpt and open ai sdk", "ask ChatGPT and OpenAI SDK"),
             (
                 "the github copilot extension",
                 "the GitHub Copilot extension",
             ),
-            ("run it in java script", "run it in JavaScript"),
-            ("java class loader", "Java class loader"),
+            ("the java script runtime", "the JavaScript runtime"),
+            ("a java exception", "a Java exception"),
             ("go routines leak", "Go routines leak"),
-            (
-                "deep seek and mistral models",
-                "DeepSeek and Mistral models",
-            ),
+            ("deepseek and mistral api", "DeepSeek and Mistral API"),
             ("a w s and g c p", "AWS and GCP"),
-            (
-                "the cloud front distribution",
-                "the CloudFront distribution",
-            ),
+            ("the cloudfront distribution", "the CloudFront distribution"),
             ("cursor agent mode", "Cursor agent mode"),
-            (
-                "vercel and super base project",
-                "Vercel and Supabase project",
-            ),
+            ("vercel and super base auth", "Vercel and Supabase auth"),
             ("python script", "Python script"),
             ("the next js app router", "the Next.js app router"),
-            ("open it in vs code", "open it in VS Code"),
-            ("i asked grok cloud", "i asked GroqCloud"),
+            ("the groq api", "the Groq API"),
             // Seen from Groq Whisper on synthetic speech.
             ("rewrote it with shadkin", "rewrote it with shadcn"),
             ("use zlookup with sumifs", "use XLOOKUP with SUMIFS"),
-            ("the SWIFT code and EBAN", "the SWIFT code and IBAN"),
             ("We passed SOC 2 Type 2", "We passed SOC 2 Type II"),
             // corp
-            ("our arr grew", "our ARR grew"),
             ("hit 2 million arr this year", "hit 2 million ARR this year"),
             ("the o k rs and k p is", "the OKRs and KPIs"),
             ("we passed sock 2 type 2", "we passed SOC 2 Type II"),
-            ("our soc 2 report", "our SOC 2 report"),
+            ("the soc 2 audit", "the SOC 2 audit"),
             ("log it in sales force crm", "log it in Salesforce CRM"),
             ("post in the slack channel", "post in the Slack channel"),
-            ("a jira ticket in hub spot", "a Jira ticket in HubSpot"),
+            ("a jira ticket in hubspot", "a Jira ticket in HubSpot"),
             ("send the n d a and s o w", "send the NDA and SOW"),
             // sheet
             ("use a v lookup or x lookup", "use a VLOOKUP or XLOOKUP"),
-            ("try sum ifs with count ifs", "try SUMIFS with COUNTIFS"),
-            ("wrap it in the sum function", "wrap it in the SUM function"),
+            ("try sumifs with countifs", "try SUMIFS with COUNTIFS"),
             ("a nested if statement", "a nested IF statement"),
-            ("index match beats it", "INDEX MATCH beats it"),
             ("open the power query editor", "open the Power Query editor"),
-            ("freeze pains on row one", "freeze panes on row one"),
             // finance
             ("e bit da margin", "EBITDA margin"),
-            ("under gap accounting", "under GAAP accounting"),
-            ("non gap earnings", "non-GAAP earnings"),
+            ("under u s gap accounting", "under u s GAAP accounting"),
+            ("non gaap earnings", "non-GAAP earnings"),
             ("k y c and a m l checks", "KYC and AML checks"),
-            ("the swift code and iban", "the SWIFT code and IBAN"),
-            ("send the swift message", "send the SWIFT message"),
+            ("the swift bic and i b a n", "the SWIFT bic and IBAN"),
             ("the annual ten k filing", "the annual 10-K filing"),
-            ("our cogs ratio", "our COGS ratio"),
+            ("our cogs margin", "our COGS margin"),
             ("the p and l and capex", "the P&L and CapEx"),
             ("five year kagger", "five year CAGR"),
-            ("the whack rate", "the WACC rate"),
+            ("the whack calculation", "the WACC calculation"),
             ("a cruel basis", "accrual basis"),
-            ("term sofa rate", "term SOFR rate"),
+            ("compounded sofa rate", "compounded SOFR rate"),
         ];
         let wrong: Vec<_> = fixed
             .iter()
@@ -769,6 +920,12 @@ mod tests {
             "the model's weights and biases",
             "a raspberry pie",
             "watched a series a while ago",
+            // A capitalised word keeps the case speech-to-text chose.
+            "the SWIFT code for the transfer",
+            "the Swift code review",
+            "written in swift code",
+            "send it over Slack status",
+            "Rust compiler",
         ]
         .into_iter()
         .map(|input| (input, before_cleanup(input, &config, false)))
@@ -781,7 +938,7 @@ mod tests {
     fn packs_follow_the_focused_app_and_config() {
         let mut config = Config::default();
         let run = |config: &Config, terminal, app| {
-            crate::text::prepare("v lookup and e bit da in cube control", config, terminal, app).0
+            crate::text::prepare("v lookup and e bit da in kube control", config, terminal, app).0
         };
         // Defaults: dev and corp everywhere; sheet in spreadsheet apps; finance off.
         assert_eq!(
@@ -799,6 +956,11 @@ mod tests {
                 "{app}"
             );
         }
+        // Calculator is not a spreadsheet.
+        assert_eq!(
+            run(&config, false, Some("com.apple.calculator")),
+            "v lookup and e bit da in kubectl"
+        );
         config.vocab.finance = true;
         assert_eq!(run(&config, false, None), "v lookup and EBITDA in kubectl");
         config.vocab.sheet = true;
@@ -807,7 +969,7 @@ mod tests {
         config.vocab.dev = false;
         assert_eq!(
             run(&config, false, Some("com.tinyspeck.slackmacgap")),
-            "VLOOKUP and EBITDA in cube control"
+            "VLOOKUP and EBITDA in kube control"
         );
         assert_eq!(
             run(&config, true, Some("com.apple.Terminal")),
@@ -817,10 +979,18 @@ mod tests {
             run(&config, false, Some("com.microsoft.VSCode")),
             "VLOOKUP and EBITDA in kubectl"
         );
-        assert_eq!(
-            run(&config, false, Some("com.todesktop.230313mzl4w4u92")),
-            "VLOOKUP and EBITDA in kubectl"
-        );
+        for app in [
+            "com.todesktop.230313mzl4w4u92",
+            "code",
+            "code.desktop",
+            "dev.zed.Zed",
+        ] {
+            assert_eq!(
+                run(&config, false, Some(app)),
+                "VLOOKUP and EBITDA in kubectl",
+                "{app}"
+            );
+        }
         config.vocab.corp = false;
         assert_eq!(
             before_cleanup("our sock 2 report", &config, false),
@@ -835,7 +1005,7 @@ mod tests {
         config.formatting.snap_to_dictionary = false;
         assert_eq!(
             run(&config, true, Some("com.microsoft.Excel")),
-            "v lookup and e bit da in cube control"
+            "v lookup and e bit da in kube control"
         );
         // A [vocab] table round-trips through TOML with partial keys.
         let parsed: Config = toml::from_str("[vocab]\nfinance = true").unwrap();

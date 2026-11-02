@@ -321,7 +321,7 @@ pub struct VocabConfig {
     pub dev: bool,
     /// Business and SaaS terms.
     pub corp: bool,
-    /// Spreadsheet functions everywhere; always on in Excel, Numbers and Calc.
+    /// Spreadsheet functions everywhere; always on in Excel, Numbers and LibreOffice Calc.
     pub sheet: bool,
     /// Banking and accounting terms.
     pub finance: bool,

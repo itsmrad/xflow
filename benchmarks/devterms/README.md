@@ -100,11 +100,16 @@ cargo test --manifest-path apps/cli/Cargo.toml --locked --release -p xflow-core 
 ```
 
 The shipped packs (`apps/cli/crates/xflow-core/src/vocab/{dev,corp,sheet,finance}.tsv`)
-contain exact heard forms and adjacent left/right cues. A safe form ("cube cuddle",
-"v lookup") is never everyday English and corrects on its own; a cued form ("cloud",
-"swift", "arr") needs a cue on either side, while either blocker prevents it.
+contain exact heard forms and adjacent left/right cues. A safe form ("kube control",
+"v lookup") has at least one word that is not English or a name and corrects on its
+own; a cued form ("cloud", "swift", "arr") needs a specific technical cue on either
+side, while either blocker prevents it, and only changes lowercase input.
 `[vocab]` selects packs: dev and corp everywhere, dev always in terminals and
-editors, sheet in Excel, Numbers and Calc, finance only when enabled. Addressing
+editors, sheet in Excel, Numbers and LibreOffice Calc, finance only when enabled.
+`shipped_data_is_small_unique_and_gated` enforces these rules (SCOWL plus the
+system word and name lists, required on macOS), and
+`review_prose_is_unchanged_in_every_pack_combination` keeps 315 review sentences
+unchanged in all 16 pack combinations. Addressing
 Claude or Claude Code also requires a positive continuation (such as "to", "about"
 or "for"), punctuation, or the end of the text after a left addressing cue.
 Claude Code only accepts addressing cues such as "ask", "hey" and "tell".

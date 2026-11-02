@@ -3,25 +3,25 @@ EBITDA	e bit da|ebit da|ebitda|e bitda|ebit dah|e bit dah|ee bit da|eba da|ebida
 EBIT	e bit|ebit|ee bit|e b i t
 EBITDAR	ebitdar|ebit dar|e bit dar
 adjusted EBITDA	adjusted ebitda|adjusted e bit da|adjusted ebit da
-GAAP	g a a p|gaap|g double a p	gap	us|u s|under|per	accounting|revenue|audit|standards|standard|rules|basis|earnings|financials|financial|statements|reporting|compliant|measure|measures|eps|reconciliation	-	between|in|analysis
-non-GAAP	non gaap|non gap|non g a a p
+GAAP	g a a p|gaap|g double a p	gap	u s	accounting|compliant|eps|reconciliation	-	between|in|analysis
+non-GAAP	non gaap|non g a a p
 IFRS	i f r s|ifrs|eye f r s
 IFRS 9	ifrs 9|i f r s 9|ifrs nine
 IFRS 15	ifrs 15|i f r s 15|ifrs fifteen
 IFRS 16	ifrs 16|i f r s 16|ifrs sixteen
 ASC 606	asc 606|a s c 606|asc six oh six|a s c six oh six|asc six zero six
 ASC 842	asc 842|a s c 842|asc eight four two|a s c eight forty two
-10-K	ten kay|10 kay	ten k|10 k|10k	annual|latest|filed|file	filing|filings|report|form	-	run|race|races|steps|followers
-10-Q	ten q|10 q|ten cue|10q
-8-K	-	eight k|8 k|8k	filed|file	filing|filings|form|report	-	run|race|races|steps
-S-1	-	s 1|s one	filed|file|confidential	filing|filings|form|registration
+10-K	10 kay	ten k|10 k|10k|ten kay	latest|filed	filing|filings|form	-	run|race|races|steps|followers
+10-Q	ten q|10 q|10q
+8-K	-	eight k|8 k|8k	filed	filing|filings|form	-	run|race|races|steps
+S-1	-	s 1|s one	filed|confidential	filing|filings|form|registration
 13F	13 f|thirteen f
-SEC	s e c|sec
-FINRA	finra|fin ra|fin rah|f i n r a
+SEC	s e c
+FINRA	finra|f i n r a
 FASB	fasb|faz b|f a s b|fas b|fazby|fazzbee
 IASB	i a s b|iasb
 PCAOB	p c a o b|pcaob
-SOX	s o x	sox	-	compliance|audit|controls|control|404|testing|requirements	red|white
+SOX	s o x	sox	-	compliance|audit|controls|404	red|white
 Sarbanes-Oxley	sarbanes oxley|sarbanes oxly|sarbanes ox lee
 KYC	k y c|kyc|kay y c
 KYB	k y b|kyb
@@ -33,17 +33,17 @@ FATF	f a t f|fatf
 PEP	p e p
 SAR	s a r
 CTR	c t r
-SWIFT	s w i f t	swift	via|over	code|codes|message|messages|network|wire|bic|gpi|mt103|iso	taylor|very|so|quite|too	response|reply|action|recovery|kick|current|river
-SWIFT code	swift code|s w i f t code
+SWIFT	s w i f t	swift	-	bic|gpi|mt103	taylor|very|so|quite|too	response|reply|action|recovery|kick|current|river
+SWIFT code	s w i f t code
 BIC	b i c
-IBAN	eban|iban|eye ban|i b a n|eyeban
-ACH	a c h|ach
-ACH transfer	a c h transfer|ach transfer
-SEPA	sepa|see pa|s e p a|seepa
-SEPA transfer	sepa transfer|see pa transfer
+IBAN	i b a n|eyeban
+ACH	a c h
+ACH transfer	a c h transfer
+SEPA	sepa|s e p a|seepa
+SEPA transfer	sepa transfer
 FedNow	fednow
-Fedwire	fed wire|fedwire
-CHIPS	-	chips	-	network|payment|payments|clearing
+Fedwire	fedwire
+CHIPS	-	chips	-	clearing
 RTP	r t p|rtp
 UPI	u p i|upi
 NEFT	n e f t|neft
@@ -51,36 +51,34 @@ RTGS	r t g s|rtgs
 IMPS	i m p s
 IFSC	i f s c|ifsc
 IFSC code	ifsc code|i f s c code
-ISO 20022	iso 20022|i s o 20022|iso twenty oh twenty two|iso two zero zero two two
+ISO 20022	iso 20022|i s o 20022
 MT103	m t 103|mt 103|m t one oh three|mt one oh three
-CUSIP	cusip|cue sip|q sip|c u s i p|kyoosip
+CUSIP	cusip|q sip|c u s i p|kyoosip
 ISIN	isin|i s i n
 LEI	l e i
-LIBOR	libor|lie bore|lie bor|l i b o r|lybor
-SOFR	s o f r	sofr|sofa	term|compounded|overnight	rate|rates|curve|swap|swaps|index|transition
+LIBOR	libor|l i b o r|lybor
+SOFR	s o f r	sofr|sofa	compounded	curve|swap|swaps
 EURIBOR	euribor|euro bore|euribore
-Fed funds rate	fed funds rate|fed fund rate
-basis points	bases points
 bps	b p s|bips
-APR	a p r|apr
+APR	a p r
 APY	a p y|apy
-P&L	p and l|p n l|pnl|p l|pee and el
+P&L	p and l|p n l|pnl|p l
 P&Ls	p and ls|p n ls|pnls
-COGS	c o g s	cogs	-	ratio|margin|margins|line|percentage
+COGS	c o g s	cogs	-	margin|margins|percentage
 SG&A	s g and a|sg and a|s g n a|sgna
 OpEx	op ex|opex|o p e x|op ext
-CapEx	cap ex|capex|c a p e x|cap ext
+CapEx	capex|c a p e x|cap ext
 R&D	r and d|r n d
-ROI	r o i|roi|are o i
+ROI	r o i|are o i
 ROE	r o e
 ROA	r o a|roa
 ROIC	r o i c|roic|row ick
 ROCE	r o c e|roce
-CAGR	cagr|kagger|cagger|c a g r|kegger|kaggar|cag r
+CAGR	cagr|kagger|cagger|c a g r|kaggar|cag r
 IRR	i r r|irr
 NPV	n p v|npv
 DCF	d c f|dcf
-WACC	wacc|w a c c|wack	whack	-	rate|calculation|discount|formula|assumption|assumptions|estimate
+WACC	wacc|w a c c	whack|wack	-	calculation|discount|assumption|assumptions
 FCF	f c f|fcf
 EPS	e p s|eps
 P/E	p to e|p over e
@@ -90,31 +88,31 @@ EV	e v
 LBO	l b o|lbo
 M&A	m and a|m n a|mna
 IPO	i p o|ipo|eye p o
-SPAC	spac|s p a c	spack	-	merger|deal|ipo|sponsor|sponsors|shares|trust
+SPAC	spac|s p a c	spack	-	merger|ipo|sponsor|sponsors
 VC	v c
 PE firm	p e firm|pe firm
-AUM	a u m|aum
+AUM	a u m
 NAV	n a v|nav
 ETF	e t f|etf
 ETFs	e t fs|etfs|e t f s
-REIT	reit|r e i t	reet	-	shares|stock|stocks|dividend|dividends|index|fund|funds|portfolio
+REIT	r e i t	reet|reit	-	dividend|dividends|fund|funds
 REITs	reits|r e i ts
 401(k) rollover	401 k rollover|four oh one k rollover
 IRA	i r a
-Roth IRA	roth ira|roth i r a|wrath ira|roth eye ra
+Roth IRA	roth ira|roth i r a|roth eye ra
 HSA	h s a|hsa
 FSA	f s a
 ESPP	e s p p|espp
-FICO	fico|f i c o|fyco
-FICO score	fico score|fyco score|feeko score
+FICO	f i c o|fyco
+FICO score	fyco score|feeko score
 FDIC	f d i c|fdic
 FDIC-insured	fdic insured|f d i c insured
 OCC	o c c
 CFPB	c f p b|cfpb
-Basel III	basel 3|basel three|basil three|basil 3|bazel three
-Basel IV	basel 4|basel four|basil four
+Basel III	basel 3|basil 3|bazel three
+Basel IV	basel 4
 CET1	c e t 1|cet1|c e t one|cet one
-Tier 1 capital	tier one capital|tier 1 capital|tear one capital
+Tier 1 capital	tier 1 capital
 LCR	l c r|lcr
 NSFR	n s f r|nsfr
 RWA	r w a|rwa
@@ -131,38 +129,32 @@ DSCR	d s c r|dscr
 DTI	d t i|dti
 PMI	p m i
 HELOC	heloc|hee lock|h e l o c|heelock|helock
-ARM loan	a r m loan|arm loan
+ARM loan	a r m loan
 APR loan	a p r loan
-escrow	es crow|s crow
+escrow	s crow
 amortization	a mortization|amor tization
 amortization schedule	a mortization schedule
-accrual	a crual|a crew al	a cruel	-	basis|accounting|entry|entries|journal|reversal|reversals
-accruals	a cruels
+accrual	a crual	a cruel|a crew al	-	basis|reversal|reversals
 AP	a p
 AR	a r
 AP/AR	ap ar|a p a r|ap and ar|a p and a r
 GL	g l
-subledger	sub ledger
-reconciliation	reconcilliation|reconcile iation|re conciliation
-bank rec	bank reck
+reconciliation	reconcilliation|reconcile iation
 JE	j e
 JEs	j es|j e s
 TB	t b
 COA	c o a
-month-end close	month end close
-quarter-end close	quarter end close
-year-end close	year end close
 FP&A	f p and a|fp and a|f p n a|fpna
 CPA	c p a|cpa
 CFA	c f a|cfa
-ACCA	a c c a|acca
+ACCA	a c c a
 CMA	c m a
 FRM	f r m|frm
 KPMG audit	k p m g audit|kpmg audit
 IFRS 17	ifrs 17|ifrs seventeen
 XBRL	x b r l|xbrl|ex b r l
-EDGAR	-	edgar	sec	filing|filings|database|search
-SEC EDGAR	sec edgar|s e c edgar
+EDGAR	-	edgar	sec
+SEC EDGAR	s e c edgar
 MD&A	m d and a|md and a|m d n a
 DSO	d s o|dso
 DPO	d p o|dpo
@@ -171,8 +163,8 @@ CCC	c c c
 NWC	n w c|nwc
 COGM	c o g m|cogm
 WIP	w i p
-FIFO	fifo|fife oh|fi fo|f i f o|fyfo
-LIFO	lifo|li fo|l i f o|lyfo
+FIFO	f i f o|fyfo
+LIFO	l i f o|lyfo
 GMV	g m v|gmv
 TTM	t t m|ttm
 LTM	l t m|ltm
@@ -182,29 +174,28 @@ FY2026	fy 2026|f y 2026|fy twenty six|f y twenty six
 FY2027	fy 2027|f y 2027|fy twenty seven|f y twenty seven
 H1	h 1|h one
 H2	h 2|h two
-YoY growth	y o y growth|yoy growth
+YoY growth	y o y growth
 QoQ growth	q o q growth|qoq growth
-SAFE note	safe note
-409A	409 a|four oh nine a|four o nine a|409a
-409A valuation	409 a valuation|four oh nine a valuation|409a valuation
+409A	409 a|four o nine a|409a
+409A valuation	409 a valuation|409a valuation
 QSBS	q s b s|qsbs
-ISO options	i s o options|iso options
+ISO options	i s o options
 NSO	n s o|nso
 83(b) election	83 b election|eighty three b election|83b election
-1099	ten ninety nine|10 99
+1099	10 99
 W-8BEN	w 8 ben|w eight ben|w8 ben|w8ben
-VAT	v a t	vat	-	number|numbers|registration|rate|rates|return|returns|invoice|invoices|id|registered|exempt|inclusive
+VAT	v a t	vat	-	registration|registered|exempt|inclusive|returns
 GST	g s t|gst
 GSTIN	g s t i n|gstin|gst in
 TDS	t d s
-PAN card	p a n card|pan card
+PAN card	p a n card
 HMRC	h m r c|hmrc
 IRS	i r s|irs
 EIN	e i n|ein
 TIN	t i n
 SSN	s s n|ssn
-CUSIP number	cusip number|cue sip number
-Bloomberg terminal	bloomberg terminal|bloomberg terminals
+CUSIP number	cusip number
+Bloomberg terminal	bloomberg terminal
 Refinitiv	refinitiv|refinitive|re finitiv|refinitif
 FactSet	factset
 PitchBook	pitchbook
@@ -213,14 +204,13 @@ S&P 500	s and p 500|s and p five hundred|s p 500|snp 500|s n p 500
 S&P	s and p
 Nasdaq	nasdaq|naz dak|nas dak|naz daq|nasdak
 NYSE	n y s e|nyse
-Dow Jones	dow jones
-FTSE 100	footsie 100|ftse 100|footsie hundred|f t s e 100
-FTSE	ftse|f t s e	footsie	-	100|250|index
+FTSE 100	footsie 100|ftse 100|f t s e 100
+FTSE	ftse|f t s e	footsie	-	100|250
 DAX index	dax index|d a x index
-Nikkei	-	nikkei	the	index|225|average|stock|stocks
-Sensex	sensex|sen sex|sensecs
-Nifty 50	nifty 50|nifty fifty
-SEBI	sebi|s e b i|seby
+Nikkei	-	nikkei	-	index|225|average|stock|stocks
+Sensex	sensex|sensecs
+Nifty 50	nifty 50
+SEBI	sebi|s e b i
 RBI	r b i|rbi
 NBFC	n b f c|nbfc
 ECB	e c b|ecb
@@ -233,7 +223,6 @@ PCE	p c e|pce
 QE	q e
 QT	q t
 FX	f x
-forex	fore ex
 USD	u s d|usd
 EUR	e u r|eur
 GBP	g b p|gbp
@@ -247,33 +236,28 @@ CDO	c d o|cdo
 MBS	m b s|mbs
 ABS	a b s
 CLO	c l o|clo
-T-bill	t bill|tea bill|tee bill
-T-bills	t bills|tea bills|tee bills
+T-bill	t bill
+T-bills	t bills
 VaR	v a r
-Black-Scholes	black scholes|black shoals|black scholls
-Monte Carlo simulation	monte carlo simulation|monty carlo simulation
+Black-Scholes	black scholes|black scholls
 QuickBooks	quickbooks
 QuickBooks Online	quickbooks online|quick books online|qbo
 Xero	xero
-Sage Intacct	sage intacct|sage in tact|sage intact
+Sage Intacct	sage intacct
 NetSuite ERP	netsuite erp|net suite erp
 FreshBooks	freshbooks
-TallyPrime	tally prime|tallyprime
-Zoho Books	zoho books|zo ho books
-BlackLine	blackline
-Plaid	-	plaid	-	api|link|integration|token|sandbox
-Mastercard	master card
-Amex	amex|a mex
-Razorpay	razor pay|razorpay
+TallyPrime	tallyprime
+Zoho Books	zoho books
+Plaid	-	plaid	-	api|token|sandbox
+Amex	a mex
+Razorpay	razorpay
 Paytm	pay tm|paytm|pay t m
 PhonePe	phone pe|phonepe
 Revolut	revolut|revo lut
-Adyen	adyen|ad yen|a dyen|adian
+Adyen	adyen|a dyen
 Klarna	klarna|clarna|klar na
 JPMorgan	jp morgan|j p morgan|jpmorgan|jay p morgan
 JPMorgan Chase	jp morgan chase|j p morgan chase|jpmorgan chase
-Goldman Sachs	goldman sachs|goldman sacks|golden sachs|goldman sax
-Morgan Stanley	morgan stanley
 BlackRock	blackrock
 Citigroup	citi group
 HSBC	h s b c|hsbc
@@ -283,11 +267,10 @@ BNP Paribas	bnp paribas|b n p paribas|bnp pari bah
 Deutsche Bank	deutsche bank|doych bank|deutsch bank|deutsche banc
 HDFC Bank	hdfc bank|h d f c bank
 HDFC	h d f c|hdfc
-ICICI	i c i c i|icici|eye see eye see eye
+ICICI	i c i c i|icici
 ICICI Bank	icici bank|i c i c i bank
 SBI	s b i|sbi
 Kotak	kotak|ko tak
 Charles Schwab	charles schwab|charles schwob|charles shwab
 Schwab	schwob|shwab
-Berkshire Hathaway	berkshire hathaway|berkshire hath away
-repo rate	reepo rate|ree po rate
+repo rate	reepo rate
