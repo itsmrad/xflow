@@ -125,6 +125,9 @@ class Daemon:
 
 
 def main():
+    # `service install` on macOS drives the real launchd gui domain even with a temp HOME.
+    if not sys.platform.startswith("linux"):
+        sys.exit("verify.py is Linux-only: on macOS it would replace the real xflow LaunchAgent")
     binary = Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix="xflow-cli-", dir=os.environ.get("TMPDIR")) as directory:
         root = Path(directory)
