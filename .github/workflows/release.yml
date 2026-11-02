@@ -13,6 +13,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Tests never touch an OS keychain (keys live in the xflow keystore).
+  XFLOW_NO_KEYCHAIN: "1"
 
 jobs:
   build:
@@ -56,8 +58,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
     steps:
+      - name: Require green CI on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ok=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --commit "$GITHUB_SHA" \
+            --json conclusion --jq 'length>0 and all(.[]; .conclusion=="success")')
+          if [ "$ok" != "true" ]; then
+            echo "::error::CI has not passed on $GITHUB_SHA; not publishing."
+            exit 1
+          fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: dist-*

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Release
+- **A tag only ships when CI passed on its commit.** The release job now stops before publishing unless every CI run on the tagged commit succeeded. Release builds run tests without the OS keychain, as CI does. The release archive now includes `scripts/install.sh` and checks that `xflow` and `xflowd` start before packaging.
+
 ### Dictation
 - **Spoken underscore and dash work in every app.** In a browser, chat app or Electron app, "EBS underscore 321 underscore GHJ" becomes `EBS_321_GHJ` and "Hi dash There" becomes `Hi-There`. Outside terminals and editors a dash joins only IDs (capitals, digits, single letters, camelCase) or two capitalised words; "a dash of salt", "the 100 meter dash today", "underscore the point" and "Dash" as a name stay as said. Dot, slash, colon, operators and quotes stay in terminals and editors. Whisper's commas around the word no longer block it: "Hi, Dash, There." becomes `Hi-There.` `formatting.spoken_code = false` turns it all off.
 - **"cloud.ai" becomes Claude.ai.** Bare "cloud" is unchanged.
