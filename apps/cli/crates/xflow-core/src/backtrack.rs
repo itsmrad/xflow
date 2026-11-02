@@ -1169,8 +1169,9 @@ mod tests {
         eprintln!("backtrack {} bytes: {each:?}", text.len());
         assert!(
             each.as_micros()
+                // Debug only catches blowups; shared CI runners hit 22.6 ms.
                 < if cfg!(debug_assertions) {
-                    20_000
+                    50_000
                 } else {
                     1_000
                 },
