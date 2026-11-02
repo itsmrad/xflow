@@ -1706,6 +1706,40 @@ impl App {
                 };
                 self.key_editor(id, cleanup, false);
             }
+            "stt.languages" => {
+                if !self.editable() {
+                    return vec![];
+                }
+                let fields = ["Primary", "Secondary", "Third (optional)"]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, label)| {
+                        let current = self
+                            .config
+                            .stt
+                            .languages
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_default();
+                        let mut choices: Vec<_> = options::LANGUAGES
+                            .iter()
+                            .map(|(code, _)| code.to_string())
+                            .collect();
+                        if !choices.contains(&current) {
+                            choices.push(current.clone());
+                        }
+                        Field::pick(label, current, choices, |v| value_text("stt.language", v))
+                    })
+                    .collect();
+                let capability = xflow_providers::language_capability(&self.config.stt)
+                    .unwrap_or("Automatic only");
+                self.edit(
+                    EditTarget::Setting(key),
+                    "Speech · Preferred languages",
+                    capability,
+                    fields,
+                );
+            }
             "recording.device" => return vec![Effect::Devices],
             _ => {
                 if !self.editable() {
@@ -2267,6 +2301,11 @@ impl App {
                 return Ok(self.open_setup(Step::Permissions));
             }
             EditTarget::Setup(_) => return Ok(vec![]),
+            EditTarget::Setting(key) if key == "stt.languages" => {
+                let languages: Vec<_> = values.iter().filter(|v| !v.is_empty()).collect();
+                self.set(key, &serde_json::to_string(&languages)?)?;
+                return Ok(vec![]);
+            }
             EditTarget::Setting(key) => {
                 let key = key.clone();
                 self.set_choice(&key, value)?;

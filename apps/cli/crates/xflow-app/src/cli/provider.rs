@@ -33,7 +33,7 @@ fn credential_provider(id: &str) -> Result<()> {
 fn value(p: &ProviderInfo) -> serde_json::Value {
     serde_json::json!({"id":p.id,"name":p.name,"endpoint":p.endpoint,"default_model":p.default_model,
         "models":p.models.iter().map(|m| serde_json::json!({"id":m.id,"label":m.label,"note":m.note})).collect::<Vec<_>>(),
-        "env_var":p.env_var,"key_url":p.key_url,"docs_url":p.docs_url,"language":p.language,"vocabulary":p.vocabulary,"local":p.local})
+        "env_var":p.env_var,"key_url":p.key_url,"docs_url":p.docs_url,"language":p.language,"vocabulary":p.vocabulary,"local":p.local,"language_sets":xflow_providers::language_capability(&SttConfig {provider:p.id.into(),..SttConfig::default()}).unwrap_or("depends on server/model")})
 }
 /// Switching presets must not retain another provider's endpoint, model or credential override.
 pub fn select(stt: &mut SttConfig, id: &str, model: Option<&str>) -> Result<()> {
@@ -97,6 +97,15 @@ pub fn run(path: &Path, action: Option<&args::Providers>, out: &Output) -> Resul
                         vec!["Provider".into(), p.name.into()],
                         vec!["Default model".into(), p.default_model.into()],
                         vec!["Endpoint".into(), p.endpoint.into()],
+                        vec![
+                            "Preferred languages".into(),
+                            xflow_providers::language_capability(&SttConfig {
+                                provider: p.id.into(),
+                                ..SttConfig::default()
+                            })
+                            .unwrap_or("depends on server/model")
+                            .into(),
+                        ],
                         vec![
                             "Key environment".into(),
                             p.env_var.unwrap_or("not required").into(),
@@ -311,6 +320,7 @@ pub fn transcribe(
         cfg.stt.model = Some(model.into());
     }
     if let Some(language) = language {
+        cfg.stt.languages.clear();
         cfg.stt.language = Some(language.into());
     }
     cfg.validate().map_err(Error::config)?;

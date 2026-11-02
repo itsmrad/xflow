@@ -1005,3 +1005,133 @@ async fn whisper_retry_transport_failure_is_reported_as_the_retry() {
     assert_eq!(task.await.unwrap().len(), 1);
     std::env::remove_var(env);
 }
+
+#[tokio::test]
+async fn preferred_languages_whisper_style_precedes_hints_without_forcing_primary() {
+    for (provider, protocol) in [
+        ("groq", None),
+        ("local", None),
+        ("custom", Some("whisper-cpp")),
+    ] {
+        let (url, rx) = server(
+            "200 OK",
+            br#"{"text":"native transcript"}"#,
+            Duration::ZERO,
+            "",
+        )
+        .await;
+        let mut cfg = config(provider, url);
+        if let Some(protocol) = protocol {
+            cfg.protocol = Some(protocol.into());
+            cfg.model = Some("whisper".into());
+        }
+        cfg.languages = vec!["hi-IN".into(), "en".into()];
+        cfg.vocabulary = vec!["Postgres".into()];
+        let env = set_test_key(&mut cfg);
+        let stt = build_stt(&cfg, false).unwrap();
+        stt.transcribe(
+            clip(),
+            TranscriptionOptions {
+                language: Some("en".into()),
+                vocabulary: vec!["Rust".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let request = rx.await.unwrap();
+        let request = String::from_utf8_lossy(&request);
+        assert!(!request.contains("name=\"language\""));
+        assert!(request.contains("हाँ, मैं अभी check करके बताता हूँ।, Postgres, Rust"));
+        std::env::remove_var(env);
+    }
+}
+
+#[tokio::test]
+async fn preferred_languages_arrays_and_deepgram_multi_contracts() {
+    for provider in ["openai", "deepgram", "gemini", "assemblyai"] {
+        let response = match provider {
+            "deepgram" => {
+                json!({"results":{"channels":[{"alternatives":[{"transcript":"hello"}]}]}})
+            }
+            "gemini" => {
+                json!({"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"hello"}]}}]})
+            }
+            _ => json!({"text":"hello"}),
+        };
+        let (url, rx) = server(
+            "200 OK",
+            &serde_json::to_vec(&response).unwrap(),
+            Duration::ZERO,
+            "",
+        )
+        .await;
+        let mut cfg = config(provider, url);
+        cfg.languages = vec!["hi".into(), "en-IN".into()];
+        if provider == "assemblyai" {
+            cfg.protocol = Some("assemblyai-sync".into());
+        }
+        let env = set_test_key(&mut cfg);
+        build_stt(&cfg, false)
+            .unwrap()
+            .transcribe(
+                xflow_core::AudioClip {
+                    samples: vec![0.1; 1600],
+                    sample_rate: 16000,
+                    channels: 1,
+                },
+                TranscriptionOptions::default(),
+            )
+            .await
+            .unwrap();
+        let request = rx.await.unwrap();
+        let request = String::from_utf8_lossy(&request);
+        match provider {
+            "openai" => {
+                assert!(request.contains("name=\"languages[]\"\r\n\r\nhi"));
+                assert!(request.contains("name=\"languages[]\"\r\n\r\nen"));
+                assert!(!request.contains("name=\"language\""));
+            }
+            "deepgram" => {
+                assert!(request.contains("language=multi&language_hint=hi&language_hint=en"));
+                assert!(!request.contains("detect_language"));
+            }
+            "gemini" => assert!(request.contains("\"languageCodes\":[\"hi-IN\",\"en-US\"]")),
+            _ => {
+                assert!(request.contains("\"language_codes\":[\"hi\",\"en\"]"));
+                assert!(!request.contains("\"language_detection\""));
+            }
+        }
+        std::env::remove_var(env);
+    }
+}
+
+#[tokio::test]
+async fn preferred_languages_assembly_async_constrains_set() {
+    let (url, task) = scripted(
+        vec![
+            (
+                "200 OK",
+                json!({"upload_url":"https://example.invalid/audio"}),
+            ),
+            ("200 OK", json!({"id":"fixture", "status":"queued"})),
+            ("200 OK", json!({"status":"completed","text":"hello"})),
+        ],
+        "/v2/transcript",
+    )
+    .await;
+    let mut cfg = config("assemblyai", url);
+    cfg.languages = vec!["hi".into(), "en".into()];
+    let env = set_test_key(&mut cfg);
+    build_stt(&cfg, false)
+        .unwrap()
+        .transcribe(clip(), TranscriptionOptions::default())
+        .await
+        .unwrap();
+    let requests = task.await.unwrap();
+    let body: Value = serde_json::from_slice(body(&requests[1])).unwrap();
+    assert_eq!(body["language_codes"], json!(["hi", "en"]));
+    assert!(body.get("language_detection").is_none());
+    assert!(body.get("language_code").is_none());
+    std::env::remove_var(env);
+}

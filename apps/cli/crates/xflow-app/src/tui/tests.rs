@@ -214,7 +214,7 @@ fn every_setting_is_an_option_list_that_ignores_typing_and_stages_a_choice() {
             "{name} accepted typing"
         );
         key(&mut app, KeyCode::Down);
-        let effects = key_enter(&mut app);
+        let effects = key(&mut app, KeyCode::F(2));
         assert!(effects.is_empty());
         assert!(app.modal.is_none(), "{name}: {:?}", editor_error(&app));
     }
@@ -789,4 +789,37 @@ fn kept_failed_audio_offers_a_retry_that_copies_instead_of_pasting_into_the_term
             Tag::Done(_)
         )]
     ));
+}
+
+#[test]
+fn preferred_languages_picker_uses_names_and_rejects_unsupported_save() {
+    let (_dir, mut app) = app();
+    app.page = Page::Settings;
+    let rows = app.settings();
+    app.selected[Page::Settings.index()] =
+        rows.iter().position(|(k, _)| k == "stt.languages").unwrap();
+    key_enter(&mut app);
+    let Some(Modal::Editor(editor)) = app.modal.as_mut() else {
+        panic!("preferred languages editor")
+    };
+    assert_eq!(editor.fields.len(), 3);
+    assert!(editor.intro.contains("Whisper"));
+    editor.fields[0].value = "hi".to_owned().into();
+    editor.fields[1].value = "en".to_owned().into();
+    key(&mut app, KeyCode::F(2));
+    assert_eq!(app.config.stt.languages, ["hi", "en"]);
+    assert_eq!(
+        options::value_text("stt.languages", r#"["hi", "en"]"#),
+        "Hindi + English"
+    );
+    assert_eq!(
+        options::value_text("stt.languages", r#"["hi-IN", "en"]"#),
+        "Hindi + English"
+    );
+    assert!(app.set("stt.provider", "mistral").is_err());
+    assert_eq!(app.config.stt.provider, "groq");
+    app.set("stt.language", "fr").unwrap();
+    assert!(app.config.stt.languages.is_empty());
+    app.set("stt.languages", r#"["hi", "en"]"#).unwrap();
+    assert!(app.config.stt.language.is_none());
 }

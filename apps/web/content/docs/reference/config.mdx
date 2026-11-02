@@ -21,6 +21,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | `stt.protocol` | unset | wire protocol for provider = "custom"; e.g. `"openai"` |
 | `stt.api_key_env` | unset | e.g. `"GROQ_API_KEY"` |
 | `stt.language` | unset | ISO-639-1; unset = automatic detection; e.g. `"en"` |
+| `stt.languages` | `[]` | up to 3 languages you mix, e.g. ["hi", "en"]; instead of language; `xflow providers info` shows support |
 | `stt.vocabulary` | `[]` | extra recognition hints (dictionary.words are added too) |
 | `stt.domain_hints` | `true` | also hint the [vocab] domains' shipped terms after your words |
 | `stt.timeout_secs` | `30` |  |
@@ -175,6 +176,7 @@ provider = "groq"            # `xflow providers` lists every provider
 # protocol = "openai"        # wire protocol for provider = "custom"
 # api_key_env = "GROQ_API_KEY"
 # language = "en"            # ISO-639-1; unset = automatic detection
+languages = []              # up to 3 languages you mix, e.g. ["hi", "en"]; instead of language; `xflow providers info` shows support
 vocabulary = []              # extra recognition hints (dictionary.words are added too)
 domain_hints = true          # also hint the [vocab] domains' shipped terms after your words
 timeout_secs = 30

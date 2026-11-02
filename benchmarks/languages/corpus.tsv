@@ -1,0 +1,32 @@
+# id	devanagari (Hindi in Devanagari, English in Latin; read by Lekha)	romanized (read by Rishi)	dev terms (exact spellings, |)
+# Synthetic, non-personal. English words must be spelled identically in both scripts.
+m01	कल Next.js app को deploy करना है।	kal Next.js app ko deploy karna hai.	Next.js|deploy
+m02	useEffect में एक bug है, dependency array check करो।	useEffect mein ek bug hai, dependency array check karo.	useEffect|bug|dependency array
+m03	यार यह API बहुत slow है, Redis cache लगा देते हैं।	yaar yeh API bahut slow hai, Redis cache laga dete hain.	API|Redis|cache
+m04	PR merge करने से पहले CI pass होना चाहिए।	PR merge karne se pehle CI pass hona chahiye.	PR|merge|CI
+m05	Docker container restart करो, फिर logs देखो।	Docker container restart karo, phir logs dekho.	Docker|container|logs
+m06	मुझे लगता है कि PostgreSQL का index missing है।	mujhe lagta hai ki PostgreSQL ka index missing hai.	PostgreSQL|index
+m07	आज रात तक feature branch को main पर rebase कर दूँगा।	aaj raat tak feature branch ko main par rebase kar doonga.	feature branch|rebase
+m08	TypeScript का error आ रहा है, type undefined है।	TypeScript ka error aa raha hai, type undefined hai.	TypeScript|undefined
+m09	Kubernetes cluster पर pods crash हो रहे हैं।	Kubernetes cluster par pods crash ho rahe hain.	Kubernetes|cluster|pods
+m10	GitHub Actions का workflow fail हो गया, secrets check करो।	GitHub Actions ka workflow fail ho gaya, secrets check karo.	GitHub Actions|workflow|secrets
+m11	login page पर OAuth redirect काम नहीं कर रहा।	login page par OAuth redirect kaam nahi kar raha.	OAuth|redirect
+m12	इस function को async बनाओ और await लगाओ।	is function ko async banao aur await lagao.	function|async|await
+m13	React component में useState की जगह useReducer use करो।	React component mein useState ki jagah useReducer use karo.	React|useState|useReducer
+m14	Vercel पर preview deployment बन गया है, link भेजो।	Vercel par preview deployment ban gaya hai, link bhejo.	Vercel|preview deployment
+m15	JSON response में null values आ रही हैं।	JSON response mein null values aa rahi hain.	JSON|null
+m16	npm install के बाद package-lock.json commit करना मत भूलना।	npm install ke baad package-lock.json commit karna mat bhoolna.	npm install|package-lock.json|commit
+m17	Rust में borrow checker फिर से गुस्सा है।	Rust mein borrow checker phir se gussa hai.	Rust|borrow checker
+m18	GraphQL query बहुत बड़ी है, pagination add करो।	GraphQL query bahut badi hai, pagination add karo.	GraphQL|query|pagination
+m19	client ने बोला है कि dashboard में dark mode चाहिए।	client ne bola hai ki dashboard mein dark mode chahiye.	dashboard|dark mode
+m20	Tailwind classes बहुत लंबी हो गई हैं, component निकाल दो।	Tailwind classes bahut lambi ho gayi hain, component nikaal do.	Tailwind|component
+m21	webhook का payload validate नहीं हो रहा।	webhook ka payload validate nahi ho raha.	webhook|payload|validate
+m22	staging server पर memory leak है, heap dump लो।	staging server par memory leak hai, heap dump lo.	staging|memory leak|heap dump
+m23	Python script में pandas का version पुराना है।	Python script mein pandas ka version purana hai.	Python|pandas
+m24	कल standup में बताना कि migration done है।	kal standup mein batana ki migration done hai.	standup|migration
+m25	env file में API key मत डालना, secret manager use करो।	env file mein API key mat daalna, secret manager use karo.	env file|API key|secret manager
+m26	यह regex सही से match नहीं कर रहा।	yeh regex sahi se match nahi kar raha.	regex|match
+m27	अगले sprint में हम refactoring करेंगे।	agle sprint mein hum refactoring karenge.	sprint|refactoring
+m28	Prisma schema update करके migrate dev चलाओ।	Prisma schema update karke migrate dev chalao.	Prisma|schema|migrate dev
+m29	load balancer के पीछे दो instances चल रहे हैं।	load balancer ke peeche do instances chal rahe hain.	load balancer|instances
+m30	unit tests लिखो, coverage अस्सी percent से कम नहीं होना चाहिए।	unit tests likho, coverage assi percent se kam nahi hona chahiye.	unit tests|coverage

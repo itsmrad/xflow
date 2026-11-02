@@ -143,6 +143,7 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
         ));
     }
     if let Some(language) = &options.language {
+        current.stt.languages.clear();
         current.stt.language = Some(language.clone());
     }
     if device.is_some() || interactive {

@@ -15,7 +15,7 @@ history disabled; it must never silently erase saved rows at startup.
 
 | Section | Keys | Consumer |
 | --- | --- | --- |
-| `[stt]` | provider, model, endpoint, protocol, api_key_env, language, vocabulary, domain_hints, timeout_secs, fallback (one catalog id, opt-in) | providers |
+| `[stt]` | provider, model, endpoint, protocol, api_key_env, language, languages, vocabulary, domain_hints, timeout_secs, fallback (one catalog id, opt-in) | providers |
 | `[cleanup]` | mode (raw/light/polished/custom), provider, endpoint, model, api_key_env, prompt, timeout_secs, app_context, rewrite_selection | providers, daemon |
 | `[recording]` | max_seconds, silence_threshold, device, min_ms, auto_stop_secs, keep_warm_secs, ignore_speakers | platform audio, daemon |
 | `[hotkey]` | key, double_tap_ms (500), hold_threshold_ms (500), enabled (true) | macOS event tap, daemon |
@@ -37,6 +37,16 @@ behind the same `xflow overlay` API. See [hotkey behavior](hotkeys.md); a hotkey
 whose replacement event tap fails keeps the old binding and reports a status warning.
 CLI/TUI edit TOML with comment-preserving writes (toml_edit), validate by deserializing the edited
 document, write atomically (temp file + rename, mode 0600), then send `Reload`.
+
+`stt.languages` stores up to three distinct language/region BCP-47 codes (two-letter
+base languages, optional region; script/extension tags refused). Regions currently
+use the base language. Empty means automatic detection, one language pins it, and a
+set takes the adapter's multilingual path. Legacy `stt.language` remains readable;
+setting either control atomically replaces the other. Unsupported model/language
+sets and incompatible fallback routes are rejected before save. Whisper sets omit
+`language` and put language style before vocabulary inside the existing prompt
+budget. Reload rebuilds STT for the next dictation. No script accuracy guarantee,
+romanization or quick-switch IPC is introduced; see `benchmarks/languages/README.md`.
 
 ## Unix-socket IPC (`$XDG_RUNTIME_DIR/xflow/daemon.sock`)
 

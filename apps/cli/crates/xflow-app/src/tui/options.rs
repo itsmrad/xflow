@@ -13,7 +13,8 @@ pub const SETTINGS: &[Row] = &[
     ("stt.fallback", "Speech", "Backup provider", "Used only when the first fails. Sends the same audio once to a second service, using its recommended model and stored key."),
     ("stt.model", "Speech", "Model", "Models offered by the speech service you chose."),
     ("action.stt_key", "Speech", "API key", "Your key for the speech service. xflow stores it encrypted on this computer, never in your settings file."),
-    ("stt.language", "Speech", "Language", "Automatic works for most people. Pick a language if words come out in the wrong one."),
+    ("stt.languages", "Speech", "Preferred languages", "Up to three languages you mix when speaking."),
+    ("stt.language", "Speech", "Fixed language", "Automatic works for most people. Pick a language if words come out in the wrong one."),
     ("recording.device", "Speech", "Microphone", "Which microphone to listen to. System default follows your computer's sound settings."),
     ("recording.ignore_speakers", "Speech", "Ignore speaker sound", "Off by default. On macOS, reduce speaker sound with the system default microphone; listening can take longer to start. On Linux, configure an echo-cancel input in Sound settings."),
     ("action.stt_test", "Speech", "Check connection", "Checks your key and connection without recording or using paid credits."),
@@ -276,9 +277,21 @@ pub fn value_text(key: &str, value: &str) -> String {
                 .trim()
                 .trim_matches('"'),
         ),
+        "stt.languages" => {
+            let codes: Vec<String> = serde_json::from_str(value).unwrap_or_default();
+            if codes.is_empty() {
+                "Automatic".into()
+            } else {
+                codes
+                    .iter()
+                    .map(|code| value_text("stt.language", code))
+                    .collect::<Vec<_>>()
+                    .join(" + ")
+            }
+        }
         "stt.language" => LANGUAGES
             .iter()
-            .find(|(code, _)| *code == value)
+            .find(|(code, _)| *code == value.split('-').next().unwrap_or(value))
             .map(|(_, name)| name.to_string())
             .unwrap_or_else(|| value.into()),
         "stt.model" | "cleanup.model" if unset => "Recommended".into(),
@@ -331,6 +344,9 @@ pub fn value_text(key: &str, value: &str) -> String {
 pub fn plain(error: &str) -> String {
     let lower = error.to_lowercase();
     let rules: &[(&str, &str)] = &[
+        ("language set", "This speech model can't mix languages. Pick one, or another model."),
+        ("cannot combine", "This speech model can't mix those languages."),
+        ("distinct languages", "Choose each language once."),
         ("cleanup endpoint or provider is required", "Cleanup needs a writing service. Choose one in Settings → Writing → Service."),
         ("cleanup model is required", "Choose a model in Settings → Writing → Model."),
         ("changed outside", "Your settings were changed somewhere else, so xflow reloaded them. Please make your choice again."),
