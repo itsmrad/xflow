@@ -1,5 +1,8 @@
 //! Local corrections precede model cleanup; literal snippets follow it.
-use crate::config::{Config, Style};
+use crate::{
+    backtrack::Outcome,
+    config::{Config, Style},
+};
 
 #[derive(Clone)]
 pub(crate) struct Word<'a> {
@@ -96,7 +99,7 @@ fn replace(text: &str, pairs: &[(&str, &str)], punctuation_insensitive: bool) ->
     output.push_str(&text[cursor..]);
     output
 }
-fn tidy(text: &str) -> String {
+pub(crate) fn tidy(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut space = false;
     for (i, c) in text.char_indices() {
@@ -126,6 +129,10 @@ fn tidy(text: &str) -> String {
 }
 /// `terminal`: the target is a terminal, where a newline can run a command.
 pub fn before_cleanup(text: &str, config: &Config, terminal: bool) -> String {
+    prepare(text, config, terminal).0
+}
+/// `before_cleanup`, plus what self-correction did (a discard delivers nothing).
+pub fn prepare(text: &str, config: &Config, terminal: bool) -> (String, Outcome) {
     let mut text = text.trim().to_owned();
     if config.formatting.spoken_punctuation {
         text = replace(
@@ -165,12 +172,15 @@ pub fn before_cleanup(text: &str, config: &Config, terminal: bool) -> String {
         .collect();
     // Tidy before replacement: dictionary values, like snippets, stay literal.
     let text = replace(&text, &pairs, false);
+    // Self-corrections see the corrected names, before lists eat "one … two".
+    let (text, outcome) = crate::backtrack::apply(&text);
     // After replacements, so list items carry the corrected terms.
-    if config.formatting.lists && !terminal {
+    let text = if config.formatting.lists && !terminal {
         crate::lists::format(&text, &config.dictionary).unwrap_or(text)
     } else {
         text
-    }
+    };
+    (text, outcome)
 }
 pub fn after_cleanup(text: &str, config: &Config) -> String {
     let pairs: Vec<_> = config

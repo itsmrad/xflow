@@ -1016,7 +1016,9 @@ impl Engine {
                     bail!("selected text exceeds safety limit");
                 }
                 let terminal = xflow_platform::terminal_context(&target);
-                let local = xflow_core::text::before_cleanup(&raw, &config, terminal);
+                let (local, backtrack) = xflow_core::text::prepare(&raw, &config, terminal);
+                // The dictation ended with "scratch that" (#75): nothing is cleaned or pasted.
+                let discarded = backtrack == xflow_core::backtrack::Outcome::Discarded;
                 let style = xflow_core::text::style(&config, target.app_id.as_deref());
                 let mode = style.and_then(|s| s.mode).unwrap_or(config.cleanup.mode);
                 let instructions = style
@@ -1025,7 +1027,7 @@ impl Engine {
                 let dictation = session_mode != Mode::Command;
                 let cleanup = services
                     .transformer
-                    .filter(|_| !dictation || mode != CleanupMode::Raw);
+                    .filter(|_| !discarded && (!dictation || mode != CleanupMode::Raw));
                 // Skip the round trip when it can't help (#68). Terminals keep their
                 // deterministic text unless a style asks: a model adds periods,
                 // capitalizes `git` and "fixes" flags.
@@ -1033,7 +1035,11 @@ impl Engine {
                     && dictation
                     && (terminal && style.and_then(|s| s.mode).is_none()
                         || mode == CleanupMode::Light && !xflow_providers::cleanup_can_help(&local));
-                let mut outcome = timings.cleanup_skipped.then_some(CleanupOutcome::Skipped);
+                let mut outcome = if discarded {
+                    Some(CleanupOutcome::Discarded)
+                } else {
+                    timings.cleanup_skipped.then_some(CleanupOutcome::Skipped)
+                };
                 let text = if let Some(transformer) = cleanup.filter(|_| !timings.cleanup_skipped) {
                     let cleanup_start = Instant::now();
                     let transformed = transformer
@@ -1101,7 +1107,7 @@ impl Engine {
                 } else {
                     text
                 };
-                if text.trim().is_empty() {
+                if text.trim().is_empty() && !discarded {
                     bail!("no speech recognized after formatting");
                 }
                 validate_last_frame(&text)?;
@@ -1128,6 +1134,11 @@ impl Engine {
                 };
                 // A transcript that is ready first waits at most 20 ms, then goes unadjusted.
                 let around = match around {
+                    // Nothing is pasted after a discard, so its field read is dropped.
+                    Some(job) if discarded => {
+                        job.abort();
+                        None
+                    }
                     Some(job) => tokio::time::timeout(Duration::from_millis(20), job)
                         .await
                         .ok()
@@ -1394,7 +1405,7 @@ impl Engine {
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
                         if self.keeping().is_some() { self.load_kept(); }
-                        match result { Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
+                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some(DISCARDED.into())); }, Ok(Some(mut processed)) => { self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
                     }
                     // Late, from a canceled session: nothing it kept may stay.
                     Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
@@ -2031,6 +2042,8 @@ async fn edit_history(
     fit_final(&mut r);
     Ok(r)
 }
+/// The dictation ended with "scratch that" (#75); the pill shows it too.
+pub(crate) const DISCARDED: &str = "Discarded";
 #[cfg(target_os = "macos")]
 pub(crate) const COPIED: &str = "Copied — press ⌘V to paste";
 #[cfg(not(target_os = "macos"))]
@@ -4128,6 +4141,51 @@ mod tests {
         task.await.unwrap();
     }
     #[tokio::test]
+    async fn a_discarded_dictation_keeps_no_failed_audio_and_pastes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        // The first segment fails, so its audio would be kept; the rest takes it all back.
+        let audio = Arc::new(StreamAudio::ramp(100, 90, false));
+        let stt = Arc::new(SegmentStt {
+            audio: Some(audio.clone()),
+            broken: Some(|start| start < 30_000),
+            words: Some(|start| {
+                ["Meet at noon.", "Bring notes.", "Scratch that."][(start / 30_000).min(2)]
+            }),
+            ..SegmentStt::default()
+        });
+        let (mut engine, tx, rx, mut events, desktop) = segment_fixture(audio, stt.clone());
+        engine.config.privacy.keep_failed_audio = true;
+        engine.kept_dir = Some(dir.clone());
+        let task = tokio::spawn(engine.run(rx));
+        dictate(&tx, &stt).await;
+        let idle = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let r = events.recv().await.unwrap();
+                assert!(
+                    !matches!(r.state, State::Success | State::Error),
+                    "{:?}",
+                    r.message
+                );
+                if r.state == State::Idle && r.message.is_some() {
+                    return r;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(idle.message.as_deref(), Some(DISCARDED));
+        assert!(idle.failed_audio.is_none());
+        assert!(desktop.injections.lock().unwrap().is_empty());
+        assert!(ask(&tx, Request::Status).await.failed_audio.is_none());
+        assert!(
+            retry::load(&dir).ok().flatten().is_none(),
+            "nothing kept to retry"
+        );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
     async fn a_partial_retry_delivers_only_the_lost_part_unless_full() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("failed");
@@ -5350,7 +5408,7 @@ mod tests {
                 Skipped,
             ),
             (
-                "um actually make it five",
+                "um three, actually make it five",
                 "Make it 5.",
                 1,
                 "Make it 5.",
@@ -5467,6 +5525,75 @@ mod tests {
                     .contains("Terminal paste capability unverified"));
             }
             assert_eq!(desktop.watches.load(Ordering::SeqCst), 0);
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn scratch_that_alone_discards_without_cleanup_or_paste() {
+        // The parser's outcome decides, not the raw words (#107 review), in an
+        // editor and in a guarded terminal (#112) alike.
+        for (said, app) in [
+            ("Um, scratch that.", None),
+            ("Bring notes. Scratch, that.", None),
+            ("Scratch\nthat.", None),
+            ("Bring notes. Scratch that.", Some("com.mitchellh.ghostty")),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+            // Smart spacing (#109) has a field to read: a discard still pastes nothing.
+            let desktop = Arc::new(RecordingDesktop {
+                around: Some(("Done.", "")),
+                context: app.map(|app| AppContext {
+                    app_id: Some(app.into()),
+                    ..Default::default()
+                }),
+                guard_terminal: app.is_some(),
+                ..RecordingDesktop::default()
+            });
+            let mut config = Config::default();
+            config.injection.smart_spacing = true;
+            let (mut engine, tx, rx, mut events, _) =
+                fixture(config, desktop.clone(), store.clone());
+            engine.config.cleanup.mode = CleanupMode::Polished;
+            engine.services.stt = Arc::new(ImmediateStt {
+                calls: Arc::default(),
+                text: said,
+            });
+            let transformer = Arc::new(Reply(
+                "resurrected",
+                AtomicUsize::new(0),
+                AtomicUsize::new(0),
+            ));
+            engine.services.transformer = Some(transformer.clone());
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+            let idle = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let r = events.recv().await.unwrap();
+                    assert!(
+                        !matches!(r.state, State::Success | State::Error),
+                        "{said}: {:?}",
+                        r.message
+                    );
+                    if r.state == State::Idle && r.message.is_some() {
+                        return r;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(idle.message.as_deref(), Some(DISCARDED), "{said}");
+            // Cleanup can't resurrect it, nothing is pasted, and history says why.
+            assert_eq!(transformer.1.load(Ordering::SeqCst), 0, "{said}");
+            assert!(desktop.injections.lock().unwrap().is_empty(), "{said}");
+            assert!(desktop.copies.lock().unwrap().is_empty(), "{said}");
+            let (rows, _) = store.history(10, 0, None).await.unwrap();
+            assert_eq!(rows.len(), 1, "{said}");
+            assert_eq!(rows[0].text, "");
+            assert_eq!(rows[0].raw_text.as_deref(), Some(said));
+            assert_eq!(rows[0].cleanup, Some(CleanupOutcome::Discarded));
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }

@@ -48,12 +48,38 @@ latency p50/p95 use nearest-rank percentiles of rows with recorded latency.
 ## Text and command processing
 
 The order is spoken punctuation (opt-in), configured filler removal, whitespace
-tidying, whole-word dictionary replacements, model cleanup, literal snippets,
-then optional trailing space. Dictionary corrections reach the model; snippet
+tidying, whole-word dictionary replacements, spoken self-correction, model
+cleanup, literal snippets, then optional trailing space. Dictionary corrections reach the model; snippet
 expansions never reach it. Longest matching phrases win, replacements scan the
 original input once per stage, and inserted values are not recursively expanded.
 Unicode letters, digits, underscores, combining marks and internal apostrophes
 preserve word boundaries. Snippets ignore case and punctuation between words.
+
+Self-correction (`xflow_core::backtrack`, in every mode) edits only when the
+retracted words are certain: a restarted phrase ("I will do the meeting at 3 pm
+no no I will do the meeting at 5 pm"), or, within one sentence, a cue set off by
+commas followed by nothing but a new value of the same kind, a number,
+day or month, or name ("send it to John,
+sorry, to Mike"; "buy 3 apples, I mean 4"); only the value right before the cue
+is replaced, never one inside a list, range or alternative ("2 or 3, no, 4"), or when the
+value, its frame or a restarted opening was said more than once. A negation
+anywhere before the cue in its sentence ("we dont need 3, no, 4") refuses the
+edit, and so does a cue left over after the repairs or seen before one: the
+text stays whole. A value with a sign, currency or sigil ("-4", "€400",
+"@Mike", or spaced "- 4") is never swapped. Fillers before "scratch that" ("Um,
+scratch that.", "You know, scratch that.") belong to the cancel; any other
+words before it, with a sentence before them, leave the scope unclear, and any
+"scratch that" or "never mind" that isn't applied (and isn't quoted or a
+mention) always goes to model cleanup. An edit that would change any bracket's
+open/close balance, or the pairing of straight quotes or backticks, is not made. "Scratch that" or "never mind" as
+its own clause deletes the sentence before it (a full stop after "Mr." ends no
+sentence, and an unsure one such as "p.m.", "St." or "etc." refuses the edit);
+after a full stop it is always a cancel, even after "said" or "that"; at the end of a dictation it
+discards all of it: nothing is cleaned or pasted, the status and the macOS pill
+say "Discarded", and history records `cleanup: discarded`. Emphasis, apologies,
+negation ("no, no one came"), quoted or backticked text, flags and mentions ("the
+phrase scratch that") are left alone. Any other cue stays in the text verbatim
+and makes model cleanup run.
 
 The first style whose app pattern matches the focused app id overrides cleanup
 mode/prompt. App identifiers are sent to the transformer only with
@@ -62,14 +88,14 @@ dictation skips model cleanup, but an explicitly configured transformer remains
 available for styles and commands. Failed dictation cleanup retains the locally
 corrected transcript and reports a warning. Cleanup is skipped
 (`timings.cleanup_skipped`) in terminals unless a style sets a mode for that
-app, and light cleanup is skipped for six words or fewer without a
-self-correction cue, or for mostly-code text. `xflow_providers::cleanup_rewrote`
+app, and light cleanup is skipped for six words or fewer, or for mostly-code
+text, unless a self-correction cue remains that the local pass couldn't resolve. `xflow_providers::cleanup_rewrote`
 discards light and polished output as an answer or rewrite when its word count
-leaves 0.6–1.4x the input (0.3x after a cue such as "actually"), a question
+leaves 0.6–1.4x the input (0.3x after such an unresolved cue), a question
 loses its "?", an identifier or glossary term goes missing, or (light only)
 over a quarter of its words are new. The local text is then delivered with a
 warning (`timings.cleanup_rejected`). History records the outcome in `cleanup`
-(`applied`, `skipped`, `rejected`, `slow`, `failed`), and History shows why a
+(`applied`, `skipped`, `rejected`, `slow`, `failed`, `discarded`), and History shows why a
 dictation kept its transcribed words. Recording start warms the cleanup connection
 alongside the STT one (a free model-list request), because a cold connection
 added ~107 ms p50 to a Groq cleanup. Dictation cleanup gets 3 s plus

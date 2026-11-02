@@ -16,7 +16,10 @@ use std::{
 };
 use xflow_core::{
     config::{Config, Replacement, Snippet, Style},
-    ipc::{Delivery, Grant, HistoryEntry, Permissions, Request, Response, Stats, Timings},
+    ipc::{
+        CleanupOutcome, Delivery, Grant, HistoryEntry, Permissions, Request, Response, Stats,
+        Timings,
+    },
     CleanupMode, Mode, State,
 };
 use xflow_providers::KeySource;
@@ -536,7 +539,11 @@ impl App {
                         if let Some(app) = &h.app_id {
                             meta = format!("{meta} · {}", options::app_name(app));
                         }
-                        (h.text.lines().next().unwrap_or("").into(), meta)
+                        let first = match h.cleanup {
+                            Some(CleanupOutcome::Discarded) => "Discarded",
+                            _ => h.text.lines().next().unwrap_or(""),
+                        };
+                        (first.into(), meta)
                     })
                     .collect()
             }
