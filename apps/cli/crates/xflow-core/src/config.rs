@@ -307,7 +307,8 @@ impl InjectionConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct FormattingConfig {
     /// Format explicit casing commands and recognized spoken filenames locally,
-    /// and in terminals and editors spoken symbols next to code-shaped words.
+    /// spoken symbols next to code-shaped words in terminals and editors, and
+    /// spoken underscores and dashes between IDs or names everywhere.
     pub spoken_code: bool,
     /// Restore user spellings and context-gated developer terms locally.
     pub snap_to_dictionary: bool,

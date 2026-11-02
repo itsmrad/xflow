@@ -190,7 +190,8 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool, app: Option<&st
                 eligible: !word.is_empty()
                     && !chunk.contains(['@', '/', '\\', '_', '`', '-'])
                     && !chunk.starts_with("www.")
-                    && !crate::code::literal(chunk),
+                    // A typed domain matches only a dotted heard form: "cloud.ai".
+                    && (!crate::code::literal(chunk) || word.contains('.')),
             }
         })
         .collect();
@@ -227,7 +228,9 @@ pub(crate) fn apply(text: &str, config: &Config, terminal: bool, app: Option<&st
             let capital = text[tokens[i].start..tokens[end - 1].end]
                 .chars()
                 .any(char::is_uppercase);
-            if capital && !shouting && (cued || !sentence_start(text, tokens[i].start)) {
+            // A domain is never a name: "Cloud.ai" mid-sentence.
+            let name = !form.contains('.') && !sentence_start(text, tokens[i].start);
+            if capital && !shouting && (cued || name) {
                 // Like a blocked phrase, it must not fall back to a shorter form.
                 longest = count;
                 continue;
@@ -683,7 +686,9 @@ mod tests {
                 if !form.split(' ').all(|w| {
                     !w.is_empty()
                         && w.bytes()
-                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'.')
+                        && !w.starts_with('.')
+                        && !w.ends_with('.')
                 }) || form == f[0]
                 {
                     bad(format!("form {form:?}"));

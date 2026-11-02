@@ -78,7 +78,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `formatting.spoken_code` | `true` | Spoken symbols too, in terminals and editors, between code-shaped words: "user underscore id" -\> user_id, "dash dash verbose" -\> --verbose, "a arrow b" -\> a -\> b. Prose stays prose: "add a dash of salt", "plus one", "underscore the point". "camel case user id" -\> userId; "main dot rs" -\> main.rs |
+| `formatting.spoken_code` | `true` | Spoken symbols too, in terminals and editors, between code-shaped words: "user underscore id" -\> user_id, "dash dash verbose" -\> --verbose, "a arrow b" -\> a -\> b. Everywhere, underscore and dash between IDs or names: "EBS underscore 321" -\> EBS_321. Prose stays prose: "add a dash of salt", "plus one", "underscore the point". "camel case user id" -\> userId; "main dot rs" -\> main.rs |
 | `formatting.snap_to_dictionary` | `true` | Snapping runs before dictionary.replacements, so a replacement's `from` must match the snapped spelling ("xflow", not "x flow", when xflow is saved). Dictionary phrases protect overlapping cue words: "Google Cloud" blocks cloud, and "VS Code" blocks cloud code, even outside those dictionary phrases. restore user spellings and context-gated dev terms; false disables both |
 | `formatting.remove_fillers` | `true` |  |
 | `formatting.fillers` | `["um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm"]` |  |
@@ -231,6 +231,7 @@ smart_spacing = true         # match spacing and capitalization to the text arou
 [formatting]
 # Spoken symbols too, in terminals and editors, between code-shaped words:
 # "user underscore id" -> user_id, "dash dash verbose" -> --verbose, "a arrow b" -> a -> b.
+# Everywhere, underscore and dash between IDs or names: "EBS underscore 321" -> EBS_321.
 # Prose stays prose: "add a dash of salt", "plus one", "underscore the point".
 spoken_code = true           # "camel case user id" -> userId; "main dot rs" -> main.rs
 # Snapping runs before dictionary.replacements, so a replacement's `from` must
