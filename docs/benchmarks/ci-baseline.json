@@ -9,82 +9,82 @@
   },
   "result": {
     "binary_bytes": {
-      "xflow": 7975512,
-      "xflowd": 11560584
+      "xflow": 8098656,
+      "xflowd": 12147400
     },
     "idle_cpu_percent": 0.0,
     "idle_processes": 1,
-    "idle_pss_kib": 9398,
-    "idle_rss_kib": 11660,
-    "startup_p50_ms": 2.2124980000057803
+    "idle_pss_kib": 9873,
+    "idle_rss_kib": 12132,
+    "startup_p50_ms": 2.0291090000057466
   },
   "runs": [
     {
-      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/40911629185/attempts/1",
-      "commit": "8c44fe20fb99b34998ca1706d5cd90c0943e62bf",
-      "cpu": "AMD EPYC 7763 64-Core Processor",
+      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/41375047607/attempts/1",
+      "commit": "71e4aa6f02420a58d5a89f2d531be9168b8401bf",
+      "cpu": "AMD EPYC 9V45 96-Core Processor",
       "launch_pss_kib": [
-        9398,
-        9653,
-        9221
+        9710,
+        9664,
+        9763
       ],
       "logical_cpus": 4,
       "result": {
         "binary_bytes": {
-          "xflow": 7975512,
-          "xflowd": 11560584
+          "xflow": 8098656,
+          "xflowd": 12147400
         },
         "idle_cpu_percent": 0.0,
         "idle_processes": 1,
-        "idle_pss_kib": 9398,
-        "idle_rss_kib": 11660,
-        "startup_p50_ms": 2.2124980000057803
+        "idle_pss_kib": 9710,
+        "idle_rss_kib": 12096,
+        "startup_p50_ms": 1.557266999995477
       },
       "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
     },
     {
-      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/40911629185/attempts/2",
-      "commit": "8c44fe20fb99b34998ca1706d5cd90c0943e62bf",
+      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/41375047607/attempts/2",
+      "commit": "71e4aa6f02420a58d5a89f2d531be9168b8401bf",
       "cpu": "AMD EPYC 7763 64-Core Processor",
       "launch_pss_kib": [
-        9527,
-        9333,
-        9385
+        9651,
+        9972,
+        9873
       ],
       "logical_cpus": 4,
       "result": {
         "binary_bytes": {
-          "xflow": 7975512,
-          "xflowd": 11560584
+          "xflow": 8098656,
+          "xflowd": 12147400
         },
         "idle_cpu_percent": 0.0,
         "idle_processes": 1,
-        "idle_pss_kib": 9385,
-        "idle_rss_kib": 11648,
-        "startup_p50_ms": 2.7486459999863655
+        "idle_pss_kib": 9873,
+        "idle_rss_kib": 12132,
+        "startup_p50_ms": 2.0291090000057466
       },
       "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
     },
     {
-      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/40911629185/attempts/3",
-      "commit": "8c44fe20fb99b34998ca1706d5cd90c0943e62bf",
+      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/41375047607/attempts/3",
+      "commit": "71e4aa6f02420a58d5a89f2d531be9168b8401bf",
       "cpu": "AMD EPYC 7763 64-Core Processor",
       "launch_pss_kib": [
-        9458,
-        9478,
-        9527
+        9877,
+        9974,
+        9778
       ],
       "logical_cpus": 4,
       "result": {
         "binary_bytes": {
-          "xflow": 7975512,
-          "xflowd": 11560584
+          "xflow": 8098656,
+          "xflowd": 12147400
         },
         "idle_cpu_percent": 0.0,
         "idle_processes": 1,
-        "idle_pss_kib": 9478,
-        "idle_rss_kib": 11740,
-        "startup_p50_ms": 2.7413850000073126
+        "idle_pss_kib": 9877,
+        "idle_rss_kib": 12136,
+        "startup_p50_ms": 1.989543000007643
       },
       "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
     }
