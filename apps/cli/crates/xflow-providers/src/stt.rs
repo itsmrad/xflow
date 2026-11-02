@@ -1,4 +1,5 @@
 use super::*;
+use bytes::Bytes;
 use std::{collections::HashMap, path::Path, sync::OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,13 +363,11 @@ impl HttpProvider {
             bail!("AssemblyAI sync requires 80 ms–120 s of 16 kHz WAV; use the async protocol for longer clips");
         }
         let mime = audio_mime(format)?;
-        let retry_audio = if matches!(self.protocol, Protocol::Multipart | Protocol::WhisperCpp)
-            && !options.vocabulary.is_empty()
-        {
-            Some(data.clone())
-        } else {
-            None
-        };
+        // One buffer: the hint-free retry shares it instead of copying the audio.
+        let data = Bytes::from(data);
+        let retry_audio = (matches!(self.protocol, Protocol::Multipart | Protocol::WhisperCpp)
+            && !options.vocabulary.is_empty())
+        .then(|| data.clone());
         let mut request = self.client.post(self.endpoint.clone());
         request = match self.protocol {
             Protocol::Multipart | Protocol::Keywords | Protocol::Mistral | Protocol::WhisperCpp => {
@@ -508,7 +507,7 @@ impl HttpProvider {
     /// Multipart upload; `prompt` is false only for the hint-free retry.
     fn form(
         &self,
-        data: Vec<u8>,
+        data: Bytes,
         format: &str,
         options: &TranscriptionOptions,
         prompt: bool,
@@ -1055,8 +1054,8 @@ pub async fn check_stt(config: &SttConfig, offline: bool) -> Result<CheckReport>
     .await
 }
 
-fn audio_part(data: Vec<u8>, format: &str) -> Result<multipart::Part> {
-    multipart::Part::bytes(data)
+fn audio_part(data: Bytes, format: &str) -> Result<multipart::Part> {
+    multipart::Part::stream(data)
         .file_name(format!("dictation.{format}"))
         .mime_str(audio_mime(format)?)
         .map_err(|_| anyhow!("invalid audio MIME type"))
@@ -1155,6 +1154,53 @@ mod prompt_tests {
             );
             assert!(validate_options(None, &[format!("Q{tokens}")], protocol, "whisper").is_err());
         }
+    }
+
+    /// Counts allocations of exactly `PROBE` bytes, the size of the probe upload:
+    /// any copy of the audio (`Vec::clone`, `to_vec`) allocates exactly that.
+    struct Probe;
+    const PROBE: usize = 1_234_567;
+    static COPIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    unsafe impl std::alloc::GlobalAlloc for Probe {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            if layout.size() == PROBE {
+                COPIES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            std::alloc::System.alloc(layout)
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            std::alloc::System.dealloc(ptr, layout)
+        }
+    }
+    #[global_allocator]
+    static ALLOCATOR: Probe = Probe;
+
+    #[tokio::test]
+    async fn prompted_upload_and_its_retry_never_copy_the_audio() {
+        let (url, task) = crate::protocol_tests::scripted(
+            vec![
+                ("400 Bad Request", json!({"error":"rejected"})),
+                ("200 OK", json!({"text":"ok"})),
+            ],
+            "/transcribe",
+        )
+        .await;
+        let mut cfg = crate::tests::config("groq", url);
+        cfg.vocabulary = vec!["PostgreSQL".into()];
+        let env = crate::tests::set_test_key(&mut cfg);
+        let provider = HttpProvider::new(&cfg, true).unwrap();
+        let audio = vec![7u8; PROBE];
+        let before = COPIES.load(std::sync::atomic::Ordering::SeqCst);
+        let result = provider
+            .encoded(audio, "wav", Default::default())
+            .await
+            .unwrap();
+        assert_eq!(result.text, "ok");
+        assert_eq!(COPIES.load(std::sync::atomic::Ordering::SeqCst), before);
+        let requests = task.await.unwrap();
+        assert_eq!(requests.len(), 2, "the prompt-free retry ran");
+        assert!(requests[1].windows(64).any(|w| w == [7u8; 64]));
+        std::env::remove_var(env);
     }
 }
 
