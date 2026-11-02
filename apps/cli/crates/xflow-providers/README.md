@@ -58,7 +58,11 @@ prompted upload is retried once without the prompt. Mistral allows 100 terms wit
 allows up to 1000 terms, each under 50 characters / five words without reserved
 characters; its documented keyterm surcharge applies. Shipped domain terms
 (`TranscriptionOptions::domain`, `xflow_core::hints`) are pushed after the
-request hints under the same budget, never to ElevenLabs. The merge is memoized
+request hints under the same budget: up to 100 Whisper prompt tokens, or 30
+keyword-protocol terms (OpenAI `keywords[]`, Gemini, Mistral) until those
+limits are documented; never to ElevenLabs, Deepgram or AssemblyAI, which bill
+keyterms extra. A 400/413/422 on a request carrying shipped terms is retried
+once with the user's hints only. The merge is memoized
 per provider (about 2-5 us when config and focus are unchanged), and the
 prompt-free retry shares the upload buffer instead of copying it.
 

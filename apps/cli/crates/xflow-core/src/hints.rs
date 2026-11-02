@@ -4,9 +4,10 @@
 use crate::config::Config;
 use std::sync::OnceLock;
 
-/// Most shipped terms one dictation offers. Providers cut further: Whisper's
-/// 200-token prompt fits about 60 terms, Deepgram's 500 bytes about 50,
-/// AssemblyAI and Mistral take 100. A longer domain list could never be sent.
+/// Most shipped terms one dictation offers; no provider takes more (AssemblyAI
+/// and Mistral cap hints at 100), so a longer domain list could never be sent.
+/// Providers cut further: about 20 fill the 100-token share of a Whisper prompt,
+/// and keyword protocols take 30 until their limits are verified.
 pub const MAX: usize = 100;
 
 /// [dev, corp, sheet, finance], the same order as the text packs (`cues`).

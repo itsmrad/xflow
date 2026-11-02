@@ -117,6 +117,10 @@ const PROMPT_TOKENS: usize = 200;
 /// turbo and cost sentence-final periods, 100 tokens kept the same recall for
 /// ~18 ms (benchmarks/devterms/hints.py).
 const DOMAIN_PROMPT_TOKENS: usize = 100;
+/// Keyword protocols (OpenAI `keywords[]`, Gemini, Mistral) take at most this
+/// many shipped terms until each provider documents its limit; a rejected list
+/// is retried once without them.
+const DOMAIN_KEYTERMS: usize = 30;
 /// Every byte is at most one token, so `max` plus Whisper's 24-token slack in
 /// bytes (224, the old rule, for the full budget) always fits; only longer prompts
 /// need the estimate, which counts non-ASCII and digits bytewise.
@@ -355,22 +359,43 @@ impl HttpProvider {
             &self.model,
             PROMPT_TOKENS,
         );
-        // Shipped terms only fill what the user's words leave, within half a
-        // Whisper prompt. ElevenLabs bills keyterms extra: user words only.
-        if self.protocol != Protocol::Eleven {
+        // Shipped terms only fill what the user's words leave: half a Whisper
+        // prompt, or `DOMAIN_KEYTERMS` keywords. ElevenLabs, Deepgram and
+        // AssemblyAI bill keyterms extra, so they get the user's words only.
+        let own = vocabulary.len();
+        let ships = !matches!(
+            self.protocol,
+            Protocol::Eleven | Protocol::Deepgram | Protocol::Assembly | Protocol::AssemblySync
+        );
+        let whisper = matches!(self.protocol, Protocol::Multipart | Protocol::WhisperCpp);
+        if ships {
             push_hints(
                 &mut vocabulary,
-                options.domain.into_iter().map(str::to_owned),
+                options
+                    .domain
+                    .iter()
+                    .take(if whisper { usize::MAX } else { DOMAIN_KEYTERMS })
+                    .map(|&t| t.to_owned()),
                 language.as_deref(),
                 self.protocol,
                 &self.model,
                 DOMAIN_PROMPT_TOKENS,
             );
         }
+        // The shipped tail, so a rejected list can be retried without it.
+        let domain = (own..vocabulary.len())
+            .map(|i| {
+                *options
+                    .domain
+                    .iter()
+                    .find(|t| **t == vocabulary[i])
+                    .unwrap()
+            })
+            .collect();
         Ok(TranscriptionOptions {
             language,
             vocabulary,
-            ..Default::default()
+            domain,
         })
     }
     fn accepts_flac(&self) -> bool {
@@ -403,16 +428,56 @@ impl HttpProvider {
         {
             bail!("AssemblyAI sync requires 80 ms–120 s of 16 kHz WAV; use the async protocol for longer clips");
         }
-        let mime = audio_mime(format)?;
-        // One buffer: the hint-free retry shares it instead of copying the audio.
+        // One buffer: a retry shares it instead of copying the audio.
         let data = Bytes::from(data);
-        let retry_audio = (matches!(self.protocol, Protocol::Multipart | Protocol::WhisperCpp)
-            && !options.vocabulary.is_empty())
-        .then(|| data.clone());
-        let mut request = self.client.post(self.endpoint.clone());
-        request = match self.protocol {
+        let response = self
+            .send(self.request(data.clone(), format, &options, true)?)
+            .await?;
+        let status = response.status().as_u16();
+        let retry = if matches!(self.protocol, Protocol::Multipart | Protocol::WhisperCpp)
+            && !options.vocabulary.is_empty()
+            // 400/500 can be a rejected prompt; 502-504 are upstream load, which a retry worsens.
+            && matches!(status, 400 | 500)
+        {
+            Some((options.clone(), false))
+        } else if !options.domain.is_empty() && matches!(status, 400 | 413 | 422) {
+            // A keyword list the provider rejects: retry with the user's words only.
+            let mut own = options.clone();
+            own.vocabulary
+                .truncate(own.vocabulary.len() - own.domain.len());
+            own.domain.clear();
+            Some((own, true))
+        } else {
+            None
+        };
+        let response = if let Some((retry, prompt)) = retry {
+            // Hints must never fail a dictation; log the status only, never the body.
+            eprintln!("STT hint fallback: {status}");
+            let _ = read_bytes(response, false).await;
+            self.send(self.request(data, format, &retry, prompt)?)
+                .await
+                .map_err(|e| {
+                    e.context("provider request failed on the retry without dictionary hints")
+                })?
+        } else {
+            response
+        };
+        let result: Value = self.credential.read(response).await?;
+        self.parse(result, options.language)
+    }
+    /// The upload request; `prompt` is false only for the Whisper prompt-free retry.
+    fn request(
+        &self,
+        data: Bytes,
+        format: &str,
+        options: &TranscriptionOptions,
+        prompt: bool,
+    ) -> Result<reqwest::RequestBuilder> {
+        let mime = audio_mime(format)?;
+        let request = self.client.post(self.endpoint.clone());
+        Ok(match self.protocol {
             Protocol::Multipart | Protocol::Keywords | Protocol::Mistral | Protocol::WhisperCpp => {
-                request.multipart(self.form(data, format, &options, true)?)
+                request.multipart(self.form(data, format, options, prompt)?)
             }
             Protocol::Router => {
                 let mut body = json!({"model":self.model,"input_audio":{"data":STANDARD.encode(&data),"format":format},"response_format":"json"});
@@ -509,41 +574,15 @@ impl HttpProvider {
                 request.json(&body)
             }
             Protocol::Assembly => unreachable!(),
-        };
-        let response = self
-            .credential
+        })
+    }
+    async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        self.credential
             .apply(request, self.protocol.auth())
             .await?
             .send()
             .await
-            .map_err(http_error)?;
-        let status = response.status();
-        let response = if let Some(data) =
-            // 400/500 can be a rejected prompt; 502-504 are upstream load, which a retry worsens.
-            retry_audio.filter(|_| matches!(status.as_u16(), 400 | 500))
-        {
-            // Hints must never fail a dictation; log the status only, never the body.
-            eprintln!("STT prompt fallback: {}", status.as_u16());
-            let _ = read_bytes(response, false).await;
-            self.credential
-                .apply(
-                    self.client
-                        .post(self.endpoint.clone())
-                        .multipart(self.form(data, format, &options, false)?),
-                    self.protocol.auth(),
-                )
-                .await?
-                .send()
-                .await
-                .map_err(|e| {
-                    http_error(e)
-                        .context("provider request failed on the retry without dictionary hints")
-                })?
-        } else {
-            response
-        };
-        let result: Value = self.credential.read(response).await?;
-        self.parse(result, options.language)
+            .map_err(http_error)
     }
     /// Multipart upload; `prompt` is false only for the hint-free retry.
     fn form(
@@ -1226,7 +1265,7 @@ mod prompt_tests {
             cfg.model = model.map(Into::into);
             let env = crate::tests::set_test_key(&mut cfg);
             let provider = HttpProvider::new(&cfg, true).unwrap();
-            let hints = |vocabulary: Vec<String>| {
+            let merged = |vocabulary: Vec<String>| {
                 provider
                     .options(TranscriptionOptions {
                         vocabulary,
@@ -1234,8 +1273,8 @@ mod prompt_tests {
                         ..Default::default()
                     })
                     .unwrap()
-                    .vocabulary
             };
+            let hints = |vocabulary| merged(vocabulary).vocabulary;
             let got = hints(user.clone());
             assert_eq!(got[..3], user[..], "{id}");
             // The repeat is the memoized merge.
@@ -1253,15 +1292,21 @@ mod prompt_tests {
             );
             validate_options(None, &got, provider.protocol, &provider.model).unwrap();
             let shipped = got.len() - user.len();
+            // The merge names exactly the shipped tail, for the retry without it.
+            let tail = merged(user.clone()).domain;
+            assert_eq!(
+                tail.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+                got[3..]
+            );
             match id {
-                "elevenlabs" => assert_eq!(shipped, 0),
+                // These bill keyterms extra.
+                "elevenlabs" | "deepgram" | "assemblyai" => assert_eq!(shipped, 0),
                 "groq" => {
                     assert!((12..30).contains(&shipped), "{id}: {shipped}");
                     let tokens = prompt_tokens(&vocabulary_prompt(&got));
                     assert!((90..=DOMAIN_PROMPT_TOKENS).contains(&tokens), "{tokens}");
                 }
-                "deepgram" => assert!((30..80).contains(&shipped), "{id}: {shipped}"),
-                _ => assert!((60..=100).contains(&shipped), "{id}: {shipped}"),
+                _ => assert!((20..=DOMAIN_KEYTERMS).contains(&shipped), "{id}: {shipped}"),
             }
             // A dictionary that fills the budget keeps every word it sent alone.
             let full: Vec<String> = (0..400).map(|i| format!("Zorblax{i}")).collect();

@@ -5694,8 +5694,13 @@ mod tests {
         // Shipped hints follow the same focused app; title terms are never hints.
         let terminal = terminal_input || xflow_platform::is_terminal(Some(app));
         let domain = stt.1.lock().unwrap().clone();
-        assert_eq!(domain, xflow_core::hints::select(&config, terminal, Some(app)));
-        assert!(!domain.iter().any(|t| t.contains("TaskStore") || t.contains("myapp")));
+        assert_eq!(
+            domain,
+            xflow_core::hints::select(&config, terminal, Some(app))
+        );
+        assert!(!domain
+            .iter()
+            .any(|t| t.contains("TaskStore") || t.contains("myapp")));
         (
             pasted,
             hints,

@@ -80,7 +80,9 @@ pub fn trim(
     start..end
 }
 
-/// `domain`: the shipped terms sent with the upload, which Whisper can echo too.
+/// `domain`: the shipped terms offered with the upload, which Whisper can echo
+/// too. They count only whole ("Claude Code", "Next.js"): a near-silent "Next."
+/// or "Code" stays unless the user's own hints contain that word.
 pub fn suspect(text: &str, config: &Config, domain: &[&str]) -> bool {
     let words = |text: &str| -> Vec<String> {
         text.split(|c: char| !c.is_alphanumeric())
@@ -95,9 +97,20 @@ pub fn suspect(text: &str, config: &Config, domain: &[&str]) -> bool {
         .iter()
         .map(String::as_str)
         .chain(config.dictionary.words.iter().map(String::as_str))
-        .chain(domain.iter().copied())
         .flat_map(words)
         .collect();
+    let terms: Vec<Vec<String>> = domain.iter().map(|term| words(term)).collect();
+    // echo[i]: the first i words are all user hint words or whole shipped terms.
+    let mut echo = vec![false; text.len() + 1];
+    echo[0] = true;
+    for i in 0..text.len() {
+        if echo[i] {
+            echo[i + 1] |= hint_words.contains(&text[i]);
+            for term in terms.iter().filter(|t| text[i..].starts_with(t)) {
+                echo[i + term.len()] = true;
+            }
+        }
+    }
     text.is_empty()
         || text.len() == 1 && text[0].chars().count() <= 2
         || matches!(
@@ -108,7 +121,7 @@ pub fn suspect(text: &str, config: &Config, domain: &[&str]) -> bool {
                 | "fox jumps over the lazy dog"
                 | "the quick brown fox jumps over the lazy dog"
         )
-        || text.iter().all(|word| hint_words.contains(word))
+        || echo[text.len()]
 }
 
 /// Long dictations are transcribed in segments while recording continues. A
@@ -416,5 +429,10 @@ mod tests {
         assert!(!suspect("Supabase, Vercel.", &config, &[]));
         assert!(suspect("Supabase, Vercel.", &config, &domain));
         assert!(!suspect("Supabase is ready", &config, &domain));
+        assert!(suspect("Claude Code, Next.js, Supabase.", &config, &domain));
+        // Everyday words inside shipped terms are not echoes on their own.
+        for heard in ["Next.", "Code", "Monday", "Teams", "Power", "Microsoft"] {
+            assert!(!suspect(heard, &config, &domain), "{heard}");
+        }
     }
 }

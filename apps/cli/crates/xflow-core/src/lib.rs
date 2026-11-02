@@ -33,7 +33,8 @@ pub struct TranscriptionOptions {
     pub language: Option<String>,
     pub vocabulary: Vec<String>,
     /// Shipped domain terms (`hints::select`), sent after `vocabulary` within
-    /// the provider's budget.
+    /// the provider's budget. After the provider's merge: the ones it sends,
+    /// which end `vocabulary`.
     #[serde(skip)]
     pub domain: Vec<&'static str>,
 }

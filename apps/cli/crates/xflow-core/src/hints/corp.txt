@@ -6,7 +6,6 @@ Atlassian
 Asana
 ClickUp
 Airtable
-Monday.com
 Microsoft Teams
 SharePoint
 OneDrive
