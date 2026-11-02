@@ -570,6 +570,8 @@ struct CaptureBuffer {
     recording: Mutex<Option<Recording>>,
     active: AtomicBool,
     limited: Arc<AtomicBool>,
+    // Per buffer, unlike `limited`: also set when an idle warm stream fails.
+    failed: AtomicBool,
     first_callback_us: AtomicU64,
 }
 
@@ -603,6 +605,7 @@ impl CaptureBuffer {
             recording: Mutex::new(Some(Recording::new(sample_rate, channels, config)?)),
             active: AtomicBool::new(true),
             limited,
+            failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
         }))
     }
@@ -639,6 +642,8 @@ impl CaptureBuffer {
             recording.error = Some(error);
             self.limited.store(true, Ordering::Release);
         }
+        // Last, so a reader that sees `failed` also sees the recording's error.
+        self.failed.store(true, Ordering::Release);
     }
 }
 
@@ -708,10 +713,12 @@ fn input_alive(id: u32) -> Result<bool> {
             (&mut alive as *mut u32).cast(),
         )
     };
-    if status != 0 {
-        bail!("cannot inspect microphone availability: CoreAudio {status}");
+    match status {
+        0 => Ok(alive != 0),
+        // '!obj': the device object is gone, so it was unplugged.
+        status if status == i32::from_be_bytes(*b"!obj") => Ok(false),
+        status => bail!("cannot inspect microphone availability: CoreAudio {status}"),
     }
-    Ok(alive != 0)
 }
 
 struct OpenStream {
@@ -724,40 +731,77 @@ struct OpenStream {
     generation: u64,
     microphone: String,
     device_id: Option<u32>,
+    // Consecutive drains that saw a HAL render error.
+    render_errors: std::cell::Cell<u8>,
+}
+
+/// A failed status read or one transient render error keeps capturing, like
+/// CPAL ignoring input render errors; a second consecutive error fails.
+#[cfg(any(target_os = "macos", test))]
+fn render_failure(strikes: &std::cell::Cell<u8>, read: Result<i32>) -> Option<String> {
+    match read {
+        Ok(0) => strikes.set(0),
+        Ok(status) => {
+            strikes.set(strikes.get().saturating_add(1));
+            if strikes.get() >= 2 {
+                return Some(format!("microphone render failed: CoreAudio {status}"));
+            }
+            tracing::debug!(status, "transient microphone render error");
+        }
+        Err(error) => tracing::debug!(%error, "cannot read microphone render status"),
+    }
+    None
 }
 
 #[cfg(target_os = "macos")]
 impl OpenStream {
     fn check_input(&self) {
-        let result = (|| -> Result<()> {
-            let id = self.device_id.context("microphone ID unavailable")?;
-            if !input_alive(id)? {
-                bail!("microphone disconnected");
+        let error = (|| {
+            let Some(id) = self.device_id else {
+                return Some("microphone ID unavailable".to_string());
+            };
+            match input_alive(id) {
+                Ok(false) => return Some("microphone disconnected".to_string()),
+                Ok(true) => {}
+                Err(error) => tracing::debug!(%error, "cannot read microphone availability"),
             }
-            if let Some(owned) = self
+            let owned = self
                 ._stream
-                .downcast_ref::<OwnedHalUnit<coreaudio::audio_unit::AudioUnit>>()
-            {
-                use coreaudio::{
-                    audio_unit::{Element, Scope},
-                    sys,
-                };
-                let unit = owned.unit.as_ref().unwrap();
-                let status: sys::OSStatus = unit.get_property(
-                    sys::kAudioUnitProperty_LastRenderError,
-                    Scope::Global,
-                    Element::Output,
-                )?;
-                if status != 0 {
-                    bail!("microphone render failed: CoreAudio {status}");
-                }
-            }
-            Ok(())
+                .downcast_ref::<OwnedHalUnit<coreaudio::audio_unit::AudioUnit>>()?;
+            use coreaudio::{
+                audio_unit::{Element, Scope},
+                sys,
+            };
+            let read = owned.unit.as_ref()?.get_property(
+                sys::kAudioUnitProperty_LastRenderError,
+                Scope::Global,
+                Element::Output,
+            );
+            render_failure(&self.render_errors, read.map_err(Into::into))
         })();
-        if let Err(error) = result {
-            self.buffer.fail(error.to_string());
+        if let Some(error) = error {
+            self.buffer.fail(error);
         }
     }
+}
+
+/// Drops a warm stream whose device is gone (or unreadable) before reuse.
+#[cfg(target_os = "macos")]
+fn retire_dead_warm(stream: &mut Option<OpenStream>) -> Result<()> {
+    let Some(open) = stream.as_ref() else {
+        return Ok(());
+    };
+    let alive = open
+        .device_id
+        .context("microphone ID unavailable")
+        .and_then(input_alive);
+    if !matches!(alive, Ok(true)) {
+        *stream = None;
+    }
+    if !alive? {
+        bail!("warm microphone disconnected");
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -821,6 +865,19 @@ impl CpalCapture {
                             Err(_) => break,
                         },
                     };
+                    // Before any command uses the stream: if the bounded wake queue was
+                    // full, the next command still observes the limit/failure flag. A
+                    // failed idle warm stream has no recording but must not be reused.
+                    if stream.as_ref().is_some_and(|s| {
+                        s.buffer.limited.load(Ordering::Acquire)
+                            || s.buffer.failed.load(Ordering::Acquire)
+                    }) {
+                        if let Some(open) = stream.take() {
+                            completed = open.buffer.take().ok().flatten();
+                        }
+                        deadline = None;
+                        thread_level.store(0, Ordering::Relaxed);
+                    }
                     match command {
                         Command::Start(reply) => {
                             let result = (|| {
@@ -860,9 +917,9 @@ impl CpalCapture {
                                 ) {
                                     stream = None;
                                 }
+                                #[cfg(target_os = "macos")]
+                                retire_dead_warm(&mut stream)?;
                                 if let Some(open) = &mut stream {
-                                    #[cfg(target_os = "macos")]
-                                    if !input_alive(open.device_id.context("microphone ID unavailable")?)? { bail!("warm microphone disconnected"); }
                                     if let Some((_, choice)) = &selected {
                                         open.microphone = choice.description();
                                     }
@@ -973,19 +1030,6 @@ impl CpalCapture {
                         }
                         Command::Shutdown => break,
                     }
-                    // If the bounded wake queue was full, any queued command also
-                    // observes the limit/failure flag and closes the stream.
-                    if stream
-                        .as_ref()
-                        .is_some_and(|s| s.buffer.limited.load(Ordering::Acquire))
-                    {
-                        // Stop already owns the buffer if it was just requested.
-                        if let Some(open) = stream.take() {
-                            completed = open.buffer.take().ok().flatten();
-                        }
-                        deadline = None;
-                        thread_level.store(0, Ordering::Relaxed);
-                    }
                 }
             })
             .context("cannot start audio thread")?;
@@ -1079,6 +1123,7 @@ fn open_stream(
         generation,
         microphone: choice.description(),
         device_id: choice.device_id,
+        render_errors: Default::default(),
     })
 }
 
@@ -1264,6 +1309,7 @@ fn open_hal_input(
         generation,
         microphone: choice.description(),
         device_id: Some(id),
+        render_errors: Default::default(),
     })
 }
 
@@ -1384,6 +1430,7 @@ fn open_voice_unit(
         generation,
         microphone: String::new(),
         device_id: None,
+        render_errors: Default::default(),
     })
 }
 
@@ -1474,6 +1521,7 @@ mod tests {
                 generation: cycle,
                 microphone: "Built-in fallback".into(),
                 device_id: Some(2),
+                render_errors: Default::default(),
             };
             if cycle % 2 == 0 {
                 open.buffer.take().unwrap().unwrap().finish().unwrap();
@@ -1515,6 +1563,73 @@ mod tests {
         buffer.fail("capture failed".into());
         assert!(finished.load(Ordering::Acquire));
         assert!(!buffer.active.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn render_errors_fail_only_when_they_persist_and_failed_reads_are_ignored() {
+        let strikes = std::cell::Cell::new(0);
+        assert_eq!(
+            render_failure(&strikes, Err(anyhow!("property unsupported"))),
+            None
+        );
+        assert_eq!(render_failure(&strikes, Ok(-10863)), None);
+        assert_eq!(render_failure(&strikes, Ok(0)), None);
+        assert_eq!(render_failure(&strikes, Ok(-10863)), None);
+        assert_eq!(
+            render_failure(&strikes, Err(anyhow!("transient read"))),
+            None
+        );
+        assert_eq!(
+            render_failure(&strikes, Ok(-10863)).as_deref(),
+            Some("microphone render failed: CoreAudio -10863")
+        );
+    }
+
+    #[test]
+    fn idle_warm_stream_failure_is_flagged_for_retirement() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let idle =
+            CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished.clone()).unwrap();
+        idle.take().unwrap();
+        idle.fail("device lost while warm".into());
+        assert!(idle.failed.load(Ordering::Acquire));
+        assert!(!finished.load(Ordering::Acquire));
+        let recording =
+            CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished.clone()).unwrap();
+        assert!(!recording.failed.load(Ordering::Acquire));
+        recording.fail("device lost while recording".into());
+        assert!(recording.failed.load(Ordering::Acquire) && finished.load(Ordering::Acquire));
+        let error = recording.take().unwrap().unwrap().finish().unwrap_err();
+        assert!(error.to_string().contains("device lost while recording"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dead_warm_microphone_is_released_before_reporting_disconnect() {
+        // Read-only query of an ID no device uses; CoreAudio answers '!obj'.
+        assert!(!input_alive(0x7FFF_FF00).unwrap());
+        let buffer = CaptureBuffer::open(
+            8_000,
+            1,
+            &RecordingConfig::default(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        buffer.take().unwrap();
+        let mut stream = Some(OpenStream {
+            _stream: Box::new(()),
+            buffer,
+            sample_rate: 8_000,
+            channels: 1,
+            generation: 1,
+            microphone: "Unplugged USB mic".into(),
+            device_id: Some(0x7FFF_FF00),
+            render_errors: Default::default(),
+        });
+        let error = retire_dead_warm(&mut stream).unwrap_err();
+        assert_eq!(error.to_string(), "warm microphone disconnected");
+        assert!(stream.is_none());
+        assert!(retire_dead_warm(&mut stream).is_ok());
     }
 
     #[test]
@@ -1579,6 +1694,7 @@ mod tests {
                 generation: 1,
                 microphone: "Built-in fallback".into(),
                 device_id: Some(2),
+                render_errors: Default::default(),
             };
             if stop {
                 let _ = open.buffer.take().unwrap().unwrap().finish().unwrap();
@@ -2065,6 +2181,7 @@ mod tests {
             recording: Mutex::new(None),
             active: AtomicBool::new(false),
             limited: Arc::new(AtomicBool::new(false)),
+            failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
         };
         assert!(buffer.take().unwrap().is_none());
@@ -2165,6 +2282,7 @@ mod tests {
             )),
             active: AtomicBool::new(true),
             limited: Arc::new(AtomicBool::new(false)),
+            failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
         };
         buffer
@@ -2279,6 +2397,7 @@ mod tests {
             recording: Mutex::new(None),
             active: AtomicBool::new(false),
             limited: finished.clone(),
+            failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
         };
         let (sender, _receiver) = mpsc::sync_channel(16);
