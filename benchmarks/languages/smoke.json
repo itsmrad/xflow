@@ -1,0 +1,106 @@
+{
+  "date": "2026-11-02",
+  "voice": "Lekha hi_IN",
+  "model": "whisper-large-v3-turbo",
+  "cleanup": "raw",
+  "vocabulary": [
+    "Next.js",
+    "useEffect",
+    "API",
+    "Redis",
+    "Postgres",
+    "TypeScript"
+  ],
+  "results": [
+    {
+      "id": "m01",
+      "setting": "off",
+      "text": "नेक्स्ट जस एक को Deploy करना है",
+      "language": null,
+      "latency_ms": 308,
+      "devanagari": true,
+      "latin": true
+    },
+    {
+      "id": "m01",
+      "setting": "on",
+      "text": "नेक्स्ट जस एक को deploy करना है।",
+      "language": null,
+      "latency_ms": 258,
+      "devanagari": true,
+      "latin": true
+    },
+    {
+      "id": "m02",
+      "setting": "off",
+      "text": "useEffect में एक बग है, dependency array चेक करो.",
+      "language": null,
+      "latency_ms": 270,
+      "devanagari": true,
+      "latin": true
+    },
+    {
+      "id": "m02",
+      "setting": "on",
+      "text": "useEffect में एक बग है, dependency array चेक करो।",
+      "language": null,
+      "latency_ms": 275,
+      "devanagari": true,
+      "latin": true
+    },
+    {
+      "id": "m03",
+      "setting": "off",
+      "text": "यार यह API बहुत स्लो है, Redis Cash लगा देते हैं.",
+      "language": null,
+      "latency_ms": 294,
+      "devanagari": true,
+      "latin": true
+    },
+    {
+      "id": "m03",
+      "setting": "on",
+      "text": "यार यह API बहुत slow है, Redis cash लगा देते हैं।",
+      "language": null,
+      "latency_ms": 280,
+      "devanagari": true,
+      "latin": true
+    },
+    {
+      "id": "m04",
+      "setting": "off",
+      "text": "PR merge करने से पहले CI Pass होना चाहिए.",
+      "language": null,
+      "latency_ms": 276,
+      "devanagari": true,
+      "latin": true
+    },
+    {
+      "id": "m04",
+      "setting": "on",
+      "text": "PR merge करने से पहले CI Pass होना चाहिए।",
+      "language": null,
+      "latency_ms": 313,
+      "devanagari": true,
+      "latin": true
+    },
+    {
+      "id": "m05",
+      "setting": "off",
+      "text": "Docker Container Restart करो, फिर Lags देखो.",
+      "language": null,
+      "latency_ms": 260,
+      "devanagari": true,
+      "latin": true
+    },
+    {
+      "id": "m05",
+      "setting": "on",
+      "text": "Docker container restart करो, फिर lags देखो.",
+      "language": null,
+      "latency_ms": 295,
+      "devanagari": true,
+      "latin": true
+    }
+  ]
+}

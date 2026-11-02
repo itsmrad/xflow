@@ -19,8 +19,8 @@ pub use check::{check_cleanup, CheckReport};
 use check::{check_request, probe_url};
 mod stt;
 pub use stt::{
-    backup_providers, build_stt, check_stt, fallback_warning, hint_fit, transcribe_file,
-    validate_fallback, validate_fallback_route, FailoverExhausted,
+    backup_providers, build_stt, check_stt, fallback_warning, hint_fit, language_capability,
+    language_lead, transcribe_file, validate_fallback, validate_fallback_route, FailoverExhausted,
 };
 mod audio;
 mod catalog;

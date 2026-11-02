@@ -9,6 +9,7 @@ provider = "groq"            # `xflow providers` lists every provider
 # protocol = "openai"        # wire protocol for provider = "custom"
 # api_key_env = "GROQ_API_KEY"
 # language = "en"            # ISO-639-1; unset = automatic detection
+languages = []              # up to 3 languages you mix, e.g. ["hi", "en"]; instead of language; `xflow providers info` shows support
 vocabulary = []              # extra recognition hints (dictionary.words are added too)
 domain_hints = true          # also hint the [vocab] domains' shipped terms after your words
 timeout_secs = 30

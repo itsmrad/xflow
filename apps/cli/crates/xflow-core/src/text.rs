@@ -11,9 +11,11 @@ pub(crate) struct Word<'a> {
     pub(crate) text: &'a str,
 }
 fn word_char(c: char) -> bool {
+    // Combining marks (virama, nukta, harakat, accents) join the word; reuses
+    // learning's CCC table. Spacing vowel signs are already alphabetic.
     c.is_alphanumeric()
         || c == '_'
-        || matches!(c as u32, 0x0300..=0x036f | 0x1ab0..=0x1aff | 0x1dc0..=0x1dff | 0x20d0..=0x20ff | 0xfe20..=0xfe2f)
+        || unicode_normalization::char::canonical_combining_class(c) != 0
 }
 pub(crate) fn words(text: &str) -> Vec<Word<'_>> {
     let mut result = Vec::new();
@@ -766,5 +768,56 @@ mod terminal_tests {
             serde_json::from_str(r#"{"app_id":"editor","window_id":"1","selected_text":null}"#)
                 .unwrap();
         assert!(!context.terminal_input);
+    }
+}
+
+#[cfg(test)]
+mod multilingual_tests {
+    use super::*;
+    use crate::config::Replacement;
+
+    #[test]
+    fn local_english_passes_preserve_devanagari_hinglish_tamil_arabic_and_cjk() {
+        let mut config = Config::default();
+        config.formatting.spoken_punctuation = true;
+        config.formatting.lists = true;
+        config.injection.trailing_space = false;
+        config.vocab.sheet = true;
+        config.vocab.finance = true;
+        for text in [
+            "कल यह फ़ाइल भेजना है।",
+            "कल API deploy करना है, please review the branch.",
+            "Kal API deploy karna hai, phir branch review karenge.",
+            "எனக்கு இந்த கோப்பை அனுப்புங்கள்.",
+            "أَرْسِلْ هذا الملف غدًا، من فضلك.",
+            "明天发送这个文件。",
+            "このファイルを明日送ってください。",
+            "내일 이 파일을 보내 주세요.",
+            "umँ commaँ noँ",
+        ] {
+            for terminal in [false, true] {
+                let (prepared, outcome) = prepare(text, &config, terminal, Some("code"));
+                assert_eq!(prepared, text, "{text}, terminal={terminal}, {outcome:?}");
+                assert_eq!(after_cleanup(&prepared, &config), text);
+                assert_eq!(adjust("", "", text, &[]), text);
+            }
+        }
+    }
+
+    #[test]
+    fn native_word_marks_are_atomic_for_replacements() {
+        let mut c = Config::default();
+        for word in ["हिन्दी", "தமிழ்", "عَرَبِيّ"] {
+            c.dictionary.replacements = vec![Replacement {
+                from: word.into(),
+                to: "native".into(),
+            }];
+            assert_eq!(before_cleanup(word, &c, false), "native", "{word}");
+            let tokens = words(word);
+            assert_eq!(tokens.len(), 1, "{word}");
+            assert_eq!(tokens[0].text, word);
+        }
+        // Variation selectors are not letters.
+        assert!(!word_char('\u{fe0f}'));
     }
 }

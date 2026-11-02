@@ -202,6 +202,20 @@ impl ConfigFile {
     ) -> Result<()> {
         let mut doc = self.doc.clone();
         edit(&mut doc)?;
+        // Setting either control replaces the old selection in one validated edit;
+        // clearing the set keeps a saved fixed language.
+        if let Some(stt) = doc.get_mut("stt").and_then(Item::as_table_like_mut) {
+            if key == "stt.languages"
+                && stt
+                    .get("languages")
+                    .and_then(Item::as_array)
+                    .is_some_and(|a| !a.is_empty())
+            {
+                stt.remove("language");
+            } else if key == "stt.language" && stt.get("language").is_some() {
+                stt.remove("languages");
+            }
+        }
         parse(&doc).with_context(|| format!("invalid value for {key}"))?;
         self.doc = doc;
         Ok(())
@@ -557,6 +571,37 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+    }
+}
+
+#[cfg(test)]
+mod preferred_language_tests {
+    use super::*;
+    #[test]
+    fn preferred_languages_save_is_atomic_and_preserves_comments_and_legacy_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "# keep me\n[stt]\nlanguage = 'fr'\n").unwrap();
+        let mut file = ConfigFile::load(&path).unwrap();
+        file.set("stt.languages", r#"["hi", "en"]"#).unwrap();
+        assert!(file.config().unwrap().stt.language.is_none());
+        file.save().unwrap();
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("# keep me"));
+        let old = file.to_string();
+        assert!(file.set("stt.provider", "mistral").is_err());
+        assert!(file.set("stt.languages", r#"["hi", "hi-IN"]"#).is_err());
+        assert_eq!(file.to_string(), old);
+        file.set("stt.language", "fr").unwrap();
+        assert!(file.config().unwrap().stt.languages.is_empty());
+        file.set("stt.languages", "[]").unwrap();
+        assert_eq!(file.config().unwrap().stt.language.as_deref(), Some("fr"));
+        file.save().unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().stt.language.as_deref(),
+            Some("fr")
         );
     }
 }

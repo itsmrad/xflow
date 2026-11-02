@@ -131,6 +131,8 @@ pub struct SttConfig {
     pub protocol: Option<String>,
     pub api_key_env: Option<String>,
     pub language: Option<String>,
+    /// Preferred language set; empty keeps automatic detection / legacy `language`.
+    pub languages: Vec<String>,
     pub vocabulary: Vec<String>,
     /// Also hint the active `[vocab]` domains' shipped terms, after yours.
     pub domain_hints: bool,
@@ -146,10 +148,44 @@ impl Default for SttConfig {
             protocol: None,
             api_key_env: None,
             language: None,
+            languages: vec![],
             vocabulary: vec![],
             domain_hints: true,
             timeout_secs: 30,
         }
+    }
+}
+impl SttConfig {
+    pub fn validate_languages(&self) -> Result<()> {
+        if self.languages.len() > 3 {
+            bail!("stt.languages allows at most three languages");
+        }
+        if !self.languages.is_empty() && self.language.is_some() {
+            bail!("unset stt.language before setting stt.languages");
+        }
+        for (i, tag) in self.languages.iter().enumerate() {
+            let mut parts = tag.split('-');
+            let code = parts.next().unwrap_or_default();
+            let region = parts.next();
+            // Shape only: each provider checks the languages it can combine.
+            if code.len() != 2
+                || !code.bytes().all(|b| b.is_ascii_lowercase())
+                || region.is_some_and(|r| {
+                    !(r.len() == 2 && r.bytes().all(|b| b.is_ascii_alphabetic())
+                        || r.len() == 3 && r.bytes().all(|b| b.is_ascii_digit()))
+                })
+                || parts.next().is_some()
+            {
+                bail!("stt.languages expects codes like hi, en-IN or es-419");
+            }
+            if self.languages[..i]
+                .iter()
+                .any(|s| s.split('-').next() == Some(code))
+            {
+                bail!("stt.languages must contain distinct languages");
+            }
+        }
+        Ok(())
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -467,6 +503,7 @@ impl Config {
         Ok(config)
     }
     pub fn validate(&self) -> Result<()> {
+        self.stt.validate_languages()?;
         self.hotkey.validate()?;
         if !(1..=MAX_RECORDING_SECS).contains(&self.recording.max_seconds) {
             bail!("recording.max_seconds must be 1..{MAX_RECORDING_SECS}");
@@ -729,5 +766,36 @@ mod tests {
         assert!(config.validate().is_err());
         config.privacy.history = false;
         assert!(config.validate().is_ok());
+    }
+}
+
+#[cfg(test)]
+mod preferred_language_tests {
+    use super::*;
+    #[test]
+    fn preferred_languages_parse_validate_and_preserve_legacy_configs() {
+        for tags in ["[]", "['hi', 'en-IN']", "['es-419', 'en', 'fr']"] {
+            let c: Config = toml::from_str(&format!("[stt]\nlanguages = {tags}")).unwrap();
+            c.validate().unwrap();
+        }
+        let legacy: Config = toml::from_str("[stt]\nlanguage = 'hi'").unwrap();
+        legacy.validate().unwrap();
+        assert!(legacy.stt.languages.is_empty());
+        for tags in [
+            "['']",
+            "['HI']",
+            "['hi_IN']",
+            "['en-']",
+            "['en-US-US']",
+            "['zh-Hant']",
+            "['en', 'en-US']",
+            "['hi', 'en', 'fr', 'ta']",
+        ] {
+            let c: Config = toml::from_str(&format!("[stt]\nlanguages = {tags}")).unwrap();
+            assert!(c.validate().is_err(), "{tags}");
+        }
+        let conflict: Config =
+            toml::from_str("[stt]\nlanguage='hi'\nlanguages=['hi','en']").unwrap();
+        assert!(conflict.validate().is_err());
     }
 }

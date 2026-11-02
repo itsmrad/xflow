@@ -215,7 +215,8 @@ fn push_hints(
 /// How many of `words` the configured provider sends after `stt.vocabulary`.
 pub fn hint_fit(config: &SttConfig, words: &[String]) -> Result<usize> {
     let (_, model, protocol) = resolve(config)?;
-    let mut hints = config.vocabulary.clone();
+    let languages = preferred_languages(config)?;
+    let mut hints = configured_options(config, &languages, protocol).vocabulary;
     validate_options(None, &hints, protocol, model)?;
     Ok(push_hints(
         &mut hints,
@@ -254,6 +255,105 @@ fn resolve(config: &SttConfig) -> Result<(&'static ProviderInfo, &str, Protocol)
         .unwrap_or(default);
     Ok((info, model, protocol))
 }
+/// Request-level behavior, not a promise of script accuracy. Unknown models stay conservative.
+pub fn language_capability(config: &SttConfig) -> Result<&'static str> {
+    let (_, model, protocol) = resolve(config)?;
+    Ok(match protocol {
+        Protocol::Multipart | Protocol::WhisperCpp
+            if model.contains("whisper") || protocol == Protocol::WhisperCpp =>
+        {
+            "auto + style prompt (Whisper)"
+        }
+        Protocol::Keywords => "multi (language array)",
+        Protocol::Deepgram
+            if matches!(
+                model,
+                "nova-3" | "nova-3-general" | "nova-2" | "nova-2-general"
+            ) =>
+        {
+            "multi"
+        }
+        Protocol::Assembly | Protocol::AssemblySync if model == "universal-3-5-pro" => {
+            "multi (language array)"
+        }
+        Protocol::Gemini if model == "gemini-3.5-transcribe" => "multi (language array)",
+        Protocol::Eleven if model == "scribe_v2" => "auto-detect code-switching (no preferred set)",
+        _ => "auto-detect / single language only",
+    })
+}
+fn preferred_languages(config: &SttConfig) -> Result<Vec<String>> {
+    config.validate_languages()?;
+    if config.languages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (_, model, protocol) = resolve(config)?;
+    let languages: Vec<String> = config
+        .languages
+        .iter()
+        .map(|s| s.split('-').next().unwrap().to_owned())
+        .collect();
+    if languages.len() > 1 && language_capability(config)?.starts_with("auto-detect") {
+        bail!("this model cannot use a preferred language set");
+    }
+    // Refuse unsupported sets before recording instead of silently falling back to auto.
+    // One entry is sent like the legacy `language`, so only sets check these lists.
+    let supported = match protocol {
+        _ if languages.len() < 2 => "",
+        Protocol::Deepgram if matches!(model, "nova-2" | "nova-2-general") => "en es",
+        Protocol::Deepgram => "af ar be bn bs bg ca zh hr cs da nl en et fi fr gl de el gu he hi hu id it ja kn ko lv lt mk ms mr no fa pl pt ro ru sr sk sl es sv tl ta te th tr uk vi xh zu",
+        // shortcut: only verified AssemblyAI languages; extend with coverage and protocol fixtures.
+        Protocol::Assembly | Protocol::AssemblySync => "en es fr de pt hi zh",
+        Protocol::Multipart | Protocol::WhisperCpp => "af am ar as az ba be bg bn bo br bs ca cs cy da de el en es et eu fa fi fo fr gl gu ha haw he hi hr ht hu hy id is it ja jw ka kk km kn ko la lb ln lo lt lv mg mi mk ml mn mr ms mt my ne nl nn no oc pa pl ps pt ro ru sa sd si sk sl sn so sq sr su sv sw ta te tg th tk tl tr tt uk ur uz vi yi yo yue zh",
+        _ => "",
+    };
+    if !supported.is_empty()
+        && languages
+            .iter()
+            .any(|l| !supported.split_ascii_whitespace().any(|s| s == l))
+    {
+        bail!("stt.languages has a language this model cannot combine");
+    }
+    if protocol == Protocol::Gemini && model == "gemini-3.5-transcribe" {
+        for language in &languages {
+            gemini_locale(language)?;
+        }
+    }
+    Ok(languages)
+}
+/// The Whisper prompt lead for the one measured set, Hindi + English (#40 spike).
+/// Unmeasured sets get none: an instruction-like lead is echo-prone.
+pub fn language_lead(config: &SttConfig) -> Option<&'static str> {
+    let has = |code| {
+        config
+            .languages
+            .iter()
+            .any(|s| s.split('-').next() == Some(code))
+    };
+    (config.languages.len() == 2 && has("hi") && has("en"))
+        .then_some("हाँ, मैं अभी check करके बताता हूँ।")
+}
+fn configured_options(
+    config: &SttConfig,
+    languages: &[String],
+    protocol: Protocol,
+) -> TranscriptionOptions {
+    let mut vocabulary = config.vocabulary.clone();
+    if let Some(lead) = language_lead(config)
+        .filter(|_| matches!(protocol, Protocol::Multipart | Protocol::WhisperCpp))
+    {
+        // Language style gets the budget first; domain/dictionary hints follow (#117).
+        vocabulary.insert(0, lead.to_owned());
+    }
+    TranscriptionOptions {
+        language: if languages.len() == 1 {
+            Some(languages[0].clone())
+        } else {
+            config.language.clone()
+        },
+        vocabulary,
+        ..Default::default()
+    }
+}
 struct HttpProvider {
     name: String,
     endpoint: Url,
@@ -267,6 +367,7 @@ struct HttpProvider {
     /// between dictations, so the budget cut runs once per change.
     merged: std::sync::Mutex<Option<(TranscriptionOptions, TranscriptionOptions)>>,
     warning: Option<String>,
+    languages: Vec<String>,
 }
 impl HttpProvider {
     fn new(config: &SttConfig, offline: bool) -> Result<Self> {
@@ -306,9 +407,11 @@ impl HttpProvider {
         if protocol == Protocol::Assembly && !url.path().ends_with("/transcript") {
             bail!("AssemblyAI async endpoint must end in /transcript");
         }
+        let languages = preferred_languages(config)?;
+        let options = configured_options(config, &languages, protocol);
         validate_options(
-            config.language.as_deref(),
-            &config.vocabulary,
+            options.language.as_deref(),
+            &options.vocabulary,
             protocol,
             model,
         )?;
@@ -328,11 +431,8 @@ impl HttpProvider {
             client: client(timeout)?,
             timeout,
             protocol,
-            options: TranscriptionOptions {
-                language: config.language.clone(),
-                vocabulary: config.vocabulary.clone(),
-                ..Default::default()
-            },
+            options,
+            languages,
         })
     }
     fn options(&self, options: TranscriptionOptions) -> Result<TranscriptionOptions> {
@@ -349,7 +449,11 @@ impl HttpProvider {
     }
     fn merge(&self, options: TranscriptionOptions) -> Result<TranscriptionOptions> {
         let mut vocabulary = self.options.vocabulary.clone();
-        let language = options.language.or_else(|| self.options.language.clone());
+        let language = if self.languages.len() > 1 {
+            None
+        } else {
+            options.language.or_else(|| self.options.language.clone())
+        };
         validate_options(language.as_deref(), &vocabulary, self.protocol, &self.model)?;
         push_hints(
             &mut vocabulary,
@@ -495,7 +599,14 @@ impl HttpProvider {
                         .append_pair("smart_format", "true")
                         .append_pair("filler_words", "true")
                         .append_pair("mip_opt_out", "true");
-                    if let Some(code) = &options.language {
+                    if self.languages.len() > 1 {
+                        q.append_pair("language", "multi");
+                        if self.model.starts_with("nova-3") {
+                            for code in &self.languages {
+                                q.append_pair("language_hint", code);
+                            }
+                        }
+                    } else if let Some(code) = &options.language {
                         q.append_pair("language", code);
                     } else {
                         q.append_pair("detect_language", "true");
@@ -535,7 +646,9 @@ impl HttpProvider {
             Protocol::AssemblySync => {
                 let file = audio_part(data, format)?;
                 let mut cfg = json!({"keyterms_prompt":options.vocabulary,"timestamps":false});
-                if let Some(code) = &options.language {
+                if self.languages.len() > 1 {
+                    cfg["language_codes"] = json!(self.languages);
+                } else if let Some(code) = &options.language {
                     cfg["language_codes"] = json!([code]);
                 }
                 let part = multipart::Part::text(cfg.to_string())
@@ -555,7 +668,13 @@ impl HttpProvider {
                 let audio = json!({"inlineData":{"mimeType":mime,"data":STANDARD.encode(&data)}});
                 let mut body = if self.model == "gemini-3.5-transcribe" {
                     let mut cfg = json!({"mode":"VERBATIM","customVocabulary":options.vocabulary});
-                    if let Some(code) = &options.language {
+                    if !self.languages.is_empty() {
+                        cfg["languageCodes"] = json!(self
+                            .languages
+                            .iter()
+                            .map(|l| gemini_locale(l))
+                            .collect::<Result<Vec<_>>>()?);
+                    } else if let Some(code) = &options.language {
                         cfg["languageCodes"] = json!([gemini_locale(code)?]);
                     }
                     json!({"contents":[{"parts":[audio]}],"generationConfig":{"audioTranscriptionConfig":cfg}})
@@ -598,7 +717,11 @@ impl HttpProvider {
         if self.protocol != Protocol::Mistral {
             form = form.text("response_format", "json");
         }
-        if let Some(code) = &options.language {
+        if self.protocol == Protocol::Keywords && self.languages.len() > 1 {
+            for code in &self.languages {
+                form = form.text("languages[]", code.clone());
+            }
+        } else if let Some(code) = &options.language {
             form = form.text(
                 if self.protocol == Protocol::Keywords {
                     "languages[]"
@@ -704,7 +827,9 @@ impl HttpProvider {
             bail!("AssemblyAI upload URL exceeds size limit");
         }
         let mut cfg = json!({"audio_url":audio_url,"speech_models":[self.model],"keyterms_prompt":options.vocabulary,"punctuate":true,"format_text":false,"disfluencies":true});
-        if let Some(code) = &options.language {
+        if self.languages.len() > 1 {
+            cfg["language_codes"] = json!(self.languages);
+        } else if let Some(code) = &options.language {
             cfg["language_code"] = json!(code);
         } else {
             cfg["language_detection"] = json!(true);
@@ -824,6 +949,7 @@ fn backup_config(config: &SttConfig, id: &str) -> SttConfig {
     SttConfig {
         provider: id.into(),
         language: config.language.clone(),
+        languages: config.languages.clone(),
         vocabulary: config.vocabulary.clone(),
         timeout_secs: config.timeout_secs,
         ..SttConfig::default()
@@ -843,6 +969,17 @@ pub fn backup_providers() -> Result<Vec<String>> {
         .collect()
 }
 pub fn validate_fallback_route(config: &SttConfig, offline: bool) -> Result<()> {
+    let languages = preferred_languages(config)?;
+    if !languages.is_empty() {
+        let (_, model, protocol) = resolve(config)?;
+        let options = configured_options(config, &languages, protocol);
+        validate_options(
+            options.language.as_deref(),
+            &options.vocabulary,
+            protocol,
+            model,
+        )?;
+    }
     if config.fallback.len() > 1 || config.fallback.contains(&config.provider) {
         bail!("stt.fallback allows one backup, different from the primary");
     }
@@ -853,9 +990,11 @@ pub fn validate_fallback_route(config: &SttConfig, offline: bool) -> Result<()> 
         endpoint(info.endpoint, offline).map_err(|e| anyhow!("stt.fallback {id}: {e}"))?;
         let backup = backup_config(config, id);
         let (_, model, protocol) = resolve(&backup)?;
+        let languages = preferred_languages(&backup)?;
+        let options = configured_options(&backup, &languages, protocol);
         validate_options(
-            backup.language.as_deref(),
-            &backup.vocabulary,
+            options.language.as_deref(),
+            &options.vocabulary,
             protocol,
             model,
         )?;
@@ -1905,5 +2044,104 @@ mod failover_tests {
             "Primary"
         );
         request.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod preferred_language_tests {
+    use super::*;
+
+    #[test]
+    fn preferred_languages_capabilities_and_unsupported_sets_fail_before_recording() {
+        for (provider, capability) in [
+            ("groq", "auto + style prompt (Whisper)"),
+            ("deepgram", "multi"),
+            ("assemblyai", "multi (language array)"),
+            ("gemini", "multi (language array)"),
+            (
+                "elevenlabs",
+                "auto-detect code-switching (no preferred set)",
+            ),
+            ("mistral", "auto-detect / single language only"),
+        ] {
+            let mut cfg = SttConfig {
+                provider: provider.into(),
+                languages: vec!["hi".into(), "en".into()],
+                ..Default::default()
+            };
+            assert_eq!(language_capability(&cfg).unwrap(), capability);
+            assert_eq!(
+                preferred_languages(&cfg).is_ok(),
+                !capability.starts_with("auto-detect")
+            );
+            cfg.languages = vec!["en".into()];
+            preferred_languages(&cfg).unwrap();
+        }
+        let mut cfg = SttConfig {
+            provider: "deepgram".into(),
+            model: Some("nova-2".into()),
+            languages: vec!["hi".into(), "en".into()],
+            ..Default::default()
+        };
+        assert!(preferred_languages(&cfg).is_err());
+        cfg.languages = vec!["es".into(), "en".into()];
+        assert!(preferred_languages(&cfg).is_ok());
+        cfg.model = Some("unknown-model".into());
+        assert!(preferred_languages(&cfg).is_err());
+        cfg.provider = "groq".into();
+        cfg.model = None;
+        cfg.languages = vec!["xx".into(), "en".into()];
+        assert!(preferred_languages(&cfg).is_err());
+        cfg.languages = vec!["hi".into(), "en".into()];
+        cfg.fallback = vec!["mistral".into()];
+        assert!(validate_fallback_route(&cfg, false).is_err());
+    }
+
+    #[test]
+    fn preferred_languages_reserve_prompt_budget_before_dictionary_and_domain_hints() {
+        let cfg = SttConfig {
+            languages: vec!["hi".into(), "en".into()],
+            ..Default::default()
+        };
+        let languages = preferred_languages(&cfg).unwrap();
+        let mut options = configured_options(&cfg, &languages, Protocol::Multipart);
+        let words: Vec<_> = (0..100).map(|i| format!("medical-term-{i}")).collect();
+        let sent = push_hints(
+            &mut options.vocabulary,
+            words.clone(),
+            None,
+            Protocol::Multipart,
+            "whisper-large-v3-turbo",
+            PROMPT_TOKENS,
+        );
+        assert!(sent > 0 && sent < words.len());
+        assert_eq!(options.vocabulary[0], "हाँ, मैं अभी check करके बताता हूँ।");
+        let prompt = vocabulary_prompt(&options.vocabulary);
+        assert!(!over_prompt_budget(
+            prompt.len(),
+            || prompt_tokens(&prompt),
+            PROMPT_TOKENS
+        ));
+        assert_eq!(hint_fit(&cfg, &words).unwrap(), sent);
+        assert!(configured_options(
+            &SttConfig {
+                languages: vec!["hi".into()],
+                ..Default::default()
+            },
+            &["hi".into()],
+            Protocol::Multipart
+        )
+        .vocabulary
+        .is_empty());
+        assert!(configured_options(
+            &SttConfig {
+                languages: vec!["hi".into(), "ta".into()],
+                ..Default::default()
+            },
+            &["hi".into(), "ta".into()],
+            Protocol::Multipart
+        )
+        .vocabulary
+        .is_empty());
     }
 }

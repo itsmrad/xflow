@@ -5,12 +5,12 @@
 │ 3  Dictionary  ││            Backup provider       None                      │
 │ 4  Snippets    ││            Model                 Recommended               │
 │ 5  Styles      ││            API key               Added                     │
-│ 6  Settings    ││            Language              Automatic                 │
-│ 7  Pill        ││            Microphone            System default            │
-│ 8  Your stats  ││            Ignore speaker sound  Off                       │
-│ 9  Check-up    ││            Check connection      Run check                 │
+│ 6  Settings    ││            Preferred languages   Automatic                 │
+│ 7  Pill        ││            Fixed language        Automatic                 │
+│ 8  Your stats  ││            Microphone            System default            │
+│ 9  Check-up    ││            Ignore speaker sound  Off                       │
+│                ││            Check connection      Run check                 │
 │                ││  Shortcut  Key                   Fn (Globe)                │
-│                ││            Shortcut              On                        │
 │                │╰────────────────────────────────────────────────────────────╯
 │                │╭ About ─────────────────────────────────────────────────────╮
 │                ││ Start · Guided setup                                       │

@@ -5854,6 +5854,43 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn preferred_languages_reload_rebuilds_stt_for_next_dictation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let store = Store::open(&dir.path().join("h.db"), false, 10).unwrap();
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            store,
+        );
+        engine.config_path = Some(path.clone());
+        engine.reload_factory = Arc::new(|_, new, services| {
+            assert_eq!(new.stt.languages, ["hi", "en"]);
+            Ok(Services {
+                stt: Arc::new(ImmediateStt {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    text: "कल API deploy करना है।",
+                }),
+                ..services.clone()
+            })
+        });
+        let task = tokio::spawn(engine.run(rx));
+        std::fs::write(
+            &path,
+            "[stt]\nlanguages = ['hi', 'en']\n[privacy]\nhistory = false\n",
+        )
+        .unwrap();
+        assert!(ask(&tx, Request::Reload).await.ok);
+        assert!(ask(&tx, Request::start()).await.ok);
+        assert!(ask(&tx, Request::Stop).await.ok);
+        assert_eq!(
+            success(&mut events).await.text.as_deref(),
+            Some("कल API deploy करना है। ")
+        );
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
     async fn reload_success_invalid_config_and_build_failure_keep_running_services() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");

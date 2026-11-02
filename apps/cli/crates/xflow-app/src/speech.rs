@@ -97,6 +97,7 @@ pub fn suspect(text: &str, config: &Config, domain: &[&str]) -> bool {
         .iter()
         .map(String::as_str)
         .chain(config.dictionary.words.iter().map(String::as_str))
+        .chain(xflow_providers::language_lead(&config.stt))
         .flat_map(words)
         .collect();
     let terms: Vec<Vec<String>> = domain.iter().map(|term| words(term)).collect();
@@ -430,6 +431,13 @@ mod tests {
         assert!(suspect("Supabase, Vercel.", &config, &domain));
         assert!(!suspect("Supabase is ready", &config, &domain));
         assert!(suspect("Claude Code, Next.js, Supabase.", &config, &domain));
+        // The Hindi + English prompt lead is echoed on silence too (#40).
+        let echo = "हाँ, मैं अभी check करके बताता हूँ।";
+        assert!(!suspect(echo, &config, &[]));
+        config.stt.languages = vec!["hi".into(), "en".into()];
+        assert!(suspect(echo, &config, &[]));
+        assert!(suspect("मैं अभी check करके", &config, &[]));
+        assert!(!suspect("कल API deploy करना है", &config, &[]));
         // Everyday words inside shipped terms are not echoes on their own.
         for heard in ["Next.", "Code", "Monday", "Teams", "Power", "Microsoft"] {
             assert!(!suspect(heard, &config, &domain), "{heard}");
