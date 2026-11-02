@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
 
 permissions:
@@ -62,7 +62,7 @@ jobs:
         id: binaries
         with:
           path: target/scoreboard-bin
-          key: scoreboard-bin-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('apps/cli/**') }}
+          key: scoreboard-bin-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('apps/cli/**','config/**','packaging/**') }}
       - name: Install system packages
         run: |
           sudo apt-get update
@@ -242,6 +242,7 @@ jobs:
         run: |
           bun run start -p 3000 > /tmp/next.log 2>&1 &
           for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:3000/ && break; sleep 1; done
+          curl -sf http://localhost:3000/ >/dev/null || { cat /tmp/next.log; exit 1; }
           bun scripts/axe.ts http://localhost:3000
           bun scripts/overflow.ts http://localhost:3000
           bun scripts/ui-check.ts http://localhost:3000
