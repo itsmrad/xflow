@@ -198,12 +198,17 @@ that mic, or a read-only preview labelled "Next recording" before the first capt
 Linux retains existing exact-name/default selection; Bluetooth profile handling
 and automatic fallback on Linux are outside this change.
 
-Plain CPAL streams explicitly pause (AudioUnit stop) before handle release, including
-stop, cancel, error, idle timeout and shutdown. The default ID uses CPAL's default
-handle to avoid its disconnect-listener cycle. Non-default streams in CPAL 0.15.3
-still retain their stopped AudioUnit/listener allocation per open; a `shortcut:`
-note tracks the upstream cycle. Cancelled sample buffers are cleared before release.
-No CPAL dependency update is included.
+Default plain macOS input uses CPAL's default handle (no cyclic disconnect listener)
+and pauses before release. Non-default input directly owns a coreaudio-rs HAL AudioUnit,
+pinned by device ID with input enabled and output disabled. Its drop stops, uninitializes,
+frees the callback and disposes the unit on every exit; no disconnect listener is registered.
+The debug `live_hal_units` count returns to zero after stop (or warm timeout). Device-alive
+and HAL render errors are checked on the existing drain/stop paths; no new timer runs.
+A retired buffer cannot publish a failure into the next dictation's shared completion flag.
+Warm input is reused after selection failure only if the same device ID is still listed
+and alive. Built-in inputs with duplicate names are chosen by ID. Linux previews may
+briefly open ALSA devices to inspect formats; a missing default name never blocks capture.
+No dependency update is included.
 
 Manual acceptance still needs AirPods and a USB mic: play music with AirPods as
 default input, make ten dictations with `ignore_speakers` off and on, and inspect
