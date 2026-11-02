@@ -5692,6 +5692,8 @@ mod tests {
         let pasted = desktop.injections.lock().unwrap().concat();
         let hints = stt.0.lock().unwrap().concat();
         // Shipped hints follow the same focused app; title terms are never hints.
+        // `fixture` turns the dev pack off, so the expected selection does too.
+        config.vocab.dev = false;
         let terminal = terminal_input || xflow_platform::is_terminal(Some(app));
         let domain = stt.1.lock().unwrap().clone();
         assert_eq!(
@@ -6226,11 +6228,14 @@ mod tests {
             }),
             ..RecordingDesktop::default()
         };
+        // `fixture` turns the dev pack off; the selection must match that config.
+        let mut config = Config::default();
+        config.vocab.dev = false;
         let sent = first_upload(excel(), Config::default()).await;
         assert_eq!(sent.domain[0], "XLOOKUP");
         assert_eq!(
             sent.domain,
-            xflow_core::hints::select(&Config::default(), false, Some("com.microsoft.Excel"))
+            xflow_core::hints::select(&config, false, Some("com.microsoft.Excel"))
         );
         // A focus read that never returns: the upload goes at once with the
         // last known focus (none yet), never waiting for it.
@@ -6239,10 +6244,7 @@ mod tests {
             ..excel()
         };
         let sent = first_upload(blocked, Config::default()).await;
-        assert_eq!(
-            sent.domain,
-            xflow_core::hints::select(&Config::default(), false, None)
-        );
+        assert_eq!(sent.domain, xflow_core::hints::select(&config, false, None));
         assert!(!sent.domain.contains(&"XLOOKUP"));
         let mut off = Config::default();
         off.stt.domain_hints = false;

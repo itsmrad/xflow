@@ -2,7 +2,6 @@
 //! spelling per line, ranked by importance. Sent to the STT provider after the
 //! user's own words (`stt.domain_hints`); never used to rewrite text.
 use crate::config::Config;
-use std::sync::OnceLock;
 
 /// Most shipped terms one dictation offers; no provider takes more (AssemblyAI
 /// and Mistral cap hints at 100), so a longer domain list could never be sent.
@@ -18,11 +17,6 @@ const DOMAINS: [&str; 4] = [
     include_str!("hints/finance.txt"),
 ];
 
-fn terms() -> &'static [Vec<&'static str>; 4] {
-    static TERMS: OnceLock<[Vec<&'static str>; 4]> = OnceLock::new();
-    TERMS.get_or_init(|| DOMAINS.map(|data| data.lines().collect()))
-}
-
 /// Shipped terms for one dictation, best first: the focused app's domains take
 /// up to two thirds of `MAX`, the other `[vocab]` domains the rest, each group
 /// interleaved by rank. The app turns domains on exactly as for the text packs.
@@ -32,7 +26,10 @@ pub fn select(config: &Config, terminal: bool, app: Option<&str>) -> Vec<&'stati
         return vec![];
     }
     let v = &config.vocab;
-    let (on, focus) = ([v.dev, v.corp, v.sheet, v.finance], crate::cues::focused(terminal, app));
+    let (on, focus) = (
+        [v.dev, v.corp, v.sheet, v.finance],
+        crate::cues::focused(terminal, app),
+    );
     let (focus, rest): (Vec<usize>, Vec<usize>) = (0..4)
         .filter(|&i| on[i] || focus[i])
         .partition(|&i| focus[i]);
@@ -42,18 +39,35 @@ pub fn select(config: &Config, terminal: bool, app: Option<&str>) -> Vec<&'stati
     out
 }
 
-fn interleave(domains: &[usize]) -> impl Iterator<Item = &'static str> + '_ {
-    let lists = terms();
-    (0..MAX).flat_map(move |rank| {
-        domains
-            .iter()
-            .filter_map(move |&d| lists[d].get(rank).copied())
+/// Round robin over the domains' lines, best first. No parsed copy: walking
+/// a few KB of `include_str!` per dictation costs microseconds and no heap.
+fn interleave(domains: &[usize]) -> impl Iterator<Item = &'static str> {
+    let mut lines: Vec<_> = domains.iter().map(|&d| DOMAINS[d].lines()).collect();
+    let (mut next, mut dry) = (0, 0);
+    std::iter::from_fn(move || {
+        let len = lines.len();
+        while dry < len {
+            let term = lines[next % len].next();
+            next += 1;
+            match term {
+                Some(term) => {
+                    dry = 0;
+                    return Some(term);
+                }
+                None => dry += 1,
+            }
+        }
+        None
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn terms() -> [Vec<&'static str>; 4] {
+        DOMAINS.map(|data| data.lines().collect())
+    }
     use std::collections::HashSet;
 
     fn domain(term: &str) -> usize {

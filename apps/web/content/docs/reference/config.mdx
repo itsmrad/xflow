@@ -96,7 +96,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `vocab.dev` | `true` | Shipped term packs, applied locally after transcription with snap_to_dictionary. Words that are also everyday English change only next to a context word: "cloud storage" stays, "ask cloud to review" becomes "ask Claude to review". Your dictionary words and never_learn always win. developer and AI terms everywhere (always on in terminals and editors) |
+| `vocab.dev` | `true` | Shipped term packs, applied locally after transcription with snap_to_dictionary. Words that are also everyday English change only next to a context word: "cloud storage" stays, "ask cloud to review" becomes "ask Claude to review". Your dictionary words and never_learn always win. With stt.domain_hints the same packs are also recognition hints: public product and industry terms, not your data. developer and AI terms everywhere (always on in terminals and editors) |
 | `vocab.corp` | `true` | business and SaaS terms: OKR, SOC 2, Salesforce, Jira |
 | `vocab.sheet` | `false` | spreadsheet functions everywhere (always on in Excel, Numbers, LibreOffice Calc) |
 | `vocab.finance` | `false` | banking and accounting terms: EBITDA, GAAP, IBAN, KYC |
@@ -243,7 +243,8 @@ never_learn = []             # removed learned words, never learned again
 # Shipped term packs, applied locally after transcription with snap_to_dictionary.
 # Words that are also everyday English change only next to a context word:
 # "cloud storage" stays, "ask cloud to review" becomes "ask Claude to review".
-# Your dictionary words and never_learn always win.
+# Your dictionary words and never_learn always win. With stt.domain_hints the
+# same packs are also recognition hints: public product and industry terms, not your data.
 dev = true                   # developer and AI terms everywhere (always on in terminals and editors)
 corp = true                  # business and SaaS terms: OKR, SOC 2, Salesforce, Jira
 sheet = false                # spreadsheet functions everywhere (always on in Excel, Numbers, LibreOffice Calc)

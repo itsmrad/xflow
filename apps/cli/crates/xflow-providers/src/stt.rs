@@ -428,39 +428,39 @@ impl HttpProvider {
         {
             bail!("AssemblyAI sync requires 80 ms–120 s of 16 kHz WAV; use the async protocol for longer clips");
         }
-        // One buffer: a retry shares it instead of copying the audio.
+        // One buffer: a retry shares it instead of copying the audio. One request
+        // site keeps the builder inlined once.
         let data = Bytes::from(data);
-        let response = self
-            .send(self.request(data.clone(), format, &options, true)?)
-            .await?;
-        let status = response.status().as_u16();
-        let retry = if matches!(self.protocol, Protocol::Multipart | Protocol::WhisperCpp)
-            && !options.vocabulary.is_empty()
-            // 400/500 can be a rejected prompt; 502-504 are upstream load, which a retry worsens.
-            && matches!(status, 400 | 500)
-        {
-            Some((options.clone(), false))
-        } else if !options.domain.is_empty() && matches!(status, 400 | 413 | 422) {
-            // A keyword list the provider rejects: retry with the user's words only.
-            let mut own = options.clone();
-            own.vocabulary
-                .truncate(own.vocabulary.len() - own.domain.len());
-            own.domain.clear();
-            Some((own, true))
-        } else {
-            None
-        };
-        let response = if let Some((retry, prompt)) = retry {
+        let (mut options, mut prompt, mut retried) = (options, true, false);
+        let response = loop {
+            let sent = self
+                .send(self.request(data.clone(), format, &options, prompt)?)
+                .await;
+            if retried {
+                break sent.map_err(|e| {
+                    e.context("provider request failed on the retry without dictionary hints")
+                })?;
+            }
+            let response = sent?;
+            let status = response.status().as_u16();
+            if matches!(self.protocol, Protocol::Multipart | Protocol::WhisperCpp)
+                && !options.vocabulary.is_empty()
+                // 400/500 can be a rejected prompt; 502-504 are upstream load, which a retry worsens.
+                && matches!(status, 400 | 500)
+            {
+                prompt = false;
+            } else if !options.domain.is_empty() && matches!(status, 400 | 413 | 422) {
+                // A keyword list the provider rejects: retry with the user's words only.
+                let own = options.vocabulary.len() - options.domain.len();
+                options.vocabulary.truncate(own);
+                options.domain.clear();
+            } else {
+                break response;
+            }
             // Hints must never fail a dictation; log the status only, never the body.
             eprintln!("STT hint fallback: {status}");
             let _ = read_bytes(response, false).await;
-            self.send(self.request(data, format, &retry, prompt)?)
-                .await
-                .map_err(|e| {
-                    e.context("provider request failed on the retry without dictionary hints")
-                })?
-        } else {
-            response
+            retried = true;
         };
         let result: Value = self.credential.read(response).await?;
         self.parse(result, options.language)
