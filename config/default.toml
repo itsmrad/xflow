@@ -57,6 +57,9 @@ trailing_space = true        # terminal mode strips trailing spaces/newlines and
 smart_spacing = true         # match spacing and capitalization to the text around the cursor (macOS; read locally, never uploaded)
 
 [formatting]
+# Spoken symbols too, in terminals and editors, between code-shaped words:
+# "user underscore id" -> user_id, "dash dash verbose" -> --verbose, "a arrow b" -> a -> b.
+# Prose stays prose: "add a dash of salt", "plus one", "underscore the point".
 spoken_code = true           # "camel case user id" -> userId; "main dot rs" -> main.rs
 # Snapping runs before dictionary.replacements, so a replacement's `from` must
 # match the snapped spelling ("xflow", not "x flow", when xflow is saved).

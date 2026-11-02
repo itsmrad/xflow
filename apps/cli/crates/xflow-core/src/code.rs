@@ -1,6 +1,8 @@
 //! Spoken code: explicit casing commands ("camel case user id" -> userId), a
 //! closed filename grammar ("index dot ts" -> index.ts) and bracket pairs
-//! ("open paren" -> "("). Bare "dot", "slash" and "backtick" stay speech.
+//! ("open paren" -> "("). Spoken symbols ("user underscore id" -> user_id,
+//! "dash dash verbose" -> --verbose) only in terminals and editors, and only
+//! next to code-shaped words; elsewhere "dot", "slash" and "backtick" stay speech.
 use crate::{
     config::Config,
     text::{words, Word},
@@ -35,14 +37,18 @@ const NAMES: [(&str, &str, &str); 6] = [
     ("changelog", "md", "CHANGELOG"),
     ("contributing", "md", "CONTRIBUTING"),
 ];
-const BRACKETS: [(&str, usize); 5] = [
+const BRACKETS: [(&str, usize); 8] = [
     ("paren", 0),
     ("parens", 0),
     ("parenthesis", 0),
     ("bracket", 1),
     ("brace", 2),
+    // These may take "bracket" or "brace" after them: "open curly brace".
+    ("square", 1),
+    ("curly", 2),
+    ("angle", 3),
 ];
-const PAIRS: [(char, char); 3] = [('(', ')'), ('[', ']'), ('{', '}')];
+const PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
 /// Function words end an identifier: "rename camel case user id to ...".
 const STOP: &[&str] = &[
     "to",
@@ -400,8 +406,8 @@ fn stops(text: &str, w: &[Word<'_>], i: usize, by_of: bool) -> bool {
     }
 }
 
-/// "open paren" / "close brace": (opens, pair index).
-fn pair(text: &str, w: &[Word<'_>], i: usize) -> Option<(bool, usize)> {
+/// "open paren" / "close curly brace": (opens, pair index, words).
+fn pair(text: &str, w: &[Word<'_>], i: usize) -> Option<(bool, usize, usize)> {
     let next = w.get(i + 1)?;
     let open = is(&w[i], "open");
     if !open && !is(&w[i], "close")
@@ -411,7 +417,14 @@ fn pair(text: &str, w: &[Word<'_>], i: usize) -> Option<(bool, usize)> {
     {
         return None;
     }
-    BRACKETS.iter().find(|b| is(next, b.0)).map(|b| (open, b.1))
+    let (name, kind) = BRACKETS.iter().find(|b| is(next, b.0))?;
+    let noun = w.get(i + 2).filter(|x| {
+        ["square", "curly", "angle"].contains(name)
+            && any(x, &["bracket", "brace"])
+            && spoken(text, x)
+            && joined(text, &w[i + 1..i + 3])
+    });
+    Some((open, *kind, 2 + usize::from(noun.is_some())))
 }
 
 /// What a command needs to its left. Plain prose ("the lesson about snake case
@@ -679,11 +692,11 @@ fn bracket(
     text: &str,
     w: &[Word<'_>],
     i: usize,
-    depth: &mut [usize; 3],
-    last_close: &[Option<usize>; 3],
+    depth: &mut [usize; 4],
+    last_close: &[Option<usize>; 4],
 ) -> Option<(usize, char, bool)> {
-    let (open, kind) = pair(text, w, i)?;
-    let ok = if w.len() == 2 {
+    let (open, kind, len) = pair(text, w, i)?;
+    let ok = if w.len() == len {
         true
     } else if open {
         last_close[kind].is_some_and(|j| j > i)
@@ -699,16 +712,265 @@ fn bracket(
         depth[kind] = depth[kind].saturating_sub(1);
     }
     Some((
-        i + 2,
+        i + len,
         if open { PAIRS[kind].0 } else { PAIRS[kind].1 },
         open,
     ))
 }
 
+/// How a spoken symbol attaches to the words around it.
+#[derive(Clone, Copy, PartialEq)]
+enum Sym {
+    /// Between two content words, no spaces: user_id, foo.bar, feature-login.
+    Join,
+    /// A join that may also start or end a path: /usr/bin, git@github.com, __init__.
+    Path,
+    /// Glued to the next word: --verbose, ./build.sh, ~/projects, $PATH.
+    Lead,
+    /// Spaced as dictated, between code-like words: a -> b, x == 1.
+    Op,
+    /// Glued to the code before it: `x;`, `f():`, localhost:3000.
+    End,
+    /// A pair around the words between: `ls`, "hello".
+    Quote,
+}
+/// Spoken symbols, longest phrase first. Bare "hash", "at", "quote" and "tab"
+/// are not here: they are everyday words, and a tab can complete in a shell.
+const SYMBOLS: [(&str, &str, Sym); 47] = [
+    ("dot dot slash", "../", Sym::Lead),
+    ("dot dot dot", "...", Sym::Lead),
+    ("dash dash", "--", Sym::Lead),
+    ("dot slash", "./", Sym::Lead),
+    ("tilde slash", "~/", Sym::Lead),
+    ("hash sign", "#", Sym::Lead),
+    ("pound sign", "#", Sym::Lead),
+    ("dollar sign", "$", Sym::Lead),
+    ("underscore underscore", "__", Sym::Path),
+    ("at sign", "@", Sym::Path),
+    ("forward slash", "/", Sym::Path),
+    ("back slash", "\\", Sym::Path),
+    ("double colon", "::", Sym::Path),
+    ("dot dot", "..", Sym::Join),
+    ("double equals", "==", Sym::Op),
+    ("equals sign", "=", Sym::Op),
+    ("equal sign", "=", Sym::Op),
+    ("fat arrow", "=>", Sym::Op),
+    ("less than", "<", Sym::Op),
+    ("greater than", ">", Sym::Op),
+    ("and sign", "&", Sym::Op),
+    ("percent sign", "%", Sym::Op),
+    ("back tick", "`", Sym::Quote),
+    ("single quote", "'", Sym::Quote),
+    ("double quote", "\"", Sym::Quote),
+    ("dash", "-", Sym::Join),
+    ("hyphen", "-", Sym::Join),
+    ("underscore", "_", Sym::Join),
+    ("dot", ".", Sym::Join),
+    ("slash", "/", Sym::Path),
+    ("backslash", "\\", Sym::Path),
+    ("tilde", "~", Sym::Lead),
+    ("ellipsis", "...", Sym::Lead),
+    ("colon", ":", Sym::End),
+    ("semicolon", ";", Sym::End),
+    ("equals", "=", Sym::Op),
+    ("equal", "=", Sym::Op),
+    ("arrow", "->", Sym::Op),
+    ("plus", "+", Sym::Op),
+    ("minus", "-", Sym::Op),
+    ("star", "*", Sym::Op),
+    ("asterisk", "*", Sym::Op),
+    ("caret", "^", Sym::Op),
+    ("percent", "%", Sym::Op),
+    ("pipe", "|", Sym::Op),
+    ("ampersand", "&", Sym::Op),
+    ("backtick", "`", Sym::Quote),
+];
+/// Verbs a symbol never joins: "cd slash etc" is `cd /etc`, "write dot org" stays.
+const VERBS: &[&str] = &[
+    "cd", "ls", "cat", "rm", "cp", "mv", "mkdir", "touch", "chmod", "source", "run", "type", "vim",
+    "write", "wrote", "say", "said", "add", "put",
+];
+
+/// The symbol spoken at `i`: (end, symbol, kind).
+fn symbol(text: &str, w: &[Word<'_>], i: usize) -> Option<(usize, &'static str, Sym)> {
+    SYMBOLS.iter().find_map(|&(phrase, sym, kind)| {
+        let mut end = i;
+        for part in phrase.split(' ') {
+            let x = w.get(end)?;
+            if !is(x, part) || !spoken(text, x) || end > i && !gap(&text[w[end - 1].end..x.start]) {
+                return None;
+            }
+            end += 1;
+        }
+        Some((end, sym, kind))
+    })
+}
+fn function(word: &Word<'_>) -> bool {
+    any(word, STOP)
+        || any(word, PREPOSITIONS)
+        || any(word, DETERMINERS)
+        || crate::text::CONTINUING.contains(&word.text.to_lowercase().as_str())
+}
+/// A spoken word that is not a symbol or bracket.
+fn plain(text: &str, w: &[Word<'_>], k: usize) -> bool {
+    w.get(k).is_some_and(|x| spoken(text, x))
+        && symbol(text, w, k).is_none()
+        && pair(text, w, k).is_none()
+}
+/// Word `k` follows word `k - 1` on the same line.
+fn after(text: &str, w: &[Word<'_>], k: usize) -> bool {
+    k > 0 && w.get(k).is_some_and(|x| gap(&text[w[k - 1].end..x.start]))
+}
+/// A content word a symbol may join: "user", "id", "src", "3000"; never "the" or "of".
+fn operand(text: &str, w: &[Word<'_>], k: usize) -> bool {
+    plain(text, w, k) && !function(&w[k])
+}
+/// A word that reads as code on its own: x, 42, user_id, userId.
+fn code_like(word: &Word<'_>) -> bool {
+    let t = word.text;
+    t.len() == 1 && t.chars().all(|c| c.is_ascii_alphabetic())
+        || t.chars().all(|c| c.is_ascii_digit())
+        || t.contains('_')
+        || t.chars().skip(1).any(char::is_uppercase) && t.chars().any(char::is_lowercase)
+}
+/// A short flag after "dash": -b, -la, -rf. "dash id" stays a join: user-id.
+fn flag(word: &Word<'_>) -> bool {
+    let t = word.text.to_lowercase();
+    t.chars().all(|c| c.is_ascii_alphabetic())
+        && (t.len() == 1 && t != "i" || t.len() <= 3 && !common(&t) && !function(word))
+}
+/// Joins from the symbol at `k` onto `code`: "slash bin", "dot sh". After an
+/// unmistakable lead (`loose`) any spoken word joins: --no-verify. The end.
+fn joins(text: &str, w: &[Word<'_>], mut k: usize, code: &mut String, loose: bool) -> usize {
+    while let Some((end, sym, kind)) = symbol(text, w, k)
+        .filter(|s| matches!(s.2, Sym::Join | Sym::Path) && gap(&text[w[k - 1].end..w[k].start]))
+    {
+        let right = if loose { plain } else { operand };
+        if right(text, w, end) && after(text, w, end) && !(sym == "-" && !loose && flag(&w[end])) {
+            code.push_str(sym);
+            code.push_str(w[end].text);
+            k = end + 1;
+        } else {
+            // A trailing slash or dunder: "projects slash", "init underscore underscore".
+            if kind == Sym::Path {
+                code.push_str(sym);
+                k = end;
+            }
+            break;
+        }
+    }
+    k
+}
+
+/// A spoken symbol at word `i` in a terminal or editor: (end, code, glue
+/// before, glue after). Joins need content words on both sides and operators
+/// code-like ones, so prose in a code app ("add a dash of salt", "plus one",
+/// "the star of the show") stays prose. `quote`: the open quote's closing word.
+fn symbols(
+    text: &str,
+    w: &[Word<'_>],
+    i: usize,
+    last: Option<usize>,
+    terminal: bool,
+    quote: &mut Option<usize>,
+) -> Option<(usize, String, bool, bool)> {
+    let left = i
+        .checked_sub(1)
+        .filter(|&p| gap(&text[w[p].end..w[i].start]));
+    let after_code = left.is_some_and(|p| last == Some(w[p].end));
+    let det = left.is_some_and(|p| any(&w[p], DETERMINERS));
+    let Some((end, sym, kind)) = symbol(text, w, i) else {
+        // A run from a content word: "user underscore id", "src slash main dot rs".
+        // After "the" or "a" it is prose ("a polka dot dress"), except underscore,
+        // which is a verb after a plural: "these findings underscore concerns".
+        let (end, sym, kind) = symbol(text, w, i + 1)?;
+        let ok = matches!(kind, Sym::Join | Sym::Path)
+            && operand(text, w, i)
+            && operand(text, w, end)
+            && after(text, w, end)
+            && !(sym == "-" && flag(&w[end]))
+            && !(if sym == "_" { plural(&w[i]) } else { det })
+            && !any(&w[i], VERBS)
+            // "four dot env" names the dotfile: `four .env`.
+            && !(sym == "." && filename(text, w, i + 1).is_some());
+        if !ok {
+            return None;
+        }
+        let mut code = w[i].text.to_owned();
+        return Some((joins(text, w, i + 1, &mut code, false), code, false, false));
+    };
+    let right = |code: &mut String, loose| {
+        let ok = if loose { plain } else { operand };
+        (ok(text, w, end) && after(text, w, end)).then(|| {
+            code.push_str(w[end].text);
+            joins(text, w, end + 1, code, loose)
+        })
+    };
+    match kind {
+        // Right after inserted code: "camel case user id dot length" -> userId.length.
+        Sym::Join | Sym::Path if after_code => {
+            let mut code = String::new();
+            let end = joins(text, w, i, &mut code, false);
+            (end > i).then_some((end, code, true, false))
+        }
+        // "dash la" -> -la, keeping the space after the command.
+        Sym::Join if sym == "-" => {
+            let short = w
+                .get(end)
+                .filter(|x| flag(x) && plain(text, w, end) && after(text, w, end));
+            (short.is_some() && !det).then(|| (end + 1, format!("-{}", w[end].text), false, false))
+        }
+        // "slash help", "backslash n", "at sign override": only where no word joins.
+        Sym::Path if !det && left.is_none_or(|p| !operand(text, w, p) || any(&w[p], VERBS)) => {
+            let mut code = sym.to_owned();
+            right(&mut code, false).map(|end| (end, code, false, false))
+        }
+        Sym::Lead if !det => {
+            let mut code = sym.to_owned();
+            right(&mut code, true).map(|end| (end, code, false, false))
+        }
+        Sym::Op => {
+            let r = w
+                .get(end)
+                .filter(|_| plain(text, w, end) && after(text, w, end));
+            let ok = left.is_some_and(|p| code_like(&w[p]) || after_code)
+                && r.is_some_and(|r| code_like(r) || after_code && !function(r));
+            // The shell reads `FOO=bar` and `--name=value`, never `x = y`.
+            let glue = terminal && sym == "=";
+            ok.then(|| (end, sym.to_owned(), glue, glue))
+        }
+        Sym::End => {
+            let code = after_code || left.is_some_and(|p| code_like(&w[p]) && !function(&w[p]));
+            let port = sym == ":"
+                && left.is_some_and(|p| code || operand(text, w, p))
+                && w.get(end).is_some_and(|r| {
+                    plain(text, w, end)
+                        && after(text, w, end)
+                        && r.text.chars().all(|c| c.is_ascii_digit())
+                });
+            (code || port).then(|| (end, sym.to_owned(), true, port))
+        }
+        Sym::Quote if *quote == Some(i) => {
+            *quote = None;
+            Some((end, sym.to_owned(), true, false))
+        }
+        // Opens only with a matching close later: "type backtick ls backtick".
+        Sym::Quote if quote.is_none_or(|q| q < i) && !det => {
+            let close = (end + 1..w.len())
+                .find(|&j| symbol(text, w, j).is_some_and(|s| s.1 == sym && s.2 == Sym::Quote))?;
+            *quote = Some(close);
+            Some((end, sym.to_owned(), false, true))
+        }
+        _ => None,
+    }
+}
+
 /// Structured list items retain the spelling produced by the code pass.
 pub(crate) fn literal(word: &str) -> bool {
     let word = word.trim_end_matches([',', '.', ':', ';', '!', '?']);
-    word.contains(['_', '-'])
+    // Spoken symbols too: foo.bar, ~/projects, git@github.com, std::io.
+    word.contains(['_', '-', '/', '\\', '@', '~', ':'])
+        || word.trim_start_matches('.').contains('.')
         || word == ".gitignore"
         || word
             .rsplit_once('.')
@@ -719,19 +981,28 @@ pub(crate) fn literal(word: &str) -> bool {
 /// through `prose` (the snap pass), so a dictionary term never re-cases an
 /// identifier the speaker spelled out. Output never gains a newline, so this
 /// is as safe in terminals as anywhere.
-pub fn apply(text: &str, config: &Config, mut prose: impl FnMut(&str) -> String) -> String {
+/// `terminal` and `app` (the focused app) turn on spoken symbols in code apps.
+pub fn apply(
+    text: &str,
+    config: &Config,
+    terminal: bool,
+    app: Option<&str>,
+    mut prose: impl FnMut(&str) -> String,
+) -> String {
     if !config.formatting.spoken_code {
         return prose(text);
     }
+    let dev = crate::cues::focused(terminal, app)[0];
+    let mut quote = None;
     let typed = typed(text, config);
     let text = typed.as_str();
     let w = words(text);
     let mut out = String::with_capacity(text.len());
-    let (mut cursor, mut i, mut last, mut depth) = (0, 0, None, [0; 3]);
+    let (mut cursor, mut i, mut last, mut depth) = (0, 0, None, [0; 4]);
     // One pass, so "open paren" never rescans the rest of a long dictation.
-    let mut last_close = [None; 3];
+    let mut last_close = [None; 4];
     for j in 0..w.len() {
-        if let Some((false, kind)) = pair(text, &w, j) {
+        if let Some((false, kind, _)) = pair(text, &w, j) {
             last_close[kind] = Some(j);
         }
     }
@@ -745,6 +1016,11 @@ pub fn apply(text: &str, config: &Config, mut prose: impl FnMut(&str) -> String)
             (end, id, false, false)
         } else if let Some((end, c, open)) = bracket(text, &w, i, &mut depth, &last_close) {
             (end, c.to_string(), !open, open)
+        } else if let Some(found) = dev
+            .then(|| symbols(text, &w, i, last, terminal, &mut quote))
+            .flatten()
+        {
+            found
         } else {
             i += 1;
             continue;
@@ -771,7 +1047,7 @@ mod tests {
     use crate::{config::Replacement, text::before_cleanup};
 
     fn code(text: &str, config: &Config) -> String {
-        apply(text, config, str::to_owned)
+        apply(text, config, false, None, str::to_owned)
     }
 
     #[test]
@@ -1083,5 +1359,352 @@ mod tests {
                     1_000
                 }
         );
+    }
+
+    type App = (bool, Option<&'static str>);
+    /// No app, Mail, Notes, Slack: never spoken symbols.
+    const PROSE_APPS: [App; 4] = [
+        (false, None),
+        (false, Some("com.apple.mail")),
+        (false, Some("com.apple.Notes")),
+        (false, Some("com.tinyspeck.slackmacgap")),
+    ];
+    /// Terminal, VS Code's integrated terminal, then editors.
+    const CODE_APPS: [App; 5] = [
+        (true, Some("com.apple.Terminal")),
+        (true, Some("com.microsoft.VSCode")),
+        (false, Some("com.microsoft.VSCode")),
+        (false, Some("dev.zed.Zed")),
+        (false, Some("com.jetbrains.intellij")),
+    ];
+    fn symbols_in(text: &str, (terminal, app): App) -> String {
+        apply(text, &Config::default(), terminal, app, str::to_owned)
+    }
+
+    #[test]
+    fn spoken_symbols_in_terminals_and_editors() {
+        let config = Config::default();
+        // (spoken, editor, terminal): terminals glue `=` for `FOO=bar` and `--name=value`.
+        for (input, editor, terminal) in [
+            ("user underscore id", "user_id", ""),
+            (
+                "rename the user underscore id field",
+                "rename the user_id field",
+                "",
+            ),
+            ("foo dot bar", "foo.bar", ""),
+            ("feature dash login", "feature-login", ""),
+            ("dark hyphen mode", "dark-mode", ""),
+            ("src slash main dot rs", "src/main.rs", ""),
+            ("docs forward slash api", "docs/api", ""),
+            ("path backslash file", "path\\file", ""),
+            ("backslash n", "\\n", ""),
+            ("std double colon io", "std::io", ""),
+            (
+                "git diff main dot dot feature",
+                "git diff main..feature",
+                "",
+            ),
+            ("at sign override", "@override", ""),
+            ("git at sign github dot com", "git@github.com", ""),
+            ("hash sign include", "#include", ""),
+            ("echo dollar sign home", "echo $home", ""),
+            (
+                "cd tilde slash projects slash xflow",
+                "cd ~/projects/xflow",
+                "",
+            ),
+            ("tilde slash projects slash", "~/projects/", ""),
+            ("run dot slash build dot sh", "run ./build.sh", ""),
+            ("cd dot dot slash src", "cd ../src", ""),
+            ("cd slash etc", "cd /etc", ""),
+            ("slash help", "/help", ""),
+            ("cargo test dash dash release", "cargo test --release", ""),
+            (
+                "git commit dash dash no dash verify",
+                "git commit --no-verify",
+                "",
+            ),
+            ("ls dash la", "ls -la", ""),
+            ("rm dash rf build", "rm -rf build", ""),
+            (
+                "git checkout dash b feature dash login",
+                "git checkout -b feature-login",
+                "",
+            ),
+            (
+                "underscore underscore init underscore underscore",
+                "__init__",
+                "",
+            ),
+            ("dot dot dot args", "...args", ""),
+            ("a arrow b", "a -> b", ""),
+            ("x fat arrow y", "x => y", ""),
+            ("x equals 5", "x = 5", "x=5"),
+            ("x double equals y", "x == y", ""),
+            ("a plus b", "a + b", ""),
+            ("x minus 1", "x - 1", ""),
+            ("a star b", "a * b", ""),
+            ("a asterisk b", "a * b", ""),
+            ("x caret 2", "x ^ 2", ""),
+            ("n percent 2", "n % 2", ""),
+            ("a pipe b", "a | b", ""),
+            ("a ampersand b", "a & b", ""),
+            ("x less than y", "x < y", ""),
+            ("x greater than 10", "x > 10", ""),
+            ("user underscore id equals 5", "user_id = 5", "user_id=5"),
+            (
+                "dash dash name equals value",
+                "--name = value",
+                "--name=value",
+            ),
+            ("x semicolon", "x;", ""),
+            ("foo open paren close paren semicolon", "foo ();", ""),
+            ("foo open paren close paren dot bar", "foo ().bar", ""),
+            ("localhost colon 3000", "localhost:3000", ""),
+            ("def main open paren close paren colon", "def main ():", ""),
+            (
+                "echo double quote hello world double quote",
+                "echo \"hello world\"",
+                "",
+            ),
+            ("type backtick ls backtick", "type `ls`", ""),
+            ("single quote x single quote", "'x'", ""),
+            // Bracket words work everywhere, like "open paren".
+            (
+                "Vec open angle bracket T close angle bracket",
+                "Vec <T>",
+                "",
+            ),
+            ("open curly brace x close curly brace", "{x}", ""),
+            ("open square bracket 0 close square bracket", "[0]", ""),
+        ] {
+            let terminal = if terminal.is_empty() {
+                editor
+            } else {
+                terminal
+            };
+            for app in CODE_APPS {
+                let expected = if app.0 { terminal } else { editor };
+                assert_eq!(symbols_in(input, app), expected, "{input} {app:?}");
+            }
+            // Prose apps get only the existing filename and bracket grammar.
+            for app in PROSE_APPS {
+                assert_eq!(
+                    symbols_in(input, app),
+                    code(input, &config),
+                    "{input} {app:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn english_idioms_stay_prose_in_every_app() {
+        let mut wrong = Vec::new();
+        for text in [
+            "Add a dash of salt to the recipe.",
+            "a dash of salt",
+            "make a dash for it",
+            "dash to the store",
+            "His door dash ended in a fall.",
+            "She wore a polka dot dress.",
+            "polka dot",
+            "dot the i's",
+            "the dot com boom",
+            "Please write dot org after the charity name.",
+            "A dash and a dot make different marks.",
+            "We need to underscore the point.",
+            "underscore the point",
+            "These findings underscore concerns.",
+            "There was a slash in prices.",
+            "a slash in prices",
+            "The slash separates the two dates.",
+            "It's a pipe dream.",
+            "pipe dream",
+            "the water pipe burst",
+            "I love hash browns.",
+            "hash browns",
+            "She was the star of the show.",
+            "star of the show",
+            "plus one",
+            "I'd say plus one.",
+            "That's a plus.",
+            "Disney plus subscription",
+            "two plus two equals four",
+            "I'm at home.",
+            "The at sign is on the 2 key.",
+            "colon cancer",
+            "He survived colon cancer.",
+            "Note colon this matters",
+            "quote me",
+            "Don't quote me on that.",
+            "Use a single quote and a double quote.",
+            "back tick",
+            "the back tick key",
+            "minus five degrees",
+            "It's minus five degrees outside.",
+            "Add a semicolon here.",
+            "fix the missing semicolon",
+            "Press the tilde key.",
+            "Put an asterisk next to it.",
+            "Revenue grew twelve percent last quarter.",
+        ] {
+            for app in PROSE_APPS.into_iter().chain(CODE_APPS) {
+                for text in [text.to_owned(), text.to_lowercase()] {
+                    let got = symbols_in(&text, app);
+                    if got != text {
+                        wrong.push(format!("{app:?}: {text} -> {got}"));
+                    }
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// The prose controls, as written and lowercased: spoken symbols change
+    /// nothing outside code apps. In code apps only two spoken mentions of code
+    /// convert, by design: "dash dash flag" and "main dot street".
+    #[test]
+    fn prose_controls_are_unchanged_by_spoken_symbols() {
+        let config = Config::default();
+        let mut changed = std::collections::BTreeSet::new();
+        let mut words = 0;
+        for line in [
+            include_str!("../../../../../benchmarks/devterms/spoken-code-prose.txt"),
+            include_str!("snap-prose.txt"),
+            include_str!("vocab/review-prose.txt"),
+        ]
+        .iter()
+        .flat_map(|data| data.lines())
+        {
+            words += line.split_whitespace().count();
+            for text in [line.to_owned(), line.to_lowercase()] {
+                let plain = code(&text, &config);
+                for app in PROSE_APPS {
+                    assert_eq!(symbols_in(&text, app), plain, "{text} {app:?}");
+                }
+                for app in CODE_APPS {
+                    if symbols_in(&text, app) != plain {
+                        changed.insert(text.to_lowercase());
+                    }
+                }
+            }
+        }
+        eprintln!("spoken symbols: prose controls, {words} words, code-app changes {changed:?}");
+        assert_eq!(
+            changed.into_iter().collect::<Vec<_>>(),
+            [
+                "i went to main dot street.",
+                "we discussed dash dash flag as a phrase."
+            ]
+        );
+    }
+
+    #[test]
+    fn spoken_symbols_through_backtrack_cues_lists_and_spacing() {
+        use crate::{backtrack::Outcome, text::prepare};
+        let mut config = Config::default();
+        let editor = Some("com.microsoft.VSCode");
+        let terminal = Some("com.apple.Terminal");
+        // A repeated frame retracts code like any other words.
+        assert_eq!(
+            prepare(
+                "rename it to foo dash bar, sorry, rename it to foo underscore bar",
+                &config,
+                false,
+                editor
+            ),
+            ("rename it to foo_bar".into(), Outcome::Edited)
+        );
+        // A bare "no" before a word is no cue for code either ("foo bar, no, foo baz").
+        assert_eq!(
+            prepare(
+                "foo dash bar, no, foo underscore bar",
+                &config,
+                false,
+                editor
+            ),
+            ("foo-bar, no, foo_bar".into(), Outcome::Unchanged)
+        );
+        assert_eq!(
+            prepare(
+                "cd tilde slash projects, scratch that",
+                &config,
+                true,
+                terminal
+            ),
+            (String::new(), Outcome::Discarded)
+        );
+        // Shipped dev terms still snap around spoken symbols.
+        assert_eq!(
+            prepare(
+                "deploy with kube ctl dash dash dry dash run",
+                &config,
+                true,
+                terminal
+            )
+            .0,
+            "deploy with kubectl --dry-run"
+        );
+        // List items keep code spelling; terminals get no list.
+        let list = "one user underscore id, two foo dot bar, three main dot rs";
+        assert_eq!(
+            prepare(list, &config, false, editor).0,
+            "1. user_id\n2. foo.bar\n3. main.rs"
+        );
+        assert_eq!(
+            prepare(list, &config, true, terminal).0,
+            "one user_id, two foo.bar, three main.rs"
+        );
+        // Straight quotes survive terminal plain text.
+        let quoted = prepare("echo double quote hi double quote", &config, true, terminal).0;
+        assert_eq!(crate::text::terminal_plain(&quoted), "echo \"hi\"");
+        // Smart spacing: a space before a path or flag, none after `~/`, no capital.
+        let adjust = crate::text::adjust;
+        assert_eq!(adjust("cd", "", "~/projects", &[]), " ~/projects");
+        assert_eq!(adjust("cd ~/", "", "projects", &[]), "projects");
+        assert_eq!(adjust("ls", "", "-la", &[]), " -la");
+        assert_eq!(adjust("", "", "foo.bar", &[]), "foo.bar");
+        assert_eq!(adjust("", "", "user_id = 5", &[]), "user_id = 5");
+        // spoken_code = false turns symbols off too.
+        config.formatting.spoken_code = false;
+        assert_eq!(
+            prepare("user underscore id", &config, true, terminal).0,
+            "user underscore id"
+        );
+    }
+
+    #[test]
+    fn spoken_symbols_latency_in_microseconds() {
+        let text = "cd tilde slash projects slash xflow and run dot slash build dot sh dash dash release, then set user underscore id equals 5 semicolon. ".repeat(16);
+        assert!(text.len() >= 2_000);
+        for app in [(false, None), (false, Some("com.microsoft.VSCode"))] {
+            let mut samples: Vec<_> = (0..200)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    std::hint::black_box(symbols_in(std::hint::black_box(&text), app));
+                    start.elapsed()
+                })
+                .collect();
+            samples.sort_unstable();
+            eprintln!(
+                "spoken symbols {app:?} {} bytes: p50 {:?}, p95 {:?}",
+                text.len(),
+                samples[100],
+                samples[190]
+            );
+            let limit = if cfg!(debug_assertions) {
+                10_000
+            } else {
+                1_000
+            };
+            assert!(samples[100].as_micros() < limit, "{app:?}");
+        }
+        // Worst case stays linear: 60k chars of unpaired quotes and symbols.
+        let long = "backtick x dash ".repeat(4_000);
+        let start = std::time::Instant::now();
+        std::hint::black_box(symbols_in(&long, (false, Some("dev.zed.Zed"))));
+        assert!(start.elapsed().as_millis() < if cfg!(debug_assertions) { 500 } else { 50 });
     }
 }

@@ -6345,7 +6345,11 @@ mod tests {
             assert_eq!(transformer.1.load(Ordering::SeqCst), calls);
             assert_eq!(r.timings.unwrap().cleanup_skipped, calls == 0);
             if calls == 0 {
-                assert_eq!(r.text.as_deref().map(str::trim_end), Some(said));
+                // Local spoken symbols still run without cleanup.
+                assert_eq!(
+                    r.text.as_deref().map(str::trim_end),
+                    Some("git commit -m fix the build on the main branch")
+                );
             }
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
