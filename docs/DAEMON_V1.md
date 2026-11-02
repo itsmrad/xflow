@@ -169,15 +169,25 @@ or virtual inputs); a missing name falls back with a notice. Otherwise the syste
 default wins, except Bluetooth/Bluetooth LE defaults with `recording.avoid_bluetooth = true`
 (the default), and virtual/aggregate defaults: these prefer built-in input when
 available. Without built-in input the default is retained, including Bluetooth.
-Duplicate names keep CPAL's actual default device because names cannot identify them
-safely. `xflow config set recording.avoid_bluetooth false` allows Bluetooth defaults;
+Only a duplicate of the name being selected causes fallback to the system default;
+unrelated duplicates do not affect a pinned mic or the built-in pick. Inputs are matched
+to CPAL by CoreAudio device ID/order, excluding output-only name collisions. A device
+whose input/name/transport property fails is skipped with a debug log. If the default
+cannot be inspected, a surviving built-in input is preferred, then another available
+input. Capture fails only when no usable input or stable inventory remains.
+`xflow config set recording.avoid_bluetooth false` allows Bluetooth defaults;
 `xflow config set recording.device '"AirPods"'` pins that exact name. `xflow devices`
 lists names without opening inputs. No ranked lists or UIDs are configured.
 
 Voice processing (`ignore_speakers`) only opens the system default input when no
 name is pinned. If resolution chooses built-in input instead, capture uses the
-plain microphone and reports that echo cancellation is off. Warm streams re-resolve
-at the next start and reopen when the choice changes. Status names the last
+plain microphone and reports that echo cancellation is off, also when VPIO fails to
+open. Plain macOS warm streams re-resolve at the next start and reopen when the selected
+device ID changes. Automatic-input echo cancellation closes at every stop even with
+`keep_warm_secs` enabled: the unpinned VPIO unit could otherwise follow an AirPods
+default appearing in the warm window. VPIO can still follow a default change during
+an active dictation; input pinning needs hardware validation. Linux warm streams reuse
+the open device without enumerating/probing other ALSA PCMs. Status names the last
 successfully opened mic (so idle status never probes hardware); doctor reports
 that mic, or a read-only preview labelled "Next recording" before the first capture.
 Linux retains existing exact-name/default selection; Bluetooth profile handling

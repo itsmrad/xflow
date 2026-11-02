@@ -47,7 +47,7 @@ silence_threshold = 0.005    # minimum 20 ms frame RMS; speech must last at leas
 avoid_bluetooth = true      # ignored on Linux; false allows the Bluetooth default
 min_ms = 300                 # shorter taps are discarded without upload
 auto_stop_secs = 0           # stop after N s of silence (0 = off)
-keep_warm_secs = 0           # keep the mic open N s after a recording (0 = off)
+keep_warm_secs = 0           # keep mic open N s (0 = off); macOS automatic echo cancellation always closes
 ignore_speakers = false      # macOS: echo cancelling only when using the system default mic
 
 [injection]

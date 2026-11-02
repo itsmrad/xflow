@@ -60,7 +60,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | `recording.avoid_bluetooth` | `true` | macOS: use built-in input when the default is Bluetooth; named devices override. Virtual/aggregate defaults also fall back to built-in. No built-in: keep default. ignored on Linux; false allows the Bluetooth default |
 | `recording.min_ms` | `300` | shorter taps are discarded without upload |
 | `recording.auto_stop_secs` | `0` | stop after N s of silence (0 = off) |
-| `recording.keep_warm_secs` | `0` | keep the mic open N s after a recording (0 = off) |
+| `recording.keep_warm_secs` | `0` | keep mic open N s (0 = off); macOS automatic echo cancellation always closes |
 | `recording.ignore_speakers` | `false` | macOS: echo cancelling only when using the system default mic |
 
 ## [injection]
@@ -215,7 +215,7 @@ silence_threshold = 0.005    # minimum 20 ms frame RMS; speech must last at leas
 avoid_bluetooth = true      # ignored on Linux; false allows the Bluetooth default
 min_ms = 300                 # shorter taps are discarded without upload
 auto_stop_secs = 0           # stop after N s of silence (0 = off)
-keep_warm_secs = 0           # keep the mic open N s after a recording (0 = off)
+keep_warm_secs = 0           # keep mic open N s (0 = off); macOS automatic echo cancellation always closes
 ignore_speakers = false      # macOS: echo cancelling only when using the system default mic
 
 [injection]
