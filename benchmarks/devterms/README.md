@@ -125,5 +125,19 @@ Dictionary phrases conservatively protect every overlapping cue word: adding
 even when the full dictionary phrase is absent. All-caps input keeps all-caps
 corrections.
 Pack selection reuses the focused app id the daemon already reads; no fuzzy
-index, new provider call, download or additional model is involved. Shipped prompt hints are deferred: the current Whisper fallback retains
-a second copy of encoded audio whenever hints are present.
+index, new provider call, download or additional model is involved.
+
+## Shipped domain hints
+
+`hints.py` compares `stt.domain_hints` off and on for 27 `say` clips (dev, corp,
+finance, sheet and two plain-English controls), each in the app whose domains it
+would hint. It mirrors `xflow_core::hints::select` and the provider's 100-token cut,
+sends the result as `stt.vocabulary` through `xflow transcribe` (which reads its
+own stored key), and reports term recall, missing final periods, upper-case
+outputs, p50 and paired latency. 54 requests, about $0.01:
+
+```sh
+python3 benchmarks/devterms/hints.py --self-test   # no network
+XFLOW_BIN=path/to/xflow python3 benchmarks/devterms/hints.py
+python3 benchmarks/devterms/hints.py --summary
+```

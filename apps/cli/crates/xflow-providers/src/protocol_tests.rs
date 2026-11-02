@@ -839,7 +839,7 @@ async fn whisper_prompt_fallback_preserves_audio_and_retries_once() {
             assert_eq!(requests.len(), 2);
             let first = String::from_utf8_lossy(&requests[0]);
             let second = String::from_utf8_lossy(&requests[1]);
-            assert!(first.contains("name=\"prompt\"\r\n\r\nReact, PostgreSQL\r\n"));
+            assert!(first.contains("name=\"prompt\"\r\n\r\nReact, PostgreSQL.\r\n"));
             assert!(!second.contains("name=\"prompt\""));
             for bytes in requests {
                 let request = String::from_utf8_lossy(&bytes);

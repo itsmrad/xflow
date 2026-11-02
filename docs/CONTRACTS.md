@@ -15,14 +15,14 @@ history disabled; it must never silently erase saved rows at startup.
 
 | Section | Keys | Consumer |
 | --- | --- | --- |
-| `[stt]` | provider, model, endpoint, protocol, api_key_env, language, vocabulary, timeout_secs, fallback (one catalog id, opt-in) | providers |
+| `[stt]` | provider, model, endpoint, protocol, api_key_env, language, vocabulary, domain_hints, timeout_secs, fallback (one catalog id, opt-in) | providers |
 | `[cleanup]` | mode (raw/light/polished/custom), provider, endpoint, model, api_key_env, prompt, timeout_secs, app_context | providers, daemon |
 | `[recording]` | max_seconds, silence_threshold, device, min_ms, auto_stop_secs, keep_warm_secs, ignore_speakers | platform audio, daemon |
 | `[hotkey]` | key, double_tap_ms (500), hold_threshold_ms (500), enabled (true) | macOS event tap, daemon |
 | `[injection]` | method (paste/type/clipboard), clipboard_only, restore_clipboard, restore_delay_ms, trailing_space, smart_spacing | platform desktop, extension |
 | `[formatting]` | remove_fillers, fillers, spoken_punctuation, lists | daemon text pipeline |
 | `[dictionary]` | words, replacements = [{from, to}], auto_learn, learned, never_learn | daemon text pipeline and correction learning, providers (hints) |
-| `[vocab]` | dev (true), corp (true), sheet (false), finance (false); dev also on in terminals/editors, sheet in spreadsheet apps | daemon text pipeline |
+| `[vocab]` | dev (true), corp (true), sheet (false), finance (false); dev also on in terminals/editors, sheet in spreadsheet apps | daemon text pipeline, providers (hints with `stt.domain_hints`) |
 | `[[snippets]]` | trigger, text | daemon text pipeline |
 | `[[styles]]` | name, apps, mode, prompt | daemon (picks style by focused app id) |
 | `[sounds]` | enabled, volume, start, stop, error | daemon/platform |

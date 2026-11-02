@@ -80,7 +80,8 @@ pub fn trim(
     start..end
 }
 
-pub fn suspect(text: &str, config: &Config) -> bool {
+/// `domain`: the shipped terms sent with the upload, which Whisper can echo too.
+pub fn suspect(text: &str, config: &Config, domain: &[&str]) -> bool {
     let words = |text: &str| -> Vec<String> {
         text.split(|c: char| !c.is_alphanumeric())
             .filter(|s| !s.is_empty())
@@ -92,8 +93,10 @@ pub fn suspect(text: &str, config: &Config) -> bool {
         .stt
         .vocabulary
         .iter()
-        .chain(&config.dictionary.words)
-        .flat_map(|hint| words(hint))
+        .map(String::as_str)
+        .chain(config.dictionary.words.iter().map(String::as_str))
+        .chain(domain.iter().copied())
+        .flat_map(words)
         .collect();
     text.is_empty()
         || text.len() == 1 && text[0].chars().count() <= 2
@@ -401,9 +404,17 @@ mod tests {
             .collect();
         assert_eq!(thumps.len(), 6);
         for case in thumps {
-            assert!(suspect(case["text"].as_str().unwrap(), &config), "{case}");
+            assert!(
+                suspect(case["text"].as_str().unwrap(), &config, &[]),
+                "{case}"
+            );
         }
-        assert!(suspect("OpenResty, ZenML.", &config));
-        assert!(!suspect("OpenResty is ready", &config));
+        assert!(suspect("OpenResty, ZenML.", &config, &[]));
+        assert!(!suspect("OpenResty is ready", &config, &[]));
+        // Shipped domain hints are echoes too.
+        let domain = xflow_core::hints::select(&Config::default(), true, None);
+        assert!(!suspect("Supabase, Vercel.", &config, &[]));
+        assert!(suspect("Supabase, Vercel.", &config, &domain));
+        assert!(!suspect("Supabase is ready", &config, &domain));
     }
 }

@@ -174,6 +174,9 @@ pub struct Engine {
     job: Option<JoinHandle<()>>,
     /// The focused app, and terms from its window title (`privacy.window_terms`).
     context_job: Option<JoinHandle<(AppContext, Vec<String>)>>,
+    /// The last focused (app id, terminal) the context read found; picks the
+    /// shipped hint domains without waiting on the current read.
+    focus: Arc<std::sync::Mutex<(Option<String>, bool)>>,
     context_abort: Option<tokio::task::AbortHandle>,
     warm_job: Option<JoinHandle<()>>,
     /// Ends the observation of the last pasted field (see `observe`).
@@ -265,6 +268,7 @@ impl Engine {
             live: watch::Sender::new(None),
             job: None,
             context_job: None,
+            focus: Default::default(),
             context_abort: None,
             warm_job: None,
             observing: None,
@@ -424,8 +428,10 @@ impl Engine {
         };
         let mut sent = tokio::task::JoinSet::new();
         let mut delivered = Vec::with_capacity(kept.parts.len());
+        let domain = self.domain_hints();
         for (index, part) in kept.parts.into_iter().enumerate() {
             let (stt, config, dir) = (self.services.stt.clone(), self.config.clone(), dir.clone());
+            let domain = domain.clone();
             match part {
                 Part::Text {
                     text,
@@ -448,7 +454,7 @@ impl Engine {
                             .unwrap_or_else(|e| Err(e.into()));
                         let piece = match audio {
                             Ok(audio) => {
-                                transcribe_segment(&*stt, audio, low_energy, &config).await
+                                transcribe_segment(&*stt, audio, low_energy, &config, domain).await
                             }
                             // An empty clip fails again locally, before any upload.
                             Err(e) => Err((
@@ -487,6 +493,15 @@ impl Engine {
         };
         self.transcribe(sent, 0, None, Instant::now(), keep, completion.clone());
         Ok(())
+    }
+    /// Shipped hint terms for the last known focus. ponytail: a segment sent
+    /// before this dictation's focus read finishes uses the previous app's.
+    fn domain_hints(&self) -> Vec<&'static str> {
+        let focus = self
+            .focus
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        xflow_core::hints::select(&self.config, focus.1, focus.0.as_deref())
     }
     fn active(&self) -> bool {
         matches!(self.state, State::Listening | State::Processing)
@@ -693,6 +708,7 @@ impl Engine {
         let desktop = self.services.desktop.clone();
         let window_terms =
             self.config.privacy.window_terms && self.config.formatting.snap_to_dictionary;
+        let focus = self.focus.clone();
         // Both queries run after capture opens and outside the command actor.
         let task = tokio::spawn(async move {
             let context = async {
@@ -715,6 +731,12 @@ impl Engine {
             if mode == Mode::Command {
                 target.selected_text = selection.or(target.selected_text);
             }
+            *focus
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = (
+                target.app_id.clone(),
+                xflow_platform::terminal_context(&target),
+            );
             // Editor and terminal apps only, by app id: other titles name documents, mail and
             // private tabs, including a browser whose web terminal has focus.
             // A read past 100 ms is dropped so it never holds the context back.
@@ -856,7 +878,11 @@ impl Engine {
         }
         segments.heard = true;
         trace_segment("send");
-        let (stt, config) = (self.services.stt.clone(), self.config.clone());
+        let (stt, config, domain) = (
+            self.services.stt.clone(),
+            self.config.clone(),
+            self.domain_hints(),
+        );
         let keep = speech::trim(
             &audio,
             &activity.voiced,
@@ -864,7 +890,7 @@ impl Engine {
             last,
             config.recording.min_ms,
         );
-        segments.sent.spawn(async move {
+        self.segments.sent.spawn(async move {
             // Every upload is 16 kHz mono anyway; holding that copy for a retry instead
             // of native-rate audio cuts in-flight memory 3–6x.
             let audio = tokio::task::spawn_blocking(move || {
@@ -876,7 +902,7 @@ impl Engine {
             .expect("audio conversion panicked");
             (
                 index,
-                transcribe_segment(&*stt, audio, activity.low_energy, &config).await,
+                transcribe_segment(&*stt, audio, activity.low_energy, &config, domain).await,
             )
         });
     }
@@ -891,6 +917,7 @@ impl Engine {
     ) {
         let services = self.services.clone();
         let config = self.config.clone();
+        let domain = self.domain_hints();
         let store = self.store.clone();
         let generation = self.generation;
         let epoch = self.epoch.clone();
@@ -939,7 +966,7 @@ impl Engine {
                 for (index, piece) in pieces {
                     let piece = match piece {
                         Err((error, audio, low_energy)) if segmented && !error.is::<xflow_providers::FailoverExhausted>() => {
-                            transcribe_segment(&*services.stt, audio, low_energy, &config).await
+                            transcribe_segment(&*services.stt, audio, low_energy, &config, domain.clone()).await
                         }
                         piece => piece,
                     };
@@ -2166,14 +2193,16 @@ async fn transcribe_segment(
     audio: AudioClip,
     low_energy: bool,
     config: &Config,
+    domain: Vec<&'static str>,
 ) -> Piece {
     let options = TranscriptionOptions {
         vocabulary: vocabulary(config),
+        domain: domain.clone(),
         ..TranscriptionOptions::default()
     };
     match stt.transcribe(audio.clone(), options).await {
         // Near-silent audio: drop the provider's stock hallucinations and hint echoes.
-        Ok(mut transcript) if low_energy && speech::suspect(&transcript.text, config) => {
+        Ok(mut transcript) if low_energy && speech::suspect(&transcript.text, config, &domain) => {
             transcript.text.clear();
             Ok(transcript)
         }
@@ -5590,9 +5619,10 @@ mod tests {
             task.await.unwrap();
         }
     }
-    /// Answers "open use task store" and keeps the hints it was sent.
+    /// Answers "open use task store" and keeps the hints it was sent: the
+    /// user's and the shipped domain terms.
     #[derive(Default)]
-    struct HintStt(Mutex<Vec<Vec<String>>>);
+    struct HintStt(Mutex<Vec<Vec<String>>>, Mutex<Vec<&'static str>>);
     #[async_trait]
     impl SpeechToText for HintStt {
         fn name(&self) -> &str {
@@ -5604,6 +5634,7 @@ mod tests {
             options: TranscriptionOptions,
         ) -> Result<Transcript> {
             self.0.lock().unwrap().push(options.vocabulary);
+            self.1.lock().unwrap().extend(options.domain);
             Ok(Transcript {
                 provider: None,
                 text: "open use task store".into(),
@@ -5636,7 +5667,7 @@ mod tests {
         let mut config = Config::default();
         config.privacy.window_terms = window_terms;
         config.formatting.snap_to_dictionary = snap;
-        let (mut engine, tx, rx, mut events, _) = fixture(config, desktop.clone(), store);
+        let (mut engine, tx, rx, mut events, _) = fixture(config.clone(), desktop.clone(), store);
         let stt = Arc::new(HintStt::default());
         engine.services.stt = stt.clone();
         let task = tokio::spawn(engine.run(rx));
@@ -5660,6 +5691,11 @@ mod tests {
         task.await.unwrap();
         let pasted = desktop.injections.lock().unwrap().concat();
         let hints = stt.0.lock().unwrap().concat();
+        // Shipped hints follow the same focused app; title terms are never hints.
+        let terminal = terminal_input || xflow_platform::is_terminal(Some(app));
+        let domain = stt.1.lock().unwrap().clone();
+        assert_eq!(domain, xflow_core::hints::select(&config, terminal, Some(app)));
+        assert!(!domain.iter().any(|t| t.contains("TaskStore") || t.contains("myapp")));
         (
             pasted,
             hints,
@@ -6145,6 +6181,67 @@ mod tests {
         success(&mut events).await;
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
+    }
+    /// Records the first upload's options; the dictation is then cancelled.
+    async fn first_upload(desktop: RecordingDesktop, config: Config) -> TranscriptionOptions {
+        let desktop = Arc::new(desktop);
+        let (called, options) = (Arc::new(Notify::new()), Arc::new(Mutex::new(Vec::new())));
+        let (mut engine, tx, rx, _, _) = fixture(
+            config,
+            desktop.clone(),
+            Store::open(std::path::Path::new("unused"), false, 5).unwrap(),
+        );
+        engine.services.stt = Arc::new(FakeStt {
+            called: called.clone(),
+            release: Arc::new(Notify::new()),
+            options: options.clone(),
+        });
+        let task = tokio::spawn(engine.run(rx));
+        assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
+        // Single-threaded: once the read has started, an unblocked one has finished.
+        while desktop.contexts.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(ask(&tx, Request::Stop).await.state, State::Processing);
+        tokio::time::timeout(Duration::from_secs(2), called.notified())
+            .await
+            .unwrap();
+        assert_eq!(ask(&tx, Request::Cancel).await.state, State::Idle);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+        let sent = options.lock().unwrap()[0].clone();
+        sent
+    }
+    #[tokio::test]
+    async fn uploads_hint_the_focused_apps_domains_without_waiting() {
+        let excel = || RecordingDesktop {
+            context: Some(AppContext {
+                app_id: Some("com.microsoft.Excel".into()),
+                ..AppContext::default()
+            }),
+            ..RecordingDesktop::default()
+        };
+        let sent = first_upload(excel(), Config::default()).await;
+        assert_eq!(sent.domain[0], "XLOOKUP");
+        assert_eq!(
+            sent.domain,
+            xflow_core::hints::select(&Config::default(), false, Some("com.microsoft.Excel"))
+        );
+        // A focus read that never returns: the upload goes at once with the
+        // last known focus (none yet), never waiting for it.
+        let blocked = RecordingDesktop {
+            block_context: Some(Arc::new(Notify::new())),
+            ..excel()
+        };
+        let sent = first_upload(blocked, Config::default()).await;
+        assert_eq!(
+            sent.domain,
+            xflow_core::hints::select(&Config::default(), false, None)
+        );
+        assert!(!sent.domain.contains(&"XLOOKUP"));
+        let mut off = Config::default();
+        off.stt.domain_hints = false;
+        assert!(first_upload(excel(), off).await.domain.is_empty());
     }
     #[test]
     fn recognition_hints_include_stt_and_dictionary_words() {

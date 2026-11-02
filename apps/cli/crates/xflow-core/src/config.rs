@@ -132,6 +132,8 @@ pub struct SttConfig {
     pub api_key_env: Option<String>,
     pub language: Option<String>,
     pub vocabulary: Vec<String>,
+    /// Also hint the active `[vocab]` domains' shipped terms, after yours.
+    pub domain_hints: bool,
     pub timeout_secs: u64,
 }
 impl Default for SttConfig {
@@ -145,6 +147,7 @@ impl Default for SttConfig {
             api_key_env: None,
             language: None,
             vocabulary: vec![],
+            domain_hints: true,
             timeout_secs: 30,
         }
     }
@@ -313,7 +316,8 @@ impl Default for DictionaryConfig {
         }
     }
 }
-/// Shipped term packs that fix mis-heard terms locally (`formatting.snap_to_dictionary`).
+/// Shipped term packs: fix mis-heard terms locally (`formatting.snap_to_dictionary`)
+/// and are sent as recognition hints (`stt.domain_hints`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct VocabConfig {

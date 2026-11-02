@@ -22,6 +22,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | `stt.api_key_env` | unset | e.g. `"GROQ_API_KEY"` |
 | `stt.language` | unset | ISO-639-1; unset = automatic detection; e.g. `"en"` |
 | `stt.vocabulary` | `[]` | extra recognition hints (dictionary.words are added too) |
+| `stt.domain_hints` | `true` | also hint the [vocab] domains' shipped terms after your words |
 | `stt.timeout_secs` | `30` |  |
 | `stt.fallback` | `[]` | opt in: one backup id, e.g. ["openai"]; needs `xflow key set openai` |
 
@@ -174,6 +175,7 @@ provider = "groq"            # `xflow providers` lists every provider
 # api_key_env = "GROQ_API_KEY"
 # language = "en"            # ISO-639-1; unset = automatic detection
 vocabulary = []              # extra recognition hints (dictionary.words are added too)
+domain_hints = true          # also hint the [vocab] domains' shipped terms after your words
 timeout_secs = 30
 fallback = []               # opt in: one backup id, e.g. ["openai"]; needs `xflow key set openai`
 # Backup uses its catalog endpoint/model and stored key. Audio may go to both providers.
