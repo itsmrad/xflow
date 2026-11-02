@@ -1,0 +1,8 @@
+# xflow sheet pack: spreadsheet functions and features (function names only). Same format as dev.tsv.
+XLOOKUP	zlookup
+Power Query	powerquery
+Power Pivot	powerpivot
+Power Automate	powerautomate
+Flash Fill	flashfill
+Goal Seek	goalseek
+R1C1	r1 c1

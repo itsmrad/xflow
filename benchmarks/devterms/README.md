@@ -99,8 +99,21 @@ cargo test --manifest-path apps/cli/Cargo.toml --locked -p xflow-core cues
 cargo test --manifest-path apps/cli/Cargo.toml --locked --release -p xflow-core cues::tests::pipeline_latency -- --nocapture
 ```
 
-The shipped `cues.txt` contains exact heard forms and adjacent left/right cues;
-either side may enable a correction, while either blocker prevents it. Addressing
+The shipped packs (`apps/cli/crates/xflow-core/src/vocab/{dev,corp,sheet,finance}.tsv`)
+contain exact heard forms and adjacent left/right cues. A safe form ("kube ctl",
+"zlookup") corrects on its own only if every word is not English, not a name, not a
+digit and not a single letter, and it is more than a case change. A cued form
+("cloud", "swift", "gap") changes only lowercase input next to a non-English
+technical cue ("sdk", "repo", "gpi"); English addressing cues ("ask", "hey",
+"tell") also need a continuation ("to", "about", "for"). Blockers always win.
+`[vocab]` selects packs: dev and corp everywhere, dev always in terminals and
+editors, sheet in Excel, Numbers and LibreOffice Calc, finance only when enabled.
+`shipped_data_is_small_unique_and_gated` enforces these rules against SCOWL plus
+a test-only list (`vocab/english-extra.txt`: SCOWL words to size 70, names to 95
+and modern words and short names) and the system word lists where installed
+(required on macOS). `review_prose_is_unchanged_in_every_pack_combination` keeps
+every sentence from the PR #113 reviews, as written and lowercased, unchanged in
+all 16 pack combinations and seven app contexts. Addressing
 Claude or Claude Code also requires a positive continuation (such as "to", "about"
 or "for"), punctuation, or the end of the text after a left addressing cue.
 Claude Code only accepts addressing cues such as "ask", "hey" and "tell".
@@ -111,6 +124,6 @@ Dictionary phrases conservatively protect every overlapping cue word: adding
 "Google Cloud" suppresses the cloud cue, and "VS Code" suppresses cloud code,
 even when the full dictionary phrase is absent. All-caps input keeps all-caps
 corrections.
-No app lookup, fuzzy index, new provider call, download or additional model is
-involved. Shipped prompt hints are deferred: the current Whisper fallback retains
+Pack selection reuses the focused app id the daemon already reads; no fuzzy
+index, new provider call, download or additional model is involved. Shipped prompt hints are deferred: the current Whisper fallback retains
 a second copy of encoded audio whenever hints are present.

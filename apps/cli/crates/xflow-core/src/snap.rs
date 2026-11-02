@@ -581,7 +581,9 @@ mod tests {
 
     #[test]
     fn exact_windows_prevent_fuzzy_matches_from_consuming_following_words() {
-        let c = config(&["Postgres", "Supabase"]);
+        let mut c = config(&["Postgres", "Supabase"]);
+        // Snap alone: the dev pack would also fix "postgre".
+        c.vocab.dev = false;
         for (input, expected) in [
             ("post gres is ready.", "Postgres is ready."),
             ("post gress is ready.", "Postgres is ready."),

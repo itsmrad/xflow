@@ -1,0 +1,638 @@
+Please send the notes before next week.
+We should go home before it gets dark.
+The swift river carried the boat away.
+There is rust on the car door.
+I prefer java coffee in the morning.
+We paid for express delivery yesterday.
+The children are on spring break.
+There was a spark of hope in her eyes.
+We watched pandas at the zoo.
+We are back to square one.
+Do not chase the bus across the road.
+Our sales force grew by ten people.
+It was a long work day for everyone.
+We need better service now than before.
+The apex of the roof needs repairs.
+We spoke about the API after lunch.
+We spoke about the api after lunch.
+It is all right with us.
+I am going to meet them at five pm.
+Please bring your id and let me know if that is ok.
+The cat made art with muddy paws.
+The sum of these numbers is small.
+Max and Min will join us later.
+Arr matey, the ship is ready.
+The postman brought a letter this morning.
+Ask the post man to leave it by the door.
+We need to get lab results by Friday.
+He was eating a fig, Ma said.
+Cut me some slack this week.
+The notion of fairness matters to us.
+We discussed a linear relationship between price and demand.
+Please change the bed sheets tomorrow.
+Both teams played well this season.
+There are ten pages left in the book.
+The numbers do not add up.
+I cannot remember the word for it.
+She hopes to excel at mathematics.
+How will they react to the news?
+The river was swift after the rain.
+There is a ruby in her ring.
+The flask is full of hot coffee.
+The birds built a nest by the window.
+Play the remix one more time.
+We bought a bun for the journey.
+The sage gave us good advice.
+He wore plaid to the party.
+There is a stripe on the wall.
+The ledger is on the shelf.
+We use accrual accounting for the company.
+Put the packages on the table.
+The clerk at the desk was helpful.
+Please leave a message after the tone.
+A pinecone fell beside the path.
+There was a snowflake on the window.
+The celery is in the fridge.
+There are gnats by the pond.
+The neon lights are too bright.
+We need a convex lens for this experiment.
+There was a lot of traffic today.
+The wind gave the boat a strong tailwind.
+We talked about the movie sequel.
+There is no sequel to that film.
+The storybook belonged to my grandmother.
+She looked svelte in that coat.
+We went to a luau on the beach.
+My friend Lora is coming for dinner.
+Claud told us a funny story.
+Yamil will call us tomorrow.
+The doctor recommended kegel exercises.
+Cagle and Haskell are presenting tomorrow.
+The professor explained kinesis in biology.
+Give me a sec to find the receipt.
+There is a kegger at the house tonight.
+Please pass the bug zapper.
+We admired the tableau in the museum.
+Toast the jeera before adding rice.
+We sprinkled geera over the vegetables.
+The coach asked for one last pass.
+We will leave a safe note with the guard.
+Please put this on my tea bill.
+The black shoals are visible at low tide.
+The local host welcomed every guest.
+The far gate is locked again.
+We spotted a fire fox near the trees.
+The fig jam is in the kitchen.
+We need a fresh desk for the new employee.
+Please help scout a new location.
+The air table kept the puck moving.
+The engineers checked the master card in the deck.
+The ferry took route fifty three today.
+They studied the cloud front over the valley.
+We went on a cloud watch after sunset.
+There is a cloud trail behind the aircraft.
+The soldiers left the fire base at dawn.
+I put my coin base on the shelf.
+There is a low dash on the printed chart.
+The puppet has a see lion label.
+Please bring the live kit for the broadcast.
+There was an ant design on the fabric.
+The story had an unreal engine powered by magic.
+We need to type script notes before rehearsal.
+He was carrying a power shell from the beach.
+The fort has an elastic beanstalk in the fairy tale.
+Try not to let rust up the pipe.
+The owl made a ghosty sound at night.
+We have to post grass samples tomorrow.
+The accountant checked the month end close.
+The quarter end close took longer this time.
+The year end close will be tomorrow.
+The smart sheet helps the patient move.
+I bought a turbo pack for the toy car.
+That was a big query for a small meeting.
+We wrote a what if analysis of the budget.
+We should index and match the records by hand.
+Please choose cols for the chart manually.
+We need to import html into the archive.
+The client asked us to import xml today.
+The office scripts for the receptionist are ready.
+Please take a freeze pain remedy with you.
+Please get pivot data from the report.
+Use a v lookup for the customer list.
+The max function is easy to explain.
+The min formula appears on the handout.
+I will count if you cannot.
+The sum product was larger than expected.
+The date diff is easy to read.
+The art function starts at seven.
+The annual function is today.
+Our service now includes breakfast.
+She will excel in class.
+Our teams meeting starts after lunch.
+We have a notion of what happened.
+Please keep the engine running.
+We can talk about the terms tomorrow.
+The meeting was shorter than expected.
+Send the invoice when you can.
+We need more details before deciding.
+The bus arrives at half past nine.
+I will be there in the morning.
+Let us revisit this after the holiday.
+The report is due at the end of the month.
+My parents are visiting next weekend.
+There was a gap between the buildings.
+I ran a ten k for charity.
+It was a cruel joke to play on them.
+The sofa bed needs a new cover.
+The cogs in the machine are worn.
+The cursor position is wrong.
+Zoom in on the map, please.
+The outlook for the economy is bright.
+Our house has an intercom by the front door.
+They were rippling with laughter.
+She finished dinner with gusto.
+The greenhouse needs new glass.
+The lattice structure is stable.
+I fully concur with that assessment.
+Our base camp is near the river.
+We can glean some facts from the letter.
+The segment of road is closed.
+A superhuman effort saved the day.
+I have a mint plant by the window.
+Please keep an open eye for the delivery.
+There is a raspberry pie in the oven.
+The radio played a song from last spring.
+Do you remember what we agreed yesterday?
+We had a cup of tea after the walk.
+They asked me to wait outside.
+The postal service now delivers on Saturdays.
+Please tell us what you need.
+We agreed to start the work tomorrow.
+Please reply to the email before lunch.
+The mountain path is covered in snow.
+We should order another box of paper.
+Everyone enjoyed the trip to the coast.
+My brother made a model ship.
+We have enough cash for the tickets.
+The new restaurant opens on Monday.
+They wrapped the package in swift strokes.
+We wrote the inscription in rust red paint.
+Please mark down the total on paper.
+Using yarn is relaxing after work.
+The company is using poetry to reach new readers.
+Using cargo ships will cost less.
+The curtains came with stripe patterns.
+You can view components of the sculpture here.
+The observer noted electron shells in the diagram.
+There was flutter in her voice.
+The kids are using bun dough for the lesson.
+The sensors use convex mirrors to see traffic.
+Our guide spoke in ruby tones.
+They waited in discord for the answer.
+The hiker arrived in base camp before dusk.
+They painted a linear project on the wall.
+She was on workday number five without a break.
+We had a zoom call with the camera operator.
+The animal has a stable diffusion pattern across the habitat.
+They offer open search tools to the public.
+Please read it thread by thread.
+We filed the ten k report after the charity race.
+The chips network was arranged on the circuit board.
+The vat number was painted on the tank.
+The whack rate was surprisingly high in the game.
+The term sofa refers to this kind of seat.
+The gap earnings report covers wage inequality.
+There is a cruel accounting of the events in the novel.
+The company will function today without electricity.
+Can you find and replace the broken hinge?
+We need a proper function room for the wedding.
+The lower formula describes the same physical process.
+The rank function describes a mathematical concept.
+Keep the sequel light and funny.
+Oh llama, please do not eat my hat.
+She types script pages for the theatre.
+We analysed the alpha fold in the protein.
+We took samples to the Jupiter lab for testing.
+The shelter has eleven labs waiting for homes.
+All eleven lab technicians are available.
+She bought a pie charm for her bracelet.
+The boat was carrying a tan stack of towels.
+He saw the sequel lies about the original ending.
+The webpage uses a closure script to close the window.
+Debbie in accounting can help with that.
+We bought an eye pad for the injury.
+The air pods keep the equipment afloat.
+The lizard lost a tail scale yesterday.
+The bird made a hero coo in the story.
+The tube has a large pipe drive motor.
+She wore an expression of deep graham devotion.
+The public gathered on the event bridge.
+Please run the cloud run simulation again.
+They are designing a new elastic search pattern.
+We placed a log stash by the fireplace.
+His door dash ended in a fall.
+Do you pay pal to help with the gardening?
+The metal arm sixty four inches long will fit.
+The project needs a source graph for the dependencies.
+The source graph is independent of any product.
+An ordinary dependent bot will repeat that task.
+Please use the engine x replacement part.
+The mobile web flow is confusing.
+We rearranged the mix panel in the studio.
+The spacecraft measured a cloud flare near the surface.
+Please send the share point to the group.
+The translucent mat lab specimen is ready.
+He worked as a docker before retirement.
+The sequel was just the original redux.
+We stopped midjourney to rest.
+The captain spoke through the ansible.
+She wants to swot for her exams tonight.
+Grr, the train is late again.
+Uri will visit Lora and Claud tomorrow.
+Kron called Cagle and Kagel yesterday.
+Pardo and Clavijo will lead the workshop.
+Rike and Lotty are coming for lunch.
+Lotti and Samel sent their regards.
+The two Kates will meet us at the station.
+Our guide Eban speaks three languages.
+My friend Tablo will meet us later.
+They trained their pet to see pa after lunch.
+The tuition is due in Apr this year.
+The chant aum calmed the room.
+That is a wack idea for a party.
+These are the bases points on the baseball diagram.
+The black shoals extend to the shore.
+There is a safe note in the safe.
+The blackline drawing is finished.
+We need a tally prime for the arithmetic lesson.
+The aircraft made a test flight before dawn.
+We need a spring boot for the hiking season.
+She was pedantic about every small detail.
+The ifs and buts can wait.
+Our physics teacher explained the sum product identity.
+We need a pivot chart for the mechanics lesson.
+She worked on an office script all morning.
+The rank function is a topic in linear algebra.
+The proper function of the guard is to protect visitors.
+Please find and replace the lost key.
+They used swift code names for the race teams.
+We paid extra for the parcel with express delivery.
+The business needs swift data collection today.
+She arrived with ruby earrings.
+They filled the crate with python eggs.
+We replaced it with flask caps from the shop.
+They drew the plan with angular shapes.
+The teacher was using dart tips for the demonstration.
+She spoke with flutter in her voice.
+You should react calmly when this happens.
+We should learn react calmly in the workshop.
+We used the material with a convex surface.
+The poem was written in elixir of dreams.
+We stood in azure light until sunset.
+The team started on stable diffusion of the chemical.
+We can calculate the result using solidity of the material.
+Please mark down the names in this book.
+The package is in cargo storage.
+They played in a scrum team at school.
+He left a proud swagger in his wake.
+The author put her last pass in the drawer.
+He arrived in rippling silk.
+The path is covered in base camp mud.
+We need air flow control in this room.
+We found the files in open search results.
+You can use perplexity to describe the expression.
+There is a new relic account of the ruins.
+Please bring the celery flower to the classroom.
+The schematic shows a pine cone index in the key.
+The artist drew a snowflake pattern.
+The shelves are covered in sage green paint.
+We reviewed sales force data for each region.
+We insist on service now and payment later.
+Please bring a fig Ma before dinner.
+Please switch to tab nine in the binder.
+The rep let everyone into the room.
+The room has an eleven lab layout for teaching.
+I need a fresh desk and a new chair.
+Debbie in accounting…
+in linear algebra
+in swift strokes
+on service now and payment later
+read it thread by thread
+sales force data
+using poetry
+view components
+with express delivery
+Hi Debbie, can we move our meeting to Thursday afternoon?
+Jordan said the quarterly numbers look strong this time.
+We flew to Paris last spring and loved every minute.
+Victoria will join the call from London tomorrow.
+Jasmine brought jasmine tea for the whole office.
+Ruby is wearing a ruby necklace to the wedding.
+Jade carved a little jade elephant for her mom.
+Grace said grace before dinner.
+Hunter went hunting with his dad last weekend.
+Chase wants to chase the dog around the yard.
+Mason is a stone mason by trade.
+Cooper fixed the barrel like a real cooper.
+I bought apples at the farmers market.
+I ordered a new phone from Amazon this morning.
+Our target is to close ten deals this quarter.
+Let's stop by Target on the way home.
+I bank with Chase and the branch is close by.
+The kids collected shells on the beach.
+Fill up at the Shell station near the highway.
+She consulted the oracle at Delphi in the story.
+Oracle announced earnings yesterday.
+Mercury is the closest planet to the sun.
+Grab the atlas from the shelf and find Peru.
+Phoenix gets really hot in the summer.
+A falcon circled over the field.
+The eagle landed on the old pine tree.
+A jaguar is a big cat that lives in the jungle.
+He drives a Jaguar to work every day.
+I bought new Puma sneakers for running.
+Nike released a new running shoe this week.
+We flew Delta to Atlanta for the conference.
+We flew United out of Chicago.
+Frontier had the cheapest fare to Denver.
+The river delta was full of birds.
+We stand united as a team.
+Please send me the slides before the meeting.
+Thanks for the update, I will review it tonight.
+Can you loop in Grace from legal on this thread?
+Let's sync up after lunch about the budget.
+I am out of office until Monday.
+Please find the attached invoice for March.
+Looking forward to seeing you at the offsite.
+Can we push the standup to ten thirty?
+The client wants a proposal by end of day Friday.
+I left a note on the shared doc.
+The meeting room on the third floor is booked.
+Our revenue grew twelve percent last quarter.
+The stock dropped after the earnings call.
+I moved some savings into an index fund.
+Interest rates went up again this month.
+My mortgage payment is due on the first.
+The bank charged me an overdraft fee.
+We need to reconcile the receipts before Friday.
+He made a swift exit after the speech.
+The swift flew over the barn at dusk.
+I need to pay my taxes before April.
+She works in accounting at a big firm.
+We hit our sales target for the month.
+Who won the game last night?
+The Lakers beat the Celtics in overtime.
+He hit a home run in the ninth inning.
+The striker scored a goal in the final minute.
+We watched the Eagles play on Sunday.
+The Falcons lost again this week.
+The Jaguars have a new coach.
+The Suns won by twenty points.
+The Nucks won last night in overtime.
+Go Nucks go!
+The quarterback threw for three hundred yards.
+She swam a personal best at the meet.
+The marathon starts at seven in the morning.
+Add a pinch of salt to the pasta water.
+Let the dough rest for an hour.
+Preheat the oven to four hundred degrees.
+Chop the onions and garlic finely.
+I baked a pie with fresh apples.
+Stir the sauce until it thickens.
+We grilled salmon with lemon and dill.
+Add a dash of soy sauce and some ginger.
+This recipe calls for java beans and cream.
+Our flight to Rome leaves at noon.
+We stayed at a small hotel near the station.
+Don't forget your passport and boarding pass.
+The train to Victoria station was delayed.
+We rented a car in Lisbon.
+We went island hopping and stayed on Ios for three nights.
+Ios has the best beaches in the Cyclades.
+We took the ferry from Naxos to Ios.
+Maui was beautiful this time of year.
+We spent a week on Maui and a week on Oahu.
+Our hotel was right on Delta Avenue.
+I'm going to grab coffee, want anything?
+That movie was hilarious.
+My cat knocked over the plant again.
+We should get dinner sometime next week.
+I can't believe how fast the year went.
+Honestly I just need a nap.
+My kid has soccer practice at five.
+Did you watch the finale last night?
+I'll call you when I get home.
+Let's catch up over the weekend.
+The tide was swift and the water was cold.
+I need to buy some Veet before the trip.
+She uses Veet instead of shaving.
+I'll venmo you for dinner.
+Can you photoshop me into this picture?
+Let me know asap if anything changes.
+FYI the printer is broken again.
+The baby is sleeping, ssh.
+Ssh, the movie is starting.
+The choir sang the Agnus Dei beautifully.
+He joined Opus Dei years ago.
+My neighbour Mr Mui runs the bakery.
+Anita Mui was a famous singer.
+I met Lara Bell at the conference.
+Lara Bell is our new receptionist.
+Dax Shepard has a podcast.
+Dax and I went fishing.
+Sebi is coming over for dinner, Sebastian I mean.
+Hana sap collected maple syrup.
+Roa scored twice in the second half.
+Please ask Ira about the Roth account.
+We live in Blackrock near Dublin.
+Can you check that in Grok?
+I asked the same question in Grok and ChatGPT.
+Try it in grok and see what it says.
+I'll put it in grok later.
+That's the end grok said.
+Check the uni code of conduct before the exam.
+The uni code is on the back of your student card.
+Download it from the app store.
+I found the game on the app store.
+The Amazon app store has fewer games.
+Close tab 9 please.
+Open tab 9 and scroll down.
+We need a stronger net Maui fisherman would use.
+The nav bar is hidden on mobile.
+Turn on the nav in the car.
+I paid the GST in Australia on that purchase.
+Do we charge GST in Canada?
+The MD and a nurse came in to check on him.
+He's the MD and a partner at the firm.
+I stayed in room 409 a few times.
+The score was 10 99 at halftime.
+I got a nifty 50 dollar gadget.
+The Google collab with Samsung was announced.
+Let's do a colab video next week.
+We could terraform Mars one day.
+Scientists want to terraform other planets.
+The chat GP appointment is at three.
+I booked a video chat GP consultation.
+Our nan used to say tab 9 was lucky.
+Nate N. sent the invoice.
+Cuda is a nickname for the Barracuda.
+Ein bisschen mehr, bitte.
+Pendo is my cat's name.
+Deno came to the party.
+The jengo game was fun.
+Kanban boards help us stay organised.
+We use a kanban approach at work.
+I docu signed the lease yesterday.
+She bought a MacBook Air last week.
+My MVP for the season is Jordan.
+The RBI leader this year is great.
+I need to file my W 2 forms.
+Is the c suite involved?
+Ask the CEO and the CFO about that.
+The VP said yes.
+I'll be on PTO next week.
+Let me grab my notes from the meeting.
+The phone PE teacher called.
+Base 64 was the name of the bar.
+Route 53 goes through town.
+Root 53 is the plot number.
+Area 51 is in Nevada.
+Mono repo is not a word I know.
+We had a toast at the Sequel bar.
+Rest API is what the sign said.
+Next auth step is to verify your email.
+The next auth code will arrive by text.
+The palo alto networks event was fun.
+I visited the sap hana factory.
+A tik tok of the clock kept me awake.
+Whats app did you use for that?
+Watts app shows our solar output.
+The miley search on Google trended.
+Al Golia is my uncle.
+The Graf Ana Maria arrived.
+The hero koo was loud.
+That's a cool ify thought.
+My power bi weekly check came.
+Use the power bi weekly schedule.
+The python swallowed a rat.
+I love mango smoothies.
+Maria sent me the file.
+The mongo deal fell through.
+Victoria's Secret had a sale.
+My dentist said to floss daily.
+He's a real phoenix rising from the ashes.
+The atlas moth is huge.
+That was a swift kick.
+Mercury retrograde is ruining my week.
+I got a ticket for jaywalking.
+The ticket for the concert was cheap.
+Can you ticket this for me?
+Let's grab a jira later, I mean a gyro.
+I bought a kegel ball set.
+Debbie in accounting has the forms.
+Jordan in sales has the contract.
+Ruby on the front desk can help.
+Jade in marketing approved the copy.
+Hunter in finance sent the report.
+Mason in legal reviewed it.
+Cooper in IT reset my password.
+Grace in HR scheduled the interview.
+Chase in operations will handle shipping.
+Paris in design made the mockups.
+Victoria in support answered the ticket.
+Jasmine in engineering fixed the bug.
+We had pasta with pesto.
+The kids built a sand castle.
+Let's meet at the coffee shop on Main Street.
+I'll send the minutes after the call.
+The board approved the budget.
+The auditor flagged two issues.
+Our burn rate is too high.
+Cash flow was positive this quarter.
+We raised a seed round last year.
+The term sheet arrived this morning.
+I need to check my credit score.
+The ATM ate my card.
+I wired the money to my sister.
+She opened a savings account for her son.
+The swift code was printed on the statement.
+Please send the swift code and account number.
+Send me the routing number and the swift.
+What is the bank's swift code?
+Ask the swift team about the transfer.
+He gave a swift reply.
+We had a swift meeting.
+Swift is my favorite singer.
+Taylor Swift is touring again.
+I'm a huge Swift fan.
+Sell in May and go away.
+The stock is in the red today.
+Our mpg improved with the new tires.
+I need to renew my ID at the DMV.
+Let's grab a beer at the pub.
+The weather is lovely today.
+We followed the co pilot suggestion and landed early.
+The copilot suggestions helped the captain land.
+We tapped the homebrew cask on Friday.
+Load the cargo crates onto the truck.
+Unload cargo crates at dock four.
+The red shift spectrum of the galaxy was measured.
+We measured the redshift spectrum of each quasar.
+Chromium based coatings resist corrosion.
+We filmed a loom video for the weaving class.
+Our bricks expense went up this month.
+Keep everything in one drive folder.
+We can ban column reordering in the paper.
+Monitor traffic ingress and egress at the border.
+Count traffic entrypoints into the city.
+I need to get stash money from the drawer.
+Just google drive times to Boston.
+i am policy lead for the team.
+The second quadrant vectors point left.
+The boat sat in the slack channel near the dam.
+Watch this loom video of my scarf.
+Grab a twitch stream of the game.
+The snowflake database of weather records.
+A bun install guide for bakers.
+Python package delivery for the zoo.
+The pedantic schema of the old grammar book.
+The flutter doctor said rest.
+Run the spring boot starter kit.
+He wore a tail wind config.
+His meta quest for meaning continues.
+The intel chips in from the field were useful.
+I hear sea shell sounds.
+The google cloud of misinformation.
+Maria asked about the open search dashboards.
+The sentry replay of the night watch.
+A chroma vector of the song.
+We had a racy chart in the magazine.
+She read it on reddit karma threads.
+Delta and United fly that route.
+It's a fast app I built last year.
+Is it a fast app I can use offline?
+My sql skills are rusty.
+I have no sql experience at all.
+The stock went up in Vidia's report.
+We took an air bnb in Lisbon.
+Give me a mex burrito.
+The work ato we filed was late.
+Grab the tab 9 notebook.
+I asked Ruby to review it.
+Her name is Lara and she's great.
+Check out the Swift playground at the park.
+Ms. Gartener called about the garden.
+Mario Clavio scored twice.
+My friend Vemo is visiting.
+Schwob was a French writer.
+The emax setting on the drill.
+We stayed at the Otel in Istanbul.
+Lenova is a small town.
+He said bips and bops.
+The Fyco family moved here.
+Trelo is my dog.
+he wrote linix by mistake
+Hipa is a Finnish surname.
+I love the Clara Haskil recordings of Mozart.
+The Otel chain opened a new hotel.
+Nikos Kerras won the race.

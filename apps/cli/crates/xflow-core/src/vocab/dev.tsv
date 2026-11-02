@@ -1,0 +1,191 @@
+# xflow dev pack. Format and rules: cues.rs (`fields`) and its data test; sources: NOTICE.
+Claude Code	-	cloud code|claude code	ask|hey|tell	-	google|the|aws|azure	storage|provider|computing	to|about|for
+Claude	-	cloud|claude	ask|hey|tell	-	google|the|aws|azure|on	storage|provider|computing|flare|front|cover|formation|service|services	to|about|for
+Codex	-	codecs|codex	ask|openai	cli	video|audio|media	video|audio|compression	to|about|for
+kubectl	kube ctl
+Postgres	postgress
+Next.js	nextjs
+Vercel	vercell|versel|versell
+Supabase	soupabase	super base|supa base|soupa base	-	cli|postgres
+GitHub	-	github|git hub	-	repo|repos|cli
+YAML	yammel|yamle
+nginx	enginex
+Redis	reddis|redditz
+Anthropic	-	anthropic|anthro pic|an thropic	-	sdk
+OpenAI	-	open ai|open a i	-	sdk	an
+Gemini	-	gemini	-	cli|nano	-	zodiac|constellation|sign|twins
+Llama	-	llama	-	cpp	-	animal|farm|wool|llamas
+Ollama	olama
+Hugging Face	huggingface	hugging face	-	repo
+Tailwind	-	tail wind|tailwind	-	v4	a|the|strong|nice	helps|helped
+shadcn	shadkin
+shadcn/ui	shadcn ui
+Docker	-	dogger|docker	-	dockerfile	-	bank|boat|fisherman|sailed
+GPT-4o	gpt 4o
+o3	-	o 3|oh 3|o three|oh three	openai
+Copilot	-	copilot|co pilot	-	cli
+DeepMind	-	deep mind	-	alphafold
+Mistral	-	mistral	-	7b	the	wind|winds
+Midjourney	-	mid journey|midjourney	-	v6|v7
+Stable Diffusion	-	stable diffusion	-	webui
+Sora	-	sora	openai
+Whisper	-	whisper	openai	v3|cpp	a|in	quietly|softly|sweet
+LangChain	langchane
+CUDA	cooda|kooda
+Nvidia	nvidea|envidea
+scikit-learn	sklearn
+NumPy	numpie
+Kaggle	kaggel
+Weights & Biases	wandb
+ElevenLabs	11labs
+Cline	-	cline	-	mcp	calvin
+Aider	-	aider	-	cli	-	and
+Replit	replet
+Codeium	codeum
+VS Code	vscode
+Neovim	nvim
+Java	-	java	-	jvm	-	coffee|beans|island|sea|cup|script
+Kotlin	cotlin
+Scala	-	scala	-	sbt	la
+Go	-	go	-	struct|structs|toolchain
+Rust	-	rust	-	toolchain|async|cli	-	on|stain|stains|proof|removal|belt|colored|bucket|spots|never
+Python	-	python	-	sdk	-	snake|snakes|skin|bite
+Ruby on Rails	rubyonrails
+C#	-	c sharp|see sharp	-	dotnet	-	major|minor|chord|note|scale|key
+.NET	-	dot net	-	sdk
+Laravel	laravell
+Objective-C	objectivec
+Dart	-	dart	-	sdk	-	board|boards|game|games
+Flutter	-	flutter	-	sdk
+React Native	reactnative
+React	reactjs	react|react js|react j s	-	devtools	-	to|quickly|badly|well|strongly|differently|angrily|positively|negatively
+Vue.js	vue js|vuejs|viewjs
+Vue	-	vue	-	devtools|sfc	the|a|of|my|your|our|this|that|point|to|in|with|using|learn
+Nuxt	nuxt js|nuxtjs|nux js
+Angular	-	angular	-	cli	-	cheilitis|momentum|velocity|frequency|shape|face|features
+Svelte	svelt|svelty
+Flask	-	flask	-	sqlalchemy	a|the|hip|vacuum|thermos|his|her|my
+Pydantic	-	pedantic|pi dantic|pie dantic|py dantic	-	v2|basemodel
+Spring Boot	springboot
+Express	expressjs	express|express js|express j s	-	middleware
+Node.js	nodejs
+Bun	bunjs	bun|bun js	-	lockfile	hot|cinnamon|burger|sweet|honey|sticky
+Electron	-	electron	-	preload|ipc	an|the|one|each|free|valence|single
+Expo	-	expo	-	cli|sdk	world|trade|car|art|auto|food|travel
+Zustand	zoostand
+React Query	-	react query	-	devtools
+Prisma	prizma
+Drizzle	-	drizzle	-	orm	light|steady
+Mongoose	-	mongoose	-	middleware	the|a|wild|grey	snake|snakes
+Vite	vit js|vitejs
+Playwright	-	playwright	-	codegen|mcp	famous|great|the
+Prettier	-	prettier	-	eslint	-	than|and|now|today|girl|picture
+Nx	-	n x	-	monorepo
+Lerna	learna
+Yarn	-	yarn	-	lockfile	-	ball|balls|knit|knitting|shop
+uv	-	u v	-	venv
+Poetry	-	poetry	-	venv	the|of|read|write|wrote|loves|love
+PyPI	pipey
+Cargo	-	cargo	-	toml	the|a|air|heavy|of	ship|ships|pants|plane|hold|bay
+Elixir	-	elixir	-	genserver	an|the|magic|of
+Clojure	clojur
+Zig	-	zig	-	toolchain	-	zag
+Wasm	wazzam|wasum
+Sass	-	sass	-	mixin|mixins
+Bootstrap	-	bootstrap	-	navbar	the|a|to|by
+TOML	tommel
+regex	regexp
+cron job	cronjob
+GUID	gwid
+UTF-8	utf8
+ASCII	asky
+UI/UX	ui ux
+CI/CD	cicd
+CORS	-	cors	-	middleware
+Let's Encrypt	letsencrypt
+Azure	-	azure	-	devops|openai|cli|vm|vms|aks|kubernetes	the|clear|bright|sky	sky|skies|sea|blue|water|waters
+Google Cloud	-	google cloud	-	sdk|cli
+S3	-	s3|s 3|s three	-	urls
+CloudFormation	-	cloud formation|claude formation	-	changeset
+Redshift	-	redshift|red shift	-	serverless
+Kinesis	kenesis|kinnesis
+Kubernetes	kuber netes|kuber nettys|kuberneties|kubernetties|kubernets|kubernetis
+minikube	minicube
+Argo CD	argocd
+Prometheus	-	prometheus	-	alertmanager
+Grafana	grafanna
+New Relic	-	new relic	-	apm	a
+Sentry	-	sentry	-	sdk|dsn	a|the|loyal|lone	duty|box|post
+Splunk	splunck
+Kibana	kibbana
+OpenSearch	-	open search	-	serverless
+Pulumi	pulumy
+Ansible	ansibel|ansable
+Linux	linnux
+Ubuntu	ubunto
+Red Hat	redhat
+App Store	appstore
+Play Store	playstore
+Android	-	android	-	sdk|gradle	paranoid|an
+Gradle	gradel
+Chrome	-	chrome	-	devtools	-	plated|plating|finish|wheels|bumper
+Safari	-	safari	-	devtools	a|on|african|wildlife|desert	park|tour|trip|hat|holiday
+tsconfig.json	tsconfig json
+Cassandra	-	cassandra	-	keyspace|cql
+Hadoop	hadoo
+Fivetran	5tran
+Pinecone	-	pinecone|pine cone	-	namespace|namespaces|serverless
+Chroma	chromadb
+Neon	-	neon	-	postgres|serverless	the|a|bright|pink|green|blue	sign|signs|light|lights|lighting
+Turso	tursso
+Clerk	-	clerk	-	middleware|webhook|webhooks|sdk	the|a|bank|desk|county|court|city|store|hotel|law|shop
+Stripe	-	stripe	-	webhook|webhooks|sdk|cli	a|one|each|white|red|blue|black|pin|racing
+Twilio	twillio|twileo|twilleo
+Postman	-	postman	-	cli	the|a|our	delivered|came|brought
+Swagger	-	swagger	-	json|yaml|codegen
+OpenAPI	-	open api	-	yaml|json	an
+Protobuf	protobuff
+Netlify	nettlify|netlefy
+Heroku	herokku
+DigitalOcean	-	digital ocean	-	kubernetes|vps
+Apache	-	apache	-	webserver|httpd	-	helicopter|helicopters|tribe|tribes|nation|chief|warrior
+Google	-	google	-	colab
+Microsoft	-	microsoft|micro soft	-	entra
+Netflix	netflicks
+Intel	-	intel	-	cpus|xeon
+Qualcomm	qualcom
+Instagram	instergram
+LinkedIn	-	linked in	-	inmail
+Discord	-	discord	-	webhook
+Shopify	shoppify
+Venmo	venmoe
+Palantir	palanteer|pallantir
+Oracle	-	oracle	-	jdk|erp|netsuite	the|an|of|delphi|delphic
+SAP	-	sap|s a p	-	erp|fiori|abap|ariba
+S/4HANA	s4hana
+Atlassian	atlassien
+Cisco	-	cisco	-	webex|meraki
+Adobe	-	adobe	-	xd|indesign	-	house|houses|brick|bricks|walls|hut|huts
+Figma	figmah
+Canva	canvah
+Calendly	calendaly|calendlee
+Zapier	zappier
+Auth.js	authjs
+Passport.js	passportjs
+Three.js	threejs
+D3.js	d3 js|d3js
+Chart.js	chartjs
+Lottie	lottee
+Ant Design	antd
+Hono	hono js
+Koa	koajs
+Socket.IO	socketio
+Axios	axioss
+Moment.js	momentjs
+Zod	-	zod|zodd	-	v4
+Immer	immer js
+Rollup	rollup js|rollupjs
+Biome	-	biome	-	js|json
+Xamarin	zamarin
+Arduino	ardweeno
+USB-C	usbc

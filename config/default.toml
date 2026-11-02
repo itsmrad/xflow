@@ -73,6 +73,16 @@ auto_learn = true            # learn words you correct after dictating (macOS) o
 learned = []                 # learned words; `xflow dictionary remove <word>` undoes one
 never_learn = []             # removed learned words, never learned again
 
+[vocab]
+# Shipped term packs, applied locally after transcription with snap_to_dictionary.
+# Words that are also everyday English change only next to a context word:
+# "cloud storage" stays, "ask cloud to review" becomes "ask Claude to review".
+# Your dictionary words and never_learn always win.
+dev = true                   # developer and AI terms everywhere (always on in terminals and editors)
+corp = true                  # business and SaaS terms: OKR, SOC 2, Salesforce, Jira
+sheet = false                # spreadsheet functions everywhere (always on in Excel, Numbers, LibreOffice Calc)
+finance = false              # banking and accounting terms: EBITDA, GAAP, IBAN, KYC
+
 [sounds]
 enabled = true
 volume = 0.5

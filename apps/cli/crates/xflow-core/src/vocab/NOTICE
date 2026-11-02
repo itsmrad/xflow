@@ -1,0 +1,16 @@
+xflow vocabulary packs (dev.tsv, corp.tsv, sheet.tsv, finance.tsv)
+
+Written by hand for xflow. Each row is a product, company, function or term
+name (a short fact), how speech-to-text mis-hears it, and neighbouring words.
+No source file was imported, and no documentation text, descriptions, glossary
+definitions or taxonomy labels were copied. The IFRS and US GAAP XBRL
+taxonomies were not used.
+
+Everyday-word and name checks in the tests use SCOWL; see ../SCOWL-LICENSE.txt.
+english-extra.txt is test-only (never compiled into xflow): SCOWL 2020.12.07
+(https://downloads.sourceforge.net/project/wordlist/SCOWL/2020.12.07/scowl-2020.12.07.tar.gz)
+english, american and british words up to size 70 and upper/proper-names up to
+size 95, plus a hand-written supplement of modern words and short names, minus
+../words.txt and ../names.txt; lowercase ASCII, front-coded like ../words.txt.
+review-prose.txt holds sentences written for the PR #113 reviews.
+Product and company names are trademarks of their owners.

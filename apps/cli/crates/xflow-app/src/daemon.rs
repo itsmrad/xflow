@@ -1050,8 +1050,12 @@ impl Engine {
                     titled.title_terms = terms;
                     titled
                 });
-                let (local, backtrack) =
-                    xflow_core::text::prepare(&raw, titled.as_ref().unwrap_or(&config), terminal);
+                let (local, backtrack) = xflow_core::text::prepare(
+                    &raw,
+                    titled.as_ref().unwrap_or(&config),
+                    terminal,
+                    target.app_id.as_deref(),
+                );
                 // The dictation ended with "scratch that" (#75): nothing is cleaned or pasted.
                 let discarded = backtrack == xflow_core::backtrack::Outcome::Discarded;
                 let style = xflow_core::text::style(&config, target.app_id.as_deref());
@@ -3263,7 +3267,7 @@ mod tests {
         }
     }
     fn fixture(
-        config: Config,
+        mut config: Config,
         desktop: Arc<dyn Desktop>,
         store: Store,
     ) -> (
@@ -3273,6 +3277,9 @@ mod tests {
         broadcast::Receiver<Response>,
         Arc<AtomicUsize>,
     ) {
+        // The fake transcript's "post gres" is a dev pack form; these tests
+        // need it to reach delivery and learning unfixed.
+        config.vocab.dev = false;
         let (tx, rx) = mpsc::channel(8);
         let (events, receiver) = broadcast::channel(128);
         let (desktop_events, _) = broadcast::channel(32);

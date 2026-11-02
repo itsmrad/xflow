@@ -969,7 +969,7 @@ mod tests {
                 ("He called. Mhm, scratch that. Bring notes.", "Bring notes."),
             ] {
                 assert_eq!(
-                    crate::text::prepare(input, &config, false),
+                    crate::text::prepare(input, &config, false, None),
                     (output.to_owned(), Outcome::Edited),
                     "{input} (remove_fillers = {remove})"
                 );

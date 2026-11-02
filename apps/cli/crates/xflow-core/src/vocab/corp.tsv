@@ -1,0 +1,26 @@
+# xflow corp pack: business, SaaS and workplace terms. Same format as dev.tsv.
+LTV/CAC	ltv cac
+SaaS	-	sass|s a a s	b2b
+TL;DR	tldr
+SOC 2	soc2
+401(k)	401k
+Salesforce	-	sales force|salesforce	-	crm|agentforce	the|our|their|a|your|direct|field|inside|outside
+Workday	-	workday	-	hcm	a|the|every|each|long|short|normal|typical|whole|full|my|your|our
+ServiceNow	-	service now	-	itsm
+Jira	jirra
+G Suite	gsuite
+Marketo	marquetto
+Klaviyo	klavio
+Qualtrics	qual trics|qualtricks
+Power BI	powerbi
+Looker	-	looker	-	lookml	a|real|quite
+Justworks	-	just works	-	peo
+Lattice	-	lattice	-	okrs	a|the|crystal	structure|energy|work
+1Password	-	one password	-	cli
+Snyk	-	sneak|snick	-	cli|iac
+Drata	drahta
+Grammarly	grammerly
+Help Scout	helpscout
+Segment	-	segment	-	cdp	a|the|each|every|market|customer|this|that|one|our|new
+Accenture	ascenture
+Y Combinator	ycombinator

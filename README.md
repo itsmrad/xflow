@@ -140,6 +140,13 @@ xflow overlay set position bottom
 xflow completions bash > xflow.bash
 ```
 
+Shipped term packs fix mis-heard developer, business, spreadsheet and finance
+terms locally after transcription ("kube ctl" → kubectl, "zlookup" → XLOOKUP,
+"ebida" → EBITDA). Ordinary English changes only next to a technical context word:
+"ask cloud to review" becomes "ask Claude to review", "cloud storage" stays, and a
+capitalised word keeps its case. `[vocab]`
+turns packs on or off: dev and corp everywhere (dev always in terminals and
+editors), sheet in Excel, Numbers and LibreOffice Calc, finance when you set `vocab.finance = true`.
 Local developer-term corrections respect dictionary phrases conservatively: adding
 "Google Cloud" protects the cloud cue word, and "VS Code" protects cloud code,
 even when the full dictionary phrase is absent. Set

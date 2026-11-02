@@ -129,10 +129,16 @@ pub(crate) fn tidy(text: &str) -> String {
 }
 /// `terminal`: the target is a terminal, where a newline can run a command.
 pub fn before_cleanup(text: &str, config: &Config, terminal: bool) -> String {
-    prepare(text, config, terminal).0
+    prepare(text, config, terminal, None).0
 }
 /// `before_cleanup`, plus what self-correction did (a discard delivers nothing).
-pub fn prepare(text: &str, config: &Config, terminal: bool) -> (String, Outcome) {
+/// `app`: the focused app id, which turns on its shipped term packs.
+pub fn prepare(
+    text: &str,
+    config: &Config,
+    terminal: bool,
+    app: Option<&str>,
+) -> (String, Outcome) {
     let mut text = text.trim().to_owned();
     if config.formatting.spoken_punctuation {
         text = replace(
@@ -163,7 +169,12 @@ pub fn prepare(text: &str, config: &Config, terminal: bool) -> (String, Outcome)
     text = tidy(&text);
     text = crate::code::apply(&text, config, |s| {
         let s = crate::title::apply(s, config);
-        crate::cues::apply(&crate::snap::apply(&s, config, terminal), config, terminal)
+        crate::cues::apply(
+            &crate::snap::apply(&s, config, terminal),
+            config,
+            terminal,
+            app,
+        )
     });
     let pairs: Vec<_> = config
         .dictionary
@@ -214,7 +225,7 @@ fn closing(c: char) -> bool {
     )
 }
 /// A period after these doesn't end a sentence.
-const ABBREVIATIONS: &[&str] = &[
+pub(crate) const ABBREVIATIONS: &[&str] = &[
     "approx", "ave", "capt", "co", "col", "dept", "dr", "etc", "fig", "gen", "gov", "inc", "jr",
     "lt", "ltd", "mr", "mrs", "ms", "mt", "prof", "rev", "sgt", "sr", "st", "vs",
 ];

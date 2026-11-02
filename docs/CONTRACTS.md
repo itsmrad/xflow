@@ -22,6 +22,7 @@ history disabled; it must never silently erase saved rows at startup.
 | `[injection]` | method (paste/type/clipboard), clipboard_only, restore_clipboard, restore_delay_ms, trailing_space, smart_spacing | platform desktop, extension |
 | `[formatting]` | remove_fillers, fillers, spoken_punctuation, lists | daemon text pipeline |
 | `[dictionary]` | words, replacements = [{from, to}], auto_learn, learned, never_learn | daemon text pipeline and correction learning, providers (hints) |
+| `[vocab]` | dev (true), corp (true), sheet (false), finance (false); dev also on in terminals/editors, sheet in spreadsheet apps | daemon text pipeline |
 | `[[snippets]]` | trigger, text | daemon text pipeline |
 | `[[styles]]` | name, apps, mode, prompt | daemon (picks style by focused app id) |
 | `[sounds]` | enabled, volume, start, stop, error | daemon/platform |
