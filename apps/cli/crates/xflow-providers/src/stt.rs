@@ -329,9 +329,9 @@ pub fn language_lead(config: &SttConfig) -> Option<&'static str> {
             .iter()
             .any(|s| s.split('-').next() == Some(code))
     };
-    (config.languages.len() == 2 && has("hi") && has("en"))
-        .then_some("हाँ, मैं अभी check करके बताता हूँ।")
+    (config.languages.len() == 2 && has("hi") && has("en")).then_some(HI_EN_LEAD)
 }
+const HI_EN_LEAD: &str = "हाँ, मैं अभी check करके बताता हूँ।";
 fn configured_options(
     config: &SttConfig,
     languages: &[String],
@@ -485,6 +485,11 @@ impl HttpProvider {
                 &self.model,
                 DOMAIN_PROMPT_TOKENS,
             );
+        }
+        // A lone lead is echoed and pulls English into Devanagari: 6 English clips
+        // went from 0.04 to 0.67 WER on Groq turbo; with hints after it, no change.
+        if vocabulary == [HI_EN_LEAD] {
+            vocabulary.clear();
         }
         // The shipped tail, so a rejected list can be retried without it.
         let domain = (own..vocabulary.len())
@@ -2101,6 +2106,28 @@ mod preferred_language_tests {
         cfg.languages = vec!["hi".into(), "en".into()];
         cfg.fallback = vec!["mistral".into()];
         assert!(validate_fallback_route(&cfg, false).is_err());
+    }
+
+    #[test]
+    fn hi_en_lead_is_never_the_whole_prompt() {
+        let mut cfg = crate::tests::config("groq", "http://127.0.0.1:9/x".into());
+        cfg.languages = vec!["hi".into(), "en".into()];
+        let env = crate::tests::set_test_key(&mut cfg);
+        let provider = HttpProvider::new(&cfg, true).unwrap();
+        let sent = |vocabulary: Vec<String>, domain: Vec<&'static str>| {
+            provider
+                .options(TranscriptionOptions {
+                    vocabulary,
+                    domain,
+                    ..Default::default()
+                })
+                .unwrap()
+                .vocabulary
+        };
+        assert!(sent(vec![], vec![]).is_empty());
+        assert_eq!(sent(vec!["Rust".into()], vec![]), [HI_EN_LEAD, "Rust"]);
+        assert_eq!(sent(vec![], vec!["Claude"]), [HI_EN_LEAD, "Claude"]);
+        std::env::remove_var(env);
     }
 
     #[test]
