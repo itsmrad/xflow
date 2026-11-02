@@ -357,6 +357,7 @@ struct Focus {
     editable: Option<bool>,
     secure: bool,
     element: Option<Owned>,
+    window: Option<Owned>,
     _accessibility: Option<AccessibilityGuard<Owned>>,
 }
 
@@ -535,6 +536,7 @@ fn focus_waiting(wait: bool) -> Focus {
     focus.context.window_id = window
         .as_ref()
         .map(|w| format!("{pid}:{}", unsafe { CFHash(w.0) }));
+    focus.window = window;
     let Some(element) = element else {
         return focus;
     };
@@ -892,6 +894,23 @@ impl Desktop for MacDesktop {
             .await
             .ok()
             .flatten()
+    }
+    async fn window_title(&self, target: &AppContext) -> Option<String> {
+        let target = target.clone();
+        tokio::task::spawn_blocking(move || {
+            // No waiting for a Chromium tree: the window title is native.
+            let focus = focus_waiting(false);
+            let same = target.window_id.is_some()
+                && focus.context.window_id == target.window_id
+                && focus.context.app_id == target.app_id;
+            if focus.secure || !same {
+                return None;
+            }
+            focus.window?.text("AXTitle")
+        })
+        .await
+        .ok()
+        .flatten()
     }
     async fn copy(&self, text: &str) -> Result<()> {
         let _delivery = self.delivery.lock().await;

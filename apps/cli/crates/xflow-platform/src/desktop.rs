@@ -172,6 +172,34 @@ pub fn is_terminal(app: Option<&str>) -> bool {
         || app == "st"
 }
 
+/// Code editors whose window titles name the open file and project.
+pub fn is_editor(app: Option<&str>) -> bool {
+    let app = app.unwrap_or_default().to_ascii_lowercase();
+    app.starts_with("com.jetbrains.")
+        || app.starts_with("jetbrains-")
+        || [
+            "com.microsoft.vscode",
+            "com.microsoft.vscodeinsiders",
+            "com.vscodium",
+            "com.todesktop.230313mzl4w4u92",
+            "com.exafunction.windsurf",
+            "dev.zed.zed",
+            "dev.zed.zed-preview",
+            "com.apple.dt.xcode",
+            "com.google.android.studio",
+            "com.sublimetext.4",
+            "com.panic.nova",
+            "code",
+            "code-insiders",
+            "codium",
+            "cursor",
+            "windsurf",
+            "zed",
+            "sublime_text",
+        ]
+        .contains(&app.as_str())
+}
+
 /// An integrated terminal identified by the focused element, or a terminal app.
 pub fn terminal_context(context: &AppContext) -> bool {
     context.terminal_input || is_terminal(context.app_id.as_deref())
@@ -664,6 +692,31 @@ mod tests {
             assert!(is_terminal(Some(app)), "{app}");
         }
         assert!(!is_terminal(Some("com.tinyspeck.slackmacgap")));
+    }
+    #[test]
+    fn editors_are_named_by_bundle_or_window_class() {
+        for app in [
+            "com.microsoft.VSCode",
+            "com.todesktop.230313mzl4w4u92",
+            "dev.zed.Zed",
+            "com.apple.dt.Xcode",
+            "com.jetbrains.intellij",
+            "jetbrains-pycharm",
+            "code",
+            "cursor",
+        ] {
+            assert!(is_editor(Some(app)), "{app}");
+        }
+        for app in [
+            "com.google.Chrome",
+            "com.apple.mail",
+            "com.agilebits.onepassword7",
+            "com.apple.Terminal",
+            "codex",
+            "",
+        ] {
+            assert!(!is_editor(Some(app)), "{app}");
+        }
     }
     #[test]
     fn terminal_controls_copy_only_for_identified_terminal_input() {

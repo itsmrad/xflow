@@ -38,6 +38,7 @@ pub const SETTINGS: &[Row] = &[
     ("privacy.history_limit", "Privacy", "Keep last", "Older dictations are removed once this many are saved."),
     ("privacy.offline", "Privacy", "Local services only", "Only use services running on this computer. Cloud services stop working while this is on."),
     ("cleanup.app_context", "Privacy", "Share app name", "Tell the writing service which app you're typing in (never what's on screen), so it can match the tone."),
+    ("privacy.window_terms", "Privacy", "Use window titles", "Off by default. Reads the title of code editor and terminal windows to spell the file, project and branch names you say. macOS only for now. Titles stay on this computer."),
     ("ui.theme", "Look", "Theme", "Colors for this window."),
     ("ui.mouse", "Look", "Mouse", "Click and scroll in this window. The keyboard always works too."),
     (ADVANCED, "Advanced", "Advanced settings", "Recording limits and time limits. Most people never need these."),

@@ -172,7 +172,8 @@ pub struct Engine {
     /// The active session's generation, for connections that hold one (see `connection`).
     live: watch::Sender<Option<u64>>,
     job: Option<JoinHandle<()>>,
-    context_job: Option<JoinHandle<AppContext>>,
+    /// The focused app, and terms from its window title (`privacy.window_terms`).
+    context_job: Option<JoinHandle<(AppContext, Vec<String>)>>,
     context_abort: Option<tokio::task::AbortHandle>,
     warm_job: Option<JoinHandle<()>>,
     /// Ends the observation of the last pasted field (see `observe`).
@@ -468,8 +469,8 @@ impl Engine {
         let desktop = self.services.desktop.clone();
         let task = tokio::spawn(async move {
             match delivery {
-                Delivery::None => AppContext::default(),
-                _ => desktop.context().await.unwrap_or_default(),
+                Delivery::None => Default::default(),
+                _ => (desktop.context().await.unwrap_or_default(), Vec::new()),
             }
         });
         self.context_abort = Some(task.abort_handle());
@@ -690,6 +691,8 @@ impl Engine {
             .await;
         }));
         let desktop = self.services.desktop.clone();
+        let window_terms =
+            self.config.privacy.window_terms && self.config.formatting.snap_to_dictionary;
         // Both queries run after capture opens and outside the command actor.
         let task = tokio::spawn(async move {
             let context = async {
@@ -712,7 +715,22 @@ impl Engine {
             if mode == Mode::Command {
                 target.selected_text = selection.or(target.selected_text);
             }
-            target
+            // Editor and terminal apps only, by app id: other titles name documents, mail and
+            // private tabs, including a browser whose web terminal has focus.
+            // A read past 100 ms is dropped so it never holds the context back.
+            let app = target.app_id.as_deref();
+            let dev = xflow_platform::is_terminal(app) || xflow_platform::is_editor(app);
+            let terms = if window_terms && dev {
+                tokio::time::timeout(Duration::from_millis(100), desktop.window_title(&target))
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|title| xflow_core::title::terms(&title))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            (target, terms)
         });
         self.context_abort = Some(task.abort_handle());
         self.context_job = Some(task);
@@ -1000,23 +1018,30 @@ impl Engine {
                     }
                     add_warning(&mut warning, &format!("Part of the dictation could not be transcribed ({e:#}); the rest was delivered{note}"));
                 }
-                let target = if let Some(ref mut job) = context {
+                let (target, terms) = if let Some(ref mut job) = context {
                     match tokio::time::timeout(Duration::from_secs(2), &mut *job).await {
                         Ok(Ok(c)) => c,
                         _ => {
                             job.abort();
-                            AppContext::default()
+                            Default::default()
                         }
                     }
                 } else {
-                    AppContext::default()
+                    Default::default()
                 };
                 let selection = target.selected_text.as_deref().unwrap_or("");
                 if selection.len() > MAX_MESSAGE_BYTES {
                     bail!("selected text exceeds safety limit");
                 }
                 let terminal = xflow_platform::terminal_context(&target);
-                let (local, backtrack) = xflow_core::text::prepare(&raw, &config, terminal);
+                // Title names are for this dictation's local formatting only (see `title::apply`).
+                let titled = (!terms.is_empty()).then(|| {
+                    let mut titled = config.clone();
+                    titled.title_terms = terms;
+                    titled
+                });
+                let (local, backtrack) =
+                    xflow_core::text::prepare(&raw, titled.as_ref().unwrap_or(&config), terminal);
                 // The dictation ended with "scratch that" (#75): nothing is cleaned or pasted.
                 let discarded = backtrack == xflow_core::backtrack::Outcome::Discarded;
                 let style = xflow_core::text::style(&config, target.app_id.as_deref());
@@ -3103,6 +3128,10 @@ mod tests {
         around: Option<(&'static str, &'static str)>,
         around_delay: Duration,
         outcome: Option<InjectionOutcome>,
+        /// The focused window's title, reads of it, and how long one takes.
+        title: Option<&'static str>,
+        title_reads: AtomicUsize,
+        title_delay: Duration,
     }
     struct ScriptedField {
         field: Arc<Mutex<Option<String>>>,
@@ -3171,6 +3200,11 @@ mod tests {
         async fn neighbors(&self) -> Option<(String, String)> {
             tokio::time::sleep(self.around_delay).await;
             self.around.map(|(b, a)| (b.into(), a.into()))
+        }
+        async fn window_title(&self, _: &AppContext) -> Option<String> {
+            self.title_reads.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(self.title_delay).await;
+            self.title.map(Into::into)
         }
     }
     struct ImmediateStt {
@@ -5453,6 +5487,129 @@ mod tests {
             ask(&tx, Request::Shutdown).await;
             task.await.unwrap();
         }
+    }
+    /// Answers "open use task store" and keeps the hints it was sent.
+    #[derive(Default)]
+    struct HintStt(Mutex<Vec<Vec<String>>>);
+    #[async_trait]
+    impl SpeechToText for HintStt {
+        fn name(&self) -> &str {
+            "fixture"
+        }
+        async fn transcribe(
+            &self,
+            _: AudioClip,
+            options: TranscriptionOptions,
+        ) -> Result<Transcript> {
+            self.0.lock().unwrap().push(options.vocabulary);
+            Ok(Transcript {
+                provider: None,
+                text: "open use task store".into(),
+                language: Some("en".into()),
+            })
+        }
+    }
+    /// One dictation into `app` with the given title settings: what was pasted,
+    /// the STT hints, the saved history and the number of title reads.
+    async fn titled_dictation(
+        app: &str,
+        terminal_input: bool,
+        window_terms: bool,
+        snap: bool,
+        title_delay: Duration,
+    ) -> (String, Vec<String>, String, usize, Duration) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db"), true, 10).unwrap();
+        let desktop = Arc::new(RecordingDesktop {
+            context: Some(AppContext {
+                app_id: Some(app.into()),
+                window_id: Some("1:2".into()),
+                terminal_input,
+                ..Default::default()
+            }),
+            title: Some("useTaskStore.ts — myapp"),
+            title_delay,
+            ..Default::default()
+        });
+        let mut config = Config::default();
+        config.privacy.window_terms = window_terms;
+        config.formatting.snap_to_dictionary = snap;
+        let (mut engine, tx, rx, mut events, _) = fixture(config, desktop.clone(), store);
+        let stt = Arc::new(HintStt::default());
+        engine.services.stt = stt.clone();
+        let task = tokio::spawn(engine.run(rx));
+        assert!(ask(&tx, Request::start()).await.ok);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let stopped = Instant::now();
+        assert!(ask(&tx, Request::Stop).await.ok);
+        success(&mut events).await;
+        let elapsed = stopped.elapsed();
+        let history = ask(
+            &tx,
+            Request::History {
+                limit: 5,
+                offset: 0,
+                query: None,
+            },
+        )
+        .await;
+        let history = serde_json::to_string(&history.history).unwrap();
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+        let pasted = desktop.injections.lock().unwrap().concat();
+        let hints = stt.0.lock().unwrap().concat();
+        (
+            pasted,
+            hints,
+            history,
+            desktop.title_reads.load(Ordering::SeqCst),
+            elapsed,
+        )
+    }
+    #[tokio::test]
+    async fn window_title_terms_are_opt_in_local_and_never_kept() {
+        let instant = Duration::ZERO;
+        // Off (the default), snapping off, or a non-developer app (even a browser's web
+        // terminal, as in vscode.dev or Codespaces): the title is never read.
+        for (app, terminal_input, on, snap) in [
+            ("com.microsoft.VSCode", false, false, true),
+            ("com.microsoft.VSCode", false, true, false),
+            ("com.google.Chrome", false, true, true),
+            ("com.google.Chrome", true, true, true),
+            ("com.apple.Safari", true, true, true),
+            ("com.agilebits.onepassword7", false, true, true),
+        ] {
+            let (pasted, hints, _, reads, _) =
+                titled_dictation(app, terminal_input, on, snap, instant).await;
+            assert_eq!(reads, 0, "{app} {terminal_input} {on} {snap}");
+            assert!(!pasted.contains("useTaskStore"), "{pasted}");
+            assert!(hints.is_empty());
+        }
+        for app in ["com.microsoft.VSCode", "com.mitchellh.ghostty"] {
+            let (pasted, hints, history, reads, _) =
+                titled_dictation(app, false, true, true, instant).await;
+            assert_eq!(reads, 1);
+            assert!(pasted.contains("open useTaskStore"), "{pasted}");
+            // Local only: no provider hint, and only the dictation itself is saved.
+            assert!(hints.is_empty(), "{hints:?}");
+            assert!(history.contains("useTaskStore"));
+            assert!(!history.contains("myapp") && !history.contains("useTaskStore.ts"));
+        }
+    }
+    #[tokio::test]
+    async fn slow_window_title_never_holds_back_the_dictation() {
+        let (pasted, _, _, reads, elapsed) = titled_dictation(
+            "com.microsoft.VSCode",
+            false,
+            true,
+            true,
+            Duration::from_secs(30),
+        )
+        .await;
+        assert_eq!(reads, 1);
+        // The read is dropped after 100 ms; the dictation is delivered without its terms.
+        assert!(pasted.contains("open use task store"), "{pasted}");
+        assert!(elapsed < Duration::from_secs(1), "{elapsed:?}");
     }
     #[tokio::test]
     async fn terminal_multiline_copies_but_normal_editor_buffers_paste() {

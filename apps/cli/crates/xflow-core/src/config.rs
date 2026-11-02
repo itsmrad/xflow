@@ -26,6 +26,9 @@ pub struct Config {
     /// Derived dictionary index; excluded from configuration and equality.
     #[serde(skip)]
     pub snap: crate::snap::Cache,
+    /// This dictation's window-title names (`privacy.window_terms`); never read or saved.
+    #[serde(skip)]
+    pub title_terms: Vec<String>,
     pub stt: SttConfig,
     pub cleanup: CleanupConfig,
     pub recording: RecordingConfig,
@@ -369,6 +372,9 @@ pub struct PrivacyConfig {
     pub offline: bool,
     /// Keep a failed dictation's audio (one, private, at most 24 h) for `xflow retry`.
     pub keep_failed_audio: bool,
+    /// Read editor and terminal window titles locally to spell file, project and
+    /// branch names. Titles and their terms never leave this computer.
+    pub window_terms: bool,
 }
 impl Default for PrivacyConfig {
     fn default() -> Self {
@@ -377,6 +383,7 @@ impl Default for PrivacyConfig {
             history_limit: 500,
             offline: false,
             keep_failed_audio: false,
+            window_terms: false,
         }
     }
 }

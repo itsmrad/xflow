@@ -26,7 +26,7 @@ history disabled; it must never silently erase saved rows at startup.
 | `[[styles]]` | name, apps, mode, prompt | daemon (picks style by focused app id) |
 | `[sounds]` | enabled, volume, start, stop, error | daemon/platform |
 | `[notifications]` | enabled | daemon/platform |
-| `[privacy]` | history, history_limit, offline, keep_failed_audio | daemon, providers |
+| `[privacy]` | history, history_limit, offline, keep_failed_audio, window_terms | daemon, providers |
 | `[ui]` | theme, themes = {name = {slot = color}}, mouse | TUI only |
 
 Linux overlay appearance and shortcuts remain GSettings keys of

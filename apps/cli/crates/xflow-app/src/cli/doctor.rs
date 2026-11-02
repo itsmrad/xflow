@@ -118,11 +118,17 @@ fn checks(
         ));
     }
     if let Ok(config) = config {
-        let detail = if config.privacy.offline {
+        let mut detail = if config.privacy.offline {
             "Offline endpoint guard enabled"
         } else {
             "Cloud transcription uploads audio to the configured provider"
-        };
+        }
+        .to_owned();
+        // Only macOS reads titles today.
+        if config.privacy.window_terms && cfg!(target_os = "macos") {
+            detail +=
+                "; editor and terminal window titles are read locally for names (never uploaded)";
+        }
         checks.push(check(
             "privacy",
             true,

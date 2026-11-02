@@ -12,6 +12,7 @@ pub mod learn;
 pub mod lists;
 pub mod snap;
 pub mod text;
+pub mod title;
 pub mod words;
 
 /// Maximum uploadable mono 16-bit PCM WAV: 25 MB including the 44-byte header.
@@ -205,6 +206,11 @@ pub trait Desktop: Send + Sync {
     /// characters each), for `text::adjust`. None when unsupported, secure, a
     /// terminal or unreadable. Never logged or uploaded.
     async fn neighbors(&self) -> Option<(String, String)> {
+        None
+    }
+    /// The title of `target`'s window while it still has focus, for local term
+    /// hints. None when unsupported, secure or focus moved. Never logged or uploaded.
+    async fn window_title(&self, _target: &AppContext) -> Option<String> {
         None
     }
 }
