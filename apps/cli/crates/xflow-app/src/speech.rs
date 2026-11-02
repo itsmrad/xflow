@@ -6,14 +6,15 @@ pub const NOT_CAUGHT: &str = "Didn't catch anything";
 pub struct Activity {
     pub speech: bool,
     pub low_energy: bool,
-    /// Samples from the first frame over half the threshold to the end of the last;
-    /// empty without one. The lower bar keeps soft first words and trailing endings.
+    /// Samples from the first frame over the lead floor (see `activity`) to the end
+    /// of the last frame over half the threshold; empty without the latter. The lower
+    /// bars keep soft first words and trailing endings.
     pub voiced: Range<usize>,
 }
 
 /// Analyze the captured buffer once, outside the audio callback; keep all pauses.
 pub fn activity(audio: &AudioClip, threshold: f32) -> Activity {
-    if audio.sample_rate == 0 || audio.channels == 0 {
+    if audio.sample_rate == 0 || audio.channels == 0 || audio.samples.is_empty() {
         return Activity {
             speech: false,
             low_energy: true,
@@ -21,19 +22,29 @@ pub fn activity(audio: &AudioClip, threshold: f32) -> Activity {
         };
     }
     let frame_samples = (audio.sample_rate as usize / 50).max(1) * usize::from(audio.channels);
-    let (mut voiced_samples, mut peak, mut voiced) = (0, 0f32, None::<Range<usize>>);
-    for (i, frame) in audio.samples.chunks(frame_samples).enumerate() {
-        let rms = (frame.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / frame.len() as f64)
+    let (mut voiced_samples, mut peak, mut rms) = (0, 0f32, Vec::new());
+    for frame in audio.samples.chunks(frame_samples) {
+        let frame_rms = (frame.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>()
+            / frame.len() as f64)
             .sqrt() as f32;
-        if rms > threshold {
+        if frame_rms > threshold {
             voiced_samples += frame.len();
         }
-        if rms > threshold / 2.0 {
-            let start = i * frame_samples;
-            voiced = Some(voiced.map_or(start, |v| v.start)..start + frame.len());
-        }
-        peak = peak.max(rms);
+        peak = peak.max(frame_rms);
+        rms.push(frame_rms);
     }
+    // #116 hardware test: a faded-in first word sat 3-5 dB over room noise, under half
+    // the threshold, for 760 ms. The lead edge counts from 1.5x the noise floor (the
+    // 10th-percentile frame) instead, within [threshold / 4, threshold / 2], so it is
+    // never stricter than the tail and a noisier room only trims less.
+    let mut sorted = rms.clone();
+    let tenth = sorted.len() / 10;
+    let noise = *sorted.select_nth_unstable_by(tenth, f32::total_cmp).1;
+    let lead_floor = (noise * 1.5).clamp(threshold / 4.0, threshold / 2.0);
+    let voiced = rms.iter().rposition(|r| *r > threshold / 2.0).map(|last| {
+        let first = rms.iter().position(|r| *r > lead_floor).unwrap_or(last);
+        first * frame_samples..(last * frame_samples + frame_samples).min(audio.samples.len())
+    });
     let voiced_ms =
         voiced_samples as u64 * 1000 / u64::from(audio.sample_rate) / u64::from(audio.channels);
     // Losing a short "yes" is worse than sending a click to STT: 80 ms passes it.
@@ -295,6 +306,41 @@ mod tests {
         let murmur = tone(16_000, 1, &[(2000, amplitude(-50.0))]);
         let found = activity(&murmur, 0.005);
         assert!(!found.speech && !found.voiced.is_empty());
+    }
+
+    #[test]
+    fn a_faded_in_first_word_just_over_room_noise_is_kept() {
+        // #116 hardware test: "Honestly," at 1.6x the room noise (0.001 RMS), under
+        // half the threshold for 700 ms, then a pause and the louder words.
+        let at = |rms: f32| rms * std::f32::consts::SQRT_2;
+        for (noise, soft) in [(0.001, 0.0016), (0.0015, 0.0024)] {
+            let audio = tone(
+                16_000,
+                1,
+                &[
+                    (2000, at(noise)),
+                    (700, at(soft)),
+                    (300, at(noise)),
+                    (500, at(0.006)),
+                    (2000, at(noise)),
+                ],
+            );
+            let found = activity(&audio, 0.005);
+            assert!(found.speech);
+            // The soft word starts at 32_000; the lead still trims to the pad before it.
+            let kept = trim(&audio, &found.voiced, true, true, 0);
+            assert_eq!(kept.start, 25_600, "noise {noise}");
+            // The tail keeps half the threshold: the room noise after it is trimmed.
+            assert_eq!(kept.end, 56_000 + 6_400, "noise {noise}");
+        }
+        // Room noise over half the threshold: no stricter than before, nothing trimmed.
+        let loud_room = tone(
+            16_000,
+            1,
+            &[(2000, at(0.003)), (500, at(0.02)), (500, at(0.003))],
+        );
+        let found = activity(&loud_room, 0.005);
+        assert_eq!(found.voiced, 0..48_000);
     }
 
     #[test]
