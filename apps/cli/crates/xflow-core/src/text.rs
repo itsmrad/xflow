@@ -111,6 +111,83 @@ fn replace(text: &str, pairs: &[(&str, &str)], punctuation_insensitive: bool) ->
     output.push_str(&text[cursor..]);
     output
 }
+/// Whisper writes clock times with a dot ("for 10.30", "9.45am"). A time cue turns
+/// them into "10:30"; money, versions, decimals and measures keep their dot.
+fn clock(text: &str) -> String {
+    const CUES: [&str; 10] = [
+        "at", "by", "until", "till", "from", "before", "after", "around", "between", "for",
+    ];
+    const UNITS: [&str; 22] = [
+        "percent", "per", "dollars", "dollar", "rupees", "rupee", "euros", "euro", "pounds",
+        "points", "million", "billion", "crore", "lakh", "times", "x", "kg", "km", "miles", "gb",
+        "mb", "ghz",
+    ];
+    let word = |s: &str| s.to_lowercase();
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let (mut cursor, mut i, mut last) = (0, 0, None::<usize>);
+    while i < b.len() {
+        let free = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'.');
+        if !b[i].is_ascii_digit() || !free {
+            i += 1;
+            continue;
+        }
+        let h_end = i + b[i..].iter().take_while(|c| c.is_ascii_digit()).count();
+        let m_end = h_end
+            + 1
+            + b.get(h_end + 1..)
+                .map_or(0, |r| r.iter().take_while(|c| c.is_ascii_digit()).count());
+        if h_end - i > 2 || b.get(h_end) != Some(&b'.') || m_end - h_end != 3 {
+            i = h_end;
+            continue;
+        }
+        let after = &text[m_end..];
+        let (hour, min): (u32, u32) = (
+            text[i..h_end].parse().unwrap(),
+            text[h_end + 1..m_end].parse().unwrap(),
+        );
+        let decimal =
+            after.starts_with('.') && after[1..].starts_with(|c: char| c.is_ascii_digit());
+        let money = text[..i].ends_with(['$', '₹', '€', '£']);
+        if hour > 23 || min > 59 || decimal || money {
+            i = m_end;
+            continue;
+        }
+        let prev = text[..i]
+            .trim_end()
+            .rsplit(|c: char| !c.is_alphanumeric())
+            .next()
+            .map(word);
+        let rest = after.trim_start();
+        let next = word(
+            rest.split(|c: char| !c.is_alphanumeric())
+                .next()
+                .unwrap_or(""),
+        );
+        let meridiem = ["am", "pm", "a.m", "p.m"].iter().any(|m| {
+            // ASCII prefix match: `rest` may start with any script.
+            rest.as_bytes()
+                .get(..m.len())
+                .is_some_and(|p| p.eq_ignore_ascii_case(m.as_bytes()))
+                && !rest[m.len()..].starts_with(char::is_alphabetic)
+        });
+        let unit = rest.starts_with('%') || UNITS.contains(&next.as_str());
+        // "from 9.30 to 10.30", "between 9.30 and 10.30", "9.30-10.30"
+        let range = last.is_some_and(|end| {
+            ["to", "and", "-", "–"].contains(&word(text[end..i].trim()).as_str())
+        });
+        let cue = prev.is_some_and(|p| CUES.contains(&p.as_str()));
+        if meridiem && !unit || (cue || range) && !unit {
+            out.push_str(&text[cursor..h_end]);
+            out.push(':');
+            cursor = h_end + 1;
+            last = Some(m_end);
+        }
+        i = m_end;
+    }
+    out.push_str(&text[cursor..]);
+    out
+}
 pub(crate) fn tidy(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut space = false;
@@ -178,7 +255,7 @@ pub fn prepare(
             .collect();
         text = replace(&text, &pairs, false);
     }
-    text = tidy(&text);
+    text = clock(&tidy(&text));
     text = crate::code::apply(&text, config, terminal, app, |s| {
         let s = crate::title::apply(s, config);
         crate::cues::apply(
@@ -778,6 +855,52 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod clock_tests {
+    use super::clock;
+
+    #[test]
+    fn dotted_clock_times_with_a_cue_get_a_colon() {
+        for (raw, want) in [
+            (
+                "Schedule the stand-up for 10.30.",
+                "Schedule the stand-up for 10:30.",
+            ),
+            (
+                "Let's meet at 4.15 tomorrow.",
+                "Let's meet at 4:15 tomorrow.",
+            ),
+            ("The call is at 9.45am.", "The call is at 9:45am."),
+            ("Done by 6.00 p.m. today", "Done by 6:00 p.m. today"),
+            ("from 9.30 to 10.30", "from 9:30 to 10:30"),
+            ("between 9.30 and 10.45", "between 9:30 and 10:45"),
+            ("At 18.05 the build ran", "At 18:05 the build ran"),
+            ("free 2.30 PM onwards", "free 2:30 PM onwards"),
+        ] {
+            assert_eq!(clock(raw), want, "{raw}");
+        }
+    }
+
+    #[test]
+    fn money_versions_decimals_and_measures_keep_their_dot() {
+        for raw in [
+            "It costs $10.30 now.",
+            "It costs ₹10.30 now.",
+            "Bump to 1.10.30 tonight.",
+            "Upgrade to 10.30 today.",
+            "Revenue grew 10.30 percent.",
+            "Rates rose by 2.50%.",
+            "Sold at 2.50 per share.",
+            "Play it at 1.25x speed.",
+            "Pi is 3.14159 roughly.",
+            "Meet at 24.30 or 10.75 or 10.5",
+            "version 10.30 shipped",
+            "रात 10.30 बजे",
+        ] {
+            assert_eq!(clock(raw), raw, "{raw}");
+        }
+    }
+}
 #[cfg(test)]
 mod terminal_tests {
     use super::*;
