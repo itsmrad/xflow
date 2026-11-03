@@ -6362,6 +6362,16 @@ mod tests {
             watch_events(pasted, &[(0, "Postgres is ready ", folded)]).await,
             learned
         );
+        // Fail closed in a double-posting app too: a duplicate clear cannot
+        // be distinguished from the last letter and a clear arriving together.
+        assert_eq!(
+            watch_events(
+                pasted,
+                &[(0, "Postgres is ready ", folded), (200, "", folded)]
+            )
+            .await,
+            Err(Some("unsettled"))
+        );
     }
 
     fn words(list: &[&str]) -> DictionaryConfig {

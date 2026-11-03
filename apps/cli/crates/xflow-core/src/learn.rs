@@ -137,7 +137,7 @@ impl Receipt {
             .zip(b.iter().rev())
             .take_while(|(x, y)| x == y)
             .count();
-        let remnant = prefix + suffix;
+        let remnant = prefix + suffix.min(b.len() - prefix);
         remnant > 0 && remnant + MAX_HUNK_WORDS + 1 >= a.len()
     }
 }
@@ -1258,6 +1258,9 @@ mod tests {
         for field in ["I ", "I need lunch", "The next message failed"] {
             assert!(!receipt.editing(field, pasted), "{field:?}");
         }
+        let pasted = "ok so kubernetis is down ok";
+        let receipt = Receipt::new(pasted, pasted, None).unwrap();
+        assert!(!receipt.editing("ok", pasted));
         // An anchored dictation is being edited while its anchors are found once.
         let receipt = Receipt::new("Notes: we use postgress", "we use postgress", None).unwrap();
         assert!(receipt.editing("Notes: ", "we use postgress"));
