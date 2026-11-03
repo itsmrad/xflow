@@ -80,7 +80,7 @@ lists = true                 # "one ..., two ..., three ..." / "bullet ..." beco
 words = []                   # e.g. ["Postgres", "Kubernetes", "xflow"]
 replacements = []            # e.g. [{ from = "postgress", to = "Postgres" }]
 auto_learn = true            # learn words you correct after dictating (macOS) or in history
-learned = []                 # learned words; `xflow dictionary undo` takes back the latest save
+learned = []                 # learned words; `xflow dictionary remove WORD` blocks relearning; `xflow dictionary undo` reverts the latest automatic save
 never_learn = []             # removed learned words, never learned again
 
 [vocab]

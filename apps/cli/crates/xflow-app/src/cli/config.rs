@@ -136,9 +136,13 @@ pub fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 fn edit(path: &Path, out: &Output) -> Result<()> {
-    let original = read_optional(path)?;
+    let (original, contents) = {
+        let _lock = lock(path)?;
+        let (file, bytes) = ConfigFile::load_exact(path).map_err(Error::config)?;
+        (bytes, file.to_string())
+    };
     let mut temp = tempfile::NamedTempFile::new()?;
-    temp.write_all(load(path)?.to_string().as_bytes())?;
+    temp.write_all(contents.as_bytes())?;
     run_editor(temp.path())?;
     let content = bounded_read(temp.path(), 1024 * 1024)?;
     load(temp.path())?.validate().map_err(Error::config)?;
@@ -147,10 +151,7 @@ fn edit(path: &Path, out: &Output) -> Result<()> {
         // meanwhile (a learned word, another command) is never overwritten.
         let _lock = lock(path)?;
         if read_optional(path)? != original {
-            let kept = temp
-                .keep()
-                .map(|(_, path)| path.display().to_string())
-                .unwrap_or_default();
+            let kept = temp.keep().map_err(Error::config)?.1.display().to_string();
             return Err(Error::new(
                 1,
                 "Configuration changed while the editor was open; nothing was saved",
@@ -260,7 +261,9 @@ pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) 
     if matches!(action, Some(Undo)) {
         return undo(path, out);
     }
-    let lock = lock(path)?;
+    let lock = (!matches!(action, None | Some(List | Export)))
+        .then(|| lock(path))
+        .transpose()?;
     let mut file = load(path)?;
     let mut config = file.config().map_err(Error::config)?;
     let mut kept = Vec::new();
@@ -348,7 +351,11 @@ pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) 
         .map_err(Error::config)?;
     file.set_typed("dictionary.replacements", &config.dictionary.replacements)
         .map_err(Error::config)?;
-    commit(&file, lock, out)?;
+    commit(
+        &file,
+        lock.ok_or_else(|| Error::config("No configuration write lock"))?,
+        out,
+    )?;
     if !out.json {
         for line in kept {
             eprintln!("Note: {line}");
@@ -373,11 +380,14 @@ fn undo(path: &Path, out: &Output) -> Result<()> {
             .message
             .as_deref()
             .unwrap_or("Dictionary change undone"),
-    )
+    )?;
+    Ok(())
 }
 pub fn snippets(path: &Path, action: Option<&args::Snippets>, out: &Output) -> Result<()> {
     use args::Snippets::*;
-    let lock = lock(path)?;
+    let lock = (!matches!(action, None | Some(List)))
+        .then(|| lock(path))
+        .transpose()?;
     let mut file = load(path)?;
     let mut config = file.config().map_err(Error::config)?;
     match action.unwrap_or(&List) {
@@ -413,11 +423,17 @@ pub fn snippets(path: &Path, action: Option<&args::Snippets>, out: &Output) -> R
     }
     file.set_typed("snippets", &config.snippets)
         .map_err(Error::config)?;
-    commit(&file, lock, out)
+    commit(
+        &file,
+        lock.ok_or_else(|| Error::config("No configuration write lock"))?,
+        out,
+    )
 }
 pub fn styles(path: &Path, action: Option<&args::Styles>, out: &Output) -> Result<()> {
     use args::Styles::*;
-    let lock = lock(path)?;
+    let lock = (!matches!(action, None | Some(List)))
+        .then(|| lock(path))
+        .transpose()?;
     let mut file = load(path)?;
     let mut config = file.config().map_err(Error::config)?;
     match action.unwrap_or(&List) {
@@ -471,7 +487,11 @@ pub fn styles(path: &Path, action: Option<&args::Styles>, out: &Output) -> Resul
     }
     file.set_typed("styles", &config.styles)
         .map_err(Error::config)?;
-    commit(&file, lock, out)
+    commit(
+        &file,
+        lock.ok_or_else(|| Error::config("No configuration write lock"))?,
+        out,
+    )
 }
 #[cfg(test)]
 mod tests {

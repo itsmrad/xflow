@@ -642,13 +642,13 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
 /// under the config lock, so a word the daemon learned, or another command's
 /// edit, is never overwritten; the reload is requested after it is released.
 pub(super) fn save(file: &ConfigFile, expected: Option<&str>) -> Result<()> {
+    let config = file.config()?;
+    xflow_providers::build_stt(&config.stt, config.privacy.offline)?;
+    crate::daemon::build_transformer(&config)?;
     let _lock = crate::config_edit::lock(file.path())?;
     if read_optional(file.path())?.as_deref() != expected {
         bail!("Configuration changed outside the TUI");
     }
-    let config = file.config()?;
-    xflow_providers::build_stt(&config.stt, config.privacy.offline)?;
-    crate::daemon::build_transformer(&config)?;
     file.save()
 }
 fn doctor() -> Result<Vec<String>> {

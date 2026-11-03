@@ -5,9 +5,8 @@
 //! the caret that smart spacing needs.
 use super::{
     cf_text, focus, focus_waiting, search_or_address, secure, text_reads_allowed,
-    AXUIElementCreateApplication,
-    AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementSetMessagingTimeout, CFGetTypeID,
-    CFRelease, Focus, Owned, Ref,
+    AXUIElementCreateApplication, AXUIElementCreateSystemWide, AXUIElementGetPid,
+    AXUIElementSetMessagingTimeout, CFGetTypeID, CFRelease, Focus, Owned, Ref,
 };
 use async_trait::async_trait;
 use std::{

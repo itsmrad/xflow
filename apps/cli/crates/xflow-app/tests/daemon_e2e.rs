@@ -1179,3 +1179,278 @@ async fn long_dictation_streams_segments_through_the_real_daemon() {
     assert_eq!(done.timings.unwrap().audio_ms, 180_000);
     daemon.stop_process().await;
 }
+
+/// A name the provider mishears with a function word inside (see
+/// `DictionaryConfig::derive`), and the user's correction of it.
+const HEARD: &str = "Hi Rimpas or Kar";
+const NAME: &str = "Rimpa Sarkar";
+const FIXED: &str = "Hi Rimpa Sarkar";
+
+/// The config.toml both this daemon and its real CLI use.
+fn config_path(daemon: &Daemon) -> PathBuf {
+    daemon.root.path().join("config/xflow/config.toml")
+}
+
+/// Runs the real `xflow` CLI against this daemon, never touching a keychain.
+async fn xflow(daemon: &Daemon, args: &[&str]) -> std::process::Output {
+    let mut command = client(daemon);
+    command
+        .env("XFLOW_NO_KEYCHAIN", "1")
+        .args(args)
+        .stdin(Stdio::null());
+    tokio::task::spawn_blocking(move || command.output().unwrap())
+        .await
+        .unwrap()
+}
+
+/// Corrects the newest history entry over the socket, like a history edit.
+async fn correct_latest(daemon: &Daemon, text: &str) -> Response {
+    let id = daemon.history().await.history[0].id;
+    let response = daemon
+        .request(json!({"command":"history_update", "id":id, "text":text}))
+        .await;
+    assert!(response.ok, "{:?}", response.message);
+    response
+}
+
+/// Waits until the daemon's dictionary equals config.toml's (by fingerprint):
+/// the history edit replies before the actor installs what it saved.
+async fn in_sync(daemon: &Daemon) {
+    let file = format!(
+        "{:016x}",
+        xflow_core::config::Config::load(&config_path(daemon))
+            .unwrap()
+            .dictionary
+            .fingerprint()
+    );
+    timeout(DEADLINE, async {
+        loop {
+            let status = daemon.request(json!({"command":"status"})).await;
+            if status.learning.map(|l| l.fingerprint) == Some(file.clone()) {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the daemon's dictionary differs from config.toml");
+}
+
+async fn undo_available(daemon: &Daemon) -> bool {
+    let status = daemon.request(json!({"command":"status"})).await;
+    status.learning.expect("status reports learning").undo
+}
+
+fn dictionary(daemon: &Daemon) -> xflow_core::config::DictionaryConfig {
+    xflow_core::config::Config::load(&config_path(daemon))
+        .unwrap()
+        .dictionary
+}
+
+/// The upload's multipart `prompt` field (the recognition hints), if any.
+fn prompt(upload: &[u8]) -> Option<String> {
+    const FIELD: &str = "name=\"prompt\"\r\n\r\n";
+    let body = String::from_utf8_lossy(upload);
+    let start = body.find(FIELD)? + FIELD.len();
+    body[start..].split("\r\n").next().map(str::to_owned)
+}
+
+/// The whole correction loop through the real binaries: a history edit over the
+/// socket learns the name as a hint only; a second edit of the same mishearing
+/// saves an exact phrase rule, so the next dictation is corrected locally; the
+/// real `xflow dictionary undo` then removes only that rule, exactly once.
+#[tokio::test]
+async fn corrections_learn_a_name_then_a_rule_and_cli_undo_removes_only_the_rule() {
+    let mut mock = MockStt::start((0..4).map(|_| Plan::success(HEARD)).collect()).await;
+    let mut daemon = Daemon::spawn(&mock.endpoint, "voice", true);
+    daemon.ready().await;
+    let mut events = daemon.events().await;
+    let path = config_path(&daemon);
+    let initial = fs::read(&path).unwrap();
+
+    // 1. The misheard name is delivered; correcting it learns a hint, no rule.
+    dictate(&daemon, &mut events).await;
+    assert!(!prompt(&mock.upload().await)
+        .unwrap_or_default()
+        .contains(NAME));
+    assert_eq!(fs::read_to_string(daemon.sink()).unwrap(), HEARD);
+    let learned = correct_latest(&daemon, FIXED).await;
+    assert_eq!(
+        learned.message.as_deref(),
+        Some("Added 'Rimpa Sarkar' to your dictionary")
+    );
+    let entry = learned.entry.unwrap();
+    assert_eq!(entry.text, FIXED);
+    assert_eq!(entry.raw_text.as_deref(), Some(HEARD));
+    in_sync(&daemon).await;
+    assert!(undo_available(&daemon).await);
+    let word_only = fs::read(&path).unwrap();
+    assert_ne!(word_only, initial);
+    let learned = dictionary(&daemon);
+    assert_eq!(learned.words, [NAME]);
+    assert_eq!(learned.learned, [NAME]);
+    assert!(learned.replacements.is_empty());
+
+    // 2. The same mishearing: the hint goes first in the upload, but one
+    // correction never rewrites transcripts locally.
+    dictate(&daemon, &mut events).await;
+    assert!(prompt(&mock.upload().await).unwrap().starts_with(NAME));
+    assert_eq!(fs::read_to_string(daemon.sink()).unwrap(), HEARD);
+
+    // 3. The second trusted correction of a known name saves the exact phrase.
+    let corrected = correct_latest(&daemon, FIXED).await;
+    assert_eq!(
+        corrected.message.as_deref(),
+        Some("Saved your correction to 'Rimpa Sarkar'")
+    );
+    in_sync(&daemon).await;
+    let ruled = dictionary(&daemon);
+    assert_eq!(ruled.words, [NAME]);
+    assert_eq!(ruled.replacements.len(), 1);
+    assert_eq!(
+        (
+            ruled.replacements[0].from.as_str(),
+            ruled.replacements[0].to.as_str()
+        ),
+        ("Rimpas or Kar", NAME)
+    );
+
+    // 4. The provider repeats the mishearing; the daemon corrects it locally.
+    dictate(&daemon, &mut events).await;
+    mock.upload().await;
+    assert_eq!(fs::read_to_string(daemon.sink()).unwrap(), FIXED);
+    let newest = daemon.history().await.history.remove(0);
+    assert_eq!(newest.text, FIXED);
+    assert_eq!(newest.raw_text.as_deref(), Some(HEARD));
+
+    // 5. The real CLI undoes the latest change: only the rule goes, byte-exact,
+    // in the file and in the running daemon.
+    let undone = xflow(&daemon, &["dictionary", "undo"]).await;
+    assert!(
+        undone.status.success(),
+        "{}",
+        String::from_utf8_lossy(&undone.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&undone.stdout);
+    assert!(
+        stdout.contains("Undid the dictionary change") && stdout.contains(NAME),
+        "{stdout}"
+    );
+    assert_eq!(fs::read(&path).unwrap(), word_only);
+    in_sync(&daemon).await;
+    assert!(!undo_available(&daemon).await);
+    dictate(&daemon, &mut events).await;
+    assert!(prompt(&mock.upload().await).unwrap().starts_with(NAME));
+    assert_eq!(fs::read_to_string(daemon.sink()).unwrap(), HEARD);
+
+    // 6. A replay is refused with nothing written; the learned word stays.
+    let replay = xflow(&daemon, &["dictionary", "undo"]).await;
+    assert!(!replay.status.success());
+    let stderr = String::from_utf8_lossy(&replay.stderr);
+    assert!(stderr.contains("can no longer be undone"), "{stderr}");
+    assert_eq!(fs::read(&path).unwrap(), word_only);
+    daemon.stop_process().await;
+}
+
+/// Undo is offered once, and only while config.toml is exactly what the
+/// daemon wrote: a wrong op id on the wire keeps it; a CLI save that adopts
+/// the word, or a hand edit without a reload, refuses it with nothing written.
+#[tokio::test]
+async fn wrong_op_cli_adoption_or_hand_edit_refuse_undo_without_writing() {
+    let mut mock = MockStt::start((0..3).map(|_| Plan::success(HEARD)).collect()).await;
+    let mut daemon = Daemon::spawn(&mock.endpoint, "voice", true);
+    daemon.ready().await;
+    let mut events = daemon.events().await;
+    let path = config_path(&daemon);
+
+    dictate(&daemon, &mut events).await;
+    mock.upload().await;
+    correct_latest(&daemon, FIXED).await;
+    in_sync(&daemon).await;
+    let learned = fs::read(&path).unwrap();
+    // Op ids are odd (see `Change::id`), so 2 never names the pending change.
+    let wrong = daemon
+        .request(json!({"command":"undo_learned", "op":2}))
+        .await;
+    assert!(!wrong.ok);
+    assert_eq!(fs::read(&path).unwrap(), learned);
+    assert!(undo_available(&daemon).await);
+
+    // Adoption: the user keeps the word with the CLI (already there).
+    let adopted = xflow(&daemon, &["dictionary", "add", NAME]).await;
+    assert!(
+        adopted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&adopted.stderr)
+    );
+    let kept = fs::read(&path).unwrap();
+    assert!(!undo_available(&daemon).await);
+    let refused = xflow(&daemon, &["dictionary", "undo"]).await;
+    assert!(!refused.status.success());
+    assert_eq!(fs::read(&path).unwrap(), kept);
+    assert_eq!(dictionary(&daemon).words, [NAME]);
+
+    // Stale: a later rule, then a hand edit the daemon was never told about.
+    dictate(&daemon, &mut events).await;
+    mock.upload().await;
+    let corrected = correct_latest(&daemon, FIXED).await;
+    assert_eq!(
+        corrected.message.as_deref(),
+        Some("Saved your correction to 'Rimpa Sarkar'")
+    );
+    in_sync(&daemon).await;
+    assert!(undo_available(&daemon).await);
+    let mut edited = fs::read(&path).unwrap();
+    edited.extend_from_slice(b"\n# edited by hand\n");
+    fs::write(&path, &edited).unwrap();
+    let refused = xflow(&daemon, &["dictionary", "undo"]).await;
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("nothing was undone"), "{stderr}");
+    assert_eq!(fs::read(&path).unwrap(), edited);
+    assert_eq!(dictionary(&daemon).replacements.len(), 1);
+    assert!(!undo_available(&daemon).await);
+    // The refused undo left the running dictionary alone.
+    dictate(&daemon, &mut events).await;
+    mock.upload().await;
+    assert_eq!(fs::read_to_string(daemon.sink()).unwrap(), FIXED);
+    daemon.stop_process().await;
+}
+
+#[tokio::test]
+async fn read_only_config_listings_do_not_create_a_lock_beside_the_target() {
+    let mock = MockStt::start(vec![]).await;
+    let mut daemon = Daemon::spawn(&mock.endpoint, "voice", true);
+    daemon.ready().await;
+    let managed = daemon.root.path().join("managed");
+    fs::create_dir(&managed).unwrap();
+    let config = daemon.root.path().join("config/xflow/config.toml");
+    let target = managed.join("config.toml");
+    fs::rename(&config, &target).unwrap();
+    std::os::unix::fs::symlink(&target, &config).unwrap();
+    fs::set_permissions(&managed, fs::Permissions::from_mode(0o555)).unwrap();
+    let results: Vec<_> = [
+        ["dictionary", "list"],
+        ["dictionary", "export"],
+        ["snippets", "list"],
+        ["styles", "list"],
+    ]
+    .into_iter()
+    .map(|args| {
+        (
+            args,
+            client(&daemon).args(args).arg("--json").output().unwrap(),
+        )
+    })
+    .collect();
+    fs::set_permissions(&managed, fs::Permissions::from_mode(0o700)).unwrap();
+    for (args, output) in results {
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(!managed.join("config.toml.lock").exists());
+    daemon.stop_process().await;
+}

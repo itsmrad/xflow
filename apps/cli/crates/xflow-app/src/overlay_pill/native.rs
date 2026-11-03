@@ -6,7 +6,10 @@ use anyhow::{bail, Result};
 use std::{
     ffi::{c_char, c_void, CStr, CString},
     io::BufRead,
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 use xflow_core::{ipc::Request, State};
@@ -17,6 +20,14 @@ type Sel = *mut c_void;
 #[link(name = "objc")]
 unsafe extern "C" {
     fn objc_getClass(name: *const c_char) -> Id;
+    fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
+    fn objc_registerClassPair(class: Id);
+    fn class_addMethod(
+        class: Id,
+        selector: Sel,
+        implementation: unsafe extern "C" fn(),
+        types: *const c_char,
+    ) -> i8;
     fn sel_registerName(name: *const c_char) -> Sel;
     fn objc_msgSend();
     #[cfg(target_arch = "x86_64")]
@@ -325,6 +336,39 @@ const NOTICE: Duration = Duration::from_millis(1000);
 /// The notice window's width before `scale`; the capsule fits its text.
 const NOTICE_W: f64 = 360.0;
 
+static NOTICE_PRESSED: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C" fn press_notice(_: Id, _: Sel, _: Id) {
+    NOTICE_PRESSED.store(true, Ordering::Relaxed);
+}
+
+/// Explicit action state: a window being hidden is never an undo request.
+unsafe fn notice_target() -> Result<Id> {
+    let name = c"XFlowNoticeUndoTarget";
+    let mut target = objc_getClass(name.as_ptr());
+    if target.is_null() {
+        target = objc_allocateClassPair(class(c"NSObject"), name.as_ptr(), 0);
+        if target.is_null()
+            || class_addMethod(
+                target,
+                sel_registerName(c"undoNotice:".as_ptr()),
+                std::mem::transmute::<unsafe extern "C" fn(Id, Sel, Id), unsafe extern "C" fn()>(
+                    press_notice,
+                ),
+                c"v@:@".as_ptr(),
+            ) == 0
+        {
+            bail!("cannot create the dictionary undo action");
+        }
+        objc_registerClassPair(target);
+    }
+    let action = msg!(target, c"new"; Id);
+    if action.is_null() {
+        bail!("cannot create the dictionary undo action");
+    }
+    Ok(action)
+}
+
 /// What the notice says: the exact saved word(s).
 fn notice_text(notice: &Notice) -> String {
     let first = &notice.words[0];
@@ -341,7 +385,7 @@ fn notice_text(notice: &Notice) -> String {
 /// The Undo button's accessibility label: every word it removes.
 fn undo_label(notice: &Notice) -> String {
     let words: Vec<String> = notice.words.iter().map(|w| format!("“{w}”")).collect();
-    format!("Undo: remove {} from dictionary", words.join(", "))
+    format!("Undo dictionary changes for {}", words.join(", "))
 }
 fn cstring(text: &str) -> CString {
     CString::new(text.replace('\0', "")).unwrap_or_default()
@@ -425,21 +469,34 @@ pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
         let close = layer(capsule, faint, BUTTON * s / 2.0);
         for angle in [std::f64::consts::FRAC_PI_4, -std::f64::consts::FRAC_PI_4] {
             let stroke = layer(close, white, 0.8 * s);
-            place(stroke, BUTTON * s / 2.0, BUTTON * s / 2.0, 1.6 * s, 10.0 * s);
+            place(
+                stroke,
+                BUTTON * s / 2.0,
+                BUTTON * s / 2.0,
+                1.6 * s,
+                10.0 * s,
+            );
             transform(stroke, 1.0, angle, 0.0);
         }
         msg!(class(c"CATransaction"), c"begin"; ());
         msg!(class(c"CATransaction"), c"setDisableActions:", 1i8 => i8; ());
         place(capsule, cx, cy, w, h);
-        place(words, pad + 3.0 * s + text_w / 2.0, h / 2.0, text_w, 16.0 * s);
+        place(
+            words,
+            pad + 3.0 * s + text_w / 2.0,
+            h / 2.0,
+            text_w,
+            16.0 * s,
+        );
         let button_x = w - pad - BUTTON * s / 2.0;
         place(close, button_x, h / 2.0, BUTTON * s, BUTTON * s);
         msg!(class(c"CATransaction"), c"commit"; ());
         // In window coordinates, like mouse locations.
         let (bx, by) = (cx - w / 2.0 + button_x, cy);
         let reach = BUTTON * s / 2.0 + 2.0;
-        // A momentary push button over the ×: hiding the panel is its action, so a
-        // click and an accessibility press both read as "hidden before time".
+        // Both a mouse click and an accessibility press explicitly request undo.
+        NOTICE_PRESSED.store(false, Ordering::Relaxed);
+        let action = notice_target()?;
         let button = msg!(class(c"NSButton"), c"alloc"; Id);
         let button = msg!(button, c"initWithFrame:",
             Rect::new(bx - reach, by - reach, 2.0 * reach, 2.0 * reach) => Rect; Id);
@@ -448,8 +505,8 @@ pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
             msg!(button, c"setBordered:", 0i8 => i8; ());
             msg!(button, c"setTitle:", string(c"") => Id; ());
             msg!(button, c"setAccessibilityLabel:", string(&label) => Id; ());
-            msg!(button, c"setTarget:", panel => Id; ());
-            msg!(button, c"setAction:", sel_registerName(c"orderOut:".as_ptr()) => Sel; ());
+            msg!(button, c"setTarget:", action => Id; ());
+            msg!(button, c"setAction:", sel_registerName(c"undoNotice:".as_ptr()) => Sel; ());
             msg!(view, c"addSubview:", button => Id; ());
             msg!(button, c"release"; ());
         }
@@ -459,7 +516,10 @@ pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
         msg!(class(c"CATransaction"), c"flush"; ());
         let shown = Instant::now();
         // VoiceOver hears the save even though the button is out of reach in time.
-        let post = libc::dlsym(appkit, c"NSAccessibilityPostNotificationWithUserInfo".as_ptr());
+        let post = libc::dlsym(
+            appkit,
+            c"NSAccessibilityPostNotificationWithUserInfo".as_ptr(),
+        );
         if !post.is_null() {
             let post: unsafe extern "C" fn(Id, Id, Id) = std::mem::transmute(post);
             let info = msg!(class(c"NSMutableDictionary"), c"dictionary"; Id);
@@ -476,7 +536,8 @@ pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
             }
             let tick_pool = msg!(class(c"NSAutoreleasePool"), c"new"; Id);
             let wait = left.as_secs_f64().min(1.0 / 60.0);
-            let deadline = msg!(class(c"NSDate"), c"dateWithTimeIntervalSinceNow:", wait => f64; Id);
+            let deadline =
+                msg!(class(c"NSDate"), c"dateWithTimeIntervalSinceNow:", wait => f64; Id);
             let event = msg!(app, c"nextEventMatchingMask:untilDate:inMode:dequeue:",
                 usize::MAX => usize, deadline => Id, string(c"kCFRunLoopDefaultMode") => Id, 1i8 => i8; Id);
             if !event.is_null() {
@@ -492,7 +553,7 @@ pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
                     msg!(app, c"sendEvent:", event => Id; ());
                 }
             }
-            pressed |= msg!(panel, c"isVisible"; i8) == 0;
+            pressed |= NOTICE_PRESSED.load(Ordering::Relaxed);
             msg!(tick_pool, c"drain"; ());
         }
         msg!(panel, c"orderOut:", std::ptr::null_mut::<c_void>() => Id; ());
@@ -507,6 +568,7 @@ pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
         }
         msg!(panel, c"close"; ());
         msg!(panel, c"release"; ());
+        msg!(action, c"release"; ());
         for color in colors {
             CGColorRelease(color);
         }
@@ -780,14 +842,32 @@ mod tests {
             correction: false,
         };
         assert_eq!(notice_text(&notice), "“claud” saved to dictionary");
-        assert_eq!(undo_label(&notice), "Undo: remove “claud” from dictionary");
+        assert_eq!(undo_label(&notice), "Undo dictionary changes for “claud”");
         notice.words.push("Kubernetes".into());
         assert_eq!(notice_text(&notice), "“claud” +1 saved to dictionary");
         assert!(undo_label(&notice).contains("“Kubernetes”"));
         notice.words = vec!["Rimpa Sarkar".into()];
         notice.correction = true;
         assert_eq!(notice_text(&notice), "“Rimpa Sarkar” correction saved");
+        assert_eq!(
+            undo_label(&notice),
+            "Undo dictionary changes for “Rimpa Sarkar”"
+        );
         assert_eq!(cstring("a\0b").to_str().unwrap(), "ab");
+    }
+
+    #[test]
+    fn notice_undo_requires_an_explicit_action() {
+        NOTICE_PRESSED.store(false, Ordering::Relaxed);
+        assert!(!NOTICE_PRESSED.load(Ordering::Relaxed));
+        unsafe {
+            press_notice(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(NOTICE_PRESSED.swap(false, Ordering::Relaxed));
     }
     #[test]
     fn placement_respects_visible_area_and_position_aliases() {

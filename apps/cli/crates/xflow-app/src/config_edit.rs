@@ -379,7 +379,7 @@ pub fn migrate_recording_limit(path: &Path, marker: &Path) -> Result<bool> {
     }
     let mut changed = false;
     if path.exists() {
-        let _lock = lock(path)?;
+        let _lock = lock_within(path, Duration::from_secs(5))?;
         let mut file = ConfigFile::load(path)?;
         if file.get("recording.max_seconds").as_deref() == Some("120") {
             changed = file.unset("recording.max_seconds")?;
@@ -766,7 +766,9 @@ mod undo_tests {
         type Later = fn(&Path);
         let later: [(&str, Later); 5] = [
             // `dictionary add claud` of a word already there saves identical bytes.
-            ("identical bytes", |path| ConfigFile::load(path).unwrap().save().unwrap()),
+            ("identical bytes", |path| {
+                ConfigFile::load(path).unwrap().save().unwrap()
+            }),
             ("unrelated setting", |path| {
                 let mut file = ConfigFile::load(path).unwrap();
                 file.set("ui.theme", "midnight").unwrap();
@@ -812,7 +814,10 @@ mod undo_tests {
         let path = dir.path().join("xflow/config.toml");
         let undo = learn(&path, "claud");
         assert!(path.exists());
-        assert_eq!(restore(&undo, &path).unwrap().dictionary.words, Vec::<String>::new());
+        assert_eq!(
+            restore(&undo, &path).unwrap().dictionary.words,
+            Vec::<String>::new()
+        );
         assert!(!path.exists());
     }
 
@@ -832,7 +837,10 @@ mod undo_tests {
         drop(lock_within(&target, Duration::from_millis(50)).unwrap());
         let undo = learn(&link, "claud");
         restore(&undo, &link).unwrap();
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), START);
         // The link now names another file: not the file the edit wrote.
         let undo = learn(&link, "claud");

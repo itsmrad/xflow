@@ -39,6 +39,7 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
         });
     }
     let mut current = config::load(path)?.config().map_err(Error::config)?;
+    let before_prompts = current.clone();
     let mut id = options
         .provider
         .clone()
@@ -154,6 +155,12 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     // only the sections setup owns, so an edit made meanwhile is kept.
     let lock = config::lock(path)?;
     let mut file = config::load(path)?;
+    let latest = file.config().map_err(Error::config)?;
+    if setup_conflict(&before_prompts, &latest, smart.is_some()) {
+        return Err(Error::config(
+            "Setup settings changed while the prompts were open; rerun setup to keep those edits",
+        ));
+    }
     if let Some(smart) = &smart {
         current.cleanup = smart.cleanup.clone();
         file.set_typed("cleanup", &current.cleanup)
@@ -256,6 +263,16 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     }
     Ok(())
 }
+
+fn setup_conflict(
+    before: &xflow_core::config::Config,
+    latest: &xflow_core::config::Config,
+    cleanup: bool,
+) -> bool {
+    latest.stt != before.stt
+        || latest.recording != before.recording
+        || (cleanup && latest.cleanup != before.cleanup)
+}
 fn number_or_name<'a>(answer: &str, values: impl Iterator<Item = &'a str>) -> Result<String> {
     if let Ok(number) = answer.parse::<usize>() {
         return number
@@ -275,6 +292,23 @@ fn number_or_name<'a>(answer: &str, values: impl Iterator<Item = &'a str>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn setup_preserves_edits_made_while_answering_prompts() {
+        let before = xflow_core::config::Config::default();
+        let mut latest = before.clone();
+        latest.dictionary.words.push("PersonalName".into());
+        assert!(!setup_conflict(&before, &latest, true));
+        latest.stt.language = Some("fr".into());
+        assert!(setup_conflict(&before, &latest, false));
+        let mut latest = before.clone();
+        latest.recording.max_seconds += 1;
+        assert!(setup_conflict(&before, &latest, false));
+        let mut latest = before.clone();
+        latest.cleanup.mode = xflow_core::CleanupMode::Light;
+        assert!(!setup_conflict(&before, &latest, false));
+        assert!(setup_conflict(&before, &latest, true));
+    }
+
     #[test]
     fn menu_handles_names_and_rejects_invalid_numbers() {
         assert_eq!(number_or_name("2", ["a", "b"].into_iter()).unwrap(), "b");

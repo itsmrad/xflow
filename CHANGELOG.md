@@ -9,9 +9,10 @@
 ### Learning from corrections
 - **See what was saved, and take it back.** On macOS, when xflow learns a word from your correction, the pill shows it for one second with an Undo ×; `xflow dictionary undo` takes the latest save back afterwards, once, until config.toml changes or xflowd restarts. Undo restores the file exactly as it was and never blocks the word; `xflow dictionary remove` still does that.
 - **Short messages learn names.** Retyping a name in a short message (`Rimpas or Kar, call me` → `Rimpa Sarkar, call me`) is learned, and four misheard words may become a one- or two-word name. Replies that are only the name, three words or fewer, are still not learned.
-- **Names you keep correcting stick better.** Correcting a word that's already saved moves it to the front of the hint list. Correcting the same misheard phrase of a saved name a second time adds that exact phrase as a replacement, for 2–3 plain words only; a single word like "cloud" is never rewritten, and a comma or line break inside the phrase leaves it alone. Hints still can't guarantee the next transcript.
+- **Spoken line breaks stay intact.** Manual multi-word replacements and phrase fillers no longer consume text across a spoken “new line” or “new paragraph”.
+- **Names you keep correcting stick better.** Correcting a word that's already saved moves it to the front of the hint list. Correcting a narrow misheard phrase to a name already in the dictionary may add that exact phrase as a replacement, for 2–3 plain words only; a single word like "cloud" is never rewritten, and a comma or line break inside the phrase leaves it alone. Hints still can't guarantee the next transcript.
 - **Fewer truncated saves.** A change folded into Enter, or arriving just after the field empties, now learns nothing; search boxes and address bars are no longer watched. `xflow doctor` shows learning counts and whether xflowd's dictionary matches config.toml, without any words.
-- **No lost edits.** Every xflow command that writes config.toml, the TUI and xflowd now take the same lock, and xflowd always ends up with what's on disk after a learn, undo, CLI change or reload.
+- **No lost edits.** Every xflow command that writes config.toml, the TUI and xflowd now take the same lock, and successful reloads and ordered daemon writes keep the in-memory dictionary current; a reload refused during recording is reported and must be retried.
 
 ## 0.2.1-beta — 2026-11-02
 

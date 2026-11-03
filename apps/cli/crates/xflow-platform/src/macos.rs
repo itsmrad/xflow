@@ -1608,11 +1608,22 @@ mod tests {
             "WEB_BROWSER_ADDRESS_AND_SEARCH_FIELD",
             "urlbar-input",
         ] {
-            assert!(search_label(Some("AXTextField"), None, labels(&[label])), "{label}");
+            assert!(
+                search_label(Some("AXTextField"), None, labels(&[label])),
+                "{label}"
+            );
         }
         // A word that merely contains "search" is not a search field.
-        for label in ["Message #research", "Researchers channel", "addressee", "compose"] {
-            assert!(!search_label(Some("AXTextArea"), None, labels(&[label])), "{label}");
+        for label in [
+            "Message #research",
+            "Researchers channel",
+            "addressee",
+            "compose",
+        ] {
+            assert!(
+                !search_label(Some("AXTextArea"), None, labels(&[label])),
+                "{label}"
+            );
         }
     }
     #[test]

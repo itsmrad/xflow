@@ -28,8 +28,8 @@ pub use xflow_core::ipc::Command;
 use xflow_core::{
     config::{Config, DictionaryConfig, HotkeyConfig},
     ipc::{
-        CleanupOutcome, Delivery, FailedAudio, Grant, HistoryEntry, Learning, Permissions,
-        Request, Response, Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
+        CleanupOutcome, Delivery, FailedAudio, Grant, HistoryEntry, Learning, Permissions, Request,
+        Response, Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     },
     log, AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, FieldEvent,
     GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
@@ -666,21 +666,54 @@ impl Engine {
         }
         let path = self.config_path.clone()?;
         self.reloading = true;
-        let old = self.config.clone(); let services = self.services.clone(); let store = self.store.clone(); let factory = self.reload_factory.clone(); let hotkey_factory = self.hotkey_factory.clone(); let retry_hotkeys = self.hotkeys.is_none() || self.hotkey_warning.is_some(); let tx = completion.clone();
+        let old = self.config.clone();
+        let services = self.services.clone();
+        let store = self.store.clone();
+        let factory = self.reload_factory.clone();
+        let hotkey_factory = self.hotkey_factory.clone();
+        let retry_hotkeys = self.hotkeys.is_none() || self.hotkey_warning.is_some();
+        let tx = completion.clone();
         let clock = self.dictionary_clock.clone();
         Some(async move {
             // Before the file: every daemon write numbered up to here is in what loads.
             let seq = clock.load(Ordering::SeqCst);
             // Bounded so a wedged provider/tap setup cannot leave `reloading` stuck.
-            let result = tokio::time::timeout(RELOAD_TIMEOUT, tokio::task::spawn_blocking(move || {
-                let config = Config::load(&path)?;
-                let services = factory(&old, &config, services)?;
-                // Recreate the tap only when its config changed or it is missing (e.g. permission granted since).
-                let hotkeys = hotkey_factory.filter(|_| old.hotkey != config.hotkey || retry_hotkeys).map(|factory| factory(&config.hotkey).map_err(|e| bounded_message(&format!("{e:#}"))));
-                let store = if store.settings() == (config.privacy.history, config.privacy.history_limit) { store } else { store.reopen(config.privacy.history, config.privacy.history_limit)? };
-                Ok(Reloaded { config, services, store, hotkeys })
-            })).await.unwrap_or_else(|_| Ok(Err(anyhow::anyhow!("configuration reload timed out")))).unwrap_or_else(|e| Err(e.into()));
-            let _ = tx.send(Completion::Reloaded { result: Box::new(result), replies, seq }).await;
+            let result = tokio::time::timeout(
+                RELOAD_TIMEOUT,
+                tokio::task::spawn_blocking(move || {
+                    let config = Config::load(&path)?;
+                    let services = factory(&old, &config, services)?;
+                    // Recreate the tap only when its config changed or it is missing (e.g. permission granted since).
+                    let hotkeys = hotkey_factory
+                        .filter(|_| old.hotkey != config.hotkey || retry_hotkeys)
+                        .map(|factory| {
+                            factory(&config.hotkey).map_err(|e| bounded_message(&format!("{e:#}")))
+                        });
+                    let store = if store.settings()
+                        == (config.privacy.history, config.privacy.history_limit)
+                    {
+                        store
+                    } else {
+                        store.reopen(config.privacy.history, config.privacy.history_limit)?
+                    };
+                    Ok(Reloaded {
+                        config,
+                        services,
+                        store,
+                        hotkeys,
+                    })
+                }),
+            )
+            .await
+            .unwrap_or_else(|_| Ok(Err(anyhow::anyhow!("configuration reload timed out"))))
+            .unwrap_or_else(|e| Err(e.into()));
+            let _ = tx
+                .send(Completion::Reloaded {
+                    result: Box::new(result),
+                    replies,
+                    seq,
+                })
+                .await;
         })
     }
     /// A reload finished (see `Completion::Reloaded`): the reply for its requests.
@@ -1757,7 +1790,7 @@ impl Engine {
             tokio::select! { biased;
                 command = commands.recv() => {
                     let Some(Command { request, reply }) = command else { break; };
-                    if reply.is_closed() { continue; }
+                    if reply.is_closed() && !matches!(request, Request::UndoLearned { .. }) { continue; }
                     while queries.try_join_next().is_some() {}
                     while desktop_ops.try_join_next().is_some() {}
                     if (is_query(&request) || matches!(request, Request::Reload | Request::UndoLearned { .. })) && queries.len() + desktop_ops.len() >= 32 { let _ = reply.send(Response::error(self.state, "daemon request capacity reached")); continue; }
@@ -2230,6 +2263,7 @@ fn trusted_before_clear(unread: usize, last: &str) -> String {
 /// grace), the next dictation starts, or after 60 s, with one last read. Only
 /// the span and 16 characters each side stay in memory. Err holds the outcome
 /// when there is nothing to learn, None when cancelled.
+#[cfg(test)]
 async fn watch_edit(
     desktop: &dyn Desktop,
     target: &AppContext,
@@ -2566,23 +2600,29 @@ async fn learn(
         Err(reason) => return Ok(Err(reason)),
     };
     let rules: Vec<String> = rules.into_iter().map(|r| r.to).collect();
+    let mut notice_words = Vec::new();
+    for word in added.iter().chain(&rules).chain(&promoted) {
+        if !notice_words.contains(word) {
+            notice_words.push(word.clone());
+        }
+    }
     let (outcome, message, words) = if !added.is_empty() {
         (
             "learned",
             format!("Added {} to your dictionary", quoted(&added)),
-            added,
+            notice_words,
         )
     } else if !rules.is_empty() {
         (
             "corrected",
             format!("Saved your correction to {}", quoted(&rules)),
-            rules,
+            notice_words,
         )
     } else {
         (
             "promoted",
             format!("{} is already in your dictionary", quoted(&promoted)),
-            promoted,
+            notice_words,
         )
     };
     // A reorder alone is not announced or offered for undo.
@@ -2630,7 +2670,10 @@ async fn undo(
             change: None,
         })
         .await;
-    r.message = Some(format!("Undid the dictionary change for {}", quoted(&words)));
+    r.message = Some(format!(
+        "Undid the dictionary change for {}",
+        quoted(&words)
+    ));
     Ok(r)
 }
 /// Save a corrected history entry, then learn from the correction.
@@ -2970,7 +3013,11 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let (notice_tx, _) = watch::channel(None);
     #[cfg(target_os = "macos")]
     let pill = {
-        let (events, notices, config) = (desktop_tx.subscribe(), notice_tx.subscribe(), config_path.clone());
+        let (events, notices, config) = (
+            desktop_tx.subscribe(),
+            notice_tx.subscribe(),
+            config_path.clone(),
+        );
         tokio::spawn(async move {
             if native {
                 crate::overlay_pill::run(events, notices, config).await;
@@ -6254,13 +6301,22 @@ mod tests {
         assert_eq!(
             watch_events(
                 pasted,
-                &[(0, "", CHANGED), (0, "p", UNANNOUNCED), (30, "p", CHANGED), (150, next, CHANGED)]
+                &[
+                    (0, "", CHANGED),
+                    (0, "p", UNANNOUNCED),
+                    (30, "p", CHANGED),
+                    (150, next, CHANGED)
+                ]
             )
             .await,
             Err(Some("anchors-lost"))
         );
         assert_eq!(
-            watch_events(pasted, &[(0, "Message #general", CHANGED), (200, next, CHANGED)]).await,
+            watch_events(
+                pasted,
+                &[(0, "Message #general", CHANGED), (200, next, CHANGED)]
+            )
+            .await,
             Err(Some("anchors-lost"))
         );
     }
@@ -6274,20 +6330,32 @@ mod tests {
         let pasted = "post gres is ready ";
         let folded: &[FieldEvent] = &[FieldEvent::Changed, FieldEvent::Merged];
         assert_eq!(
-            watch_events(pasted, &[(0, "Postgre is ready ", CHANGED), (200, "", folded)]).await,
+            watch_events(
+                pasted,
+                &[(0, "Postgre is ready ", CHANGED), (200, "", folded)]
+            )
+            .await,
             Err(Some("unsettled"))
         );
         assert_eq!(
             watch_events(
                 pasted,
-                &[(0, "Postgre is ready ", CHANGED), (200, "", CHANGED), (10, "", CHANGED)]
+                &[
+                    (0, "Postgre is ready ", CHANGED),
+                    (200, "", CHANGED),
+                    (10, "", CHANGED)
+                ]
             )
             .await,
             Err(Some("unsettled"))
         );
         let learned = Ok((pasted.to_owned(), "Postgres is ready ".to_owned()));
         assert_eq!(
-            watch_events(pasted, &[(0, "Postgres is ready ", CHANGED), (200, "", CHANGED)]).await,
+            watch_events(
+                pasted,
+                &[(0, "Postgres is ready ", CHANGED), (200, "", CHANGED)]
+            )
+            .await,
             learned
         );
         assert_eq!(
@@ -6304,7 +6372,8 @@ mod tests {
     }
     fn write_words(path: &std::path::Path, list: &[&str]) -> DictionaryConfig {
         let mut file = ConfigFile::load(path).unwrap();
-        file.set_typed("dictionary.words", &words(list).words).unwrap();
+        file.set_typed("dictionary.words", &words(list).words)
+            .unwrap();
         file.save().unwrap();
         Config::load(path).unwrap().dictionary
     }
@@ -6324,16 +6393,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let store = Store::open(&dir.path().join("h.db"), false, 10).unwrap();
-        let (mut engine, ..) = fixture(Config::default(), Arc::new(RecordingDesktop::default()), store);
+        let (mut engine, ..) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            store,
+        );
         engine.config_path = Some(path.clone());
         let on_disk = |engine: &Engine| {
-            assert_eq!(engine.config.dictionary, Config::load(&path).unwrap().dictionary);
+            assert_eq!(
+                engine.config.dictionary,
+                Config::load(&path).unwrap().dictionary
+            );
         };
         // A learn saves {foo, claud} as 1; the CLI removes foo and reloads (its
         // read follows the learn); the learn's completion arrives last.
         let learn1 = write_words(&path, &["foo", "claud"]);
         write_words(&path, &["claud"]);
-        assert!(engine.reloaded(reload_of(&engine, Config::load(&path).unwrap()), 1).ok);
+        assert!(
+            engine
+                .reloaded(reload_of(&engine, Config::load(&path).unwrap()), 1)
+                .ok
+        );
         engine.learned(learn1, 1, Some("Added 'foo'".into()), None);
         on_disk(&engine);
         // A reload read before learn 2 completes after it: its other settings
@@ -6357,12 +6437,20 @@ mod tests {
         engine.learned(undone.clone(), 5, None, None);
         assert!(engine.reloaded(reload_of(&engine, before.clone()), 4).ok);
         on_disk(&engine);
-        assert!(engine.reloaded(reload_of(&engine, Config::load(&path).unwrap()), 5).ok);
+        assert!(
+            engine
+                .reloaded(reload_of(&engine, Config::load(&path).unwrap()), 5)
+                .ok
+        );
         engine.learned(undone, 5, None, None);
         on_disk(&engine);
         // A reload that read after every write installs what it read.
         write_words(&path, &["claud"]);
-        assert!(engine.reloaded(reload_of(&engine, Config::load(&path).unwrap()), 5).ok);
+        assert!(
+            engine
+                .reloaded(reload_of(&engine, Config::load(&path).unwrap()), 5)
+                .ok
+        );
         on_disk(&engine);
     }
 
@@ -6380,8 +6468,11 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(&path, MINE).unwrap();
         let store = Store::open(&dir.join("h.db"), true, 10).unwrap();
-        let (mut engine, tx, rx, mut events, _) =
-            fixture(Config::default(), Arc::new(RecordingDesktop::default()), store);
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            store,
+        );
         engine.config_path = Some(path.clone());
         // Reloads keep the fixture's services.
         engine.reload_factory = Arc::new(|_, _, services| Ok(services));
@@ -6404,7 +6495,10 @@ mod tests {
     }
     /// The daemon's dictionary ends equal to config.toml (by fingerprint).
     async fn in_sync(tx: &mpsc::Sender<Command>, path: &std::path::Path) {
-        let file = format!("{:016x}", Config::load(path).unwrap().dictionary.fingerprint());
+        let file = format!(
+            "{:016x}",
+            Config::load(path).unwrap().dictionary.fingerprint()
+        );
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if ask(tx, Request::Status).await.learning.unwrap().fingerprint == file {
@@ -6426,7 +6520,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (tx, task, path, id, notices) = history_fixture(dir.path()).await;
         let learned = correct(&tx, id, "Postgres is ready").await;
-        assert_eq!(learned.message.as_deref(), Some("Added 'Postgres' to your dictionary"));
+        assert_eq!(
+            learned.message.as_deref(),
+            Some("Added 'Postgres' to your dictionary")
+        );
         in_sync(&tx, &path).await;
         assert!(ask(&tx, Request::Status).await.learning.unwrap().undo);
         // A history edit is not announced on the pill, but is undoable.
@@ -6465,7 +6562,11 @@ mod tests {
         }
         let refused = ask(&tx, undo_request(None)).await;
         assert!(!refused.ok && refused.message.unwrap().contains("changed"));
-        assert!(Config::load(&path).unwrap().dictionary.words.contains(&"Postgres".to_owned()));
+        assert!(Config::load(&path)
+            .unwrap()
+            .dictionary
+            .words
+            .contains(&"Postgres".to_owned()));
         in_sync(&tx, &path).await;
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
@@ -6475,14 +6576,21 @@ mod tests {
         correct(&tx, id, "Postgres is ready").await;
         assert!(ask(&tx, Request::Reload).await.ok);
         assert!(!ask(&tx, undo_request(None)).await.ok);
-        assert!(Config::load(&path).unwrap().dictionary.words.contains(&"Postgres".to_owned()));
+        assert!(Config::load(&path)
+            .unwrap()
+            .dictionary
+            .words
+            .contains(&"Postgres".to_owned()));
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
 
         let dir = tempfile::tempdir().unwrap();
         let (tx, task, path, id, _) = history_fixture(dir.path()).await;
         assert_eq!(
-            correct(&tx, id, "Postgres is Readie").await.message.as_deref(),
+            correct(&tx, id, "Postgres is Readie")
+                .await
+                .message
+                .as_deref(),
             Some("Added 'Postgres', 'Readie' to your dictionary")
         );
         assert!(ask(&tx, undo_request(None)).await.ok);
@@ -6520,12 +6628,13 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         *desktop.field.lock().unwrap() = Some(String::new());
         notify.send(FieldEvent::Changed).unwrap();
-        let notice = tokio::time::timeout(Duration::from_secs(3), notices.wait_for(Option::is_some))
-            .await
-            .expect("no notice")
-            .unwrap()
-            .clone()
-            .unwrap();
+        let notice =
+            tokio::time::timeout(Duration::from_secs(3), notices.wait_for(Option::is_some))
+                .await
+                .expect("no notice")
+                .unwrap()
+                .clone()
+                .unwrap();
         assert_eq!(notice.words, ["Postgres"]);
         assert!(!notice.correction && notice.op != 0);
         let undone = ask(&tx, undo_request(Some(notice.op))).await;
@@ -6549,13 +6658,19 @@ mod tests {
         let refused = correct(&tx, id, "Postgres is ready").await;
         assert!(started.elapsed() < Duration::from_secs(2));
         let message = refused.message.unwrap_or_default();
-        assert!(message.starts_with("Transcript saved; dictionary not updated"), "{message}");
+        assert!(
+            message.starts_with("Transcript saved; dictionary not updated"),
+            "{message}"
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), MINE);
         assert!(ask(&tx, Request::Reload).await.ok);
         drop(held);
         // The entry already reads "Postgres is ready": correct another word.
         let learned = correct(&tx, id, "Postgres is Readie").await;
-        assert_eq!(learned.message.as_deref(), Some("Added 'Readie' to your dictionary"));
+        assert_eq!(
+            learned.message.as_deref(),
+            Some("Added 'Readie' to your dictionary")
+        );
         let held = crate::config_edit::lock(&path).unwrap();
         let after = std::fs::read(&path).unwrap();
         assert!(!ask(&tx, undo_request(None)).await.ok);
@@ -6580,7 +6695,10 @@ mod tests {
         file.save().unwrap();
         drop(held);
         let learned = learning.await.unwrap();
-        assert_eq!(learned.message.as_deref(), Some("Added 'Postgres' to your dictionary"));
+        assert_eq!(
+            learned.message.as_deref(),
+            Some("Added 'Postgres' to your dictionary")
+        );
         let config = Config::load(&path).unwrap();
         assert_eq!(config.ui.theme, "midnight");
         assert_eq!(config.dictionary.words, ["Postgres"]);
@@ -6597,8 +6715,11 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(&path, MINE).unwrap();
         let store = Store::open(&dir.path().join("h.db"), false, 10).unwrap();
-        let (mut engine, tx, rx, _, _) =
-            fixture(Config::default(), Arc::new(RecordingDesktop::default()), store);
+        let (mut engine, tx, rx, _, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            store,
+        );
         engine.config_path = Some(path.clone());
         let calls = Arc::new(AtomicUsize::new(0));
         let (release, released) = std::sync::mpsc::channel::<()>();
@@ -6651,9 +6772,15 @@ mod tests {
         in_sync(&tx, &path).await;
         let status = ask(&tx, Request::Status).await;
         let json = serde_json::to_string(&status).unwrap();
-        assert!(!json.contains("Postgres") && !json.contains("gres"), "{json}");
+        assert!(
+            !json.contains("Postgres") && !json.contains("gres"),
+            "{json}"
+        );
         let learning = status.learning.unwrap();
-        assert_eq!((learning.words, learning.learned, learning.replacements), (1, 1, 0));
+        assert_eq!(
+            (learning.words, learning.learned, learning.replacements),
+            (1, 1, 0)
+        );
         // The paste with no readable field was watched and counted.
         let learning = tokio::time::timeout(Duration::from_secs(3), async {
             loop {

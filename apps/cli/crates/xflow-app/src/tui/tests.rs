@@ -841,7 +841,10 @@ fn save_compares_and_writes_under_the_config_lock() {
     });
     started.recv().unwrap();
     let error = super::runtime::save(file, None).unwrap_err();
-    assert!(format!("{error:#}").contains("changed outside"), "{error:#}");
+    assert!(
+        format!("{error:#}").contains("changed outside"),
+        "{error:#}"
+    );
     writer.join().unwrap();
     assert!(std::fs::read_to_string(file.path())
         .unwrap()

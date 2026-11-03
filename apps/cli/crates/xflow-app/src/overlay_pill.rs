@@ -48,9 +48,10 @@ impl Notice {
     fn valid(&self) -> bool {
         self.op != 0
             && (1..=4).contains(&self.words.len())
-            && self.words.iter().all(|w| {
-                (1..=40).contains(&w.chars().count()) && !w.chars().any(char::is_control)
-            })
+            && self
+                .words
+                .iter()
+                .all(|w| (1..=40).contains(&w.chars().count()) && !w.chars().any(char::is_control))
     }
 }
 
@@ -290,7 +291,10 @@ async fn show(config: &std::path::Path, notice: &Notice) -> Option<Child> {
         return None;
     }
     let mut stdin = child.stdin.take()?;
-    if !matches!(timeout(WRITE_TIMEOUT, stdin.write_all(&bytes)).await, Ok(Ok(()))) {
+    if !matches!(
+        timeout(WRITE_TIMEOUT, stdin.write_all(&bytes)).await,
+        Ok(Ok(()))
+    ) {
         let _ = child.start_kill();
         return None;
     }
@@ -346,7 +350,9 @@ async fn close(helper: &mut Option<Child>, notice: bool) {
 fn read_line(reader: &mut impl BufRead, limit: usize) -> Result<Option<Vec<u8>>> {
     use std::io::Read;
     let mut bytes = Vec::new();
-    reader.take((limit + 1) as u64).read_until(b'\n', &mut bytes)?;
+    reader
+        .take((limit + 1) as u64)
+        .read_until(b'\n', &mut bytes)?;
     if bytes.is_empty() {
         return Ok(None);
     }
@@ -592,7 +598,9 @@ mod tests {
             [Action::Show(notice(1))]
         );
         assert!(notices.step(Step::Exited).is_empty());
-        assert!(notices.step(Step::Latest(Some(notice(1)), false)).is_empty());
+        assert!(notices
+            .step(Step::Latest(Some(notice(1)), false))
+            .is_empty());
         // Saved during a session (often finalized by the next dictation): it
         // waits through the 25 Hz level frames, which are not session starts,
         // and shows once the pill is idle.
@@ -607,7 +615,9 @@ mod tests {
         assert_eq!(notices.step(Step::Session), [Action::Kill]);
         assert!(notices.step(Step::Latest(Some(notice(3)), true)).is_empty());
         assert!(notices.step(Step::Session).is_empty());
-        assert!(notices.step(Step::Latest(Some(notice(3)), false)).is_empty());
+        assert!(notices
+            .step(Step::Latest(Some(notice(3)), false))
+            .is_empty());
         // A newer change replaces the visible notice; one that can no longer be
         // undone takes it away, and a waiting one is forgotten.
         assert_eq!(
@@ -661,7 +671,10 @@ mod tests {
                 })
                 .unwrap()
             );
-            assert!(read_first(&mut std::io::Cursor::new(frame)).is_err(), "{bad:?}");
+            assert!(
+                read_first(&mut std::io::Cursor::new(frame)).is_err(),
+                "{bad:?}"
+            );
         }
         let zero = "{\"notice\":{\"op\":0,\"words\":[\"claud\"]}}\n";
         assert!(read_first(&mut std::io::Cursor::new(zero)).is_err());

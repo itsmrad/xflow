@@ -992,7 +992,10 @@ mod multilingual_tests {
             "casa",
             "the cloud is up",
         ] {
-            assert!(!before_cleanup(text, &c, false).contains("Rimpa Sarkar"), "{text}");
+            assert!(
+                !before_cleanup(text, &c, false).contains("Rimpa Sarkar"),
+                "{text}"
+            );
         }
         // A line break is a boundary too; snippets are unchanged.
         let rule = [("Rimpas or Kar", "Rimpa Sarkar")];
@@ -1002,11 +1005,33 @@ mod multilingual_tests {
         // The adaws forms: plain ones snap, a comma is never bridged.
         for text in ["ad aws", "ad AWS", "we use ad AWS today"] {
             let out = before_cleanup(text, &c, false);
-            assert!(out.contains("adaws") && !out.contains("ad aws") && !out.contains("ad AWS"), "{out}");
+            assert!(
+                out.contains("adaws") && !out.contains("ad aws") && !out.contains("ad AWS"),
+                "{out}"
+            );
         }
         for text in ["an ad, AWS and Azure", "ad, AWS"] {
             assert_eq!(before_cleanup(text, &c, false), text);
         }
+    }
+
+    #[test]
+    fn spoken_line_breaks_survive_manual_replacements_and_fillers() {
+        let mut config = Config::default();
+        config.formatting.spoken_punctuation = true;
+        config.dictionary.replacements = vec![Replacement {
+            from: "acme corp".into(),
+            to: "AcmeCorp".into(),
+        }];
+        assert_eq!(
+            before_cleanup("Acme new line Corp", &config, false),
+            "Acme\nCorp"
+        );
+        config.formatting.fillers = vec!["you know".into()];
+        assert_eq!(
+            before_cleanup("you new line know", &config, false),
+            "you\nknow"
+        );
     }
 
     #[test]
