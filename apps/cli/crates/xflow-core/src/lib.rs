@@ -35,6 +35,15 @@ fn log_enabled(level: &str, configured: Option<&str>) -> bool {
     rank(level) <= rank(configured.unwrap_or("warn"))
 }
 
+/// FNV-1a 64: a stable, explicitly specified hash (unlike std's
+/// `DefaultHasher`, whose output may change between Rust releases), so two
+/// binaries can compare local state. Not a secret and not collision-proof.
+pub fn stable_hash(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
 /// Maximum uploadable mono 16-bit PCM WAV: 25 MB including the 44-byte header.
 pub const MAX_UPLOAD_WAV_BYTES: usize = 25_000_000;
 pub const MAX_UPLOAD_FRAMES: usize = (MAX_UPLOAD_WAV_BYTES - 44) / 2;
@@ -268,6 +277,12 @@ pub enum FieldEvent {
     Changed,
     /// Focus may have left the field; re-check after a short grace.
     Focus,
+    /// A value change within a few milliseconds of the last one, which the
+    /// desktop folds into it: an app's duplicate notification, or a second edit
+    /// in the same app turn (the last letter and Enter). Never schedules a read
+    /// or counts as an edit, but the text before it is no longer known to be
+    /// the last one a cleared field held.
+    Merged,
 }
 /// Fields longer than this (UTF-16 units) are not read for learning: each read
 /// copies the whole value across processes, on every edit.
@@ -310,7 +325,15 @@ pub trait Overlay: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::log_enabled;
+    use super::{log_enabled, stable_hash};
+
+    #[test]
+    fn stable_hash_is_fnv_1a_64() {
+        // Published FNV-1a 64 test vectors: the same in every build.
+        assert_eq!(stable_hash(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(stable_hash(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(stable_hash(b"foobar"), 0x8594_4171_f739_67e8);
+    }
 
     #[test]
     fn xflow_log_debug_shows_platform_debug_lines_and_default_is_warn() {

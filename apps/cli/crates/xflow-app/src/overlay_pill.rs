@@ -1,11 +1,12 @@
 //! The daemon only forwards small events; AppKit is loaded by `xflow overlay-pill`.
+use crate::daemon::LearnNotice;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{io::BufRead, process::Stdio, time::Duration};
 use tokio::{
     io::AsyncWriteExt,
     process::{Child, Command},
-    sync::broadcast,
+    sync::{broadcast, watch},
     time::timeout,
 };
 use xflow_core::{DesktopEvent, State};
@@ -13,7 +14,110 @@ use xflow_core::{DesktopEvent, State};
 mod native;
 
 const MAX_EVENT_BYTES: usize = 192;
+/// A notice frame: at most four saved words of at most 40 characters.
+const MAX_NOTICE_BYTES: usize = 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// The learning notice a separate helper shows for one second: the exact words
+/// saved and the change its Undo sends back. Its own first frame, so recording
+/// frames are unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Notice {
+    op: u64,
+    words: Vec<String>,
+    /// A correction rule for a word already saved, not a new word.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    correction: bool,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoticeFrame {
+    notice: Notice,
+}
+impl Notice {
+    /// None when it can't be shown in full (the change stays undoable from the CLI).
+    fn new(notice: &LearnNotice) -> Option<Self> {
+        let notice = Self {
+            op: notice.op,
+            words: notice.words.clone(),
+            correction: notice.correction,
+        };
+        notice.valid().then_some(notice)
+    }
+    fn valid(&self) -> bool {
+        self.op != 0
+            && (1..=4).contains(&self.words.len())
+            && self.words.iter().all(|w| {
+                (1..=40).contains(&w.chars().count()) && !w.chars().any(char::is_control)
+            })
+    }
+}
+
+/// When the pill shows the learning notice. Recording comes first: a session
+/// start removes a visible notice and drops a waiting one; a notice saved
+/// during a session (often finalized by the next dictation) waits for it and
+/// shows once the pill is idle, only while it is still the current change.
+/// The actor owns that: it publishes None, or a newer change, when this one
+/// can no longer be undone, and a visible notice for it goes at once.
+#[derive(Debug, Default)]
+struct Notices {
+    pending: Option<Notice>,
+    /// The change of the notice helper on screen.
+    shown: Option<u64>,
+    /// The last change shown or dropped: never shown again.
+    done: Option<u64>,
+}
+#[derive(Debug, PartialEq)]
+enum Step {
+    /// A new recording session started.
+    Session,
+    /// The actor's current change; `busy`: a recording or its alert is on screen.
+    Latest(Option<Notice>, bool),
+    /// The notice helper exited.
+    Exited,
+}
+#[derive(Debug, PartialEq)]
+enum Action {
+    Show(Notice),
+    /// Kill the notice helper, without waiting for it.
+    Kill,
+}
+impl Notices {
+    fn step(&mut self, step: Step) -> Vec<Action> {
+        let mut actions = Vec::new();
+        match step {
+            Step::Session => {
+                if let Some(notice) = self.pending.take() {
+                    self.done = Some(notice.op);
+                }
+                if self.shown.take().is_some() {
+                    actions.push(Action::Kill);
+                }
+            }
+            Step::Latest(latest, busy) => {
+                let op = latest.as_ref().map(|n| n.op);
+                if self.shown.is_some() && self.shown != op {
+                    self.shown = None;
+                    actions.push(Action::Kill);
+                }
+                self.pending = latest.filter(|n| Some(n.op) != self.done);
+                if !busy {
+                    if let Some(notice) = self.pending.take() {
+                        if self.shown.take().is_some() {
+                            actions.push(Action::Kill);
+                        }
+                        self.done = Some(notice.op);
+                        self.shown = Some(notice.op);
+                        actions.push(Action::Show(notice));
+                    }
+                }
+            }
+            Step::Exited => self.shown = None,
+        }
+        actions
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -78,47 +182,121 @@ impl PillEvent {
 /// Spawn this future with a dedicated desktop-event subscription. Failures are
 /// deliberately isolated from recording; no helper, timer or AppKit exists at idle.
 /// The pill shows while listening and collapses on release; afterwards only a
-/// session's failure brings it back, briefly.
-pub async fn run(mut events: broadcast::Receiver<DesktopEvent>, config: std::path::PathBuf) {
+/// session's failure brings it back, briefly. A saved correction's notice is a
+/// separate short-lived helper (see `Notices`), never waited on here.
+pub async fn run(
+    mut events: broadcast::Receiver<DesktopEvent>,
+    mut notices: watch::Receiver<Option<LearnNotice>>,
+    config: std::path::PathBuf,
+) {
     let mut helper: Option<Child> = None;
     // None outside a session; Some(true) once it reached Processing.
     let mut session: Option<bool> = None;
+    let mut state = Notices::default();
+    let mut notice: Option<Child> = None;
+    let mut notices_open = true;
     loop {
-        let event = match events.recv().await {
-            Ok(event) => PillEvent::from_desktop(event, session == Some(true)),
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(broadcast::error::RecvError::Closed) => break,
-        };
-        match event.state {
-            State::Listening => {
-                if session.is_none() {
-                    session = Some(false);
-                    // Retry only on the next session, not on every microphone-level event.
-                    helper = spawn(&config).ok();
-                }
-                if let Some(child) = &mut helper {
-                    if send(child, event).await.is_err() {
+        let steps = tokio::select! {
+            event = events.recv() => {
+                let event = match event {
+                    Ok(event) => PillEvent::from_desktop(event, session == Some(true)),
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                match event.state {
+                    State::Listening => {
+                        let mut steps = Vec::new();
+                        if session.is_none() {
+                            session = Some(false);
+                            // Only the transition: level frames repeat at 25 Hz.
+                            steps.push(Step::Session);
+                            // Retry only on the next session, not on every microphone-level event.
+                            helper = spawn(&config).ok();
+                        }
+                        if let Some(child) = &mut helper {
+                            if send(child, event).await.is_err() {
+                                close(&mut helper, false).await;
+                            }
+                        }
+                        steps
+                    }
+                    State::Processing => {
+                        session = Some(true);
                         close(&mut helper, false).await;
+                        Vec::new()
+                    }
+                    _ => {
+                        let alert = session.take().is_some() && event.alert.is_some();
+                        if alert && helper.is_none() {
+                            helper = spawn(&config).ok();
+                        }
+                        if let Some(child) = helper.as_mut().filter(|_| alert) {
+                            let _ = send(child, event).await;
+                        }
+                        close(&mut helper, alert).await;
+                        // Idle again: a notice that waited shows now, if still current.
+                        vec![Step::Latest(current(&mut notices), false)]
                     }
                 }
             }
-            State::Processing => {
-                session = Some(true);
-                close(&mut helper, false).await;
+            changed = notices.changed(), if notices_open => {
+                if changed.is_err() {
+                    notices_open = false;
+                    continue;
+                }
+                vec![Step::Latest(current(&mut notices), session.is_some() || helper.is_some())]
             }
-            _ => {
-                let alert = session.take().is_some() && event.alert.is_some();
-                if alert && helper.is_none() {
-                    helper = spawn(&config).ok();
+            _ = async { notice.as_mut().unwrap().wait().await }, if notice.is_some() => {
+                notice = None;
+                vec![Step::Exited]
+            }
+        };
+        for step in steps {
+            for action in state.step(step) {
+                if let Some(mut child) = notice.take() {
+                    // Never waited on: dropped children are reaped in the background.
+                    let _ = child.start_kill();
                 }
-                if let Some(child) = helper.as_mut().filter(|_| alert) {
-                    let _ = send(child, event).await;
+                if let Action::Show(shown) = action {
+                    notice = show(&config, &shown).await;
+                    if notice.is_none() {
+                        state.step(Step::Exited);
+                    }
                 }
-                close(&mut helper, alert).await;
             }
         }
     }
     close(&mut helper, false).await;
+    if let Some(mut child) = notice.take() {
+        let _ = child.start_kill();
+    }
+}
+
+fn current(notices: &mut watch::Receiver<Option<LearnNotice>>) -> Option<Notice> {
+    notices.borrow_and_update().as_ref().and_then(Notice::new)
+}
+
+/// A notice helper with its one frame sent; None when the overlay is off or
+/// the helper failed.
+async fn show(config: &std::path::Path, notice: &Notice) -> Option<Child> {
+    let mut child = spawn(config).ok()?;
+    let mut bytes = serde_json::to_vec(&NoticeFrame {
+        notice: notice.clone(),
+    })
+    .ok()?;
+    bytes.push(b'\n');
+    if bytes.len() > MAX_NOTICE_BYTES {
+        let _ = child.start_kill();
+        return None;
+    }
+    let mut stdin = child.stdin.take()?;
+    if !matches!(timeout(WRITE_TIMEOUT, stdin.write_all(&bytes)).await, Ok(Ok(()))) {
+        let _ = child.start_kill();
+        return None;
+    }
+    // The notice needs no more input; EOF does not end it early.
+    drop(stdin);
+    Some(child)
 }
 
 fn spawn(config: &std::path::Path) -> Result<Child> {
@@ -165,44 +343,80 @@ async fn close(helper: &mut Option<Child>, notice: bool) {
     }
 }
 
-fn read_event(reader: &mut impl BufRead) -> Result<Option<PillEvent>> {
+fn read_line(reader: &mut impl BufRead, limit: usize) -> Result<Option<Vec<u8>>> {
     use std::io::Read;
     let mut bytes = Vec::new();
-    reader
-        .take((MAX_EVENT_BYTES + 1) as u64)
-        .read_until(b'\n', &mut bytes)?;
+    reader.take((limit + 1) as u64).read_until(b'\n', &mut bytes)?;
     if bytes.is_empty() {
         return Ok(None);
     }
-    if bytes.len() > MAX_EVENT_BYTES || bytes.last() != Some(&b'\n') {
+    if bytes.len() > limit || bytes.last() != Some(&b'\n') {
         bail!("invalid pill event frame");
     }
-    let event: PillEvent = serde_json::from_slice(&bytes)?;
+    Ok(Some(bytes))
+}
+
+fn pill_event(bytes: &[u8]) -> Result<PillEvent> {
+    let event: PillEvent = serde_json::from_slice(bytes)?;
     if !event.level.is_finite() || !(0.0..=1.0).contains(&event.level) {
         bail!("invalid pill audio level");
     }
-    Ok(Some(event))
+    Ok(event)
+}
+
+fn read_event(reader: &mut impl BufRead) -> Result<Option<PillEvent>> {
+    read_line(reader, MAX_EVENT_BYTES)?
+        .map(|bytes| pill_event(&bytes))
+        .transpose()
+}
+
+/// A helper's first frame: a recording event, or a learning notice.
+enum First {
+    Pill(PillEvent),
+    Notice(Notice),
+}
+fn read_first(reader: &mut impl BufRead) -> Result<Option<First>> {
+    let Some(bytes) = read_line(reader, MAX_NOTICE_BYTES)? else {
+        return Ok(None);
+    };
+    if let Ok(frame) = serde_json::from_slice::<NoticeFrame>(&bytes) {
+        if !frame.notice.valid() {
+            bail!("invalid learning notice");
+        }
+        return Ok(Some(First::Notice(frame.notice)));
+    }
+    if bytes.len() > MAX_EVENT_BYTES {
+        bail!("invalid pill event frame");
+    }
+    pill_event(&bytes).map(|event| Some(First::Pill(event)))
 }
 
 /// Hidden CLI entry point; must run on the process main thread.
 pub fn helper(config: &std::path::Path) -> Result<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
-    let Some(first) = read_event(&mut input)? else {
+    let Some(first) = read_first(&mut input)? else {
         return Ok(());
     };
-    if !first.active() && first.alert.is_none() {
-        return Ok(());
+    if let First::Pill(event) = &first {
+        if !event.active() && event.alert.is_none() {
+            return Ok(());
+        }
     }
     let settings = crate::gsettings::GSettings::beside(config);
     if settings.get("enabled")? != "true" {
         return Ok(());
     }
-    native::run(first, input, settings)
+    match first {
+        First::Pill(event) => native::run(event, input, settings),
+        First::Notice(notice) => native::notice(notice, settings),
+    }
 }
 
 /// Hidden `xflow overlay preview`: cycles listening, hands-free (then no signal)
-/// and a failure alert without dictating.
-pub fn preview() -> Result<()> {
+/// and a failure alert without dictating. `notice`: the one-second learning
+/// notice instead, for an example word (its Undo is refused: no such change);
+/// with XFLOW_PILL_TIMING set, the helper prints how long it was visible.
+pub fn preview(notice: bool) -> Result<()> {
     use std::io::Write;
     let mut child = std::process::Command::new(std::env::current_exe()?)
         .arg("overlay-pill")
@@ -210,6 +424,19 @@ pub fn preview() -> Result<()> {
         .spawn()
         .context("cannot start the recording pill")?;
     let mut stdin = child.stdin.take().context("pill input closed")?;
+    if notice {
+        let frame = NoticeFrame {
+            notice: Notice {
+                op: 1,
+                words: vec!["claud".into()],
+                correction: false,
+            },
+        };
+        writeln!(stdin, "{}", serde_json::to_string(&frame)?)?;
+        drop(stdin);
+        child.wait()?;
+        return Ok(());
+    }
     for i in 0..=175 {
         let t = i as f32 * 0.04; // 25 Hz, like the daemon's level tick
         let level = 0.01 + 0.2 * ((t * 7.0).sin() * (t * 1.7).sin()).abs();
@@ -346,6 +573,114 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(read.alert, Some(Alert::Transcribe));
+    }
+
+    fn notice(op: u64) -> Notice {
+        Notice {
+            op,
+            words: vec!["claud".into()],
+            correction: false,
+        }
+    }
+
+    #[test]
+    fn notice_waits_for_recording_and_shows_once_while_current() {
+        let mut notices = Notices::default();
+        // Idle: shown at once, and never again for the same change.
+        assert_eq!(
+            notices.step(Step::Latest(Some(notice(1)), false)),
+            [Action::Show(notice(1))]
+        );
+        assert!(notices.step(Step::Exited).is_empty());
+        assert!(notices.step(Step::Latest(Some(notice(1)), false)).is_empty());
+        // Saved during a session (often finalized by the next dictation): it
+        // waits through the 25 Hz level frames, which are not session starts,
+        // and shows once the pill is idle.
+        assert!(notices.step(Step::Session).is_empty());
+        assert!(notices.step(Step::Latest(Some(notice(2)), true)).is_empty());
+        assert_eq!(notices.pending, Some(notice(2)));
+        assert_eq!(
+            notices.step(Step::Latest(Some(notice(2)), false)),
+            [Action::Show(notice(2))]
+        );
+        // A new session removes a visible notice at once and drops a waiting one.
+        assert_eq!(notices.step(Step::Session), [Action::Kill]);
+        assert!(notices.step(Step::Latest(Some(notice(3)), true)).is_empty());
+        assert!(notices.step(Step::Session).is_empty());
+        assert!(notices.step(Step::Latest(Some(notice(3)), false)).is_empty());
+        // A newer change replaces the visible notice; one that can no longer be
+        // undone takes it away, and a waiting one is forgotten.
+        assert_eq!(
+            notices.step(Step::Latest(Some(notice(4)), false)),
+            [Action::Show(notice(4))]
+        );
+        assert_eq!(
+            notices.step(Step::Latest(Some(notice(5)), false)),
+            [Action::Kill, Action::Show(notice(5))]
+        );
+        assert_eq!(notices.step(Step::Latest(None, false)), [Action::Kill]);
+        assert!(notices.step(Step::Latest(Some(notice(6)), true)).is_empty());
+        assert!(notices.step(Step::Latest(None, true)).is_empty());
+        assert!(notices.step(Step::Latest(None, false)).is_empty());
+    }
+
+    #[test]
+    fn notice_frames_are_bounded_validated_and_first_only() {
+        let widest = Notice {
+            op: u64::MAX,
+            words: vec!["“é’\"".repeat(10); 4],
+            correction: true,
+        };
+        assert!(widest.valid());
+        let mut frame = serde_json::to_vec(&NoticeFrame {
+            notice: widest.clone(),
+        })
+        .unwrap();
+        frame.push(b'\n');
+        assert!(frame.len() < MAX_NOTICE_BYTES, "{}", frame.len());
+        assert!(matches!(
+            read_first(&mut std::io::Cursor::new(frame)).unwrap(),
+            Some(First::Notice(read)) if read == widest
+        ));
+        for words in [
+            vec![],
+            vec!["".to_owned()],
+            vec!["x".repeat(41)],
+            vec!["bell\u{7}".to_owned()],
+            vec!["claud".to_owned(); 5],
+        ] {
+            let bad = Notice {
+                op: 1,
+                words,
+                correction: false,
+            };
+            let frame = format!(
+                "{}\n",
+                serde_json::to_string(&NoticeFrame {
+                    notice: bad.clone()
+                })
+                .unwrap()
+            );
+            assert!(read_first(&mut std::io::Cursor::new(frame)).is_err(), "{bad:?}");
+        }
+        let zero = "{\"notice\":{\"op\":0,\"words\":[\"claud\"]}}\n";
+        assert!(read_first(&mut std::io::Cursor::new(zero)).is_err());
+        // Only a first frame: later frames are recording events.
+        let small = "{\"notice\":{\"op\":1,\"words\":[\"claud\"]}}\n";
+        assert!(read_event(&mut std::io::Cursor::new(small)).is_err());
+        // Recording frames are unchanged.
+        let listening = b"{\"state\":\"listening\",\"level\":0.5}\n".as_slice();
+        assert!(matches!(
+            read_first(&mut std::io::Cursor::new(listening)).unwrap(),
+            Some(First::Pill(event)) if event.active()
+        ));
+        // A word too long to show in full is not offered on the pill.
+        let long = LearnNotice {
+            op: 1,
+            words: vec!["x".repeat(41)],
+            correction: false,
+        };
+        assert_eq!(Notice::new(&long), None);
     }
 
     #[test]

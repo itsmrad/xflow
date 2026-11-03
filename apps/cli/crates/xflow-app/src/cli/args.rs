@@ -333,6 +333,9 @@ pub enum Dictionary {
         file: PathBuf,
     },
     Export,
+    /// Undo the latest word or correction xflow saved automatically, once
+    /// (until config.toml changes or xflowd restarts).
+    Undo,
 }
 #[derive(Subcommand, Debug)]
 pub enum Snippets {
@@ -376,10 +379,14 @@ pub enum Overlay {
     Reset {
         key: Option<String>,
     },
-    /// Show the recording pill cycling through its states, without dictating.
+    /// Show the recording pill cycling through its states, without dictating;
+    /// --notice shows the one-second learning notice instead.
     #[cfg(target_os = "macos")]
     #[command(hide = true)]
-    Preview,
+    Preview {
+        #[arg(long)]
+        notice: bool,
+    },
 }
 #[derive(Subcommand, Debug)]
 pub enum Daemon {

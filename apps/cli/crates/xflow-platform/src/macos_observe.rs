@@ -4,7 +4,8 @@
 //! request and never leaves the daemon. Also reads the few characters around
 //! the caret that smart spacing needs.
 use super::{
-    cf_text, focus, focus_waiting, secure, text_reads_allowed, AXUIElementCreateApplication,
+    cf_text, focus, focus_waiting, search_or_address, secure, text_reads_allowed,
+    AXUIElementCreateApplication,
     AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementSetMessagingTimeout, CFGetTypeID,
     CFRelease, Focus, Owned, Ref,
 };
@@ -81,6 +82,7 @@ pub(super) struct Watch {
 }
 
 /// Pin the focused editable element if focus is still in `target`. Blocking.
+/// Search boxes and address bars are never watched.
 pub(super) fn watch(target: &AppContext) -> Option<Watch> {
     let focus = focus();
     if focus.context.app_id != target.app_id
@@ -90,6 +92,9 @@ pub(super) fn watch(target: &AppContext) -> Option<Watch> {
         return None;
     }
     let element = focus.element?;
+    if search_or_address(&element) {
+        return None;
+    }
     let mut pid = 0;
     if unsafe { AXUIElementGetPid(element.0, &mut pid) } != 0 {
         return None;
@@ -180,7 +185,9 @@ struct Context {
     edit: std::cell::Cell<Option<Instant>>,
 }
 /// Value changes this close to the last one passed on are the same edit: some
-/// apps post AXValueChanged twice per edit, and nobody edits twice in 5 ms.
+/// apps post AXValueChanged twice per edit, and nobody types twice in 5 ms. An
+/// app can still apply two edits in one turn (the last letter and Enter), so
+/// the folded change is passed on as `FieldEvent::Merged`, never dropped.
 const SAME_EDIT: Duration = Duration::from_millis(5);
 fn new_edit(last: Option<Instant>, now: Instant) -> bool {
     last.is_none_or(|t| now.duration_since(t) >= SAME_EDIT)
@@ -190,10 +197,11 @@ unsafe extern "C" fn callback(_: Ref, _: Ref, notification: Ref, context: *mut c
     let event = if cf_text(notification).as_deref() == Some("AXValueChanged") {
         let now = Instant::now();
         if !new_edit(context.edit.get(), now) {
-            return;
+            FieldEvent::Merged
+        } else {
+            context.edit.set(Some(now));
+            FieldEvent::Changed
         }
-        context.edit.set(Some(now));
-        FieldEvent::Changed
     } else {
         FieldEvent::Focus
     };
@@ -467,7 +475,7 @@ mod tests {
         // Every notification for this one edit over a full second: more than
         // one value change (after SAME_EDIT coalescing) means this app would
         // never learn, since several unread changes end a watch as unsettled.
-        let (mut changed_ms, mut changes, mut focus_events) = (None, 0, 0);
+        let (mut changed_ms, mut changes, mut focus_events, mut merged) = (None, 0, 0, 0);
         let _ = tokio::time::timeout(Duration::from_secs(1), async {
             while let Some(event) = watch.next().await {
                 match event {
@@ -476,6 +484,7 @@ mod tests {
                         changes += 1;
                     }
                     FieldEvent::Focus => focus_events += 1,
+                    FieldEvent::Merged => merged += 1,
                 }
             }
         })
@@ -483,7 +492,7 @@ mod tests {
         let read_at = Instant::now();
         let after = watch.read().await.expect("unreadable");
         println!(
-            "set={set} changed_ms={changed_ms:?} value_changes={changes} focus_events={focus_events} read_ms={} len {}->{} caret {:?}->{:?} marker={}",
+            "set={set} changed_ms={changed_ms:?} value_changes={changes} merged={merged} focus_events={focus_events} read_ms={} len {}->{} caret {:?}->{:?} marker={}",
             read_at.elapsed().as_millis(),
             before.value.encode_utf16().count(),
             after.value.encode_utf16().count(),

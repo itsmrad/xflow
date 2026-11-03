@@ -38,8 +38,7 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
                 .map_err(Into::into)
         });
     }
-    let mut file = config::load(path)?;
-    let mut current = file.config().map_err(Error::config)?;
+    let mut current = config::load(path)?.config().map_err(Error::config)?;
     let mut id = options
         .provider
         .clone()
@@ -151,6 +150,10 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     }
     current.validate().map_err(Error::config)?;
     let smart = xflow_app::tui::smart_formatting(&current);
+    // Answers can take a while: read the file again under the lock and write
+    // only the sections setup owns, so an edit made meanwhile is kept.
+    let lock = config::lock(path)?;
+    let mut file = config::load(path)?;
     if let Some(smart) = &smart {
         current.cleanup = smart.cleanup.clone();
         file.set_typed("cleanup", &current.cleanup)
@@ -159,7 +162,7 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
     file.set_typed("stt", &current.stt).map_err(Error::config)?;
     file.set_typed("recording", &current.recording)
         .map_err(Error::config)?;
-    config::commit(&file, &quiet)?;
+    config::commit(&file, lock, &quiet)?;
     let store_key = options.key_stdin
         || (interactive
             && !provider::info(&id)?.local

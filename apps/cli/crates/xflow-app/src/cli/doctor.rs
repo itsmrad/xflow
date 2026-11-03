@@ -161,6 +161,42 @@ fn checks(
     }
     checks
 }
+/// Whether xflowd's dictionary is the one in config.toml (compared by
+/// fingerprint, see `DictionaryConfig::fingerprint`), and how correction
+/// learning went since xflowd started. Counts only: never a word or text.
+fn learning_check(
+    learning: &xflow_core::ipc::Learning,
+    file: &xflow_core::config::DictionaryConfig,
+) -> Check {
+    let same = learning.fingerprint == format!("{:016x}", file.fingerprint());
+    let outcomes: Vec<String> = learning
+        .outcomes
+        .iter()
+        .map(|(outcome, n)| format!("{outcome}={n}"))
+        .collect();
+    check(
+        "dictionary in use",
+        same,
+        false,
+        format!(
+            "xflowd's dictionary {} config.toml ({} words, {} learned, {} replacements); since start: {} watches{}{}, reads={} unread_max={} late={} merged={} editing={}{}",
+            if same { "matches" } else { "differs from" },
+            learning.words,
+            learning.learned,
+            learning.replacements,
+            learning.watches,
+            if outcomes.is_empty() { "" } else { ": " },
+            outcomes.join(" "),
+            learning.reads,
+            learning.unread_max,
+            learning.late,
+            learning.merged,
+            learning.editing,
+            if learning.undo { "; the latest automatic change can be undone (xflow dictionary undo)" } else { "" },
+        ),
+        "Save any setting, or run xflow daemon restart, so xflowd reads config.toml again",
+    )
+}
 #[cfg(any(target_os = "macos", test))]
 fn permission_checks(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<Check> {
     use xflow_core::ipc::{ACCESSIBILITY_FIX, INPUT_MONITORING_FIX, UNVERIFIED_SHORTCUT};
@@ -287,6 +323,12 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
         ));
     }
     if let Ok(cfg) = super::config::load(path).and_then(|f| f.config().map_err(Error::config)) {
+        // Only for the configuration xflowd itself uses.
+        if let Some(learning) = status.as_ref().ok().and_then(|r| r.learning.as_ref()) {
+            if super::ipc::serves(path).unwrap_or(false) {
+                checks.push(learning_check(learning, &cfg.dictionary));
+            }
+        }
         let used = status.as_ref().ok().and_then(|r| r.microphone.as_deref());
         let next = if used.is_none() {
             xflow_platform::selected_microphone(&cfg.recording)
@@ -412,6 +454,39 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn learning_check_compares_fingerprints_and_never_shows_words() {
+        let dictionary = xflow_core::config::DictionaryConfig {
+            words: vec!["Rimpa Sarkar".into(), "adaws".into()],
+            learned: vec!["Rimpa Sarkar".into()],
+            ..Default::default()
+        };
+        let mut learning = xflow_core::ipc::Learning {
+            watches: 3,
+            reads: 9,
+            merged: 1,
+            words: 2,
+            learned: 1,
+            fingerprint: format!("{:016x}", dictionary.fingerprint()),
+            ..Default::default()
+        };
+        learning.outcomes.insert("learned".into(), 1);
+        learning.outcomes.insert("unsettled".into(), 2);
+        let same = learning_check(&learning, &dictionary);
+        assert!(same.ok && !same.required);
+        assert!(same.detail.contains("matches") && same.detail.contains("unsettled=2"));
+        let mut file = dictionary.clone();
+        file.words.retain(|w| w != "adaws");
+        let differs = learning_check(&learning, &file);
+        assert!(!differs.ok && differs.detail.contains("differs"));
+        for check in [same, differs] {
+            assert!(
+                !check.detail.contains("Rimpa") && !check.detail.contains("adaws"),
+                "{}",
+                check.detail
+            );
+        }
+    }
     #[test]
     fn microphone_doctor_distinguishes_last_used_from_next_and_errors() {
         let used = microphone_check(

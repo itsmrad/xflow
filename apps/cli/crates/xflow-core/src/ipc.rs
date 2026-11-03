@@ -117,6 +117,13 @@ pub enum Request {
         grant: Grant,
     },
     Shutdown,
+    /// Undo the latest automatic dictionary change once: `op` from the pill's
+    /// notice, or None for the latest (`xflow dictionary undo`). Refused, with
+    /// nothing written, once config.toml changed after it or the daemon restarted.
+    UndoLearned {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        op: Option<u64>,
+    },
     /// Daemon-internal, never on the wire: the socket could not deliver the start
     /// reply for `session`, so cancel that session (and no later one).
     #[serde(skip)]
@@ -236,6 +243,34 @@ pub struct Stats {
     pub wpm: Option<f64>,
     pub latency_p50_ms: Option<u64>,
     pub latency_p95_ms: Option<u64>,
+}
+
+/// Correction learning since xflowd started: counts only, never field text,
+/// dictated or learned words.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Learning {
+    /// Field watches started after a paste.
+    pub watches: u32,
+    /// How each watch ended ("learned", "unsettled", "filtered:dissimilar", ...).
+    pub outcomes: std::collections::BTreeMap<String, u32>,
+    /// Field reads, and the most change notifications seen between two reads.
+    pub reads: u32,
+    pub unread_max: u32,
+    /// Change notifications that arrived while a read ran, or in the grace after
+    /// the dictation left its field.
+    pub late: u32,
+    /// Value changes the desktop folded into the one before (see `FieldEvent::Merged`).
+    pub merged: u32,
+    /// Reads of a field still being edited away from the dictation.
+    pub editing: u32,
+    /// The daemon's dictionary: entry counts, and its `DictionaryConfig::fingerprint`
+    /// to compare with config.toml.
+    pub words: u32,
+    pub learned: u32,
+    pub replacements: u32,
+    pub fingerprint: String,
+    /// An automatic change can still be undone (`xflow dictionary undo`).
+    pub undo: bool,
 }
 
 /// Per-session latency breakdown in milliseconds.
@@ -367,6 +402,9 @@ pub struct Response {
     /// The failed dictation kept for `retry`, on every status and event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_audio: Option<FailedAudio>,
+    /// Status only: count-only correction-learning diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learning: Option<Learning>,
     /// Daemon-internal, never on the wire: the session a successful start began.
     #[serde(skip)]
     pub session: Option<u64>,

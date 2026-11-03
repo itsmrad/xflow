@@ -84,10 +84,13 @@ impl Receipt {
     /// short dictation that filled an empty field has nothing to tell it apart
     /// from the next message typed there, so it is not trusted.
     pub fn corrected<'a>(&self, field: &'a str) -> Option<&'a str> {
-        if self.before.is_empty()
-            && self.after.is_empty()
-            && self.inserted.split_whitespace().count() < 4
-        {
+        self.span(field)
+            .filter(|span| similar(&self.inserted, span))
+    }
+    /// The span between the anchors, whether or not it still reads as the
+    /// dictation; the same short-dictation guard as `corrected`.
+    pub fn span<'a>(&self, field: &'a str) -> Option<&'a str> {
+        if self.whole_field() && self.inserted.split_whitespace().count() < 4 {
             return None;
         }
         let unique = |anchor: &str| {
@@ -105,9 +108,36 @@ impl Receipt {
         } else {
             unique(&self.after)?
         };
-        field
-            .get(start..end)
-            .filter(|span| similar(&self.inserted, span))
+        field.get(start..end)
+    }
+    /// The dictation filled the field: nothing around it tells it apart from
+    /// the next message typed there.
+    fn whole_field(&self) -> bool {
+        self.before.is_empty() && self.after.is_empty()
+    }
+    /// A read that no longer looks like the dictation (see `corrected`) may be
+    /// the user retyping part of it, or the next message. It counts as an edit
+    /// in progress only while a context anchor is still found exactly once, or,
+    /// for a dictation that filled the field, while the field keeps a whole
+    /// word at the start or end of `last` (the last span that looked like the
+    /// dictation): "R, call me" while "Rimpas or Kar, call me" is retyped. A
+    /// placeholder or a new message after a send keeps neither.
+    pub fn editing(&self, field: &str, last: &str) -> bool {
+        let Some(span) = self.span(field) else {
+            return false;
+        };
+        if !self.whole_field() {
+            return true;
+        }
+        let (a, b) = (parts(last), parts(span));
+        let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+        let suffix = a
+            .iter()
+            .rev()
+            .zip(b.iter().rev())
+            .take_while(|(x, y)| x == y)
+            .count();
+        prefix + suffix > 0
     }
 }
 /// The comparison form of a character. Smart quotes and dashes, no-break
@@ -174,33 +204,98 @@ fn lcs(a: &[String], b: &[String]) -> Vec<Vec<u16>> {
     }
     lcs
 }
+/// Lowercase words, split at punctuation and camelCase humps.
+fn parts(s: &str) -> Vec<String> {
+    let mut parts = vec![];
+    let mut part = String::new();
+    let mut lower = false;
+    for c in s.chars() {
+        if (!c.is_alphanumeric() || (lower && c.is_uppercase())) && !part.is_empty() {
+            parts.push(std::mem::take(&mut part));
+        }
+        if c.is_alphanumeric() {
+            part.extend(c.to_lowercase());
+        }
+        lower = c.is_lowercase() || c.is_numeric();
+    }
+    if !part.is_empty() {
+        parts.push(part);
+    }
+    parts
+}
 /// At least half of the original words survive, in order: an edit of the
 /// dictation, not a different text such as the next message. Words are split
 /// at punctuation and camelCase humps, so "get user name" survives as
-/// getUserName.
+/// getUserName. A short text where the user respelled a run of words passes on
+/// its letters instead (see `similar_letters`).
 fn similar(original: &str, corrected: &str) -> bool {
-    let parts = |s: &str| {
-        let mut parts = vec![];
-        let mut part = String::new();
-        let mut lower = false;
-        for c in s.chars() {
-            if (!c.is_alphanumeric() || (lower && c.is_uppercase())) && !part.is_empty() {
-                parts.push(std::mem::take(&mut part));
-            }
-            if c.is_alphanumeric() {
-                part.extend(c.to_lowercase());
-            }
-            lower = c.is_lowercase() || c.is_numeric();
-        }
-        if !part.is_empty() {
-            parts.push(part);
-        }
-        parts
-    };
     let (a, b) = (parts(original), parts(corrected));
-    a.len() <= MAX_DIFF_WORDS
-        && b.len() <= MAX_DIFF_WORDS
-        && usize::from(lcs(&a, &b)[0][0]) * 2 >= a.len()
+    if a.len() > MAX_DIFF_WORDS || b.len() > MAX_DIFF_WORDS {
+        return false;
+    }
+    let lcs = lcs(&a, &b);
+    usize::from(lcs[0][0]) * 2 >= a.len() || similar_letters(&a, &b, &lcs)
+}
+/// The letter fallback runs on short texts only, so its edit distances stay
+/// small: at most this many words and letters in the original, and runs of at
+/// most this many letters on each side.
+const MAX_LETTER_PARTS: usize = 40;
+const MAX_LETTER_TOTAL: usize = 400;
+const MAX_RUN_LETTERS: usize = 64;
+/// At least half of the original's letters survive: each kept word counts its
+/// letters, and each respelled run of up to four words against up to three
+/// counts the letters that stayed ("Rimpas or Kar, call me" against "Rimpa
+/// Sarkar, call me" keeps 16 of 17). A short message where one name was
+/// respelled is still the same message; "Hi Rimpas or Kar" against "Hi there"
+/// keeps 3 of 13 and is not.
+fn similar_letters(a: &[String], b: &[String], lcs: &[Vec<u16>]) -> bool {
+    let total: usize = a.iter().map(|w| w.chars().count()).sum();
+    if total == 0
+        || total > MAX_LETTER_TOTAL
+        || a.len() > MAX_LETTER_PARTS
+        || b.len() > MAX_LETTER_PARTS
+    {
+        return false;
+    }
+    let respelled = |x: &[String], y: &[String]| -> usize {
+        let (x, y): (Vec<char>, Vec<char>) = (x.concat().chars().collect(), y.concat().chars().collect());
+        if x.len() > MAX_RUN_LETTERS || y.len() > MAX_RUN_LETTERS {
+            return 0;
+        }
+        x.len().saturating_sub(distance(&x, &y))
+    };
+    let (mut i, mut j, mut from, mut to, mut kept) = (0, 0, 0, 0, 0);
+    loop {
+        let matched = i < a.len() && j < b.len() && a[i] == b[j];
+        if matched || (i == a.len() && j == b.len()) {
+            if (from < i || to < j) && i - from <= MAX_HUNK_WORDS + 1 && j - to <= MAX_HUNK_WORDS {
+                kept += respelled(&a[from..i], &b[to..j]);
+            }
+            if !matched {
+                break;
+            }
+            kept += a[i].chars().count();
+            (i, j) = (i + 1, j + 1);
+            (from, to) = (i, j);
+        } else if j == b.len() || (i < a.len() && lcs[i + 1][j] >= lcs[i][j + 1]) {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    kept * 2 >= total
+}
+
+/// What one correction teaches: terms to learn, and corrections back to a term
+/// the dictionary already had, whose recognition hint did not take.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Corrections {
+    /// New terms, at most four.
+    pub new: Vec<Replacement>,
+    /// At most four; `to` is the dictionary's own spelling of the term.
+    pub known: Vec<Replacement>,
+    /// Why nothing new was learned, when `new` is empty.
+    pub rejected: &'static str,
 }
 
 /// Close word corrections from `original` to `corrected` (at most four), skipping
@@ -212,6 +307,21 @@ pub fn corrections(
     corrected: &str,
     dictionary: &DictionaryConfig,
 ) -> Result<Vec<Replacement>, &'static str> {
+    let found = review(original, corrected, dictionary)?;
+    if found.new.is_empty() {
+        Err(found.rejected)
+    } else {
+        Ok(found.new)
+    }
+}
+/// `corrections`, plus the hunks that respell a term the dictionary already
+/// has (see `DictionaryConfig::promote` and `derive`). Err only when there is
+/// neither.
+pub fn review(
+    original: &str,
+    corrected: &str,
+    dictionary: &DictionaryConfig,
+) -> Result<Corrections, &'static str> {
     // Bounds the work below, punctuation-only tokens included.
     if original.split_whitespace().count() > MAX_DIFF_WORDS
         || corrected.split_whitespace().count() > MAX_DIFF_WORDS
@@ -235,16 +345,14 @@ pub fn corrections(
     let (la, lb) = (lower(&a), lower(&b));
     // Edits are the unmatched runs between matched words.
     let lcs = lcs(&la, &lb);
-    let known = |word: &str| {
+    let never = |word: &str| {
         let word = word.to_lowercase();
-        dictionary
-            .words
-            .iter()
-            .chain(&dictionary.never_learn)
-            .any(|known| known.to_lowercase() == word)
+        dictionary.never_learn.iter().any(|w| w.to_lowercase() == word)
     };
-    let mut found: Vec<Replacement> = vec![];
-    let mut rejected = "no-edit";
+    let mut found = Corrections {
+        rejected: "no-edit",
+        ..Corrections::default()
+    };
     let (mut i, mut j, mut from, mut to) = (0, 0, 0, 0);
     loop {
         let matched = i < a.len() && j < b.len() && la[i] == lb[j];
@@ -252,21 +360,25 @@ pub fn corrections(
             if from < i || to < j {
                 match hunk(&a[from..i], &b[to..j]) {
                     // A removed word is not learned back in either direction.
-                    Ok(c)
-                        if known(&c.to)
-                            || dictionary.never_learn.contains(&c.from.to_lowercase()) =>
-                    {
-                        rejected = "known";
-                    }
+                    Ok(c) if never(&c.to) || never(&c.from) => found.rejected = "known",
                     Ok(c) => {
-                        if !found
-                            .iter()
-                            .any(|f| f.to.to_lowercase() == c.to.to_lowercase())
-                        {
-                            found.push(c);
+                        let lower = c.to.to_lowercase();
+                        let stored = dictionary.words.iter().find(|w| w.to_lowercase() == lower);
+                        let (list, term) = match stored {
+                            Some(word) => {
+                                found.rejected = "known";
+                                (&mut found.known, word.clone())
+                            }
+                            None => (&mut found.new, c.to),
+                        };
+                        if !list.iter().any(|f| f.to.to_lowercase() == lower) {
+                            list.push(Replacement {
+                                from: c.from,
+                                to: term,
+                            });
                         }
                     }
-                    Err(reason) => rejected = reason,
+                    Err(reason) => found.rejected = reason,
                 }
             }
             if !matched {
@@ -280,9 +392,10 @@ pub fn corrections(
             j += 1;
         }
     }
-    found.truncate(MAX_CANDIDATES);
-    if found.is_empty() {
-        Err(rejected)
+    found.new.truncate(MAX_CANDIDATES);
+    found.known.truncate(MAX_CANDIDATES);
+    if found.new.is_empty() && found.known.is_empty() {
+        Err(found.rejected)
     } else {
         Ok(found)
     }
@@ -309,14 +422,21 @@ fn hunk(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
 fn key(token: &str) -> &str {
     token.trim_matches(|c: char| !c.is_alphanumeric())
 }
-/// One edit is learnable when it replaces 1-3 plain dictated words with a term
-/// of 1-3 words that looks or sounds like them. Learning only adds vocabulary,
-/// so the term may be code-like (`useEffect`, `Next.js`, `k8s`, `shadcn/ui`).
+/// One edit is learnable when it replaces 1-3 plain dictated words (four for a
+/// term of one or two) with a term of 1-3 words that looks or sounds like them.
+/// Learning only adds vocabulary, so the term may be code-like (`useEffect`,
+/// `Next.js`, `k8s`, `shadcn/ui`).
 /// Insertions, deletions, case or punctuation changes, numbers, URLs, spoken
 /// punctuation and swaps between everyday words (their/there, deploy/deployed,
 /// every day/everyday) are not.
 fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
-    if from.is_empty() || to.is_empty() || from.len() > MAX_HUNK_WORDS || to.len() > MAX_HUNK_WORDS
+    // Four dictated words may make a name of one or two ("Rim pass or car" ->
+    // "Rimpa Sarkar").
+    let heard = from.len();
+    if from.is_empty()
+        || to.is_empty()
+        || to.len() > MAX_HUNK_WORDS
+        || heard > MAX_HUNK_WORDS + usize::from(to.len() <= 2)
     {
         return Err("shape");
     }
@@ -356,6 +476,11 @@ fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
             .collect()
     };
     let (x, y) = (letters(&from), letters(&to));
+    // Four words joined letter for letter ("a lot of fun" -> "alotoffun") are a
+    // typing choice, not a misrecognition; snap never joins four words either.
+    if heard > MAX_HUNK_WORDS && x == y {
+        return Err("shape");
+    }
     // At most a third of the letters changed, or the same consonant skeleton.
     let close = distance(&x, &y) * 3 <= x.len().max(y.len())
         || (x.len().min(y.len()) >= 5 && sounds(&x).len() >= 3 && sounds(&x) == sounds(&y));
@@ -460,11 +585,17 @@ fn common(word: &str) -> bool {
     COMMON.split_whitespace().any(|common| common == word)
 }
 
+/// Correction rules `derive` may add for one term, and in all. Counted
+/// conservatively: every replacement that targets a dictionary word counts,
+/// whoever wrote it.
+const MAX_DERIVED_PER_TERM: usize = 3;
+const MAX_DERIVED: usize = 100;
+
 impl DictionaryConfig {
-    /// Save learned corrections as vocabulary only: the corrected word becomes a
-    /// recognition hint (first, so provider hint limits keep it). Learning never
-    /// writes replacements, which would rewrite every future transcript.
-    /// Returns the newly learned words.
+    /// Save learned corrections as vocabulary: the corrected word becomes a
+    /// recognition hint (first, so provider hint limits keep it). A first
+    /// correction never writes a replacement, which would rewrite every future
+    /// transcript (see `derive` for the second). Returns the newly learned words.
     pub fn learn(&mut self, found: &[Replacement]) -> Vec<String> {
         let mut added = Vec::new();
         for c in found {
@@ -481,7 +612,104 @@ impl DictionaryConfig {
         }
         added
     }
+    /// Move each corrected term the dictionary already has (its stored
+    /// spelling, `known` from `review`) to the front, so provider hint limits
+    /// keep the words the user keeps correcting. Returns the terms that moved.
+    pub fn promote(&mut self, known: &[Replacement]) -> Vec<String> {
+        let mut moved = Vec::new();
+        for c in known {
+            if let Some(i) = self.words.iter().position(|w| *w == c.to).filter(|&i| i > 0) {
+                let word = self.words.remove(i);
+                self.words.insert(0, word);
+                moved.push(c.to.clone());
+            }
+        }
+        moved
+    }
+    /// A second correction of a term the dictionary already had (`known` from
+    /// `review`): its recognition hint did not take, and snap cannot restore a
+    /// name misheard with a function word inside ("Rimpas or Kar"), so that
+    /// exact phrase becomes an ordinary replacement to the stored spelling.
+    /// Only a narrow shape: 2-3 ASCII words of two letters or more, at least one
+    /// of five; the first and last uncommon (not everyday words, names or
+    /// function words), a middle one a function word. Never a single word
+    /// ("cloud" stays "cloud"), a phrase snap already restores, a phrase over an
+    /// existing rule or holding another dictionary word, or past the caps.
+    /// Replacements match whole words with spaces between them only, so
+    /// "Rimpas, or Kar" is left alone. Returns the rules added.
+    pub fn derive(&mut self, known: &[Replacement]) -> Vec<Replacement> {
+        let mut added = Vec::new();
+        for c in known {
+            if let Some(rule) = self.phrase(c) {
+                self.replacements.push(rule.clone());
+                added.push(rule);
+            }
+        }
+        added
+    }
+    fn phrase(&self, c: &Replacement) -> Option<Replacement> {
+        let tokens: Vec<String> = c.from.split(' ').map(str::to_ascii_lowercase).collect();
+        let function = |w: &str| crate::snap::FUNCTION_WORDS.contains(&w);
+        let uncommon =
+            |w: &str| !crate::words::common(w) && !crate::words::name(w) && !common(w) && !function(w);
+        let (first, last) = (tokens.first()?, tokens.last()?);
+        let shape = (2..=3).contains(&tokens.len())
+            && tokens
+                .iter()
+                .all(|t| t.len() >= 2 && t.bytes().all(|b| b.is_ascii_alphabetic()))
+            && tokens.iter().any(|t| t.len() >= 5)
+            && uncommon(first.as_str())
+            && uncommon(last.as_str())
+            && tokens[1..tokens.len() - 1].iter().all(|t| function(t.as_str()));
+        // The stored spelling of an active term the user did not remove.
+        let to = self.words.iter().find(|w| **w == c.to)?;
+        let lower = to.to_lowercase();
+        if !shape || self.never_learn.iter().any(|w| w.to_lowercase() == lower) {
+            return None;
+        }
+        let words = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_lowercase).collect() };
+        let letters = |s: &str| -> String {
+            s.chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect()
+        };
+        let targets = |r: &Replacement| self.words.iter().any(|w| w.to_lowercase() == r.to.to_lowercase());
+        // Over an existing rule, whatever its target (a manual one is never replaced).
+        let ruled = self.replacements.iter().any(|r| words(&r.from) == tokens);
+        let holds_word = self.words.iter().any(|w| {
+            let w = words(w);
+            !w.is_empty() && tokens.windows(w.len()).any(|window| window == w.as_slice())
+        });
+        let per_term = self
+            .replacements
+            .iter()
+            .filter(|r| r.to.to_lowercase() == lower)
+            .count();
+        let derived = self.replacements.iter().filter(|r| targets(r)).count();
+        if ruled
+            || holds_word
+            || letters(&c.from) == letters(to)
+            || per_term >= MAX_DERIVED_PER_TERM
+            || derived >= MAX_DERIVED
+            || self.replacements.len() >= MAX_DICTIONARY_ITEMS
+        {
+            return None;
+        }
+        // Snap already restores it, so the rule would be redundant.
+        let mut config = crate::config::Config::default();
+        config.dictionary = self.clone();
+        if crate::snap::apply(&c.from, &config, false) == *to {
+            return None;
+        }
+        Some(Replacement {
+            from: c.from.clone(),
+            to: to.clone(),
+        })
+    }
     /// Remove a word. A learned word is remembered so it is never learned again.
+    /// Replacements are left alone, whoever wrote them: `targeting` lists those
+    /// that still produce the word, for `dictionary unreplace`.
     pub fn forget(&mut self, word: &str) {
         self.words.retain(|w| w != word);
         let lower = word.to_lowercase();
@@ -496,6 +724,36 @@ impl DictionaryConfig {
                 self.never_learn.push(lower);
             }
         }
+    }
+    /// A stable fingerprint of every list and the auto-learn switch (each entry
+    /// length-prefixed, see `stable_hash`), to tell whether the daemon's
+    /// dictionary matches config.toml without sending a word.
+    pub fn fingerprint(&self) -> u64 {
+        let mut bytes = vec![u8::from(self.auto_learn)];
+        let lists = [&self.words, &self.learned, &self.never_learn];
+        let pairs = self.replacements.iter().flat_map(|r| [&r.from, &r.to]);
+        for (i, list) in lists.into_iter().enumerate() {
+            bytes.extend((list.len() as u64).to_le_bytes());
+            bytes.push(i as u8);
+            for entry in list {
+                bytes.extend((entry.len() as u64).to_le_bytes());
+                bytes.extend(entry.as_bytes());
+            }
+        }
+        bytes.extend((self.replacements.len() as u64).to_le_bytes());
+        for entry in pairs {
+            bytes.extend((entry.len() as u64).to_le_bytes());
+            bytes.extend(entry.as_bytes());
+        }
+        crate::stable_hash(&bytes)
+    }
+    /// Replacements whose result is `word` (case-insensitive).
+    pub fn targeting(&self, word: &str) -> Vec<&Replacement> {
+        let lower = word.to_lowercase();
+        self.replacements
+            .iter()
+            .filter(|r| r.to.to_lowercase() == lower)
+            .collect()
     }
 }
 
@@ -855,6 +1113,264 @@ mod tests {
         );
         assert_eq!(receipt.corrected(""), None);
         assert_eq!(receipt.corrected("lunch at noon anyone"), None);
+    }
+
+    #[test]
+    fn short_messages_with_a_respelled_name_are_still_the_dictation() {
+        let name = pair("Rimpas or Kar", "Rimpa Sarkar");
+        for (original, corrected) in [
+            ("Rimpas or Kar, call me", "Rimpa Sarkar, call me"),
+            ("Hi Rimpas or Kar", "Hi Rimpa Sarkar"),
+            ("Call Rimpas or Kar", "Call Rimpa Sarkar"),
+            ("Rimpas or Kar here", "Rimpa Sarkar here"),
+            // Long sentences already passed on their words.
+            ("Ask Rimpas or Kar to join", "Ask Rimpa Sarkar to join"),
+            (
+                "Thanks Rimpas or Kar for the update",
+                "Thanks Rimpa Sarkar for the update",
+            ),
+        ] {
+            assert_eq!(learn(original, corrected), name, "{original}");
+        }
+        // Four dictated words may make a name of one or two.
+        assert_eq!(
+            learn(
+                "Thanks Rim pass or car for the update",
+                "Thanks Rimpa Sarkar for the update"
+            ),
+            pair("Rim pass or car", "Rimpa Sarkar")
+        );
+        // A different short reply is not a correction of the dictation.
+        for (original, corrected) in [
+            ("Hi Rimpas or Kar", "Hi there"),
+            ("Call Rimpas or Kar", "Call mom"),
+            ("deploy kubernetis now", "lunch at noon with Kubernetes"),
+        ] {
+            assert!(!similar(original, corrected), "{corrected}");
+            assert_eq!(
+                corrections(original, corrected, &DictionaryConfig::default()).unwrap_err(),
+                "dissimilar"
+            );
+        }
+        // Ordinary edits keep their old results.
+        assert_eq!(
+            corrections("Thanks Rimpa circa for the update", "Thanks Rimpa Sarkar for the update", &DictionaryConfig::default()).unwrap_err(),
+            "not-close"
+        );
+        assert_eq!(
+            corrections("we went their", "we went there", &DictionaryConfig::default()).unwrap_err(),
+            "not-close"
+        );
+    }
+
+    #[test]
+    fn four_word_names_only_and_never_a_plain_join() {
+        assert_eq!(
+            candidate(&["Rim", "pass", "or", "car"], &["Rimpa", "Sar", "Kar"]).unwrap_err(),
+            "shape"
+        );
+        assert_eq!(
+            candidate(&["a", "lot", "of", "fun"], &["alotoffun"]).unwrap_err(),
+            "shape"
+        );
+        assert_eq!(
+            candidate(&["see", "docs", "slash", "api", "slash"], &["docs/api"]).unwrap_err(),
+            "shape"
+        );
+        assert!(learn("we had a lot of fun today", "we had alotoffun today").is_empty());
+    }
+
+    #[test]
+    fn letter_fallback_is_bounded() {
+        // One huge token (CJK text, an identifier) is never compared letter by letter.
+        let long = "日".repeat(10_000);
+        let started = std::time::Instant::now();
+        assert!(!similar(&format!("{long} x"), &format!("{long}y z")));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        // Over 40 words, the word rule alone decides.
+        let many: Vec<String> = (0..41).map(|i| format!("w{i}")).collect();
+        assert!(!similar_letters(&many, &many, &lcs(&many, &many)));
+        assert!(similar_letters(&many[..40], &many[..40], &lcs(&many[..40], &many[..40])));
+        // A respelled run over 64 letters keeps none of them.
+        for (n, kept) in [(64, true), (65, false)] {
+            let (a, b) = (["a".repeat(n)], [format!("{}b", "a".repeat(n - 1))]);
+            assert_eq!(similar_letters(&a, &b, &lcs(&a, &b)), kept, "{n}");
+        }
+    }
+
+    #[test]
+    fn receipt_tells_a_retype_from_the_next_message() {
+        let pasted = "Rimpas or Kar, call me ";
+        let receipt = Receipt::new(pasted, pasted, None).unwrap();
+        // Retyping the name keeps the rest of the message.
+        assert_eq!(receipt.corrected("R, call me "), None);
+        assert!(receipt.editing("R, call me ", pasted));
+        assert!(receipt.editing("Rimpas or Kar, ", pasted));
+        // Sent: a cleared field, a placeholder or a new message keeps no remnant.
+        for field in ["", "Message #general", "Hi there", "R"] {
+            assert!(!receipt.editing(field, pasted), "{field:?}");
+        }
+        // An anchored dictation is being edited while its anchors are found once.
+        let receipt = Receipt::new("Notes: we use postgress", "we use postgress", None).unwrap();
+        assert!(receipt.editing("Notes: ", "we use postgress"));
+        assert!(!receipt.editing("Other text", "we use postgress"));
+        // The short-dictation guard holds for edits too.
+        let receipt = Receipt::new("Rimpas or Kar", "Rimpas or Kar", None).unwrap();
+        assert_eq!(receipt.span("Rimpa Sarkar"), None);
+        assert!(!receipt.editing("Rimpa", "Rimpas or Kar"));
+    }
+
+    fn known(words: &[&str]) -> DictionaryConfig {
+        DictionaryConfig {
+            words: words.iter().map(|w| w.to_string()).collect(),
+            ..DictionaryConfig::default()
+        }
+    }
+
+    #[test]
+    fn a_known_term_is_reported_with_its_stored_spelling_and_moves_first() {
+        let mut dictionary = known(&["Postgres", "xflow", "Rimpa Sarkar"]);
+        let original = "Hi Rimpas or Kar, how are you?";
+        let corrected = "Hi rimpa sarkar, how are you?";
+        assert_eq!(
+            corrections(original, corrected, &dictionary).unwrap_err(),
+            "known"
+        );
+        let found = review(original, corrected, &dictionary).unwrap();
+        assert!(found.new.is_empty());
+        assert_eq!(
+            found.known,
+            [Replacement {
+                from: "Rimpas or Kar".into(),
+                to: "Rimpa Sarkar".into()
+            }]
+        );
+        assert_eq!(dictionary.promote(&found.known), ["Rimpa Sarkar"]);
+        assert_eq!(dictionary.words, ["Rimpa Sarkar", "Postgres", "xflow"]);
+        // Already first: nothing moves, nothing to save.
+        assert!(dictionary.promote(&found.known).is_empty());
+        // A removed word stays removed: not known, not new.
+        dictionary.never_learn.push("kubernetes".into());
+        assert_eq!(
+            review("use kubernetis", "use Kubernetes", &dictionary).unwrap_err(),
+            "known"
+        );
+    }
+
+    fn rule(from: &str, to: &str) -> Replacement {
+        Replacement {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    #[test]
+    fn a_second_correction_adds_only_a_narrow_exact_rule() {
+        let mut dictionary = known(&["Rimpa Sarkar"]);
+        let found = review("Hi Rimpas or Kar", "Hi Rimpa Sarkar", &dictionary).unwrap();
+        assert_eq!(
+            dictionary.derive(&found.known),
+            [rule("Rimpas or Kar", "Rimpa Sarkar")]
+        );
+        assert_eq!(dictionary.replacements, [rule("Rimpas or Kar", "Rimpa Sarkar")]);
+        // The same phrase again: already a rule.
+        assert!(dictionary.derive(&found.known).is_empty());
+        assert_eq!(dictionary.replacements.len(), 1);
+
+        let refused = |dictionary: &DictionaryConfig, from: &str, to: &str| {
+            assert_eq!(dictionary.phrase(&rule(from, to)), None, "{from} -> {to}");
+        };
+        let dictionary = known(&[
+            "Rimpa Sarkar",
+            "Claud",
+            "adaws",
+            "Rimpasorkar",
+            "Sarkarion",
+            "Kasa Bianca",
+        ]);
+        // Never a single word: "cloud" stays "cloud" everywhere.
+        refused(&dictionary, "cloud", "Claud");
+        refused(&dictionary, "casa", "Kasa Bianca");
+        // Everyday or name outer words, a middle word that is not a function word,
+        // no word of five letters, or not plain ASCII letters.
+        refused(&dictionary, "Rimpas or car", "Rimpa Sarkar");
+        refused(&dictionary, "ad AWS", "adaws");
+        refused(&dictionary, "kar do", "Rimpa Sarkar");
+        refused(&dictionary, "Rimpas aur Kar", "Rimpa Sarkar");
+        refused(&dictionary, "Rimp or Kar", "Rimpa Sarkar");
+        refused(&dictionary, "Rímpas or Kar", "Rimpa Sarkar");
+        refused(&dictionary, "Rimpas, or Kar", "Rimpa Sarkar");
+        // The same letters, or a phrase snap already restores.
+        refused(&dictionary, "Rimpas or Kar", "Rimpasorkar");
+        refused(&dictionary, "Sarkar ian", "Sarkarion");
+        // Only a term the dictionary has, and never one the user removed.
+        refused(&dictionary, "Rimpas or Kar", "Rimpa Sarkhar");
+        let mut removed = known(&["Rimpa Sarkar"]);
+        removed.never_learn.push("rimpa sarkar".into());
+        refused(&removed, "Rimpas or Kar", "Rimpa Sarkar");
+        // A manual rule for the phrase is never replaced, whatever its target.
+        let mut manual = known(&["Rimpa Sarkar"]);
+        manual.replacements.push(rule("rimpas  or kar", "Rimpa S."));
+        refused(&manual, "Rimpas or Kar", "Rimpa Sarkar");
+        // A phrase holding another dictionary word is left to that word.
+        refused(&known(&["Rimpa Sarkar", "Kar"]), "Rimpas or Kar", "Rimpa Sarkar");
+        // At most three rules per term and a hundred that target dictionary words.
+        let mut capped = known(&["Rimpa Sarkar"]);
+        for from in ["Rimpaz Sarkaz", "Rimpos Sarkor", "Rumpas Sarkur"] {
+            capped.replacements.push(rule(from, "Rimpa Sarkar"));
+        }
+        refused(&capped, "Rimpas or Kar", "Rimpa Sarkar");
+        let mut full = known(&["Rimpa Sarkar"]);
+        for i in 0..MAX_DERIVED {
+            let word = format!("Term{i}");
+            full.words.push(word.clone());
+            full.replacements.push(rule(&format!("termz{i} termx"), &word));
+        }
+        refused(&full, "Rimpas or Kar", "Rimpa Sarkar");
+    }
+
+    #[test]
+    fn removing_a_word_keeps_and_names_the_rules_that_write_it() {
+        let mut dictionary = known(&["Rimpa Sarkar"]);
+        dictionary.learned = vec!["Rimpa Sarkar".into()];
+        dictionary.replacements = vec![
+            rule("Rimpas or Kar", "Rimpa Sarkar"),
+            rule("gonna", "going to"),
+        ];
+        dictionary.forget("rimpa sarkar");
+        assert!(dictionary.words.is_empty() && dictionary.learned.is_empty());
+        assert_eq!(dictionary.never_learn, ["rimpa sarkar"]);
+        assert_eq!(dictionary.replacements.len(), 2);
+        assert_eq!(
+            dictionary.targeting("Rimpa Sarkar"),
+            [&rule("Rimpas or Kar", "Rimpa Sarkar")]
+        );
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_covers_every_list() {
+        let base = known(&["Postgres"]);
+        assert_eq!(base.fingerprint(), known(&["Postgres"]).fingerprint());
+        let mut changed = vec![];
+        let mut d = base.clone();
+        d.learned.push("Postgres".into());
+        changed.push(d);
+        let mut d = base.clone();
+        d.never_learn.push("postgres".into());
+        changed.push(d);
+        let mut d = base.clone();
+        d.replacements.push(rule("post gres", "Postgres"));
+        changed.push(d);
+        let mut d = base.clone();
+        d.auto_learn = false;
+        changed.push(d);
+        // Moving a word between lists changes it too.
+        let mut d = DictionaryConfig::default();
+        d.learned.push("Postgres".into());
+        changed.push(d);
+        for d in changed {
+            assert_ne!(d.fingerprint(), base.fingerprint(), "{d:?}");
+        }
     }
 
     /// Time per call at typical, 20-minute (#85) and pathological sizes:

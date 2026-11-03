@@ -11,7 +11,7 @@ use std::{
 
 /// Closed-class words never end a joined term ("just in" is not Justin), and
 /// sound-alikes never span one ("so late" is not SQLite).
-const FUNCTION_WORDS: [&str; 46] = [
+pub(crate) const FUNCTION_WORDS: [&str; 46] = [
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "get", "got", "had", "has",
     "have", "he", "her", "his", "i", "if", "in", "into", "is", "it", "its", "no", "not", "of",
     "on", "or", "our", "she", "so", "such", "than", "that", "the", "they", "this", "to", "up",

@@ -625,6 +625,44 @@ fn search_field(
                 .any(|word| label.contains(word))
         })
 }
+/// Search boxes and address bars are not watched for corrections (an edit there
+/// is a query, not a fix of the dictation): by role, subrole, Chromium's omnibox
+/// class, or a label naming one as a whole word, so a Slack channel called
+/// #research ("Message #research") is still watched.
+fn search_or_address(element: &Owned) -> bool {
+    let labels = [
+        "AXTitle",
+        "AXDescription",
+        "AXIdentifier",
+        "AXDOMIdentifier",
+        "AXPlaceholderValue",
+    ]
+    .iter()
+    .filter_map(|name| element.text(name));
+    let omnibox = element
+        .attribute("AXDOMClassList")
+        .is_some_and(|classes| dom_class(&classes, "OmniboxViewViews"));
+    omnibox
+        || search_label(
+            element.text("AXRole").as_deref(),
+            element.text("AXSubrole").as_deref(),
+            labels,
+        )
+}
+fn search_label(
+    role: Option<&str>,
+    subrole: Option<&str>,
+    mut labels: impl Iterator<Item = String>,
+) -> bool {
+    role == Some("AXSearchField")
+        || subrole == Some("AXSearchField")
+        || labels.any(|label| {
+            label
+                .to_ascii_lowercase()
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|word| matches!(word, "search" | "address" | "urlbar"))
+        })
+}
 /// Labels, never AXValue: terminal contents may include secrets.
 fn terminal_input_label(label: &str) -> bool {
     let label = label.trim().to_ascii_lowercase();
@@ -1553,6 +1591,29 @@ mod tests {
             None,
             labels(&["Message body", "compose"])
         ));
+    }
+    #[test]
+    fn watched_fields_skip_search_by_role_or_whole_word_only() {
+        let labels = |l: &[&str]| {
+            l.iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .into_iter()
+        };
+        assert!(search_label(Some("AXSearchField"), None, labels(&[])));
+        assert!(search_label(None, Some("AXSearchField"), labels(&[])));
+        for label in [
+            "Search",
+            "Address and search bar",
+            "WEB_BROWSER_ADDRESS_AND_SEARCH_FIELD",
+            "urlbar-input",
+        ] {
+            assert!(search_label(Some("AXTextField"), None, labels(&[label])), "{label}");
+        }
+        // A word that merely contains "search" is not a search field.
+        for label in ["Message #research", "Researchers channel", "addressee", "compose"] {
+            assert!(!search_label(Some("AXTextArea"), None, labels(&[label])), "{label}");
+        }
     }
     #[test]
     fn secure_role_subrole_or_protected_content_is_never_read() {
