@@ -6,6 +6,13 @@
 - **Spoken underscore and dash work in every app.** In a browser, chat app or Electron app, "EBS underscore 321 underscore GHJ" becomes `EBS_321_GHJ` and "Hi dash There" becomes `Hi-There`. Outside terminals and editors a dash joins only IDs (capitals, digits, single letters, camelCase) or two capitalised words; "a dash of salt", "the 100 meter dash today", "underscore the point" and "Dash" as a name stay as said. Dot, slash, colon, operators and quotes stay in terminals and editors. Whisper's commas around the word no longer block it: "Hi, Dash, There." becomes `Hi-There.` `formatting.spoken_code = false` turns it all off.
 - **"cloud.ai" becomes Claude.ai.** Bare "cloud" is unchanged.
 
+### Learning from corrections
+- **See what was saved, and take it back.** On macOS, when xflow learns a word from your correction, the pill shows it for one second with an Undo ×; `xflow dictionary undo` takes the latest save back afterwards, once, until config.toml changes or xflowd restarts. Undo restores the file exactly as it was and never blocks the word; `xflow dictionary remove` still does that.
+- **Short messages learn names.** Retyping a name in a short message (`Rimpas or Kar, call me` → `Rimpa Sarkar, call me`) is learned, and four misheard words may become a one- or two-word name. Replies that are only the name, three words or fewer, are still not learned.
+- **Names you keep correcting stick better.** Correcting a word that's already saved moves it to the front of the hint list. Correcting the same misheard phrase of a saved name a second time adds that exact phrase as a replacement, for 2–3 plain words only; a single word like "cloud" is never rewritten, and a comma or line break inside the phrase leaves it alone. Hints still can't guarantee the next transcript.
+- **Fewer truncated saves.** A change folded into Enter, or arriving just after the field empties, now learns nothing; search boxes and address bars are no longer watched. `xflow doctor` shows learning counts and whether xflowd's dictionary matches config.toml, without any words.
+- **No lost edits.** Every xflow command that writes config.toml, the TUI and xflowd now take the same lock, and xflowd always ends up with what's on disk after a learn, undo, CLI change or reload.
+
 ## 0.2.1-beta — 2026-11-02
 
 ### Recording pill

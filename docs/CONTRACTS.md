@@ -55,7 +55,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 
 | Request (`"command"`) | Fields | Reply / semantics |
 | --- | --- | --- |
-| `status` | — | state, level, version, protocol, provider, model, mode (while active), optional daemon permissions (accessibility, input_monitoring, keyboard_events); last successful timings when inactive, cleared when a session fails |
+| `status` | — | state, level, version, protocol, provider, model, mode (while active), optional daemon permissions (accessibility, input_monitoring, keyboard_events); last successful timings when inactive, cleared when a session fails; `learning`: count-only correction-learning diagnostics (watches, outcomes, reads, unread_max, late, merged, editing), dictionary entry counts, its `fingerprint` and whether an undo is available — never words |
 | `start`, `toggle` | `mode` ("dictation"/"command", default dictation), `context` (AppContext captured by the caller), `t0_us` (caller CLOCK_MONOTONIC µs at hotkey), `delivery` ("inject" default / "clipboard" / "none" — none leaves the desktop untouched so a subscribed client such as `xflow listen` can print the text), `hold` (bool, default false: the client keeps the socket open; the daemon closes it when the session ends and cancels the session if the socket closes first, so a killed client never leaves the mic on. `xflow listen` and the TUI hold; `xflow start`, hotkeys and D-Bus don't) | Mic opens **before** any focus query; provider connection is warmed in the background |
 | `stop`, `cancel` | — | unchanged |
 | `last`, `copy_last`, `paste_last` | — | unchanged |
@@ -65,7 +65,8 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | `clear_history` | — | clears persisted rows even with history disabled; also clears the in-memory last result/timings |
 | `retry` | `full` (bool), `delivery` (as `start`), `discard` (bool) | idle only; transcribes the dictation kept by `privacy.keep_failed_audio` again, then cleans up and delivers it to the current focus. Parts already delivered are left out unless `full`; `discard` deletes it instead. Replies `processing`; the final event is a normal session's. Every status and event carries `failed_audio` (created_at, expires_at, audio_ms, partial) while one is kept |
 | `stats` | — | `stats` (sessions, words, audio_ms, today, streak, wpm, latency p50/p95) |
-| `reload` | — | idle only; stage services before swapping config; on error keep the running config and return the error; SIGHUP uses this path |
+| `reload` | — | idle only; stage services before swapping config; on error keep the running config and return the error; SIGHUP uses this path. A reload requested while one is in flight is queued (up to 8) and answered by one more read of config.toml |
+| `undo_learned` | `op` (optional; the pill's change id, absent for the latest) | undo the latest automatic dictionary change once by restoring config.toml's exact previous bytes; refused, writing nothing, after any later save, a reload, a newer change, a restart or with a wrong `op`. `message` names the words |
 | `subscribe` | — | snapshot, then every state/level event; the final event of a successful session carries `text`, `injection`, `entry`, `timings`. A learned-words event carries only `message` and leaves the state unchanged |
 | `allow` | `grant` ("input_monitoring" / "accessibility" / "microphone") | macOS: xflowd asks the system, which lists xflowd in System Settings and prompts while undecided; replies with status. A microphone reply adds `permissions.microphone` (null while undecided), read by a short-lived `xflowd --microphone` child so AVFoundation never loads in the daemon |
 | `shutdown` | — | unchanged |
@@ -144,8 +145,10 @@ and requests unchanged, and the delivery adapter always rechecks live focus.
 - `Desktop::focused_text()` — focus context plus the value of the focused editable field, from one
   lookup, for correction learning (text `None` by default; macOS Accessibility only, `None` for
   secure fields and terminals).
-- `learn::{Receipt, corrections}` and `DictionaryConfig::{learn, forget}` — pure correction learning
-  shared by the paste observer and `history_update`.
+- `learn::{Receipt, corrections, review}` and `DictionaryConfig::{learn, promote, derive, forget,
+  targeting, fingerprint}` — pure correction learning shared by the paste observer and `history_update`.
+- `FieldEvent::{Changed, Focus, Merged}` — `Merged` is a value change folded into the one before it;
+  it never schedules a read.
 - `AudioCapture::microphone()` — last successfully opened input and selection notices; default `None`.
   Status/subscription snapshots carry the optional `microphone` string; older clients can omit it.
 - `AudioCapture::finished()` — default `false`; true after capture reaches a device/buffer limit or

@@ -92,7 +92,7 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | `dictionary.words` | `[]` | e.g. ["Postgres", "Kubernetes", "xflow"] |
 | `dictionary.replacements` | `[]` | e.g. [\{ from = "postgress", to = "Postgres" \}] |
 | `dictionary.auto_learn` | `true` | learn words you correct after dictating (macOS) or in history |
-| `dictionary.learned` | `[]` | learned words; `xflow dictionary remove <word>` undoes one |
+| `dictionary.learned` | `[]` | learned words; `xflow dictionary undo` takes back the latest save |
 | `dictionary.never_learn` | `[]` | removed learned words, never learned again |
 
 ## [vocab]
@@ -248,7 +248,7 @@ lists = true                 # "one ..., two ..., three ..." / "bullet ..." beco
 words = []                   # e.g. ["Postgres", "Kubernetes", "xflow"]
 replacements = []            # e.g. [{ from = "postgress", to = "Postgres" }]
 auto_learn = true            # learn words you correct after dictating (macOS) or in history
-learned = []                 # learned words; `xflow dictionary remove <word>` undoes one
+learned = []                 # learned words; `xflow dictionary undo` takes back the latest save
 never_learn = []             # removed learned words, never learned again
 
 [vocab]
