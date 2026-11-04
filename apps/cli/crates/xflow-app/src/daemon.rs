@@ -5869,6 +5869,7 @@ mod tests {
         )
         .await
         .expect("correct and clear the prepared draft within 20 seconds");
+        std::fs::remove_file(report.join("ready")).unwrap();
         {
             let measured = lock(&learning);
             println!(
