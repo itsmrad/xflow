@@ -6,7 +6,7 @@
 use super::{
     cf_text, focus, focus_waiting, search_or_address, secure, text_reads_allowed,
     AXUIElementCreateApplication, AXUIElementCreateSystemWide, AXUIElementGetPid,
-    AXUIElementSetMessagingTimeout, CFGetTypeID, CFRelease, Focus, Owned, Ref,
+    AXUIElementSetMessagingTimeout, AccessibilityGuard, CFGetTypeID, CFRelease, Focus, Owned, Ref,
 };
 use async_trait::async_trait;
 use std::{
@@ -81,15 +81,17 @@ pub(super) struct Watch {
 }
 
 /// Pin the focused editable element if focus is still in `target`. Blocking.
-/// Search boxes and address bars are never watched.
+/// Search boxes and address bars are never watched. If finding the field
+/// turned on Chromium's accessibility, it stays on until the watch ends.
 pub(super) fn watch(target: &AppContext) -> Option<Watch> {
-    let focus = focus();
+    let mut focus = focus();
     if focus.context.app_id != target.app_id
         || focus.context.window_id != target.window_id
         || !readable(&focus)
     {
         return None;
     }
+    let accessibility = focus._accessibility.take();
     let element = focus.element?;
     if search_or_address(&element) {
         return None;
@@ -98,15 +100,20 @@ pub(super) fn watch(target: &AppContext) -> Option<Watch> {
     if unsafe { AXUIElementGetPid(element.0, &mut pid) } != 0 {
         return None;
     }
-    observe(pid, element)
+    observe(pid, element, accessibility)
 }
 /// Only known-editable fields are read: never secure fields, terminals or unknown elements.
 fn readable(focus: &Focus) -> bool {
     focus.editable == Some(true) && text_reads_allowed(focus)
 }
 /// Observe `element` of app `pid`; a watch without notifications when the app
-/// refuses an observer, so reads still work.
-fn observe(pid: i32, element: Owned) -> Option<Watch> {
+/// refuses an observer, so reads still work. `accessibility` is restored on
+/// the observer thread once its run loop has stopped, off the async runtime.
+fn observe(
+    pid: i32,
+    element: Owned,
+    accessibility: Option<AccessibilityGuard<Owned>>,
+) -> Option<Watch> {
     let element = Arc::new(Shared(element));
     let app = Arc::new(Shared(Owned::new(unsafe {
         AXUIElementCreateApplication(pid)
@@ -164,6 +171,7 @@ fn observe(pid: i32, element: Owned) -> Option<Watch> {
             CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
             drop(observer);
             drop(Box::from_raw(context));
+            drop(accessibility);
         });
     let runloop = spawned
         .ok()
@@ -457,7 +465,7 @@ mod tests {
         assert!(window.contains(&expected), "focused window is {window:?}");
         let idle = threads();
         let started = Instant::now();
-        let mut watch = observe(pid, focused()).unwrap();
+        let mut watch = observe(pid, focused(), None).unwrap();
         println!(
             "role={:?} observer={} observe_ms={} threads idle={idle} watching={}",
             editor.text("AXRole"),
@@ -532,7 +540,7 @@ mod tests {
         let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) }).unwrap();
         let idle = threads();
         let (cpu0, rss0) = usage();
-        let watch = observe(pid, app).unwrap();
+        let watch = observe(pid, app, None).unwrap();
         assert!(watch.runloop.is_some(), "observer not created");
         let watching = threads();
         std::thread::sleep(Duration::from_secs(20));

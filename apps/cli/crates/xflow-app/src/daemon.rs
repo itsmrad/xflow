@@ -5820,6 +5820,80 @@ mod tests {
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
+    /// Prepare a focused, unsent draft containing the original below, then
+    /// correct and clear it after `ready` appears in XFLOW_NATIVE_ACCEPTANCE_DIR.
+    /// Dictionary writes stay temporary; no microphone or provider is used.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "reads a prepared native draft; run explicitly with XFLOW_NATIVE_ACCEPTANCE_DIR and XFLOW_NATIVE_ACCEPTANCE_APP"]
+    async fn native_field_correction_reaches_the_dictionary() {
+        let report = PathBuf::from(
+            std::env::var_os("XFLOW_NATIVE_ACCEPTANCE_DIR").expect("acceptance directory required"),
+        );
+        let app = std::env::var("XFLOW_NATIVE_ACCEPTANCE_APP").expect("target app required");
+        let original = "Rimpas or Kar, call me";
+        let desktop: Arc<dyn Desktop> =
+            Arc::new(xflow_platform::NativeDesktop::new(&Default::default()));
+        let target = desktop.context().await.unwrap();
+        assert_eq!(target.app_id.as_deref(), Some(app.as_str()));
+        let mut field = desktop
+            .watch_field(&target)
+            .await
+            .expect("readable test field");
+        assert_eq!(field.read().await.unwrap().value.trim(), original);
+        drop(field);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let before = b"# native acceptance fixture\n";
+        std::fs::write(&path, before).unwrap();
+        let (finalize, finalized) = oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(8)).await;
+            let _ = finalize.send(());
+        });
+        let (completion, mut received) = mpsc::channel(8);
+        let learning = Arc::new(std::sync::Mutex::new(Learning::default()));
+        std::fs::write(report.join("ready"), b"ready").unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            observe(
+                desktop,
+                target,
+                original.into(),
+                finalized,
+                path.clone(),
+                completion,
+                Arc::new(AtomicU64::new(0)),
+                learning.clone(),
+            ),
+        )
+        .await
+        .expect("correct and clear the prepared draft within 20 seconds");
+        {
+            let measured = lock(&learning);
+            println!(
+                "native learning: outcomes={:?} reads={} unread_max={} late={} merged={} editing={}",
+                measured.outcomes, measured.reads, measured.unread_max,
+                measured.late, measured.merged, measured.editing,
+            );
+            assert_eq!(measured.outcomes.get("learned"), Some(&1));
+        }
+        let Some(Completion::Learned {
+            dictionary,
+            change: Some(change),
+            ..
+        }) = received.recv().await
+        else {
+            panic!("missing learned dictionary and undo");
+        };
+        assert_eq!(dictionary.words, ["Rimpa Sarkar"]);
+        assert!(change.notice);
+        assert_eq!(change.words, ["Rimpa Sarkar"]);
+        assert_ne!(std::fs::read(&path).unwrap(), before);
+        let _guard = crate::config_edit::lock(&path).unwrap();
+        change.undo.restore(&path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
     async fn learned_message(events: &mut broadcast::Receiver<Response>) -> String {
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
