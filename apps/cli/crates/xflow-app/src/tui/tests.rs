@@ -823,3 +823,30 @@ fn preferred_languages_picker_uses_names_and_rejects_unsupported_save() {
     app.set("stt.languages", r#"["hi", "en"]"#).unwrap();
     assert!(app.config.stt.language.is_none());
 }
+/// The TUI's check that config.toml is still what it loaded happens under the
+/// config lock: an edit another writer saves while holding the lock (a word
+/// xflowd learned, a CLI command) is seen and never overwritten.
+#[test]
+fn save_compares_and_writes_under_the_config_lock() {
+    let (_dir, app) = app();
+    let file = app.file.as_ref().unwrap();
+    let path = file.path().to_owned();
+    let held = crate::config_edit::lock(&path).unwrap();
+    let (ready, started) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        ready.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::fs::write(&path, "[ui]\ntheme = 'midnight'\n").unwrap();
+        drop(held);
+    });
+    started.recv().unwrap();
+    let error = super::runtime::save(file, None).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("changed outside"),
+        "{error:#}"
+    );
+    writer.join().unwrap();
+    assert!(std::fs::read_to_string(file.path())
+        .unwrap()
+        .contains("midnight"));
+}

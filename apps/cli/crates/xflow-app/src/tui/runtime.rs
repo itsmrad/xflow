@@ -638,13 +638,17 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
 }
 /// Write only what the daemon would accept on reload: the same services are
 /// built here (no network, no audio) so a bad combination is refused up front.
+/// The check that the file is still what the TUI loaded and the save happen
+/// under the config lock, so a word the daemon learned, or another command's
+/// edit, is never overwritten; the reload is requested after it is released.
 pub(super) fn save(file: &ConfigFile, expected: Option<&str>) -> Result<()> {
-    if read_optional(file.path())?.as_deref() != expected {
-        bail!("Configuration changed outside the TUI");
-    }
     let config = file.config()?;
     xflow_providers::build_stt(&config.stt, config.privacy.offline)?;
     crate::daemon::build_transformer(&config)?;
+    let _lock = crate::config_edit::lock(file.path())?;
+    if read_optional(file.path())?.as_deref() != expected {
+        bail!("Configuration changed outside the TUI");
+    }
     file.save()
 }
 fn doctor() -> Result<Vec<String>> {

@@ -53,6 +53,8 @@ fn folded(text: &str) -> String {
         .join(" ")
 }
 /// Match original input once, longest phrase first. Inserted text is never scanned.
+/// Unless `punctuation_insensitive`, a phrase matches only with spaces between
+/// its words: never across punctuation or a line break.
 fn replace(text: &str, pairs: &[(&str, &str)], punctuation_insensitive: bool) -> String {
     let input = words(text);
     let lower: Vec<_> = input.iter().map(|w| w.text.to_lowercase()).collect();
@@ -78,8 +80,10 @@ fn replace(text: &str, pairs: &[(&str, &str)], punctuation_insensitive: bool) ->
             let end = i + pattern.len();
             end <= input.len()
                 && pattern.iter().zip(&lower[i..end]).all(|(a, b)| a == b)
-                && (punctuation_insensitive
-                    || folded(&text[input[i].start..input[end - 1].end]) == *from)
+                && (punctuation_insensitive || {
+                    let span = &text[input[i].start..input[end - 1].end];
+                    !span.contains(['\n', '\r']) && folded(span) == *from
+                })
         });
         if let Some((pattern, _, to)) = matched {
             output.push_str(&text[cursor..input[i].start]);
@@ -968,6 +972,66 @@ mod multilingual_tests {
                 assert_eq!(adjust("", "", text, &[]), text);
             }
         }
+    }
+
+    #[test]
+    fn a_learned_name_rule_matches_only_its_exact_spaced_words() {
+        let mut c = Config::default();
+        c.dictionary.words = vec!["Rimpa Sarkar".into(), "adaws".into()];
+        c.dictionary.replacements = vec![Replacement {
+            from: "Rimpas or Kar".into(),
+            to: "Rimpa Sarkar".into(),
+        }];
+        assert!(before_cleanup("Hi Rimpas or Kar, call me", &c, false).contains("Hi Rimpa Sarkar"));
+        assert!(before_cleanup("hi rimpas or kar", &c, false).contains("Rimpa Sarkar"));
+        // Punctuation, another word, or ordinary words around it: unchanged.
+        for text in [
+            "Hi Rimpas, or Kar",
+            "Rimpas or Karl will come",
+            "kar do",
+            "casa",
+            "the cloud is up",
+        ] {
+            assert!(
+                !before_cleanup(text, &c, false).contains("Rimpa Sarkar"),
+                "{text}"
+            );
+        }
+        // A line break is a boundary too; snippets are unchanged.
+        let rule = [("Rimpas or Kar", "Rimpa Sarkar")];
+        assert_eq!(replace("Rimpas\nor Kar", &rule, false), "Rimpas\nor Kar");
+        assert_eq!(replace("Rimpas or  Kar", &rule, false), "Rimpa Sarkar");
+        assert_eq!(replace("Rimpas\nor Kar", &rule, true), "Rimpa Sarkar");
+        // The adaws forms: plain ones snap, a comma is never bridged.
+        for text in ["ad aws", "ad AWS", "we use ad AWS today"] {
+            let out = before_cleanup(text, &c, false);
+            assert!(
+                out.contains("adaws") && !out.contains("ad aws") && !out.contains("ad AWS"),
+                "{out}"
+            );
+        }
+        for text in ["an ad, AWS and Azure", "ad, AWS"] {
+            assert_eq!(before_cleanup(text, &c, false), text);
+        }
+    }
+
+    #[test]
+    fn spoken_line_breaks_survive_manual_replacements_and_fillers() {
+        let mut config = Config::default();
+        config.formatting.spoken_punctuation = true;
+        config.dictionary.replacements = vec![Replacement {
+            from: "acme corp".into(),
+            to: "AcmeCorp".into(),
+        }];
+        assert_eq!(
+            before_cleanup("Acme new line Corp", &config, false),
+            "Acme\nCorp"
+        );
+        config.formatting.fillers = vec!["you know".into()];
+        assert_eq!(
+            before_cleanup("you new line know", &config, false),
+            "you\nknow"
+        );
     }
 
     #[test]

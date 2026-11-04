@@ -1,13 +1,16 @@
 //! Wispr-style "Flow bar": a dark capsule with a live waveform, drawn with
 //! CALayers. All Objective-C objects stay on the helper's main thread.
-use super::{read_event, Alert, PillEvent};
+use super::{read_event, Alert, Notice, PillEvent};
 use crate::gsettings::GSettings;
 use anyhow::{bail, Result};
 use std::{
-    ffi::{c_char, c_void, CStr},
+    ffi::{c_char, c_void, CStr, CString},
     io::BufRead,
-    sync::mpsc,
-    time::Instant,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::{Duration, Instant},
 };
 use xflow_core::{ipc::Request, State};
 
@@ -17,6 +20,14 @@ type Sel = *mut c_void;
 #[link(name = "objc")]
 unsafe extern "C" {
     fn objc_getClass(name: *const c_char) -> Id;
+    fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
+    fn objc_registerClassPair(class: Id);
+    fn class_addMethod(
+        class: Id,
+        selector: Sel,
+        implementation: unsafe extern "C" fn(),
+        types: *const c_char,
+    ) -> i8;
     fn sel_registerName(name: *const c_char) -> Sel;
     fn objc_msgSend();
     #[cfg(target_arch = "x86_64")]
@@ -214,7 +225,11 @@ unsafe fn active_screen() -> Id {
 }
 
 fn frame(screen: Rect, position: &str, scale: f64) -> Rect {
-    let width = (WIN_W * scale).min(screen.size.width);
+    sized_frame(screen, position, scale, WIN_W)
+}
+/// `frame` for a window `win_w` points wide.
+fn sized_frame(screen: Rect, position: &str, scale: f64, win_w: f64) -> Rect {
+    let width = (win_w * scale).min(screen.size.width);
     let height = (WIN_H * scale).min(screen.size.height);
     // The capsule sits ~10 pt above the Dock/bottom edge (window padding included).
     let margin = (10.0 - (WIN_H - PILL_H) / 2.0) * scale;
@@ -271,6 +286,297 @@ fn send(request: Request) {
     });
 }
 
+/// Loads AppKit (confined to this CLI-only helper; xflowd never links it) and
+/// starts an accessory app: no Dock icon. Returns the autorelease pool, the
+/// app and the AppKit handle.
+unsafe fn appkit() -> Result<(Id, Id, *mut c_void)> {
+    let appkit = libc::dlopen(
+        c"/System/Library/Frameworks/AppKit.framework/AppKit".as_ptr(),
+        libc::RTLD_NOW | libc::RTLD_LOCAL,
+    );
+    if appkit.is_null() {
+        bail!("cannot load AppKit");
+    }
+    let pool = msg!(class(c"NSAutoreleasePool"), c"new"; Id);
+    let app = msg!(class(c"NSApplication"), c"sharedApplication"; Id);
+    msg!(app, c"setActivationPolicy:", 1isize => isize; i8); // Accessory: no Dock icon.
+    Ok((pool, app, appkit))
+}
+
+/// The borderless, non-activating status panel both modes draw in: it never
+/// takes focus, so the user's app keeps its key window and caret.
+unsafe fn status_panel(window: Rect, label: Id) -> Result<Id> {
+    let panel = msg!(class(c"NSPanel"), c"alloc"; Id);
+    // Borderless | non-activating panel: never takes focus.
+    let panel = msg!(panel, c"initWithContentRect:styleMask:backing:defer:",
+        window => Rect, 1usize << 7 => usize, 2usize => usize, 0i8 => i8; Id);
+    if panel.is_null() {
+        bail!("cannot create the recording pill");
+    }
+    msg!(panel, c"setReleasedWhenClosed:", 0i8 => i8; ());
+    msg!(panel, c"setLevel:", 25isize => isize; ()); // NSStatusWindowLevel
+    msg!(panel, c"setFloatingPanel:", 1i8 => i8; ());
+    msg!(panel, c"setBecomesKeyOnlyIfNeeded:", 1i8 => i8; ());
+    msg!(panel, c"setHidesOnDeactivate:", 0i8 => i8; ());
+    msg!(panel, c"setIgnoresMouseEvents:", 1i8 => i8; ());
+    msg!(panel, c"setAccessibilityLabel:", label => Id; ());
+    // All Spaces, stationary, outside window cycling, over full-screen apps.
+    msg!(panel, c"setCollectionBehavior:", 1usize | (1 << 4) | (1 << 6) | (1 << 8) => usize; ());
+    msg!(panel, c"setOpaque:", 0i8 => i8; ());
+    msg!(panel, c"setHasShadow:", 0i8 => i8; ());
+    let clear = msg!(class(c"NSColor"), c"clearColor"; Id);
+    msg!(panel, c"setBackgroundColor:", clear => Id; ());
+    let view = msg!(panel, c"contentView"; Id);
+    msg!(view, c"setWantsLayer:", 1i8 => i8; ());
+    Ok(panel)
+}
+
+/// How long the learning notice stays, from its first frame: no hover hold.
+const NOTICE: Duration = Duration::from_millis(1000);
+/// The notice window's width before `scale`; the capsule fits its text.
+const NOTICE_W: f64 = 360.0;
+
+static NOTICE_PRESSED: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C" fn press_notice(_: Id, _: Sel, _: Id) {
+    NOTICE_PRESSED.store(true, Ordering::Relaxed);
+}
+
+/// Explicit action state: a window being hidden is never an undo request.
+unsafe fn notice_target() -> Result<Id> {
+    let name = c"XFlowNoticeUndoTarget";
+    let mut target = objc_getClass(name.as_ptr());
+    if target.is_null() {
+        target = objc_allocateClassPair(class(c"NSObject"), name.as_ptr(), 0);
+        if target.is_null()
+            || class_addMethod(
+                target,
+                sel_registerName(c"undoNotice:".as_ptr()),
+                std::mem::transmute::<unsafe extern "C" fn(Id, Sel, Id), unsafe extern "C" fn()>(
+                    press_notice,
+                ),
+                c"v@:@".as_ptr(),
+            ) == 0
+        {
+            bail!("cannot create the dictionary undo action");
+        }
+        objc_registerClassPair(target);
+    }
+    let action = msg!(target, c"new"; Id);
+    if action.is_null() {
+        bail!("cannot create the dictionary undo action");
+    }
+    Ok(action)
+}
+
+/// What the notice says: the exact saved word(s).
+fn notice_text(notice: &Notice) -> String {
+    let first = &notice.words[0];
+    let more = match notice.words.len() {
+        1 => String::new(),
+        n => format!(" +{}", n - 1),
+    };
+    if notice.correction {
+        format!("“{first}”{more} correction saved")
+    } else {
+        format!("“{first}”{more} saved to dictionary")
+    }
+}
+/// The Undo button's accessibility label: every word it removes.
+fn undo_label(notice: &Notice) -> String {
+    let words: Vec<String> = notice.words.iter().map(|w| format!("“{w}”")).collect();
+    format!("Undo dictionary changes for {}", words.join(", "))
+}
+fn cstring(text: &str) -> CString {
+    CString::new(text.replace('\0', "")).unwrap_or_default()
+}
+
+/// The undo request outlives the hidden panel by at most two seconds.
+fn undo(op: u64) {
+    let (done, finished) = mpsc::channel();
+    let spawned = std::thread::Builder::new().spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        if let Ok(runtime) = runtime {
+            let request = Request::UndoLearned { op: Some(op) };
+            let _ = runtime.block_on(crate::transport::request(&request));
+        }
+        let _ = done.send(());
+    });
+    if spawned.is_ok() {
+        let _ = finished.recv_timeout(Duration::from_secs(2));
+    }
+}
+
+/// The learning notice: the saved word and an Undo (×) for one second, timed
+/// from its first committed frame (the screen shows it up to a frame later),
+/// then gone. No animation, no hover extension. The
+/// panel never activates, so the caret stays in the user's app; the × is a
+/// real momentary button (VoiceOver: "Undo: remove … from dictionary",
+/// pressed through accessibility like a click), and the save is announced, as
+/// one second is too short to reach the button: `xflow dictionary undo` is the
+/// durable route.
+pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
+    let s: f64 = settings.get("scale")?.parse()?;
+    let opacity: f64 = settings.get("opacity")?.parse()?;
+    let position = settings.get("position")?;
+    let text = cstring(&notice_text(&notice));
+    let label = cstring(&undo_label(&notice));
+    unsafe {
+        let (pool, app, appkit) = appkit()?;
+        let screen = active_screen();
+        if screen.is_null() {
+            bail!("no screen is available for the learning notice");
+        }
+        let mut colors = Vec::new();
+        let mut color = |r, g, b, a| {
+            let color = CGColorCreateSRGB(r, g, b, a);
+            colors.push(color);
+            color
+        };
+        let (dark, white) = (color(0.0, 0.0, 0.0, 0.85), color(1.0, 1.0, 1.0, 1.0));
+        let faint = color(1.0, 1.0, 1.0, 0.16);
+        let rim = color(1.0, 1.0, 1.0, 0.14);
+        let words = msg!(class(c"CATextLayer"), c"layer"; Id);
+        msg!(words, c"setString:", string(&text) => Id; ());
+        msg!(words, c"setFontSize:", 12.0 * s => f64; ());
+        msg!(words, c"setForegroundColor:", white => Id; ());
+        msg!(words, c"setContentsScale:", msg!(screen, c"backingScaleFactor"; f64) => f64; ());
+        msg!(words, c"setTruncationMode:", string(c"middle") => Id; ());
+        // The capsule fits the text and the ×, within the window.
+        let pad = (PILL_H - BUTTON) / 2.0 * s;
+        let room = NOTICE_W * s - 4.0 * s - BUTTON * s - 3.0 * pad;
+        let text_w = msg!(words, c"preferredFrameSize"; Size).width.min(room);
+        let (w, h) = (text_w + BUTTON * s + 3.0 * pad + 6.0 * s, PILL_H * s);
+        // The window is the capsule plus its padding: clicks beside it reach the app below.
+        let win_w = w / s + (WIN_H - PILL_H);
+        let window = sized_frame(
+            rect_of(screen, c"visibleFrame"),
+            position.trim_matches('\''),
+            s,
+            win_w,
+        );
+        let panel = status_panel(window, string(&text))?;
+        let view = msg!(panel, c"contentView"; Id);
+        let root = msg!(view, c"layer"; Id);
+        let (cx, cy) = (window.size.width / 2.0, window.size.height / 2.0);
+        let capsule = layer(root, dark, h / 2.0);
+        msg!(capsule, c"setBorderWidth:", 0.75 * s => f64; ());
+        msg!(capsule, c"setBorderColor:", rim => Id; ());
+        msg!(capsule, c"setOpacity:", opacity as f32 => f32; ());
+        msg!(capsule, c"addSublayer:", words => Id; ());
+        let close = layer(capsule, faint, BUTTON * s / 2.0);
+        for angle in [std::f64::consts::FRAC_PI_4, -std::f64::consts::FRAC_PI_4] {
+            let stroke = layer(close, white, 0.8 * s);
+            place(
+                stroke,
+                BUTTON * s / 2.0,
+                BUTTON * s / 2.0,
+                1.6 * s,
+                10.0 * s,
+            );
+            transform(stroke, 1.0, angle, 0.0);
+        }
+        msg!(class(c"CATransaction"), c"begin"; ());
+        msg!(class(c"CATransaction"), c"setDisableActions:", 1i8 => i8; ());
+        place(capsule, cx, cy, w, h);
+        place(
+            words,
+            pad + 3.0 * s + text_w / 2.0,
+            h / 2.0,
+            text_w,
+            16.0 * s,
+        );
+        let button_x = w - pad - BUTTON * s / 2.0;
+        place(close, button_x, h / 2.0, BUTTON * s, BUTTON * s);
+        msg!(class(c"CATransaction"), c"commit"; ());
+        // In window coordinates, like mouse locations.
+        let (bx, by) = (cx - w / 2.0 + button_x, cy);
+        let reach = BUTTON * s / 2.0 + 2.0;
+        // Both a mouse click and an accessibility press explicitly request undo.
+        NOTICE_PRESSED.store(false, Ordering::Relaxed);
+        let action = notice_target()?;
+        let button = msg!(class(c"NSButton"), c"alloc"; Id);
+        let button = msg!(button, c"initWithFrame:",
+            Rect::new(bx - reach, by - reach, 2.0 * reach, 2.0 * reach) => Rect; Id);
+        if !button.is_null() {
+            msg!(button, c"setButtonType:", 7usize => usize; ()); // NSButtonTypeMomentaryPushIn
+            msg!(button, c"setBordered:", 0i8 => i8; ());
+            msg!(button, c"setTitle:", string(c"") => Id; ());
+            msg!(button, c"setAccessibilityLabel:", string(&label) => Id; ());
+            msg!(button, c"setTarget:", action => Id; ());
+            msg!(button, c"setAction:", sel_registerName(c"undoNotice:".as_ptr()) => Sel; ());
+            msg!(view, c"addSubview:", button => Id; ());
+            msg!(button, c"release"; ());
+        }
+        msg!(panel, c"setIgnoresMouseEvents:", 0i8 => i8; ());
+        msg!(app, c"finishLaunching"; ());
+        msg!(panel, c"orderFrontRegardless"; ());
+        msg!(class(c"CATransaction"), c"flush"; ());
+        let shown = Instant::now();
+        // VoiceOver hears the save even though the button is out of reach in time.
+        let post = libc::dlsym(
+            appkit,
+            c"NSAccessibilityPostNotificationWithUserInfo".as_ptr(),
+        );
+        if !post.is_null() {
+            let post: unsafe extern "C" fn(Id, Id, Id) = std::mem::transmute(post);
+            let info = msg!(class(c"NSMutableDictionary"), c"dictionary"; Id);
+            msg!(info, c"setObject:forKey:", string(&text) => Id, string(c"AXAnnouncementKey") => Id; ());
+            let high = msg!(class(c"NSNumber"), c"numberWithInteger:", 90isize => isize; Id);
+            msg!(info, c"setObject:forKey:", high => Id, string(c"AXPriorityKey") => Id; ());
+            post(app, string(c"AXAnnouncementRequested"), info);
+        }
+        let mut pressed = false;
+        while !pressed {
+            let left = NOTICE.saturating_sub(shown.elapsed());
+            if left.is_zero() {
+                break;
+            }
+            let tick_pool = msg!(class(c"NSAutoreleasePool"), c"new"; Id);
+            let wait = left.as_secs_f64().min(1.0 / 60.0);
+            let deadline =
+                msg!(class(c"NSDate"), c"dateWithTimeIntervalSinceNow:", wait => f64; Id);
+            let event = msg!(app, c"nextEventMatchingMask:untilDate:inMode:dequeue:",
+                usize::MAX => usize, deadline => Id, string(c"kCFRunLoopDefaultMode") => Id, 1i8 => i8; Id);
+            if !event.is_null() {
+                // The raw hit test also works where a non-key panel's button
+                // would not take the first click.
+                if msg!(event, c"type"; usize) == 1 && msg!(event, c"window"; Id) == panel {
+                    let p = msg!(event, c"locationInWindow"; Point);
+                    pressed = (p.x - bx).abs() <= reach && (p.y - by).abs() <= reach;
+                }
+                // A handled click is not passed on: the button's tracking loop
+                // would hold the notice until the mouse is released.
+                if !pressed {
+                    msg!(app, c"sendEvent:", event => Id; ());
+                }
+            }
+            pressed |= NOTICE_PRESSED.load(Ordering::Relaxed);
+            msg!(tick_pool, c"drain"; ());
+        }
+        msg!(panel, c"orderOut:", std::ptr::null_mut::<c_void>() => Id; ());
+        if std::env::var_os("XFLOW_PILL_TIMING").is_some() {
+            eprintln!(
+                "notice visible_ms={} pressed={pressed}",
+                shown.elapsed().as_millis()
+            );
+        }
+        if pressed {
+            undo(notice.op);
+        }
+        msg!(panel, c"close"; ());
+        msg!(panel, c"release"; ());
+        msg!(action, c"release"; ());
+        for color in colors {
+            CGColorRelease(color);
+        }
+        msg!(pool, c"drain"; ());
+    }
+    Ok(())
+}
+
 pub(super) fn run(
     first: PillEvent,
     mut input: impl BufRead + Send + 'static,
@@ -300,18 +606,8 @@ pub(super) fn run(
                 }
             }
         })?;
-    // dlopen is confined to this CLI-only entry point; xflowd never links AppKit.
     unsafe {
-        let appkit = libc::dlopen(
-            c"/System/Library/Frameworks/AppKit.framework/AppKit".as_ptr(),
-            libc::RTLD_NOW | libc::RTLD_LOCAL,
-        );
-        if appkit.is_null() {
-            bail!("cannot load AppKit");
-        }
-        let pool = msg!(class(c"NSAutoreleasePool"), c"new"; Id);
-        let app = msg!(class(c"NSApplication"), c"sharedApplication"; Id);
-        msg!(app, c"setActivationPolicy:", 1isize => isize; i8); // Accessory: no Dock icon.
+        let (pool, app, _) = appkit()?;
         let workspace = msg!(class(c"NSWorkspace"), c"sharedWorkspace"; Id);
         let reduce_motion = msg!(workspace, c"accessibilityDisplayShouldReduceMotion"; i8) != 0;
         let screen = active_screen();
@@ -323,28 +619,11 @@ pub(super) fn run(
             position.trim_matches('\''),
             s,
         );
-        let panel = msg!(class(c"NSPanel"), c"alloc"; Id);
-        // Borderless | non-activating panel: never takes focus.
-        let panel = msg!(panel, c"initWithContentRect:styleMask:backing:defer:",
-            window => Rect, 1usize << 7 => usize, 2usize => usize, 0i8 => i8; Id);
-        if panel.is_null() {
-            bail!("cannot create the recording pill");
-        }
-        msg!(panel, c"setReleasedWhenClosed:", 0i8 => i8; ());
-        msg!(panel, c"setLevel:", 25isize => isize; ()); // NSStatusWindowLevel
-        msg!(panel, c"setFloatingPanel:", 1i8 => i8; ());
-        msg!(panel, c"setBecomesKeyOnlyIfNeeded:", 1i8 => i8; ());
-        msg!(panel, c"setHidesOnDeactivate:", 0i8 => i8; ());
-        msg!(panel, c"setIgnoresMouseEvents:", 1i8 => i8; ());
-        msg!(panel, c"setAccessibilityLabel:", string(label_text(first).unwrap_or(c"XFlow recording status")) => Id; ());
-        // All Spaces, stationary, outside window cycling, over full-screen apps.
-        msg!(panel, c"setCollectionBehavior:", 1usize | (1 << 4) | (1 << 6) | (1 << 8) => usize; ());
-        msg!(panel, c"setOpaque:", 0i8 => i8; ());
-        msg!(panel, c"setHasShadow:", 0i8 => i8; ());
-        let clear = msg!(class(c"NSColor"), c"clearColor"; Id);
-        msg!(panel, c"setBackgroundColor:", clear => Id; ());
+        let panel = status_panel(
+            window,
+            string(label_text(first).unwrap_or(c"XFlow recording status")),
+        )?;
         let view = msg!(panel, c"contentView"; Id);
-        msg!(view, c"setWantsLayer:", 1i8 => i8; ());
         let root = msg!(view, c"layer"; Id);
 
         let mut colors = Vec::new(); // layers retain what they use; released at exit
@@ -554,6 +833,41 @@ mod tests {
         assert_eq!(text(event), Some(crate::daemon::ENDS_SOON));
         event.alert = Some(Alert::Copied);
         assert_eq!(text(event), Some("Copied — paste with ⌘V"));
+    }
+    #[test]
+    fn notice_names_the_saved_words_and_its_undo() {
+        let mut notice = Notice {
+            op: 1,
+            words: vec!["claud".into()],
+            correction: false,
+        };
+        assert_eq!(notice_text(&notice), "“claud” saved to dictionary");
+        assert_eq!(undo_label(&notice), "Undo dictionary changes for “claud”");
+        notice.words.push("Kubernetes".into());
+        assert_eq!(notice_text(&notice), "“claud” +1 saved to dictionary");
+        assert!(undo_label(&notice).contains("“Kubernetes”"));
+        notice.words = vec!["Rimpa Sarkar".into()];
+        notice.correction = true;
+        assert_eq!(notice_text(&notice), "“Rimpa Sarkar” correction saved");
+        assert_eq!(
+            undo_label(&notice),
+            "Undo dictionary changes for “Rimpa Sarkar”"
+        );
+        assert_eq!(cstring("a\0b").to_str().unwrap(), "ab");
+    }
+
+    #[test]
+    fn notice_undo_requires_an_explicit_action() {
+        NOTICE_PRESSED.store(false, Ordering::Relaxed);
+        assert!(!NOTICE_PRESSED.load(Ordering::Relaxed));
+        unsafe {
+            press_notice(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(NOTICE_PRESSED.swap(false, Ordering::Relaxed));
     }
     #[test]
     fn placement_respects_visible_area_and_position_aliases() {

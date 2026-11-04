@@ -52,7 +52,7 @@ pub fn select(stt: &mut SttConfig, id: &str, model: Option<&str>) -> Result<()> 
 }
 pub fn run(path: &Path, action: Option<&args::Providers>, out: &Output) -> Result<()> {
     use args::Providers::*;
-    let mut file = config::load(path)?;
+    let file = config::load(path)?;
     let mut cfg = file.config().map_err(Error::config)?;
     match action.unwrap_or(&List) {
         List => {
@@ -135,9 +135,13 @@ pub fn run(path: &Path, action: Option<&args::Providers>, out: &Output) -> Resul
             }
         }
         Use { provider, model } => {
-            select(&mut cfg.stt, provider, model.as_deref())?;
-            file.set_typed("stt", &cfg.stt).map_err(Error::config)?;
-            config::commit(&file, out)?;
+            let lock = config::lock(path)?;
+            // Read again under the lock: an edit made meanwhile (a learned word) is kept.
+            let mut file = config::load(path)?;
+            let mut stt = file.config().map_err(Error::config)?.stt;
+            select(&mut stt, provider, model.as_deref())?;
+            file.set_typed("stt", &stt).map_err(Error::config)?;
+            config::commit(&file, lock, out)?;
         }
     }
     Ok(())

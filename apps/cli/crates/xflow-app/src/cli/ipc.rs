@@ -102,14 +102,17 @@ pub fn mode_request(toggle: bool, command: bool, delivery: Delivery, hold: bool)
         }
     }
 }
-pub fn reload_if_running(path: &std::path::Path, out: &Output) -> Result<()> {
+/// Whether a running xflowd uses this configuration (its default one).
+pub fn serves(path: &std::path::Path) -> Result<bool> {
     let default = xflow_app::paths::config_path()?;
     let resolve = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
-    if resolve(path) != resolve(&default) {
-        return Ok(());
-    }
-    let socket = xflow_app::paths::runtime_dir()?.join("daemon.sock");
-    if !socket.exists() {
+    Ok(resolve(path) == resolve(&default)
+        && xflow_app::paths::runtime_dir()?
+            .join("daemon.sock")
+            .exists())
+}
+pub fn reload_if_running(path: &std::path::Path, out: &Output) -> Result<()> {
+    if !serves(path)? {
         return Ok(());
     }
     request(&Request::Reload).map_err(|e| {

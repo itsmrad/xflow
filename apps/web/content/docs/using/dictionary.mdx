@@ -40,12 +40,16 @@ With `dictionary.auto_learn = true` (the default), when you fix a word right aft
 Added 'Kubernetes' to your dictionary
 ```
 
-- A learned word becomes a recognition hint. It never becomes an automatic replacement.
-- Only close spellings are learned, at most four per dictation. Case or punctuation changes, grammar fixes, homophones between everyday words (their/there), numbers, URLs, code and secure fields are skipped.
+- A learned word becomes a recognition hint. Hints help but can't guarantee the spelling next time.
+- On macOS, when the pill is on, it shows the saved word for one second with an Undo button (×), which takes that save back once. `xflow dictionary undo` does the same afterwards, until config.toml changes or xflowd restarts. It never blocks the word from being learned again; `xflow dictionary remove` does that.
+- Correcting a word that's already in your dictionary moves it to the front, so provider hint limits keep it. If you correct a narrow misheard phrase to a name already in the dictionary (`Rimpas or Kar` → `Rimpa Sarkar`), xflow adds that exact phrase as a replacement. Only for 2–3 plain words whose first and last words aren't everyday words or names, with only small words like "or" between them; never for a single word, so "cloud" stays "cloud". The phrase must appear with spaces only: `Rimpas, or Kar` is left alone. `xflow dictionary unreplace "Rimpas or Kar"` removes it.
+- Only close spellings are learned, at most four per dictation. A short message that you fix by retyping the name in place still counts. Case or punctuation changes, grammar fixes, homophones between everyday words (their/there), numbers, URLs, code and secure fields are skipped.
 - On macOS, `xflowd` reads the field it pasted into twice through Accessibility: about 120 ms after the paste, and again when you start the next dictation or after 60 s — only while focus is still on that field. It keeps just the pasted text and 16 characters either side in memory, never the whole field.
 - Correcting a transcript with `xflow history edit` uses the same rules, on every platform.
 
-`xflow dictionary list` marks learned entries. `xflow dictionary remove <word>` removes one for good: it moves to `never_learn` and isn't learned again.
+`xflow dictionary list` marks learned entries. `xflow dictionary remove <word>` removes one for good: it moves to `never_learn` and isn't learned again. Replacements that still produce the word are kept; `remove` lists them with the `unreplace` command for each.
+
+`xflow doctor` says whether xflowd's dictionary matches config.toml and counts how learning went since it started (watches, outcomes such as `learned` or `unsettled`), without showing any words.
 
 ## Import and export
 

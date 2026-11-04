@@ -29,8 +29,24 @@ pub fn hint_warning(
         )
     }))
 }
-pub fn commit(file: &ConfigFile, out: &Output) -> Result<()> {
+/// The config lock (see `config_edit::lock`): hold it from load to save.
+pub fn lock(path: &Path) -> Result<std::fs::File> {
+    xflow_app::config_edit::lock(path).map_err(Error::config)
+}
+/// The file's exact bytes, None when it does not exist.
+fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::config(error)),
+    }
+}
+/// Save `file` loaded under `lock`, release the lock, then warn about hints
+/// that don't fit and ask a running daemon to reload.
+pub fn commit(file: &ConfigFile, lock: std::fs::File, out: &Output) -> Result<()> {
     file.save().map_err(Error::config)?;
+    // Before the reload: the daemon's own learning takes this lock.
+    drop(lock);
     if let Some(Some(warning)) = file
         .config()
         .ok()
@@ -73,14 +89,16 @@ pub fn run(path: &Path, action: Option<&args::Config>, out: &Output) -> Result<(
             out.data(&serde_json::json!({"key":key,"value":typed}), &value)?;
         }
         Set { key, value } => {
+            let lock = lock(path)?;
             let mut file = load(path)?;
             file.set(key, value).map_err(Error::config)?;
-            commit(&file, out)?;
+            commit(&file, lock, out)?;
         }
         Unset { key } => {
+            let lock = lock(path)?;
             let mut file = load(path)?;
             file.unset(key).map_err(Error::config)?;
-            commit(&file, out)?;
+            commit(&file, lock, out)?;
         }
         Validate => {
             load(path)?.validate().map_err(Error::config)?;
@@ -88,7 +106,10 @@ pub fn run(path: &Path, action: Option<&args::Config>, out: &Output) -> Result<(
         }
         Reset { yes } => {
             confirm(*yes, "Reset configuration to defaults?")?;
-            replace(path, TEMPLATE.as_bytes())?;
+            {
+                let _lock = lock(path)?;
+                replace(path, TEMPLATE.as_bytes())?;
+            }
             super::ipc::reload_if_running(path, out)?;
             out.confirm("Configuration reset to defaults")?;
         }
@@ -115,12 +136,30 @@ pub fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 fn edit(path: &Path, out: &Output) -> Result<()> {
+    let (original, contents) = {
+        let _lock = lock(path)?;
+        let (file, bytes) = ConfigFile::load_exact(path).map_err(Error::config)?;
+        (bytes, file.to_string())
+    };
     let mut temp = tempfile::NamedTempFile::new()?;
-    temp.write_all(load(path)?.to_string().as_bytes())?;
+    temp.write_all(contents.as_bytes())?;
     run_editor(temp.path())?;
     let content = bounded_read(temp.path(), 1024 * 1024)?;
     load(temp.path())?.validate().map_err(Error::config)?;
-    replace(path, &content)?;
+    {
+        // Compare and swap: the editor ran without the lock, so a change made
+        // meanwhile (a learned word, another command) is never overwritten.
+        let _lock = lock(path)?;
+        if read_optional(path)? != original {
+            let kept = temp.keep().map_err(Error::config)?.1.display().to_string();
+            return Err(Error::new(
+                1,
+                "Configuration changed while the editor was open; nothing was saved",
+                format!("Your edit is kept in {kept}; run xflow config edit again and copy it in"),
+            ));
+        }
+        replace(path, &content)?;
+    }
     super::ipc::reload_if_running(path, out)?;
     out.confirm("Configuration saved")?;
     Ok(())
@@ -219,10 +258,17 @@ pub fn bounded_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
 }
 pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) -> Result<()> {
     use args::Dictionary::*;
-    let _lock = xflow_app::config_edit::lock(path).map_err(Error::config)?;
+    if matches!(action, Some(Undo)) {
+        return undo(path, out);
+    }
+    let lock = (!matches!(action, None | Some(List | Export)))
+        .then(|| lock(path))
+        .transpose()?;
     let mut file = load(path)?;
     let mut config = file.config().map_err(Error::config)?;
+    let mut kept = Vec::new();
     match action.unwrap_or(&List) {
+        Undo => unreachable!("handled before the lock"),
         List => {
             let d = &config.dictionary;
             let kind = |word: &str, plain: &str| {
@@ -263,6 +309,13 @@ pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) 
         Remove { words } => {
             for word in words {
                 config.dictionary.forget(word);
+                // Replacements are kept, whoever added them: say which still write it.
+                for rule in config.dictionary.targeting(word) {
+                    kept.push(format!(
+                        "\"{}\" still becomes \"{}\"; to stop it: xflow dictionary unreplace \"{}\"",
+                        rule.from, rule.to, rule.from
+                    ));
+                }
             }
             file.set_typed("dictionary.learned", &config.dictionary.learned)
                 .map_err(Error::config)?;
@@ -298,10 +351,43 @@ pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) 
         .map_err(Error::config)?;
     file.set_typed("dictionary.replacements", &config.dictionary.replacements)
         .map_err(Error::config)?;
-    commit(&file, out)
+    commit(
+        &file,
+        lock.ok_or_else(|| Error::config("No configuration write lock"))?,
+        out,
+    )?;
+    if !out.json {
+        for line in kept {
+            eprintln!("Note: {line}");
+        }
+    }
+    Ok(())
+}
+/// `xflow dictionary undo`: undo the running daemon's latest automatic
+/// dictionary change, once, while config.toml is still what it wrote. Sent
+/// without the config lock, which the daemon takes to undo.
+fn undo(path: &Path, out: &Output) -> Result<()> {
+    if !super::ipc::serves(path)? {
+        return Err(Error::new(
+            1,
+            "No automatic dictionary change to undo",
+            "Only xflowd's own configuration has one, while xflowd runs",
+        ));
+    }
+    let response = super::ipc::request(&xflow_core::ipc::Request::UndoLearned { op: None })?;
+    out.confirm(
+        response
+            .message
+            .as_deref()
+            .unwrap_or("Dictionary change undone"),
+    )?;
+    Ok(())
 }
 pub fn snippets(path: &Path, action: Option<&args::Snippets>, out: &Output) -> Result<()> {
     use args::Snippets::*;
+    let lock = (!matches!(action, None | Some(List)))
+        .then(|| lock(path))
+        .transpose()?;
     let mut file = load(path)?;
     let mut config = file.config().map_err(Error::config)?;
     match action.unwrap_or(&List) {
@@ -337,10 +423,17 @@ pub fn snippets(path: &Path, action: Option<&args::Snippets>, out: &Output) -> R
     }
     file.set_typed("snippets", &config.snippets)
         .map_err(Error::config)?;
-    commit(&file, out)
+    commit(
+        &file,
+        lock.ok_or_else(|| Error::config("No configuration write lock"))?,
+        out,
+    )
 }
 pub fn styles(path: &Path, action: Option<&args::Styles>, out: &Output) -> Result<()> {
     use args::Styles::*;
+    let lock = (!matches!(action, None | Some(List)))
+        .then(|| lock(path))
+        .transpose()?;
     let mut file = load(path)?;
     let mut config = file.config().map_err(Error::config)?;
     match action.unwrap_or(&List) {
@@ -394,7 +487,11 @@ pub fn styles(path: &Path, action: Option<&args::Styles>, out: &Output) -> Resul
     }
     file.set_typed("styles", &config.styles)
         .map_err(Error::config)?;
-    commit(&file, out)
+    commit(
+        &file,
+        lock.ok_or_else(|| Error::config("No configuration write lock"))?,
+        out,
+    )
 }
 #[cfg(test)]
 mod tests {

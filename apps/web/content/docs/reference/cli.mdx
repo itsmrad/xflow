@@ -828,6 +828,7 @@ Commands:
   unreplace
   import
   export
+  undo       Undo the latest word or correction xflow saved automatically, once (until config.toml changes or xflowd restarts)
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -936,6 +937,23 @@ Options:
 
 ```text
 Usage: xflow dictionary export [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow dictionary undo
+
+Undo the latest word or correction xflow saved automatically, once (until config.toml changes or xflowd restarts)
+
+```text
+Undo the latest word or correction xflow saved automatically, once (until config.toml changes or xflowd restarts)
+
+Usage: xflow dictionary undo [OPTIONS]
 
 Options:
       --json           Emit machine-readable JSON (watch emits one object per event)

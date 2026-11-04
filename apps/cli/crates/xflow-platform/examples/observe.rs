@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
             _ = tokio::time::sleep_until(deadline) => break,
             event = watch.next() => match event {
                 Some(FieldEvent::Changed) => { let at = Instant::now(); report("changed", watch.read().await, at) }
+                Some(FieldEvent::Merged) => println!("merged t={}ms", started.elapsed().as_millis()),
                 Some(FieldEvent::Focus) => {
                     tokio::time::sleep(Duration::from_millis(250)).await;
                     println!("focus t={}ms still_focused={}", started.elapsed().as_millis(), watch.focused().await);

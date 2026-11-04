@@ -1,5 +1,5 @@
 use crate::{
-    config_edit::ConfigFile,
+    config_edit::{ConfigFile, Undo},
     retry::{self, Part},
     speech::{self, NOT_CAUGHT},
     store::Store,
@@ -9,6 +9,7 @@ use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use std::{
     fs::File,
+    hash::BuildHasher,
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::{
@@ -27,8 +28,8 @@ pub use xflow_core::ipc::Command;
 use xflow_core::{
     config::{Config, DictionaryConfig, HotkeyConfig},
     ipc::{
-        CleanupOutcome, Delivery, FailedAudio, Grant, HistoryEntry, Permissions, Request, Response,
-        Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
+        CleanupOutcome, Delivery, FailedAudio, Grant, HistoryEntry, Learning, Permissions, Request,
+        Response, Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     },
     log, AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, FieldEvent,
     GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
@@ -76,6 +77,15 @@ struct Processed {
     warning: Option<String>,
 }
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(60);
+/// Reload requests queued behind a reload in flight; one more reload answers them all.
+const MAX_RELOAD_WAITERS: usize = 8;
+/// The daemon's learning and undo wait this long for the config lock, then fail
+/// closed: a stopped CLI or editor never wedges them.
+const LOCK_WAIT: Duration = if cfg!(test) {
+    Duration::from_millis(500)
+} else {
+    Duration::from_secs(5)
+};
 /// Dropping a tap adapter joins its run-loop thread; keep that off the actor.
 fn retire(hotkeys: Option<Box<dyn GlobalHotkeys>>) {
     if let Some(hotkeys) = hotkeys {
@@ -126,17 +136,56 @@ enum Completion {
         processed: Processed,
         result: Result<Option<InjectionOutcome>>,
     },
+    /// `seq`: the dictionary clock, read before the file was (see `Learned`).
     Reloaded {
         result: Box<Result<Reloaded>>,
-        reply: oneshot::Sender<Response>,
+        replies: Vec<oneshot::Sender<Response>>,
+        seq: u64,
     },
     /// A tap recreated after Input Monitoring was granted (see `rearm`).
     Rearmed(std::result::Result<Option<Box<dyn GlobalHotkeys>>, String>),
-    /// Learned words were saved to config.toml; `message` says which.
+    /// The daemon saved a dictionary to config.toml (a learn or an undo).
+    /// Whole snapshots can arrive out of order, so each carries `seq`, taken
+    /// from the dictionary clock while the config lock was held: the actor
+    /// installs only a newer one. A reload reads the clock before the file, so
+    /// it installs its dictionary only when no daemon write is newer than its
+    /// read (an external write took the lock and saved before that read).
     Learned {
         dictionary: DictionaryConfig,
-        message: String,
+        seq: u64,
+        /// For subscribers, e.g. "Added 'claud' to your dictionary".
+        message: Option<String>,
+        change: Option<Change>,
     },
+}
+/// The latest automatic dictionary change, kept in memory only while it can
+/// be undone once (see `config_edit::Undo`).
+struct Change {
+    /// Opaque; the pill's Undo sends it back.
+    id: u64,
+    undo: Undo,
+    /// The words saved, exactly as stored, for the notice.
+    words: Vec<String>,
+    /// A correction rule for known words rather than new words.
+    correction: bool,
+    /// From the paste observer: the pill may show it.
+    notice: bool,
+}
+/// What the pill shows for one second after a correction is saved (macOS).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LearnNotice {
+    pub op: u64,
+    pub words: Vec<String>,
+    pub correction: bool,
+}
+/// One watch's counts for `Learning`; never text.
+#[derive(Default)]
+struct Counts {
+    reads: u32,
+    unread_max: u32,
+    late: u32,
+    merged: u32,
+    editing: u32,
 }
 #[derive(Clone)]
 pub struct Services {
@@ -195,8 +244,18 @@ pub struct Engine {
     warm_job: Option<JoinHandle<()>>,
     /// Ends the observation of the last pasted field (see `observe`).
     observing: Option<oneshot::Sender<()>>,
-    /// Words learned while a reload was in flight; the reload may have read the file first.
-    learned_during_reload: Option<DictionaryConfig>,
+    /// Orders dictionary snapshots (see `Completion::Learned`).
+    dictionary_clock: Arc<AtomicU64>,
+    /// The clock value of the dictionary installed now.
+    dictionary_seq: u64,
+    /// The latest automatic dictionary change, while it can still be undone.
+    change: Option<Change>,
+    /// Its notice for the pill, latest only; None once it can't be undone.
+    notice: watch::Sender<Option<LearnNotice>>,
+    /// Reload requests that arrived while one was in flight.
+    reload_waiters: Vec<oneshot::Sender<Response>>,
+    /// Counts for status and doctor.
+    learning: Arc<std::sync::Mutex<Learning>>,
     notifications: tokio::task::JoinSet<()>,
     // Tokio's clock (the same in production) so the listening hints can be tested on paused time.
     started: Option<tokio::time::Instant>,
@@ -289,7 +348,12 @@ impl Engine {
             context_abort: None,
             warm_job: None,
             observing: None,
-            learned_during_reload: None,
+            dictionary_clock: Arc::new(AtomicU64::new(0)),
+            dictionary_seq: 0,
+            change: None,
+            notice: watch::Sender::new(None),
+            reload_waiters: Vec::new(),
+            learning: Default::default(),
             notifications: tokio::task::JoinSet::new(),
             started: None,
             silent_since: None,
@@ -538,6 +602,185 @@ impl Engine {
         *lock(&self.hints) = None;
         if !self.config.privacy.history || !self.config.stt.domain_hints {
             lock(&self.recent).clear();
+        }
+    }
+    /// Install a dictionary saved by the daemon or read by a reload, with the
+    /// caches built from it.
+    fn install(&mut self, dictionary: DictionaryConfig, seq: u64) {
+        self.config.dictionary = dictionary;
+        self.dictionary_seq = seq;
+        self.reset_hints();
+        // Rebuild the snap index now, not on the next dictation.
+        xflow_core::snap::prepare(&self.config);
+    }
+    /// Replace the undoable change and the pill's notice for it.
+    fn set_change(&mut self, change: Option<Change>) {
+        let notice = change.as_ref().filter(|c| c.notice).map(|c| LearnNotice {
+            op: c.id,
+            words: c.words.clone(),
+            correction: c.correction,
+        });
+        self.change = change;
+        self.notice.send_if_modified(move |current| {
+            let changed = *current != notice;
+            *current = notice;
+            changed
+        });
+    }
+    /// The overlay's view of the undoable change.
+    pub fn notices(&self) -> watch::Receiver<Option<LearnNotice>> {
+        self.notice.subscribe()
+    }
+    fn learning(&self) -> Learning {
+        let mut learning = lock(&self.learning).clone();
+        let dictionary = &self.config.dictionary;
+        learning.words = dictionary.words.len() as u32;
+        learning.learned = dictionary.learned.len() as u32;
+        learning.replacements = dictionary.replacements.len() as u32;
+        learning.fingerprint = format!("{:016x}", dictionary.fingerprint());
+        learning.undo = self.change.is_some();
+        learning
+    }
+    /// Start a reload that answers `replies`, or answer them with why not.
+    /// Reloads never take the config lock: the clock read before the file
+    /// orders them against the daemon's own writes.
+    fn reload(
+        &mut self,
+        replies: Vec<oneshot::Sender<Response>>,
+        completion: &mpsc::Sender<Completion>,
+    ) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+        let refused = if self.opening.is_some() {
+            Some(MIC_WAITING)
+        } else if self.active() {
+            Some("reload requires an idle daemon")
+        } else if self.config_path.is_none() {
+            Some("reload config path is unavailable")
+        } else {
+            None
+        };
+        if let Some(why) = refused {
+            for reply in replies {
+                let _ = reply.send(Response::error(self.state, why));
+            }
+            return None;
+        }
+        let path = self.config_path.clone()?;
+        self.reloading = true;
+        let old = self.config.clone();
+        let services = self.services.clone();
+        let store = self.store.clone();
+        let factory = self.reload_factory.clone();
+        let hotkey_factory = self.hotkey_factory.clone();
+        let retry_hotkeys = self.hotkeys.is_none() || self.hotkey_warning.is_some();
+        let tx = completion.clone();
+        let clock = self.dictionary_clock.clone();
+        Some(async move {
+            // Before the file: every daemon write numbered up to here is in what loads.
+            let seq = clock.load(Ordering::SeqCst);
+            // Bounded so a wedged provider/tap setup cannot leave `reloading` stuck.
+            let result = tokio::time::timeout(
+                RELOAD_TIMEOUT,
+                tokio::task::spawn_blocking(move || {
+                    let config = Config::load(&path)?;
+                    let services = factory(&old, &config, services)?;
+                    // Recreate the tap only when its config changed or it is missing (e.g. permission granted since).
+                    let hotkeys = hotkey_factory
+                        .filter(|_| old.hotkey != config.hotkey || retry_hotkeys)
+                        .map(|factory| {
+                            factory(&config.hotkey).map_err(|e| bounded_message(&format!("{e:#}")))
+                        });
+                    let store = if store.settings()
+                        == (config.privacy.history, config.privacy.history_limit)
+                    {
+                        store
+                    } else {
+                        store.reopen(config.privacy.history, config.privacy.history_limit)?
+                    };
+                    Ok(Reloaded {
+                        config,
+                        services,
+                        store,
+                        hotkeys,
+                    })
+                }),
+            )
+            .await
+            .unwrap_or_else(|_| Ok(Err(anyhow::anyhow!("configuration reload timed out"))))
+            .unwrap_or_else(|e| Err(e.into()));
+            let _ = tx
+                .send(Completion::Reloaded {
+                    result: Box::new(result),
+                    replies,
+                    seq,
+                })
+                .await;
+        })
+    }
+    /// A reload finished (see `Completion::Reloaded`): the reply for its requests.
+    fn reloaded(&mut self, result: Result<Reloaded>, seq: u64) -> Response {
+        self.reloading = false;
+        // config.toml was read again: no earlier change stays undoable.
+        self.set_change(None);
+        match result {
+            Ok(Reloaded {
+                config,
+                services,
+                store,
+                hotkeys,
+            }) => {
+                // A daemon write newer than this read keeps its dictionary.
+                let dictionary = if seq >= self.dictionary_seq {
+                    config.dictionary.clone()
+                } else {
+                    self.config.dictionary.clone()
+                };
+                let seq = seq.max(self.dictionary_seq);
+                self.config = config;
+                self.install(dictionary, seq);
+                self.services = services;
+                self.store = store;
+                match hotkeys {
+                    Some(Ok(hotkeys)) => {
+                        self.hotkeys_blind = !self.permissions.as_ref().is_some_and(|p| p.events());
+                        retire(std::mem::replace(&mut self.hotkeys, hotkeys));
+                        if self.hotkey_warning.take().is_some()
+                            && self.state == State::Error
+                            && self.message.is_none()
+                        {
+                            self.state = State::Idle;
+                        }
+                    }
+                    Some(Err(warning)) => self.hotkey_warning = Some(warning),
+                    None => (),
+                }
+                self.persistence_warning = None;
+                self.load_kept();
+                self.publish();
+                self.status()
+            }
+            Err(e) => Response::error(self.state, format!("{e:#}")),
+        }
+    }
+    /// The daemon saved a dictionary (see `Completion::Learned`): installed
+    /// only when newer than the one in use. Event only: the state and status
+    /// message stay with the current session.
+    fn learned(
+        &mut self,
+        dictionary: DictionaryConfig,
+        seq: u64,
+        message: Option<String>,
+        change: Option<Change>,
+    ) {
+        if seq > self.dictionary_seq {
+            self.install(dictionary, seq);
+            // config.toml changed again: an older change can no longer be undone exactly.
+            self.set_change(change);
+        }
+        if let Some(message) = message {
+            let mut r = self.status();
+            r.message = Some(message.clone());
+            let _ = self.events.send(r);
+            self.notify("XFlow dictionary", &message);
         }
     }
     fn active(&self) -> bool {
@@ -1507,7 +1750,12 @@ impl Engine {
                     let _ = std::thread::Builder::new().spawn(move || request(grant));
                 }
             }
-            Request::Status | Request::Subscribe | Request::Shutdown => (),
+            Request::Status => {
+                let mut r = self.status();
+                r.learning = Some(self.learning());
+                return Ok(Some(r));
+            }
+            Request::Subscribe | Request::Shutdown => (),
             _ => bail!("invalid actor request"),
         }
         Ok(Some(self.status()))
@@ -1542,33 +1790,36 @@ impl Engine {
             tokio::select! { biased;
                 command = commands.recv() => {
                     let Some(Command { request, reply }) = command else { break; };
-                    if reply.is_closed() { continue; }
+                    if reply.is_closed() && !matches!(request, Request::UndoLearned { .. }) { continue; }
                     while queries.try_join_next().is_some() {}
                     while desktop_ops.try_join_next().is_some() {}
-                    if (is_query(&request) || matches!(request, Request::Reload)) && queries.len() + desktop_ops.len() >= 32 { let _ = reply.send(Response::error(self.state, "daemon request capacity reached")); continue; }
+                    if (is_query(&request) || matches!(request, Request::Reload | Request::UndoLearned { .. })) && queries.len() + desktop_ops.len() >= 32 { let _ = reply.send(Response::error(self.state, "daemon request capacity reached")); continue; }
                     if let Request::HistoryUpdate { id, text } = request {
-                        let status = self.status(); let store = self.store.clone(); let path = self.config_path.clone(); let tx = completion_tx.clone();
-                        queries.spawn(async move { let state = status.state; let response = edit_history(status, store, id, text, path, tx).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
+                        let status = self.status(); let store = self.store.clone(); let path = self.config_path.clone(); let tx = completion_tx.clone(); let clock = self.dictionary_clock.clone();
+                        queries.spawn(async move { let state = status.state; let response = edit_history(status, store, id, text, path, tx, clock).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
+                        continue;
+                    }
+                    if let Request::UndoLearned { op } = request {
+                        // Taken before the work starts: a second click or a replay finds nothing.
+                        let Some(change) = self.change.take_if(|c| op.is_none_or(|op| op == c.id)) else {
+                            let _ = reply.send(Response::error(self.state, "That dictionary change can no longer be undone"));
+                            continue;
+                        };
+                        self.set_change(None);
+                        let status = self.status(); let path = self.config_path.clone(); let tx = completion_tx.clone(); let clock = self.dictionary_clock.clone();
+                        queries.spawn(async move { let state = status.state; let response = undo(status, path, change, clock, tx).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
                         continue;
                     }
                     if matches!(request, Request::Reload) {
-                        if self.opening.is_some() { let _ = reply.send(Response::error(self.state, MIC_WAITING)); continue; }
-                        if self.active() || self.reloading { let _ = reply.send(Response::error(self.state, "reload requires an idle daemon")); continue; }
-                        let Some(path) = self.config_path.clone() else { let _ = reply.send(Response::error(self.state, "reload config path is unavailable")); continue; };
-                        self.reloading = true;
-                        let old = self.config.clone(); let services = self.services.clone(); let store = self.store.clone(); let factory = self.reload_factory.clone(); let hotkey_factory = self.hotkey_factory.clone(); let retry_hotkeys = self.hotkeys.is_none() || self.hotkey_warning.is_some(); let tx = completion_tx.clone();
-                        queries.spawn(async move {
-                            // Bounded so a wedged provider/tap setup cannot leave `reloading` stuck.
-                            let result = tokio::time::timeout(RELOAD_TIMEOUT, tokio::task::spawn_blocking(move || {
-                                let config = Config::load(&path)?;
-                                let services = factory(&old, &config, services)?;
-                                // Recreate the tap only when its config changed or it is missing (e.g. permission granted since).
-                                let hotkeys = hotkey_factory.filter(|_| old.hotkey != config.hotkey || retry_hotkeys).map(|factory| factory(&config.hotkey).map_err(|e| bounded_message(&format!("{e:#}"))));
-                                let store = if store.settings() == (config.privacy.history, config.privacy.history_limit) { store } else { store.reopen(config.privacy.history, config.privacy.history_limit)? };
-                                Ok(Reloaded { config, services, store, hotkeys })
-                            })).await.unwrap_or_else(|_| Ok(Err(anyhow::anyhow!("configuration reload timed out")))).unwrap_or_else(|e| Err(e.into()));
-                            let _ = tx.send(Completion::Reloaded { result: Box::new(result), reply }).await;
-                        }); continue;
+                        if self.reloading {
+                            // Its read may predate the write this request follows: one
+                            // more reload after it answers every request that waited.
+                            if self.reload_waiters.len() < MAX_RELOAD_WAITERS { self.reload_waiters.push(reply); }
+                            else { let _ = reply.send(Response::error(self.state, "too many reloads queued; try again")); }
+                        } else if let Some(work) = self.reload(vec![reply], &completion_tx) {
+                            queries.spawn(work);
+                        }
+                        continue;
                     }
                     if matches!(request, Request::Allow { grant: Grant::Microphone }) && self.permission_probe.is_some() {
                         let status = self.status();
@@ -1628,7 +1879,7 @@ impl Engine {
                                     if let Some(path) = self.config_path.clone() {
                                         let (finalize, finalized) = oneshot::channel();
                                         self.observing = Some(finalize);
-                                        tokio::spawn(observe(self.services.desktop.clone(), processed.target.clone(), processed.text.clone(), finalized, path, completion_tx.clone()));
+                                        tokio::spawn(observe(self.services.desktop.clone(), processed.target.clone(), processed.text.clone(), finalized, path, completion_tx.clone(), self.dictionary_clock.clone(), self.learning.clone()));
                                     }
                                 }
                                 self.state = State::Success; self.message = message; let mut r = self.status();
@@ -1641,11 +1892,14 @@ impl Engine {
                             Err(e) => self.set_state(State::Error, Some(format!("{INJECTION_FAILED}: {e}; transcript available via last"))),
                         }
                     }
-                    Completion::Reloaded { result, reply } => {
-                        self.reloading = false;
-                        let learned = self.learned_during_reload.take();
-                        let r = match *result { Ok(Reloaded { config, services, store, hotkeys }) => { self.config = config; if let Some(dictionary) = learned { self.config.dictionary = dictionary; } self.reset_hints(); self.services = services; self.store = store; match hotkeys { Some(Ok(hotkeys)) => { self.hotkeys_blind = !self.permissions.as_ref().is_some_and(|p| p.events()); retire(std::mem::replace(&mut self.hotkeys, hotkeys)); if self.hotkey_warning.take().is_some() && self.state == State::Error && self.message.is_none() { self.state = State::Idle; } } Some(Err(warning)) => self.hotkey_warning = Some(warning), None => () } self.persistence_warning = None; self.load_kept(); self.publish(); self.status() }, Err(e) => Response::error(self.state, format!("{e:#}")) };
-                        let _ = reply.send(r);
+                    Completion::Reloaded { result, replies, seq } => {
+                        let r = self.reloaded(*result, seq);
+                        for reply in replies { let _ = reply.send(r.clone()); }
+                        // Requests that arrived meanwhile get a read of their own.
+                        if !self.reload_waiters.is_empty() {
+                            let replies = std::mem::take(&mut self.reload_waiters);
+                            if let Some(work) = self.reload(replies, &completion_tx) { queries.spawn(work); }
+                        }
                     }
                     Completion::Rearmed(result) => {
                         self.rearming = false;
@@ -1656,16 +1910,7 @@ impl Engine {
                         }
                         self.publish();
                     }
-                    Completion::Learned { dictionary, message } => {
-                        // Event only: the state and status message stay with the current session.
-                        if self.reloading { self.learned_during_reload = Some(dictionary.clone()); }
-                        self.config.dictionary = dictionary;
-                        self.reset_hints();
-                        // Rebuild the snap index now, not on the next dictation.
-                        xflow_core::snap::prepare(&self.config);
-                        let mut r = self.status(); r.message = Some(message.clone()); let _ = self.events.send(r);
-                        self.notify("XFlow dictionary", &message);
-                    }
+                    Completion::Learned { dictionary, seq, message, change } => self.learned(dictionary, seq, message, change),
                 },
                 _ = async {}, if pending.is_some() => {
                     let mut processed = pending.take().unwrap();
@@ -1765,6 +2010,8 @@ impl Engine {
         }
         drop(completion_rx);
         queries.abort_all();
+        // The undoable change lives in memory only.
+        self.set_change(None);
         self.notifications.abort_all();
         let _ = self.cancel().await;
         // Once delivery starts, finish its key release even after cancel/shutdown.
@@ -1931,8 +2178,10 @@ fn fit_history(r: &mut Response, rows: Vec<HistoryEntry>) -> Result<()> {
     r.history.truncate(fit);
     Ok(())
 }
-/// Learn from the user's corrections of a pasted dictation, then log one outcome
-/// line at debug level. The outcome never contains field text.
+/// Learn from the user's corrections of a pasted dictation, then count the
+/// outcome for status and doctor and log it at debug level. Neither contains
+/// field text.
+#[allow(clippy::too_many_arguments)]
 async fn observe(
     desktop: Arc<dyn Desktop>,
     target: AppContext,
@@ -1940,20 +2189,39 @@ async fn observe(
     finalize: oneshot::Receiver<()>,
     path: PathBuf,
     completion: mpsc::Sender<Completion>,
+    clock: Arc<AtomicU64>,
+    learning: Arc<std::sync::Mutex<Learning>>,
 ) {
-    let outcome = match watch_edit(&*desktop, &target, &inserted, finalize).await {
-        Ok((original, corrected)) => match learn(path, original, corrected, completion).await {
-            Ok(Ok(_)) => "learned".into(),
-            Ok(Err(reason)) => format!("filtered:{reason}"),
-            Err(_) => {
-                log("warn", "could not save learned dictionary words");
-                return;
+    let mut counts = Counts::default();
+    let watched = watch_counted(&*desktop, &target, &inserted, finalize, &mut counts).await;
+    let outcome: String = match watched {
+        Ok((original, corrected)) => {
+            match learn(path, original, corrected, completion, clock, true).await {
+                Ok(Ok((outcome, _))) => outcome.into(),
+                Ok(Err(reason)) => format!("filtered:{reason}"),
+                Err(_) => {
+                    log("warn", "could not save learned dictionary words");
+                    "save-failed".into()
+                }
             }
-        },
+        }
         Err(Some(outcome)) => outcome.into(),
         // The daemon is stopping or another dictation replaced this one.
-        Err(None) => return,
+        Err(None) => "cancelled".into(),
     };
+    let mut total = lock(&learning);
+    total.watches = total.watches.saturating_add(1);
+    // Outcome names come from a fixed set; the bound only guards the map.
+    if total.outcomes.len() < 64 || total.outcomes.contains_key(&outcome) {
+        let count = total.outcomes.entry(outcome.clone()).or_default();
+        *count = count.saturating_add(1);
+    }
+    total.reads = total.reads.saturating_add(counts.reads);
+    total.unread_max = total.unread_max.max(counts.unread_max);
+    total.late = total.late.saturating_add(counts.late);
+    total.merged = total.merged.saturating_add(counts.merged);
+    total.editing = total.editing.saturating_add(counts.editing);
+    drop(total);
     log("debug", &format!("auto-learn: {outcome}"));
 }
 /// Minimum gap between field reads; reads follow every change notification.
@@ -1966,6 +2234,11 @@ const FIELD_READ_GAP: Duration = Duration::from_millis(20);
 /// clear, then a new message) and nothing is learned from that field. A change
 /// with no notification at all (an app that doesn't report edits, or a missed
 /// one) is unknown in the same way: only announced edits are ever learned.
+/// The same pause is a grace after the field is found empty: a change folded
+/// into the clear, or one arriving within it, means the last read may not be
+/// the last spelling, so nothing is learned. That narrows truncated saves to
+/// apps that coalesce or drop notifications, which no reader can detect; the
+/// notice showing the exact saved word, and its undo, are the backstop.
 const FIELD_SETTLE: Duration = Duration::from_millis(60);
 /// The span to trust when the dictation has left the field: the last one read,
 /// if the clear was the only change after it. With no unread change the clear's
@@ -1980,19 +2253,32 @@ fn trusted_before_clear(unread: usize, last: &str) -> String {
 /// Pin the field a dictation was pasted into and return (dictated, corrected)
 /// spans. The field is read ~120 ms after the paste to anchor the span, then
 /// after each change notification, keeping the last span that is still
-/// recognisably the dictation. Once the dictation leaves the field (a chat
-/// app's Enter, a clear, a rewrite) the observation is over: its last span is
-/// learned only if nothing typed after it went unread (see FIELD_SETTLE), and
-/// nothing typed there later is read.
+/// recognisably the dictation. A read that no longer looks like it, while the
+/// user is visibly retyping part of it (see `Receipt::editing`), keeps the
+/// watch going; if the watch ends there, nothing is learned. Once the
+/// dictation leaves the field (a chat app's Enter, a clear, a rewrite) the
+/// observation is over: its last span is learned only if nothing typed after
+/// it went unread (see FIELD_SETTLE), and nothing typed there later is read.
 /// Otherwise the window ends when focus leaves the field (after a 250 ms
 /// grace), the next dictation starts, or after 60 s, with one last read. Only
 /// the span and 16 characters each side stay in memory. Err holds the outcome
 /// when there is nothing to learn, None when cancelled.
+#[cfg(test)]
 async fn watch_edit(
     desktop: &dyn Desktop,
     target: &AppContext,
     inserted: &str,
+    finalize: oneshot::Receiver<()>,
+) -> std::result::Result<(String, String), Option<&'static str>> {
+    watch_counted(desktop, target, inserted, finalize, &mut Counts::default()).await
+}
+/// `watch_edit`, counting reads and notifications into `counts`.
+async fn watch_counted(
+    desktop: &dyn Desktop,
+    target: &AppContext,
+    inserted: &str,
     mut finalize: oneshot::Receiver<()>,
+    counts: &mut Counts,
 ) -> std::result::Result<(String, String), Option<&'static str>> {
     use tokio::time::{sleep_until, timeout, Instant};
     // Too long to ever compare (see corrections): no reads at all.
@@ -2006,17 +2292,23 @@ async fn watch_edit(
             .flatten()
     }
     // Takes the notifications already queued, without waiting: a change that
-    // arrived during a read, or behind a finalize, is still a change.
-    fn drain(field: &mut Box<dyn xflow_core::FieldWatch>, recheck: &mut Option<Instant>) -> usize {
-        let mut changed = 0;
+    // arrived during a read, or behind a finalize, is still a change. Returns
+    // (changes, merged changes).
+    fn drain(
+        field: &mut Box<dyn xflow_core::FieldWatch>,
+        recheck: &mut Option<Instant>,
+    ) -> (usize, usize) {
+        let (mut changed, mut merged) = (0, 0);
         while let Some(event) = field.try_next() {
             match event {
                 FieldEvent::Changed => changed += 1,
+                FieldEvent::Merged => merged += 1,
                 FieldEvent::Focus => *recheck = Some(Instant::now() + Duration::from_millis(250)),
             }
         }
-        changed
+        (changed, merged)
     }
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
     tokio::time::sleep(Duration::from_millis(120)).await;
     let started = Instant::now();
     let mut field = timeout(Duration::from_secs(1), desktop.watch_field(target))
@@ -2029,11 +2321,15 @@ async fn watch_edit(
     // The last span read, and the last one read twice in a row.
     let (mut good, mut settled) = (String::new(), String::new());
     let (mut dirty, mut left, mut lost) = (true, false, false);
+    // The last read showed the user retyping part of the dictation.
+    let mut editing = false;
     // Whether the field has announced any change since the paste.
     let mut notified = false;
     // Change notifications handled since the last read; events that queued
     // during a read count too, which only errs towards not learning.
     let mut changes = 0;
+    // Changes folded into another since the last read (`FieldEvent::Merged`).
+    let mut merged = 0;
     let (mut last_read, mut next_read) = (started, started);
     let mut recheck: Option<Instant> = None;
     loop {
@@ -2061,14 +2357,21 @@ async fn watch_edit(
                     dirty = true;
                     next_read = last_read + FIELD_READ_GAP;
                 }
+                Some(FieldEvent::Merged) => {
+                    merged += 1;
+                    counts.merged = counts.merged.saturating_add(1);
+                }
                 Some(FieldEvent::Focus) => recheck = Some(Instant::now() + Duration::from_millis(250)),
                 None => break,
             },
             _ = sleep_until(next_read), if dirty => {
                 dirty = false;
                 let unread = std::mem::take(&mut changes);
+                let folded = std::mem::take(&mut merged);
                 let text = read(&mut field).await;
                 last_read = Instant::now();
+                counts.reads = counts.reads.saturating_add(1);
+                counts.unread_max = counts.unread_max.max(count(unread));
                 let Some(anchored) = &receipt else {
                     let readable = text.is_some();
                     receipt = text.and_then(|t| xflow_core::learn::Receipt::new(&t.value, inserted, t.caret));
@@ -2089,6 +2392,7 @@ async fn watch_edit(
                 let Some(text) = text else {
                     // A failed read saw nothing; its changes are still unread.
                     changes += unread;
+                    merged += folded;
                     continue;
                 };
                 if unread > 1 {
@@ -2097,22 +2401,44 @@ async fn watch_edit(
                 // Changes announced while the read ran: after its value, so they
                 // are carried to the next read, but they count if this read
                 // finds the dictation gone.
-                let late = drain(&mut field, &mut recheck);
+                let (late, late_merged) = drain(&mut field, &mut recheck);
+                counts.late = counts.late.saturating_add(count(late));
+                counts.merged = counts.merged.saturating_add(count(late_merged));
+                merged += late_merged;
                 if late > 0 {
                     notified = true;
                     changes += late;
                 }
                 match anchored.corrected(&text.value) {
-                    Some(span) if span == good => settled = good.clone(),
+                    Some(span) if span == good => {
+                        settled = good.clone();
+                        editing = false;
+                    }
                     // The span changed without a notification for it.
                     Some(_) if unread + late == 0 => return Err(Some("unsettled")),
                     Some(span) => {
                         good = span.to_owned();
+                        editing = false;
                         dirty = true;
                         next_read = last_read + FIELD_SETTLE;
                     }
+                    // Retyping part of the dictation: keep the last good span.
+                    None if anchored.editing(&text.value, &good) => {
+                        if unread + late == 0 {
+                            return Err(Some("unsettled"));
+                        }
+                        editing = true;
+                        counts.editing = counts.editing.saturating_add(1);
+                    }
+                    // Sent or cleared mid-edit: its last spelling was never read.
+                    None if editing => return Err(Some("editing")),
                     None => {
-                        settled = trusted_before_clear(unread + late, &good);
+                        // A change folded into the clear may be the last letter.
+                        settled = if folded + late_merged > 0 {
+                            String::new()
+                        } else {
+                            trusted_before_clear(unread + late, &good)
+                        };
                         lost = true;
                         break;
                     }
@@ -2132,18 +2458,24 @@ async fn watch_edit(
     // Finalize, focus leave and the deadline win over queued notifications in
     // the select above; count those before deciding.
     if !lost {
-        let pending = drain(&mut field, &mut recheck);
+        let (pending, pending_merged) = drain(&mut field, &mut recheck);
         notified |= pending > 0;
         changes += pending;
+        merged += pending_merged;
+        counts.merged = counts.merged.saturating_add(count(pending_merged));
     }
     if !lost && notified {
         let unread = changes;
+        counts.unread_max = counts.unread_max.max(count(unread));
         if unread > 1 {
             return Err(Some("unsettled"));
         }
         let text = read(&mut field).await;
+        counts.reads = counts.reads.saturating_add(1);
         // Still changing while the final read ran: its value is not final.
-        if drain(&mut field, &mut recheck) > 0 {
+        let (late, late_merged) = drain(&mut field, &mut recheck);
+        if late + late_merged > 0 {
+            counts.late = counts.late.saturating_add(count(late));
             return Err(Some("unsettled"));
         }
         match text {
@@ -2154,14 +2486,35 @@ async fn watch_edit(
                     good = span.to_owned();
                     settled = good.clone();
                 }
+                None if editing || receipt.editing(&text.value, &good) => {
+                    return Err(Some("editing"))
+                }
                 None => {
-                    settled = trusted_before_clear(unread, &good);
+                    settled = if merged > 0 {
+                        String::new()
+                    } else {
+                        trusted_before_clear(unread, &good)
+                    };
                     lost = true;
                 }
             },
+            // The last read showed a retype in progress, not a spelling.
+            None if editing => return Err(Some("editing")),
             // Nothing changed since the last read: that span is final.
             None if unread == 0 => settled = good.clone(),
             None => return Err(Some("unsettled")),
+        }
+    }
+    // A change arriving just after the field emptied may be the last letter's
+    // (its notification lagged the read), or the clear's own after a letter
+    // that was never read: either way the last read was not final.
+    if lost && !settled.is_empty() && good != receipt.inserted() {
+        tokio::time::sleep(FIELD_SETTLE).await;
+        let (late, late_merged) = drain(&mut field, &mut recheck);
+        if late + late_merged > 0 {
+            counts.late = counts.late.saturating_add(count(late));
+            counts.merged = counts.merged.saturating_add(count(late_merged));
+            settled.clear();
         }
     }
     drop(field);
@@ -2180,49 +2533,148 @@ async fn watch_edit(
     }
     Ok((receipt.inserted().to_owned(), good))
 }
+fn quoted(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|w| format!("'{w}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 /// The one learning path for corrected pastes and history edits: find close word
 /// corrections, save them to config.toml, and hand the new dictionary to the actor.
-/// Returns the user-facing message, or why nothing was learned.
+/// A term the dictionary already had moves to the front (hint limits keep it);
+/// a second correction of one may add a narrow replacement (see
+/// `DictionaryConfig::derive`). Every save keeps the file's exact previous bytes
+/// so it can be undone once; `notice`: the pill may offer that.
+/// Returns the outcome and a user-facing message, or why nothing was learned.
 async fn learn(
     path: PathBuf,
     original: String,
     corrected: String,
     completion: mpsc::Sender<Completion>,
-) -> Result<std::result::Result<String, &'static str>> {
-    let learned = tokio::task::spawn_blocking(move || -> Result<_> {
-        let _lock = crate::config_edit::lock(&path)?;
-        let mut file = ConfigFile::load(&path)?;
+    clock: Arc<AtomicU64>,
+    notice: bool,
+) -> Result<std::result::Result<(&'static str, String), &'static str>> {
+    let saved = tokio::task::spawn_blocking(move || -> Result<_> {
+        let _lock = crate::config_edit::lock_within(&path, LOCK_WAIT)?;
+        let (mut file, before) = ConfigFile::load_exact(&path)?;
         let mut dictionary = file.config()?.dictionary;
         if !dictionary.auto_learn {
             return Ok(Err("disabled"));
         }
-        let found = match xflow_core::learn::corrections(&original, &corrected, &dictionary) {
+        let found = match xflow_core::learn::review(&original, &corrected, &dictionary) {
             Ok(found) => found,
             Err(reason) => return Ok(Err(reason)),
         };
-        let added = dictionary.learn(&found);
-        if added.is_empty() {
-            return Ok(Err("dictionary-full"));
+        let promoted = dictionary.promote(&found.known);
+        let rules = dictionary.derive(&found.known);
+        let added = dictionary.learn(&found.new);
+        if added.is_empty() && rules.is_empty() && promoted.is_empty() {
+            return Ok(Err(if found.new.is_empty() {
+                found.rejected
+            } else {
+                "dictionary-full"
+            }));
+        }
+        // An edit that couldn't be undone exactly is not made automatically.
+        if before
+            .as_ref()
+            .is_some_and(|b| b.len() > crate::config_edit::MAX_UNDO_BYTES)
+        {
+            return Ok(Err("too-large"));
         }
         file.set_typed("dictionary.words", &dictionary.words)?;
         file.set_typed("dictionary.learned", &dictionary.learned)?;
-        file.save()?;
-        Ok(Ok((dictionary, added)))
+        if !rules.is_empty() {
+            file.set_typed("dictionary.replacements", &dictionary.replacements)?;
+        }
+        let revision = file.save_tracked()?;
+        // Numbered while the lock is held, after the rename (see `Completion::Learned`).
+        let seq = clock.fetch_add(1, Ordering::SeqCst) + 1;
+        let undo = Undo::new(&path, before, revision);
+        Ok(Ok((dictionary, seq, undo, added, rules, promoted)))
     })
     .await??;
-    let (dictionary, added) = match learned {
-        Ok(learned) => learned,
+    let (dictionary, seq, undo, added, rules, promoted) = match saved {
+        Ok(saved) => saved,
         Err(reason) => return Ok(Err(reason)),
     };
-    let words: Vec<_> = added.iter().map(|w| format!("'{w}'")).collect();
-    let message = format!("Added {} to your dictionary", words.join(", "));
+    let rules: Vec<String> = rules.into_iter().map(|r| r.to).collect();
+    let mut notice_words = Vec::new();
+    for word in added.iter().chain(&rules).chain(&promoted) {
+        if !notice_words.contains(word) {
+            notice_words.push(word.clone());
+        }
+    }
+    let (outcome, message, words) = if !added.is_empty() {
+        (
+            "learned",
+            format!("Added {} to your dictionary", quoted(&added)),
+            notice_words,
+        )
+    } else if !rules.is_empty() {
+        (
+            "corrected",
+            format!("Saved your correction to {}", quoted(&rules)),
+            notice_words,
+        )
+    } else {
+        (
+            "promoted",
+            format!("{} is already in your dictionary", quoted(&promoted)),
+            notice_words,
+        )
+    };
+    // A reorder alone is not announced or offered for undo.
+    let announce = outcome != "promoted";
+    let change = announce.then(|| Change {
+        // Opaque: never derived from the words.
+        id: std::collections::hash_map::RandomState::new().hash_one(seq) | 1,
+        undo,
+        correction: outcome == "corrected",
+        words,
+        notice,
+    });
     let _ = completion
         .send(Completion::Learned {
             dictionary,
-            message: message.clone(),
+            seq,
+            message: announce.then(|| message.clone()),
+            change,
         })
         .await;
-    Ok(Ok(message))
+    Ok(Ok((outcome, message)))
+}
+/// Undo one automatic dictionary change (see `config_edit::Undo`) under the
+/// config lock, then hand the restored dictionary to the actor like a learn.
+async fn undo(
+    mut r: Response,
+    path: Option<PathBuf>,
+    change: Change,
+    clock: Arc<AtomicU64>,
+    completion: mpsc::Sender<Completion>,
+) -> Result<Response> {
+    let path = path.context("config path is unavailable")?;
+    let Change { undo, words, .. } = change;
+    let (dictionary, seq) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let _lock = crate::config_edit::lock_within(&path, LOCK_WAIT)?;
+        let config = undo.restore(&path)?;
+        Ok((config.dictionary, clock.fetch_add(1, Ordering::SeqCst) + 1))
+    })
+    .await??;
+    let _ = completion
+        .send(Completion::Learned {
+            dictionary,
+            seq,
+            message: None,
+            change: None,
+        })
+        .await;
+    r.message = Some(format!(
+        "Undid the dictionary change for {}",
+        quoted(&words)
+    ));
+    Ok(r)
 }
 /// Save a corrected history entry, then learn from the correction.
 async fn edit_history(
@@ -2232,6 +2684,7 @@ async fn edit_history(
     text: String,
     path: Option<PathBuf>,
     completion: mpsc::Sender<Completion>,
+    clock: Arc<AtomicU64>,
 ) -> Result<Response> {
     if text.trim().is_empty() || text.len() > 32 * 1024 {
         bail!("corrected text must be non-empty and at most 32 KiB");
@@ -2244,8 +2697,8 @@ async fn edit_history(
     // Command-mode output is the model's text, not speech recognition; nothing to learn.
     let dictated = r.entry.as_ref().is_some_and(|e| e.mode == Mode::Dictation);
     if let Some(path) = path.filter(|_| dictated) {
-        r.message = match learn(path, original, text, completion).await {
-            Ok(learned) => learned.ok(),
+        r.message = match learn(path, original, text, completion, clock, false).await {
+            Ok(learned) => learned.ok().map(|(_, message)| message),
             Err(e) => Some(format!("Transcript saved; dictionary not updated: {e:#}")),
         };
     }
@@ -2556,12 +3009,18 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
     let (commands_tx, commands_rx) = mpsc::channel(32);
     let (events_tx, _) = broadcast::channel(64);
     let (desktop_tx, desktop_rx) = broadcast::channel(32);
+    // The pill's notice of the latest undoable dictionary change, latest only.
+    let (notice_tx, _) = watch::channel(None);
     #[cfg(target_os = "macos")]
     let pill = {
-        let (events, config) = (desktop_tx.subscribe(), config_path.clone());
+        let (events, notices, config) = (
+            desktop_tx.subscribe(),
+            notice_tx.subscribe(),
+            config_path.clone(),
+        );
         tokio::spawn(async move {
             if native {
-                crate::overlay_pill::run(events, config).await;
+                crate::overlay_pill::run(events, notices, config).await;
             }
         })
     };
@@ -2587,6 +3046,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
         desktop_tx,
     );
     engine.config_path = Some(config_path);
+    engine.notice = notice_tx;
     engine.persistence_warning = persistence_warning;
     engine.kept_dir = Some(crate::paths::data_dir()?.join("failed"));
     engine.load_kept();
@@ -5360,6 +5820,81 @@ mod tests {
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
+    /// Prepare a focused, unsent draft containing the original below, then
+    /// correct and clear it after `ready` appears in XFLOW_NATIVE_ACCEPTANCE_DIR.
+    /// Dictionary writes stay temporary; no microphone or provider is used.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "reads a prepared native draft; run explicitly with XFLOW_NATIVE_ACCEPTANCE_DIR and XFLOW_NATIVE_ACCEPTANCE_APP"]
+    async fn native_field_correction_reaches_the_dictionary() {
+        let report = PathBuf::from(
+            std::env::var_os("XFLOW_NATIVE_ACCEPTANCE_DIR").expect("acceptance directory required"),
+        );
+        let app = std::env::var("XFLOW_NATIVE_ACCEPTANCE_APP").expect("target app required");
+        let original = "Rimpas or Kar, call me";
+        let desktop: Arc<dyn Desktop> =
+            Arc::new(xflow_platform::NativeDesktop::new(&Default::default()));
+        let target = desktop.context().await.unwrap();
+        assert_eq!(target.app_id.as_deref(), Some(app.as_str()));
+        let mut field = desktop
+            .watch_field(&target)
+            .await
+            .expect("readable test field");
+        assert_eq!(field.read().await.unwrap().value.trim(), original);
+        drop(field);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let before = b"# native acceptance fixture\n";
+        std::fs::write(&path, before).unwrap();
+        let (finalize, finalized) = oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(8)).await;
+            let _ = finalize.send(());
+        });
+        let (completion, mut received) = mpsc::channel(8);
+        let learning = Arc::new(std::sync::Mutex::new(Learning::default()));
+        std::fs::write(report.join("ready"), b"ready").unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            observe(
+                desktop,
+                target,
+                original.into(),
+                finalized,
+                path.clone(),
+                completion,
+                Arc::new(AtomicU64::new(0)),
+                learning.clone(),
+            ),
+        )
+        .await
+        .expect("correct and clear the prepared draft within 20 seconds");
+        std::fs::remove_file(report.join("ready")).unwrap();
+        {
+            let measured = lock(&learning);
+            println!(
+                "native learning: outcomes={:?} reads={} unread_max={} late={} merged={} editing={}",
+                measured.outcomes, measured.reads, measured.unread_max,
+                measured.late, measured.merged, measured.editing,
+            );
+            assert_eq!(measured.outcomes.get("learned"), Some(&1));
+        }
+        let Some(Completion::Learned {
+            dictionary,
+            change: Some(change),
+            ..
+        }) = received.recv().await
+        else {
+            panic!("missing learned dictionary and undo");
+        };
+        assert_eq!(dictionary.words, ["Rimpa Sarkar"]);
+        assert!(change.notice);
+        assert_eq!(change.words, ["Rimpa Sarkar"]);
+        assert_ne!(std::fs::read(&path).unwrap(), before);
+        let _guard = crate::config_edit::lock(&path).unwrap();
+        change.undo.restore(&path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
     async fn learned_message(events: &mut broadcast::Receiver<Response>) -> String {
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
@@ -5758,6 +6293,593 @@ mod tests {
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Postgres"]);
         assert!(dictionary.replacements.is_empty());
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// `watch_script` with the notifications of each step spelled out: none (a
+    /// change the app hasn't announced yet), several, or a folded one.
+    async fn watch_events(
+        pasted: &str,
+        steps: &[(u64, &str, &[FieldEvent])],
+    ) -> std::result::Result<(String, String), Option<&'static str>> {
+        let (notify, field_events) = mpsc::unbounded_channel();
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some(pasted.into()))),
+            field_events: Mutex::new(Some(field_events)),
+            ..RecordingDesktop::default()
+        });
+        let (finalize_tx, finalize) = oneshot::channel();
+        let field = desktop.field.clone();
+        let steps: Vec<(u64, String, Vec<FieldEvent>)> = steps
+            .iter()
+            .map(|(ms, text, events)| (*ms, text.to_string(), events.to_vec()))
+            .collect();
+        let script = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            for (ms, text, events) in steps {
+                if ms > 0 {
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                }
+                *field.lock().unwrap() = Some(text);
+                for event in events {
+                    let _ = notify.send(event);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = finalize_tx.send(());
+        });
+        let result = watch_edit(&*desktop, &AppContext::default(), pasted, finalize).await;
+        script.abort();
+        result
+    }
+    const CHANGED: &[FieldEvent] = &[FieldEvent::Changed];
+    const UNANNOUNCED: &[FieldEvent] = &[];
+    /// A short message that filled the field, its name retyped in place: the
+    /// first keys make it look like another text, but the rest of the message
+    /// stays, so the watch keeps going and learns the finished name.
+    #[tokio::test]
+    async fn a_short_message_retyped_in_place_learns_the_finished_name() {
+        let pasted = "Rimpas or Kar, call me ";
+        let retype: Vec<(u64, &str, &[FieldEvent])> = [
+            "R, call me ",
+            "Rim, call me ",
+            "Rimpa, call me ",
+            "Rimpa S, call me ",
+            "Rimpa Sarkar, call me ",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| (if i == 0 { 0 } else { 90 }, text, CHANGED))
+        .collect();
+        let learned = Ok((pasted.to_owned(), "Rimpa Sarkar, call me ".to_owned()));
+        assert_eq!(watch_events(pasted, &retype).await, learned);
+        let mut sent = retype.clone();
+        sent.push((120, "", CHANGED));
+        assert_eq!(watch_events(pasted, &sent).await, learned);
+        // Sent, or the next dictation started, mid-retype: never read finished.
+        assert_eq!(
+            watch_events(pasted, &[(0, "R, call me ", CHANGED), (90, "", CHANGED)]).await,
+            Err(Some("editing"))
+        );
+        assert_eq!(
+            watch_events(pasted, &[(0, "R, call me ", CHANGED)]).await,
+            Err(Some("editing"))
+        );
+    }
+    /// After a send, the field shows the next message's first key before its
+    /// notification, or a placeholder: neither keeps a word of the dictation,
+    /// so the watch ends and the next message is never read (review R5).
+    #[tokio::test]
+    async fn a_send_never_hands_the_watch_to_the_next_message_or_a_placeholder() {
+        let pasted = "post gres is ready for review ";
+        let next = "Postgres is ready for review";
+        assert_eq!(
+            watch_events(
+                pasted,
+                &[
+                    (0, "", CHANGED),
+                    (0, "p", UNANNOUNCED),
+                    (30, "p", CHANGED),
+                    (150, next, CHANGED)
+                ]
+            )
+            .await,
+            Err(Some("anchors-lost"))
+        );
+        assert_eq!(
+            watch_events(
+                pasted,
+                &[(0, "Message #general", CHANGED), (200, next, CHANGED)]
+            )
+            .await,
+            Err(Some("anchors-lost"))
+        );
+    }
+    /// The last letter and Enter folded into one notification, or the clear's
+    /// notification lagging the read that found the field empty: the last read
+    /// may be a truncated word ("Postgre"), so nothing is learned. A plain Enter
+    /// after a settled spelling still learns it, and folded notifications alone
+    /// never count as edits.
+    #[tokio::test]
+    async fn a_change_folded_into_or_just_after_the_clear_learns_nothing() {
+        let pasted = "post gres is ready ";
+        let folded: &[FieldEvent] = &[FieldEvent::Changed, FieldEvent::Merged];
+        assert_eq!(
+            watch_events(
+                pasted,
+                &[(0, "Postgre is ready ", CHANGED), (200, "", folded)]
+            )
+            .await,
+            Err(Some("unsettled"))
+        );
+        assert_eq!(
+            watch_events(
+                pasted,
+                &[
+                    (0, "Postgre is ready ", CHANGED),
+                    (200, "", CHANGED),
+                    (10, "", CHANGED)
+                ]
+            )
+            .await,
+            Err(Some("unsettled"))
+        );
+        let learned = Ok((pasted.to_owned(), "Postgres is ready ".to_owned()));
+        assert_eq!(
+            watch_events(
+                pasted,
+                &[(0, "Postgres is ready ", CHANGED), (200, "", CHANGED)]
+            )
+            .await,
+            learned
+        );
+        assert_eq!(
+            watch_events(pasted, &[(0, "Postgres is ready ", folded)]).await,
+            learned
+        );
+        // Fail closed in a double-posting app too: a duplicate clear cannot
+        // be distinguished from the last letter and a clear arriving together.
+        assert_eq!(
+            watch_events(
+                pasted,
+                &[(0, "Postgres is ready ", folded), (200, "", folded)]
+            )
+            .await,
+            Err(Some("unsettled"))
+        );
+    }
+
+    fn words(list: &[&str]) -> DictionaryConfig {
+        DictionaryConfig {
+            words: list.iter().map(|w| w.to_string()).collect(),
+            ..DictionaryConfig::default()
+        }
+    }
+    fn write_words(path: &std::path::Path, list: &[&str]) -> DictionaryConfig {
+        let mut file = ConfigFile::load(path).unwrap();
+        file.set_typed("dictionary.words", &words(list).words)
+            .unwrap();
+        file.save().unwrap();
+        Config::load(path).unwrap().dictionary
+    }
+    fn reload_of(engine: &Engine, config: Config) -> Result<Reloaded> {
+        Ok(Reloaded {
+            config,
+            services: engine.services.clone(),
+            store: engine.store.clone(),
+            hotkeys: None,
+        })
+    }
+    /// Whole dictionary snapshots arrive out of order; each is installed only
+    /// when nothing newer is, and memory ends equal to config.toml in every
+    /// order (review R1), including an external CLI write between them.
+    #[tokio::test]
+    async fn dictionary_snapshots_install_in_write_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let store = Store::open(&dir.path().join("h.db"), false, 10).unwrap();
+        let (mut engine, ..) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            store,
+        );
+        engine.config_path = Some(path.clone());
+        let on_disk = |engine: &Engine| {
+            assert_eq!(
+                engine.config.dictionary,
+                Config::load(&path).unwrap().dictionary
+            );
+        };
+        // A learn saves {foo, claud} as 1; the CLI removes foo and reloads (its
+        // read follows the learn); the learn's completion arrives last.
+        let learn1 = write_words(&path, &["foo", "claud"]);
+        write_words(&path, &["claud"]);
+        assert!(
+            engine
+                .reloaded(reload_of(&engine, Config::load(&path).unwrap()), 1)
+                .ok
+        );
+        engine.learned(learn1, 1, Some("Added 'foo'".into()), None);
+        on_disk(&engine);
+        // A reload read before learn 2 completes after it: its other settings
+        // apply, its dictionary does not.
+        let mut early = Config::load(&path).unwrap();
+        early.formatting.lists = false;
+        let learn2 = write_words(&path, &["Kubernetes", "claud"]);
+        engine.learned(learn2, 2, None, None);
+        assert!(engine.reloaded(reload_of(&engine, early), 1).ok);
+        assert!(!engine.config.formatting.lists);
+        on_disk(&engine);
+        // Two learns out of order: the later one already holds the earlier.
+        let learn3 = write_words(&path, &["Postgres", "Kubernetes", "claud"]);
+        let learn4 = write_words(&path, &["Grafana", "Postgres", "Kubernetes", "claud"]);
+        engine.learned(learn4, 4, None, None);
+        engine.learned(learn3, 3, None, None);
+        on_disk(&engine);
+        // An undo (5) against a reload read before it, in both orders.
+        let before = Config::load(&path).unwrap();
+        let undone = write_words(&path, &["Postgres", "Kubernetes", "claud"]);
+        engine.learned(undone.clone(), 5, None, None);
+        assert!(engine.reloaded(reload_of(&engine, before.clone()), 4).ok);
+        on_disk(&engine);
+        assert!(
+            engine
+                .reloaded(reload_of(&engine, Config::load(&path).unwrap()), 5)
+                .ok
+        );
+        engine.learned(undone, 5, None, None);
+        on_disk(&engine);
+        // A reload that read after every write installs what it read.
+        write_words(&path, &["claud"]);
+        assert!(
+            engine
+                .reloaded(reload_of(&engine, Config::load(&path).unwrap()), 5)
+                .ok
+        );
+        on_disk(&engine);
+    }
+
+    const MINE: &str = "# mine\n[ui]\ntheme = 'paper'\n";
+    /// An actor with config.toml at `path` and one dictation in history (`id`).
+    async fn history_fixture(
+        dir: &std::path::Path,
+    ) -> (
+        mpsc::Sender<Command>,
+        JoinHandle<()>,
+        PathBuf,
+        i64,
+        watch::Receiver<Option<LearnNotice>>,
+    ) {
+        let path = dir.join("config.toml");
+        std::fs::write(&path, MINE).unwrap();
+        let store = Store::open(&dir.join("h.db"), true, 10).unwrap();
+        let (mut engine, tx, rx, mut events, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            store,
+        );
+        engine.config_path = Some(path.clone());
+        // Reloads keep the fixture's services.
+        engine.reload_factory = Arc::new(|_, _, services| Ok(services));
+        let notices = engine.notices();
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        let id = success(&mut events).await.entry.unwrap().id;
+        (tx, task, path, id, notices)
+    }
+    async fn correct(tx: &mpsc::Sender<Command>, id: i64, text: &str) -> Response {
+        ask(
+            tx,
+            Request::HistoryUpdate {
+                id,
+                text: text.into(),
+            },
+        )
+        .await
+    }
+    /// The daemon's dictionary ends equal to config.toml (by fingerprint).
+    async fn in_sync(tx: &mpsc::Sender<Command>, path: &std::path::Path) {
+        let file = format!(
+            "{:016x}",
+            Config::load(path).unwrap().dictionary.fingerprint()
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if ask(tx, Request::Status).await.learning.unwrap().fingerprint == file {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the daemon's dictionary differs from config.toml");
+    }
+    fn undo_request(op: Option<u64>) -> Request {
+        Request::UndoLearned { op }
+    }
+    /// The latest automatic change is undone once, restoring config.toml's
+    /// exact bytes; a wrong id or a replay writes nothing.
+    #[tokio::test]
+    async fn the_latest_change_is_undone_once_with_the_exact_previous_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, task, path, id, notices) = history_fixture(dir.path()).await;
+        let learned = correct(&tx, id, "Postgres is ready").await;
+        assert_eq!(
+            learned.message.as_deref(),
+            Some("Added 'Postgres' to your dictionary")
+        );
+        in_sync(&tx, &path).await;
+        assert!(ask(&tx, Request::Status).await.learning.unwrap().undo);
+        // A history edit is not announced on the pill, but is undoable.
+        assert!(notices.borrow().is_none());
+        assert!(!ask(&tx, undo_request(Some(7))).await.ok);
+        let undone = ask(&tx, undo_request(None)).await;
+        assert!(undone.ok, "{:?}", undone.message);
+        assert!(undone.message.unwrap().contains("'Postgres'"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), MINE);
+        in_sync(&tx, &path).await;
+        let replay = ask(&tx, undo_request(None)).await;
+        assert!(!replay.ok);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), MINE);
+        assert!(!ask(&tx, Request::Status).await.learning.unwrap().undo);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+        // A restarted daemon has nothing to undo.
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, task, path, ..) = history_fixture(dir.path()).await;
+        assert!(!ask(&tx, undo_request(None)).await.ok);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), MINE);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// A manual save after the learn, even of identical bytes (`dictionary add`
+    /// of the same word), adopts it: undo refuses and the word stays. The reload
+    /// a CLI write asks for ends the undo too. Words saved together go together.
+    #[tokio::test]
+    async fn any_later_save_adopts_the_change_and_a_batch_is_undone_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, task, path, id, _) = history_fixture(dir.path()).await;
+        correct(&tx, id, "Postgres is ready").await;
+        {
+            let _lock = crate::config_edit::lock(&path).unwrap();
+            ConfigFile::load(&path).unwrap().save().unwrap();
+        }
+        let refused = ask(&tx, undo_request(None)).await;
+        assert!(!refused.ok && refused.message.unwrap().contains("changed"));
+        assert!(Config::load(&path)
+            .unwrap()
+            .dictionary
+            .words
+            .contains(&"Postgres".to_owned()));
+        in_sync(&tx, &path).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, task, path, id, _) = history_fixture(dir.path()).await;
+        correct(&tx, id, "Postgres is ready").await;
+        assert!(ask(&tx, Request::Reload).await.ok);
+        assert!(!ask(&tx, undo_request(None)).await.ok);
+        assert!(Config::load(&path)
+            .unwrap()
+            .dictionary
+            .words
+            .contains(&"Postgres".to_owned()));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, task, path, id, _) = history_fixture(dir.path()).await;
+        assert_eq!(
+            correct(&tx, id, "Postgres is Readie")
+                .await
+                .message
+                .as_deref(),
+            Some("Added 'Postgres', 'Readie' to your dictionary")
+        );
+        assert!(ask(&tx, undo_request(None)).await.ok);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), MINE);
+        in_sync(&tx, &path).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// A correction seen in the field the dictation was pasted into is offered
+    /// on the pill (the exact saved word, its change id), and the pill's Undo
+    /// sends that id back; the notice goes once the change can't be undone.
+    #[tokio::test]
+    async fn an_observed_correction_is_offered_on_the_pill_until_undone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, MINE).unwrap();
+        let (notify, field_events) = mpsc::unbounded_channel();
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some(String::new()))),
+            field_events: Mutex::new(Some(field_events)),
+            ..RecordingDesktop::default()
+        });
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop.clone(), store);
+        engine.config_path = Some(path.clone());
+        let mut notices = engine.notices();
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        success(&mut events).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        *desktop.field.lock().unwrap() = Some("Postgres is ready ".into());
+        notify.send(FieldEvent::Changed).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        *desktop.field.lock().unwrap() = Some(String::new());
+        notify.send(FieldEvent::Changed).unwrap();
+        let notice =
+            tokio::time::timeout(Duration::from_secs(3), notices.wait_for(Option::is_some))
+                .await
+                .expect("no notice")
+                .unwrap()
+                .clone()
+                .unwrap();
+        assert_eq!(notice.words, ["Postgres"]);
+        assert!(!notice.correction && notice.op != 0);
+        let undone = ask(&tx, undo_request(Some(notice.op))).await;
+        assert!(undone.ok, "{:?}", undone.message);
+        assert!(notices.borrow().is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), MINE);
+        in_sync(&tx, &path).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// The daemon never waits on a stopped lock holder: learning and undo fail
+    /// closed within a bounded wait and write nothing. A CLI command that holds
+    /// the lock while it asks for a reload never deadlocks it either, since
+    /// reloads don't take the lock.
+    #[tokio::test]
+    async fn a_held_config_lock_bounds_learning_and_undo_and_never_blocks_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, task, path, id, _) = history_fixture(dir.path()).await;
+        let held = crate::config_edit::lock(&path).unwrap();
+        let started = Instant::now();
+        let refused = correct(&tx, id, "Postgres is ready").await;
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let message = refused.message.unwrap_or_default();
+        assert!(
+            message.starts_with("Transcript saved; dictionary not updated"),
+            "{message}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), MINE);
+        assert!(ask(&tx, Request::Reload).await.ok);
+        drop(held);
+        // The entry already reads "Postgres is ready": correct another word.
+        let learned = correct(&tx, id, "Postgres is Readie").await;
+        assert_eq!(
+            learned.message.as_deref(),
+            Some("Added 'Readie' to your dictionary")
+        );
+        let held = crate::config_edit::lock(&path).unwrap();
+        let after = std::fs::read(&path).unwrap();
+        assert!(!ask(&tx, undo_request(None)).await.ok);
+        drop(held);
+        assert_eq!(std::fs::read(&path).unwrap(), after);
+        in_sync(&tx, &path).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// A learn that waits for another writer's lock reads the file afresh, so
+    /// that writer's edit (`config set`) and the learned word are both kept.
+    #[tokio::test]
+    async fn a_learn_behind_another_writer_keeps_both_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, task, path, id, _) = history_fixture(dir.path()).await;
+        let held = crate::config_edit::lock(&path).unwrap();
+        let mut file = ConfigFile::load(&path).unwrap();
+        file.set("ui.theme", "midnight").unwrap();
+        let tx2 = tx.clone();
+        let learning = tokio::spawn(async move { correct(&tx2, id, "Postgres is ready").await });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        file.save().unwrap();
+        drop(held);
+        let learned = learning.await.unwrap();
+        assert_eq!(
+            learned.message.as_deref(),
+            Some("Added 'Postgres' to your dictionary")
+        );
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.ui.theme, "midnight");
+        assert_eq!(config.dictionary.words, ["Postgres"]);
+        in_sync(&tx, &path).await;
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// A reload asked for while another is in flight is queued, not refused, and
+    /// gets a read of its own after it: a CLI write made after the first read is
+    /// never lost from memory (review R1).
+    #[tokio::test]
+    async fn a_reload_during_a_reload_is_answered_by_a_fresh_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, MINE).unwrap();
+        let store = Store::open(&dir.path().join("h.db"), false, 10).unwrap();
+        let (mut engine, tx, rx, _, _) = fixture(
+            Config::default(),
+            Arc::new(RecordingDesktop::default()),
+            store,
+        );
+        engine.config_path = Some(path.clone());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = Arc::new(Mutex::new(released));
+        let counted = calls.clone();
+        engine.reload_factory = Arc::new(move |_, _, services| {
+            // The first reload holds after reading the file.
+            if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                let _ = released.lock().unwrap().recv();
+            }
+            Ok(services)
+        });
+        let task = tokio::spawn(engine.run(rx));
+        let first = tokio::spawn({
+            let tx = tx.clone();
+            async move { ask(&tx, Request::Reload).await }
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while calls.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // A CLI write after that read, then its reload.
+        {
+            let _lock = crate::config_edit::lock(&path).unwrap();
+            write_words(&path, &["Kubernetes"]);
+        }
+        let second = tokio::spawn({
+            let tx = tx.clone();
+            async move { ask(&tx, Request::Reload).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        release.send(()).unwrap();
+        assert!(first.await.unwrap().ok);
+        assert!(second.await.unwrap().ok);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        in_sync(&tx, &path).await;
+        assert_eq!(ask(&tx, Request::Status).await.learning.unwrap().words, 1);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    /// Status reports learning outcomes as counts only.
+    #[tokio::test]
+    async fn learning_status_is_counts_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, task, path, id, _) = history_fixture(dir.path()).await;
+        correct(&tx, id, "Postgres is ready").await;
+        in_sync(&tx, &path).await;
+        let status = ask(&tx, Request::Status).await;
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(
+            !json.contains("Postgres") && !json.contains("gres"),
+            "{json}"
+        );
+        let learning = status.learning.unwrap();
+        assert_eq!(
+            (learning.words, learning.learned, learning.replacements),
+            (1, 1, 0)
+        );
+        // The paste with no readable field was watched and counted.
+        let learning = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let learning = ask(&tx, Request::Status).await.learning.unwrap();
+                if learning.watches > 0 {
+                    return learning;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(learning.watches, 1);
+        assert_eq!(learning.outcomes.get("unreadable"), Some(&1));
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }

@@ -265,7 +265,7 @@ pub fn overlay(action: Option<&args::Overlay>, out: &Output) -> Result<()> {
             out.confirm("Overlay settings reset")?;
         }
         #[cfg(target_os = "macos")]
-        Preview => xflow_app::overlay_pill::preview()?,
+        Preview { notice } => xflow_app::overlay_pill::preview(*notice)?,
     }
     Ok(())
 }

@@ -4,8 +4,9 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 use std::{
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 use toml_edit::{DocumentMut, Item, Table};
 use xflow_core::config::Config;
@@ -17,41 +18,192 @@ pub struct ConfigFile {
     doc: DocumentMut,
 }
 
-/// Exclusive advisory lock on `<config>.lock`. Hold it from load to save so the
-/// daemon's learning and CLI dictionary edits never overwrite each other.
+/// The file a config path names: a symlink's target, or, before the file
+/// exists, the path under its resolved directory.
+pub fn target(path: &Path) -> PathBuf {
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => std::fs::canonicalize(parent)
+            .map(|parent| parent.join(name))
+            .unwrap_or_else(|_| path.to_owned()),
+        _ => path.to_owned(),
+    }
+}
+
+/// Exclusive advisory lock on `<config target>.lock`. Every cooperative writer
+/// (CLI, TUI, the daemon's learning and undo) holds it from load to save, so no
+/// edit overwrites another; it is named after the symlink-resolved file, so a
+/// symlinked path and its target share it. Release it before asking the daemon
+/// to reload.
 pub fn lock(path: &Path) -> Result<std::fs::File> {
+    let file = lock_file(path)?;
+    fs2::FileExt::lock_exclusive(&file)?;
+    Ok(file)
+}
+
+/// `lock` that gives up after `wait`: the daemon never blocks behind a stopped
+/// CLI or editor, it fails closed instead.
+pub fn lock_within(path: &Path, wait: Duration) -> Result<std::fs::File> {
+    let file = lock_file(path)?;
+    let deadline = Instant::now() + wait;
+    while fs2::FileExt::try_lock_exclusive(&file).is_err() {
+        if Instant::now() >= deadline {
+            bail!("config.toml is locked by another xflow command; nothing was changed");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(file)
+}
+
+fn lock_file(path: &Path) -> Result<std::fs::File> {
     let parent = path.parent().context("config path has no parent")?;
     if !parent.exists() {
         crate::paths::private_dir(parent)?;
     }
-    let mut name = path.as_os_str().to_owned();
+    let mut name = target(path).into_os_string();
     name.push(".lock");
-    let file = std::fs::OpenOptions::new()
+    Ok(std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(name)?;
-    fs2::FileExt::lock_exclusive(&file)?;
-    Ok(file)
+        .open(name)?)
+}
+
+/// The most config.toml bytes kept in memory to undo one automatic edit; a
+/// larger file is not edited automatically.
+pub const MAX_UNDO_BYTES: usize = 256 * 1024;
+
+/// Which file a save wrote and what it held: device, inode, size, modification
+/// time and a stable hash of the bytes, all from one open descriptor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Revision {
+    dev: u64,
+    ino: u64,
+    len: u64,
+    mtime_ns: i128,
+    hash: u64,
+}
+impl Revision {
+    fn of(file: &std::fs::File, bytes: &[u8]) -> Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = file.metadata()?;
+        Ok(Self {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            len: meta.len(),
+            mtime_ns: i128::from(meta.mtime()) * 1_000_000_000 + i128::from(meta.mtime_nsec()),
+            hash: xflow_core::stable_hash(bytes),
+        })
+    }
+    /// The file at `path` now, bytes and metadata through one descriptor (the
+    /// metadata after the read, so an in-place write during it shows); None
+    /// when it is missing.
+    fn read(path: &Path) -> Result<Option<Self>> {
+        let mut file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(2 * MAX_UNDO_BYTES as u64)
+            .read_to_end(&mut bytes)?;
+        Self::of(&file, &bytes).map(Some)
+    }
+}
+
+/// One automatic edit of config.toml that can be undone once: the exact bytes
+/// before it (None: there was no file) and what it wrote. Kept in daemon memory
+/// only.
+#[derive(Clone, Debug)]
+pub struct Undo {
+    target: PathBuf,
+    before: Option<Vec<u8>>,
+    after: Revision,
+}
+impl Undo {
+    pub fn new(path: &Path, before: Option<Vec<u8>>, after: Revision) -> Self {
+        Self {
+            target: target(path),
+            before,
+            after,
+        }
+    }
+    /// Put config.toml back exactly as it was before the edit, atomically. The
+    /// caller holds `lock`. Refuses, writing nothing, unless `path` still names
+    /// the same file and it is still byte for byte the same file the edit wrote:
+    /// any later save, even of identical bytes (a manual `dictionary add` of the
+    /// same word), replaces the file, and an in-place edit changes its time.
+    /// Returns the configuration now on disk.
+    pub fn restore(&self, path: &Path) -> Result<Config> {
+        if target(path) != self.target || Revision::read(&self.target)? != Some(self.after) {
+            bail!("config.toml changed after that automatic edit; nothing was undone");
+        }
+        let Some(before) = &self.before else {
+            std::fs::remove_file(&self.target)?;
+            return ConfigFile::load(path)?.config();
+        };
+        let text = std::str::from_utf8(before).context("config.toml was not UTF-8")?;
+        let config = parse(&text.parse::<DocumentMut>()?)?;
+        let parent = self.target.parent().context("config path has no parent")?;
+        written(parent, before)?
+            .persist(&self.target)
+            .map_err(|error| error.error)
+            .with_context(|| format!("cannot replace {}", self.target.display()))?;
+        Ok(config)
+    }
+}
+
+/// A private, synced sibling temp file holding `bytes`, ready to rename.
+fn written(parent: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
+    let mut temp = tempfile::Builder::new()
+        .prefix(".xflow-config-")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .with_context(|| format!("cannot create a temporary file in {}", parent.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        temp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    temp.as_file_mut().write_all(bytes)?;
+    temp.as_file().sync_all()?;
+    Ok(temp)
 }
 
 impl ConfigFile {
     /// The user's file, or the documented template when it does not exist yet.
     pub fn load(path: &Path) -> Result<Self> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => TEMPLATE.to_owned(),
+        Self::load_exact(path).map(|(file, _)| file)
+    }
+
+    /// `load`, plus the file's exact bytes (None when it does not exist).
+    pub fn load_exact(path: &Path) -> Result<(Self, Option<Vec<u8>>)> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => {
                 return Err(error).with_context(|| format!("cannot read {}", path.display()))
             }
         };
+        let text = match &bytes {
+            Some(bytes) => std::str::from_utf8(bytes)
+                .with_context(|| format!("cannot read {}", path.display()))?,
+            None => TEMPLATE,
+        };
         let doc = text
             .parse::<DocumentMut>()
             .with_context(|| format!("{} is not valid TOML", path.display()))?;
-        Ok(Self {
-            path: path.to_owned(),
-            doc,
-        })
+        Ok((
+            Self {
+                path: path.to_owned(),
+                doc,
+            },
+            bytes,
+        ))
     }
 
     pub fn path(&self) -> &Path {
@@ -159,6 +311,11 @@ impl ConfigFile {
     /// creating a private config directory on first save. A symlinked config
     /// is written through.
     pub fn save(&self) -> Result<()> {
+        self.save_tracked().map(drop)
+    }
+
+    /// `save`, returning what it wrote (see `Undo`).
+    pub fn save_tracked(&self) -> Result<Revision> {
         self.validate()?;
         let target = match std::fs::canonicalize(&self.path) {
             Ok(real) => real,
@@ -175,24 +332,14 @@ impl ConfigFile {
             }
         };
         let parent = target.parent().context("config path has no parent")?;
-        let mut temp = tempfile::Builder::new()
-            .prefix(".xflow-config-")
-            .suffix(".tmp")
-            .tempfile_in(parent)
-            .with_context(|| format!("cannot create a temporary file in {}", parent.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            temp.as_file()
-                .set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
-        temp.as_file_mut()
-            .write_all(self.doc.to_string().as_bytes())?;
-        temp.as_file().sync_all()?;
+        let bytes = self.doc.to_string();
+        let temp = written(parent, bytes.as_bytes())?;
+        // Before the rename, which keeps the inode and modification time.
+        let revision = Revision::of(temp.as_file(), bytes.as_bytes())?;
         temp.persist(&target)
             .map_err(|error| error.error)
             .with_context(|| format!("cannot replace {}", target.display()))?;
-        Ok(())
+        Ok(revision)
     }
 
     fn try_edit(
@@ -232,7 +379,7 @@ pub fn migrate_recording_limit(path: &Path, marker: &Path) -> Result<bool> {
     }
     let mut changed = false;
     if path.exists() {
-        let _lock = lock(path)?;
+        let _lock = lock_within(path, Duration::from_secs(5))?;
         let mut file = ConfigFile::load(path)?;
         if file.get("recording.max_seconds").as_deref() == Some("120") {
             changed = file.unset("recording.max_seconds")?;
@@ -572,6 +719,148 @@ mod tests {
             std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::*;
+
+    const START: &str = "# mine\n[dictionary]\nwords = [\"Postgres\"]\n[ui]\ntheme = 'paper'\n";
+
+    /// A daemon learn: locked load, one word added, tracked save.
+    fn learn(path: &Path, word: &str) -> Undo {
+        let _lock = lock(path).unwrap();
+        let (mut file, before) = ConfigFile::load_exact(path).unwrap();
+        let mut words = file.config().unwrap().dictionary.words;
+        words.insert(0, word.into());
+        file.set_typed("dictionary.words", &words).unwrap();
+        let after = file.save_tracked().unwrap();
+        Undo::new(path, before, after)
+    }
+    fn restore(undo: &Undo, path: &Path) -> Result<Config> {
+        let _lock = lock(path).unwrap();
+        undo.restore(path)
+    }
+    fn words(path: &Path) -> Vec<String> {
+        Config::load(path).unwrap().dictionary.words
+    }
+
+    #[test]
+    fn undo_restores_the_exact_bytes_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, START).unwrap();
+        let undo = learn(&path, "claud");
+        assert_eq!(words(&path), ["claud", "Postgres"]);
+        let restored = restore(&undo, &path).unwrap();
+        assert_eq!(restored.dictionary.words, ["Postgres"]);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), START);
+        // A replay finds a file the edit did not write.
+        assert!(restore(&undo, &path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), START);
+    }
+
+    #[test]
+    fn undo_refuses_after_any_later_save_and_writes_nothing() {
+        type Later = fn(&Path);
+        let later: [(&str, Later); 5] = [
+            // `dictionary add claud` of a word already there saves identical bytes.
+            ("identical bytes", |path| {
+                ConfigFile::load(path).unwrap().save().unwrap()
+            }),
+            ("unrelated setting", |path| {
+                let mut file = ConfigFile::load(path).unwrap();
+                file.set("ui.theme", "midnight").unwrap();
+                file.save().unwrap();
+            }),
+            ("remove then add again", |path| {
+                let mut file = ConfigFile::load(path).unwrap();
+                let bytes = file.to_string();
+                file.set("dictionary.words", r#"["Postgres"]"#).unwrap();
+                file.save().unwrap();
+                std::fs::write(path.with_extension("next"), bytes).unwrap();
+                std::fs::rename(path.with_extension("next"), path).unwrap();
+            }),
+            ("hand edit in place, same bytes", |path| {
+                let bytes = std::fs::read(path).unwrap();
+                let modified = std::fs::metadata(path).unwrap().modified().unwrap();
+                std::fs::write(path, bytes).unwrap();
+                std::fs::File::options()
+                    .write(true)
+                    .open(path)
+                    .unwrap()
+                    .set_modified(modified + std::time::Duration::from_secs(2))
+                    .unwrap();
+            }),
+            ("another learn", |path| drop(learn(path, "Kubernetes"))),
+        ];
+        for (case, later) in later {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, START).unwrap();
+            let undo = learn(&path, "claud");
+            later(&path);
+            let before = std::fs::read(&path).unwrap();
+            assert!(restore(&undo, &path).is_err(), "{case}");
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{case}");
+            assert!(words(&path).contains(&"claud".to_owned()), "{case}");
+        }
+    }
+
+    #[test]
+    fn undo_of_a_first_save_removes_the_file_it_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("xflow/config.toml");
+        let undo = learn(&path, "claud");
+        assert!(path.exists());
+        assert_eq!(
+            restore(&undo, &path).unwrap().dictionary.words,
+            Vec::<String>::new()
+        );
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn undo_and_lock_follow_a_symlinked_config_to_its_target() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("actual.toml");
+        let link = dir.path().join("config.toml");
+        std::fs::write(&target, START).unwrap();
+        symlink(&target, &link).unwrap();
+        // One lock for both names.
+        let held = lock(&link).unwrap();
+        assert!(lock_within(&target, Duration::from_millis(50)).is_err());
+        drop(held);
+        drop(lock_within(&target, Duration::from_millis(50)).unwrap());
+        let undo = learn(&link, "claud");
+        restore(&undo, &link).unwrap();
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), START);
+        // The link now names another file: not the file the edit wrote.
+        let undo = learn(&link, "claud");
+        let other = dir.path().join("other.toml");
+        std::fs::copy(&target, &other).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        symlink(&other, &link).unwrap();
+        assert!(restore(&undo, &link).is_err());
+    }
+
+    #[test]
+    fn a_held_lock_makes_a_bounded_wait_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let held = lock(&path).unwrap();
+        let started = Instant::now();
+        assert!(lock_within(&path, Duration::from_millis(100)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop(held);
+        assert!(lock_within(&path, Duration::from_millis(100)).is_ok());
     }
 }
 
