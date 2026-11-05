@@ -1,10 +1,10 @@
 use anyhow::{bail, Result};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
+use rusqlite::{ffi, params, Connection, OpenFlags, OptionalExtension, Row};
 use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, Once,
     },
 };
 use xflow_core::{
@@ -30,6 +30,21 @@ impl Store {
         if enabled && limit == 0 {
             bail!("history_limit must be positive when history is enabled");
         }
+        static PAGECACHE: Once = Once::new();
+        PAGECACHE.call_once(|| {
+            // Avoid SQLite's initial bulk page-cache allocation for small history databases.
+            // SAFETY: Once serializes this configuration before Store opens any connections;
+            // a library initialized by another caller returns SQLITE_MISUSE without changes.
+            let result = unsafe {
+                ffi::sqlite3_config(
+                    ffi::SQLITE_CONFIG_PAGECACHE,
+                    std::ptr::null_mut::<std::ffi::c_void>(),
+                    0,
+                    0,
+                )
+            };
+            debug_assert!(matches!(result, ffi::SQLITE_OK | ffi::SQLITE_MISUSE));
+        });
         let mut connection = if enabled {
             let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
                 bail!("history path needs a parent directory and file name");
@@ -477,6 +492,38 @@ mod tests {
             "SQLite {} predates the WAL-reset fix",
             rusqlite::version()
         );
+    }
+
+    #[test]
+    fn opens_when_sqlite_is_already_initialized() {
+        const CHILD: &str = "XFLOW_STORE_INITIALIZED_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let _connection = Connection::open_in_memory().unwrap();
+            // SAFETY: This isolated process has no other SQLite callers running.
+            let result = unsafe {
+                ffi::sqlite3_config(
+                    ffi::SQLITE_CONFIG_PAGECACHE,
+                    std::ptr::null_mut::<std::ffi::c_void>(),
+                    0,
+                    0,
+                )
+            };
+            assert_eq!(result, ffi::SQLITE_MISUSE);
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(&dir.path().join("history.db"), true, 10).unwrap();
+            store.reopen(true, 10).unwrap();
+            Store::open(&dir.path().join("disabled.db"), false, 10).unwrap();
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "store::tests::opens_when_sqlite_is_already_initialized",
+            ])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     fn entry(text: &str) -> HistoryEntry {
