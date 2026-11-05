@@ -31,7 +31,7 @@ Commands:
   history      Browse, search and export local dictation history
   config       Inspect or edit validated, comment-preserving TOML configuration
   providers    List providers, inspect capabilities and select a default
-  models       List a provider's models, marking the selected and default model
+  models       List provider models, or inspect the offline on-device model catalog and hardware
   key          Manage provider credentials in OS credential storage; a custom cleanup endpoint uses the `cleanup` entry
   dictionary   Manage vocabulary and text replacements
   snippets     Manage spoken shortcuts that expand to saved text
@@ -717,10 +717,10 @@ Options:
 
 ## xflow models
 
-List a provider's models, marking the selected and default model
+List provider models, or inspect the offline on-device model catalog and hardware
 
 ```text
-List a provider's models, marking the selected and default model
+List provider models, or inspect the offline on-device model catalog and hardware
 
 Usage: xflow models [OPTIONS] [PROVIDER]
 
@@ -729,6 +729,7 @@ Arguments:
 
 Options:
       --json           Emit machine-readable JSON (watch emits one object per event)
+      --on-device      Report on-device model requirements and host facts without installing or selecting a model
   -q, --quiet          Suppress confirmations; requested data and errors remain visible
       --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
       --config <PATH>  Read/write an alternate configuration file

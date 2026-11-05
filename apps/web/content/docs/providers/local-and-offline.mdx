@@ -5,6 +5,25 @@ description: Point xflow at a speech server on your own machine, and refuse ever
 
 xflow can send audio to a server you run yourself instead of a cloud provider. No model is bundled or silently downloaded — you install and run the server.
 
+## Inspect on-device models
+
+```sh
+xflow models --on-device
+xflow models --on-device --json
+```
+
+This read-only report works offline. It shows native Mac hardware facts, available space on the intended model volume, and one curated model: NVIDIA Parakeet TDT 0.6B v3. The JSON includes its immutable Core ML revision and the complete 21-file size and SHA-256 manifest. Missing facts appear as `unknown`.
+
+Apple Silicon with macOS 14 or newer meets the hardware requirements, but **local transcription is not ready**: the runtime is not installed and total system memory use has not been qualified. Intel's CPU helper is unvalidated; older macOS and other architectures are incompatible with this artifact. Linux reports an unsupported managed runtime. Low disk space produces an advisory warning. No speed or smooth-fit promise follows from the hardware report.
+
+Parakeet supports the 25 languages listed in the report. Hindi, Hindi-English mixtures and Japanese are unsupported. Its 483,105,645-byte download size covers model files only; helper, notices, filesystem allocation and Core ML caches need additional space. The provisional staging allowance is twice the model bytes plus 1 GiB, pending full installation measurements.
+
+The [pinned NVIDIA model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/blob/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/README.md) reports 6.34% average English WER on the Open ASR Leaderboard datasets. This is a base-model result, **not the quantized Core ML conversion's accuracy**. The report retains dataset, scoring and source-date qualifiers; evaluation date and comparable converted-runtime accuracy are unknown. Only comparable accuracy scores rank models, with unknown scores last.
+
+Model attribution: NVIDIA, Parakeet TDT 0.6B v3; Core ML conversion by FluidInference, under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Conversion changes include Core ML format and 6-bit LUT palettization of the original encoder; xflow has not modified these model files. Redistribution must preserve attribution, source/license links and modification notices. The planned FluidAudio dependency has an [Apache 2.0 license at its pinned revision](https://github.com/FluidInference/FluidAudio/blob/ee78635d23d52379117554ba72358b65a0612447/LICENSE), verified on 2026-11-05; it is not built or linked into xflow.
+
+The report does not select a provider, change settings, access credentials, install files or make network requests. Downloads and explicit metadata refresh are deferred. `xflow models local` continues to list models for the existing local server below.
+
 ## A local OpenAI-compatible server
 
 The `local` entry is preconfigured for a server on `http://127.0.0.1:8000`, such as [speaches](https://speaches.ai/):

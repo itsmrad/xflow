@@ -107,8 +107,13 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<Providers>,
     },
-    /// List a provider's models, marking the selected and default model.
-    Models { provider: Option<String> },
+    /// List provider models, or inspect the offline on-device model catalog and hardware.
+    Models {
+        provider: Option<String>,
+        /// Report on-device model requirements and host facts without installing or selecting a model.
+        #[arg(long, conflicts_with = "provider")]
+        on_device: bool,
+    },
     /// Manage provider credentials in OS credential storage; a custom cleanup endpoint uses the `cleanup` entry.
     Key {
         #[command(subcommand)]
