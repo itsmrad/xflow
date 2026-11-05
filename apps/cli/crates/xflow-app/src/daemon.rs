@@ -4155,6 +4155,10 @@ mod tests {
         field_left: Arc<AtomicBool>,
         /// Field watches started (one per observed paste).
         watches: AtomicUsize,
+        /// Where the caret sits, when not at the field's end (UTF-16 units).
+        field_caret: Arc<Mutex<Option<usize>>>,
+        /// Field reads, for "nothing is read after" assertions.
+        field_reads: Arc<AtomicUsize>,
         /// Text around the caret, for smart spacing, and how long reading it takes.
         around: Option<(&'static str, &'static str)>,
         around_delay: Duration,
@@ -4175,6 +4179,8 @@ mod tests {
         field: Arc<Mutex<Option<String>>>,
         events: Option<mpsc::UnboundedReceiver<FieldEvent>>,
         left: Arc<AtomicBool>,
+        caret: Arc<Mutex<Option<usize>>>,
+        reads: Arc<AtomicUsize>,
     }
     #[async_trait]
     impl xflow_core::FieldWatch for ScriptedField {
@@ -4188,8 +4194,14 @@ mod tests {
             self.events.as_mut()?.try_recv().ok()
         }
         async fn read(&mut self) -> Option<xflow_core::FieldText> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
             let value = self.field.lock().unwrap().clone()?;
-            let caret = Some(value.encode_utf16().count());
+            let caret = Some(
+                self.caret
+                    .lock()
+                    .unwrap()
+                    .unwrap_or_else(|| value.encode_utf16().count()),
+            );
             Some(xflow_core::FieldText { value, caret })
         }
         async fn focused(&mut self) -> bool {
@@ -4256,12 +4268,7 @@ mod tests {
             let outcome = self.inject(text, target).await?;
             let ticket = field
                 .zip(receipt)
-                .map(|(field, receipt)| xflow_core::DeliveryTicket {
-                    field,
-                    receipt,
-                    selection: (0, 0),
-                    delivered: (0, text.encode_utf16().count()),
-                });
+                .map(|(field, receipt)| xflow_core::DeliveryTicket { field, receipt });
             Ok(xflow_core::ObservedDelivery { outcome, ticket })
         }
         async fn watch_field(&self, _: &AppContext) -> Option<Box<dyn xflow_core::FieldWatch>> {
@@ -4271,6 +4278,8 @@ mod tests {
                 field: self.field.clone(),
                 events: self.field_events.lock().unwrap().take(),
                 left: self.field_left.clone(),
+                caret: self.field_caret.clone(),
+                reads: self.field_reads.clone(),
             }))
         }
         async fn neighbors(&self) -> Option<(String, String)> {
@@ -6205,8 +6214,8 @@ mod tests {
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Gress", "Postgres"]);
         assert_eq!(dictionary.learned, ["Postgres", "Gress"]);
-        // Learning adds vocabulary hints only, never replacements.
-        assert!(dictionary.replacements.is_empty());
+        // An uncommon source earns its literal rule at once.
+        assert_eq!(dictionary.replacements.len(), 2);
         assert!(
             !ask(
                 &tx,
@@ -6261,13 +6270,9 @@ mod tests {
                 Some(xflow_core::DeliveryTicket {
                     field: desktop.watch_field(&target).await.unwrap(),
                     receipt: xflow_core::learn::Receipt::new(original, original, None).unwrap(),
-                    selection: (0, 0),
-                    delivered: (0, original.len()),
                 }),
                 finalized,
-                path.clone(),
-                completion,
-                Arc::new(AtomicU64::new(0)),
+                test_learner(path.clone(), completion, Arc::new(AtomicU64::new(0))),
                 learning.clone(),
             ),
         )
@@ -6299,8 +6304,481 @@ mod tests {
         change.undo.restore(&path).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
+    fn test_learner(
+        path: PathBuf,
+        completion: mpsc::Sender<Completion>,
+        clock: Arc<AtomicU64>,
+    ) -> Learner {
+        Learner {
+            path,
+            completion,
+            clock,
+            seen: Default::default(),
+            notice: true,
+            admission: Some(Arc::new(AtomicU8::new(SAVE_OPEN))),
+        }
+    }
+    /// One observed dictation, as the daemon runs it, over a scripted field.
+    struct Run {
+        desktop: Arc<RecordingDesktop>,
+        notify: mpsc::UnboundedSender<FieldEvent>,
+        finalize: Option<oneshot::Sender<()>>,
+        path: PathBuf,
+        saves: mpsc::Receiver<Completion>,
+        learning: Arc<std::sync::Mutex<Learning>>,
+        admission: Arc<AtomicU8>,
+        task: JoinHandle<()>,
+        _dir: tempfile::TempDir,
+    }
+    impl Run {
+        async fn start(before: &str, dictated: &str) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            let (notify, field_events) = mpsc::unbounded_channel();
+            let desktop = Arc::new(RecordingDesktop {
+                field: Arc::new(Mutex::new(Some(before.into()))),
+                field_events: Mutex::new(Some(field_events)),
+                ..RecordingDesktop::default()
+            });
+            let delivered = desktop
+                .inject_observed(dictated, &AppContext::default())
+                .await
+                .unwrap();
+            let (finalize, finalized) = oneshot::channel();
+            let (completion, saves) = mpsc::channel(8);
+            let learning = Arc::new(std::sync::Mutex::new(Learning::default()));
+            let learner = test_learner(path.clone(), completion, Arc::new(AtomicU64::new(0)));
+            let admission = learner.admission.clone().unwrap();
+            let task = tokio::spawn(observe(
+                delivered.ticket,
+                finalized,
+                learner,
+                learning.clone(),
+            ));
+            // The first read has seen the delivery.
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            Self {
+                desktop,
+                notify,
+                finalize: Some(finalize),
+                path,
+                saves,
+                learning,
+                admission,
+                task,
+                _dir: dir,
+            }
+        }
+        fn edit(&self, text: &str) {
+            *self.desktop.field.lock().unwrap() = Some(text.into());
+            let _ = self.notify.send(FieldEvent::Changed);
+        }
+        fn caret(&self, at: Option<usize>) {
+            *self.desktop.field_caret.lock().unwrap() = at;
+        }
+        fn reads(&self) -> usize {
+            self.desktop.field_reads.load(Ordering::SeqCst)
+        }
+        fn dictionary(&self) -> DictionaryConfig {
+            Config::load(&self.path)
+                .map(|c| c.dictionary)
+                .unwrap_or_default()
+        }
+        /// The next save, if one lands within `ms`.
+        async fn save_within(&mut self, ms: u64) -> Option<Completion> {
+            tokio::time::timeout(Duration::from_millis(ms), self.saves.recv())
+                .await
+                .ok()
+                .flatten()
+        }
+        async fn finish(mut self) -> Self {
+            let _ = self.finalize.take().unwrap().send(());
+            (&mut self.task).await.unwrap();
+            self
+        }
+        fn outcomes(&self) -> Vec<String> {
+            lock(&self.learning).outcomes.keys().cloned().collect()
+        }
+    }
+    const DICTATED: &str = "Please ask Veronika about tomorrow plans ";
+    const FIXED: &str = "Please ask Veronica about tomorrow plans ";
+    /// The approved timing: about 2 s after the word settles, no focus change or
+    /// send needed; the watch then goes on, and a second fix saves too (T09).
+    #[tokio::test]
+    async fn a_settled_correction_saves_in_about_two_seconds_and_the_watch_goes_on() {
+        let mut run = Run::start("", "Please ask Veronika and Zorblax tomorrow ").await;
+        run.edit("Please ask Veronica and Zorblax tomorrow ");
+        let started = Instant::now();
+        assert!(run.save_within(1500).await.is_none(), "too early");
+        let Some(Completion::Learned { change: Some(change), .. }) = run.save_within(1500).await
+        else {
+            panic!("nothing saved within 3 s of the edit");
+        };
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(1900) && took < Duration::from_millis(2800), "{took:?}");
+        assert_eq!(change.words, ["Veronica"]);
+        assert!(change.notice);
+        run.edit("Please ask Veronica and Zorblex tomorrow ");
+        assert!(run.save_within(3000).await.is_some(), "the second fix");
+        let run = run.finish().await;
+        let dictionary = run.dictionary();
+        assert_eq!(dictionary.words, ["Zorblex", "Veronica"]);
+        assert_eq!(dictionary.replacements.len(), 2);
+        assert_eq!(run.outcomes(), ["learned"]);
+        assert_eq!(lock(&run.learning).watches, 1);
+    }
+    /// Typing on after a fix does not hold it back, and is not learned.
+    #[tokio::test]
+    async fn typing_on_after_the_fix_saves_the_fix_alone() {
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        for more in ["and", "and din", "and dinner"] {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            run.edit(&format!("{FIXED}{more}"));
+        }
+        assert!(run.save_within(1200).await.is_some());
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Veronica"]);
+    }
+    /// `Veronic`, caret on it: not saved however long it sits; finishing it saves
+    /// the finished word alone.
+    #[tokio::test]
+    async fn a_partial_word_under_the_caret_is_never_saved() {
+        let mut run = Run::start("", DICTATED).await;
+        let partial = "Please ask Veronic about tomorrow plans ";
+        run.edit(partial);
+        run.caret(Some(18));
+        assert!(run.save_within(5500).await.is_none(), "saved a partial word");
+        run.edit(FIXED);
+        run.caret(Some(21));
+        assert!(run.save_within(3000).await.is_some());
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Veronica"]);
+    }
+    /// A finished word under the caret goes after the longer wait, not after 60 s.
+    #[tokio::test]
+    async fn a_complete_word_under_the_caret_saves_after_the_longer_wait() {
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(19));
+        run.edit(FIXED);
+        assert!(run.save_within(3000).await.is_none(), "caret still on it");
+        // Moving off it saves at the next look.
+        run.caret(Some(FIXED.len()));
+        assert!(run.save_within(1500).await.is_some());
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(19));
+        run.edit(FIXED);
+        assert!(run.save_within(5500).await.is_some(), "caret never moved");
+        run.finish().await;
+    }
+    /// Leaving with the caret on a word touched a moment ago: it may be half typed.
+    #[tokio::test]
+    async fn leaving_right_after_a_keystroke_on_the_word_saves_nothing() {
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(18));
+        run.edit("Please ask Veronic about tomorrow plans ");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.outcomes(), ["partial"]);
+        assert!(run.dictionary().words.is_empty());
+        // The same word left alone first: its caret no longer says "typing".
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(19));
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.outcomes(), ["learned"]);
+    }
+    /// T04/C03: a select-all retype: the first key replaces the field. Its pair,
+    /// CEN2: a clear, then the same words as a new message, saves nothing.
+    #[tokio::test]
+    async fn a_select_all_retype_learns_unless_the_field_emptied() {
+        let keys = ["P", "Ple", "Please ", "Please ask Veron", "Please ask Veronica about ", FIXED];
+        let mut run = Run::start("", DICTATED).await;
+        for text in keys {
+            run.edit(text);
+            tokio::time::sleep(Duration::from_millis(90)).await;
+        }
+        assert!(run.save_within(3000).await.is_some());
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Veronica"]);
+
+        let mut run = Run::start("", DICTATED).await;
+        run.edit("");
+        tokio::time::sleep(Duration::from_millis(90)).await;
+        let reads = run.reads();
+        for text in keys {
+            run.edit(text);
+            tokio::time::sleep(Duration::from_millis(90)).await;
+        }
+        assert!(run.save_within(2500).await.is_none());
+        let run = run.finish().await;
+        assert_eq!(run.outcomes(), ["anchors-lost"]);
+        assert_eq!(run.reads(), reads, "the next message is never read");
+        assert!(run.dictionary().words.is_empty());
+    }
+    /// T03 with its pair: a short whole field is corrected in place, or replaced
+    /// by a different message.
+    #[tokio::test]
+    async fn a_short_field_learns_its_fix_but_not_the_next_message() {
+        let mut run = Run::start("", "Hi Veronika ").await;
+        run.edit("Hi Veronica ");
+        assert!(run.save_within(3000).await.is_some());
+        run.finish().await;
+        let mut run = Run::start("", "Hi Veronika ").await;
+        run.edit("");
+        tokio::time::sleep(Duration::from_millis(90)).await;
+        run.edit("Hi Veronica ");
+        assert!(run.save_within(2500).await.is_none());
+        let run = run.finish().await;
+        assert!(run.dictionary().words.is_empty());
+    }
+    /// T02: corrected before the first read; the notification says so.
+    #[tokio::test]
+    async fn an_edit_before_the_first_read_is_still_the_correction() {
+        let dir = tempfile::tempdir().unwrap();
+        let (notify, field_events) = mpsc::unbounded_channel();
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some(String::new()))),
+            field_events: Mutex::new(Some(field_events)),
+            ..RecordingDesktop::default()
+        });
+        let delivered = desktop
+            .inject_observed(DICTATED, &AppContext::default())
+            .await
+            .unwrap();
+        *desktop.field.lock().unwrap() = Some(FIXED.into());
+        notify.send(FieldEvent::Changed).unwrap();
+        let (finish, finalized) = oneshot::channel();
+        let (completion, mut saves) = mpsc::channel(8);
+        let path = dir.path().join("config.toml");
+        let learning = Arc::new(std::sync::Mutex::new(Learning::default()));
+        let task = tokio::spawn(observe(
+            delivered.ticket,
+            finalized,
+            test_learner(path.clone(), completion, Arc::new(AtomicU64::new(0))),
+            learning,
+        ));
+        assert!(tokio::time::timeout(Duration::from_secs(3), saves.recv()).await.is_ok());
+        let _ = finish.send(());
+        task.await.unwrap();
+        assert_eq!(Config::load(&path).unwrap().dictionary.words, ["Veronica"]);
+    }
+    /// An app's substitutions at delivery are the baseline: no notification, no
+    /// edit, so a later fix is compared with what the field really showed.
+    #[tokio::test]
+    async fn what_the_app_made_of_the_delivery_is_not_a_correction() {
+        let mut run = Run::start("", DICTATED).await;
+        // Chromium's trailing space: no save and no "unsettled" from it.
+        *run.desktop.field.lock().unwrap() = Some(DICTATED.replace(" plans ", " plans\u{a0}"));
+        run.edit(&FIXED.replace(" plans ", " plans\u{a0}"));
+        assert!(run.save_within(3000).await.is_some());
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Veronica"]);
+    }
+    /// A real focus journey is terminal: nothing read after it, returning to the
+    /// field resumes nothing, and an edit not yet read is unknown.
+    #[tokio::test]
+    async fn a_focus_journey_reads_nothing_more_and_saves_nothing_unread() {
+        let mut run = Run::start("", DICTATED).await;
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let reads = run.reads();
+        run.edit(FIXED);
+        assert!(run.save_within(2500).await.is_none());
+        let run = run.finish().await;
+        assert_eq!(run.reads(), reads);
+        assert_eq!(run.outcomes(), ["focus-left-before-edit"]);
+        // The edit and the departure queued together: its read never happens.
+        let mut run = Run::start("", DICTATED).await;
+        *run.desktop.field.lock().unwrap() = Some(FIXED.into());
+        let _ = run.notify.send(FieldEvent::Changed);
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.outcomes(), ["unsettled"]);
+        assert!(run.dictionary().words.is_empty());
+        // A settled edit, then a departure: saved from what was already read.
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let reads = run.reads();
+        *run.desktop.field.lock().unwrap() = Some("Another field entirely".into());
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.reads(), reads);
+        assert_eq!(run.dictionary().words, ["Veronica"]);
+    }
+    /// Notifications lost, the observer unable to cover the field: nothing saved.
+    #[tokio::test]
+    async fn overflow_and_missing_capabilities_end_the_watch_with_nothing() {
+        for (event, outcome) in [
+            (FieldEvent::Overflow, "overflow"),
+            (FieldEvent::Unsupported, "unsupported"),
+        ] {
+            let mut run = Run::start("", DICTATED).await;
+            run.edit(FIXED);
+            let _ = run.notify.send(event);
+            (&mut run.task).await.unwrap();
+            assert_eq!(run.outcomes(), [outcome]);
+            assert!(run.dictionary().words.is_empty());
+        }
+    }
+    /// A storm of duplicate notifications is one reread, not an aborted watch.
+    #[tokio::test]
+    async fn a_burst_of_notifications_rereads_and_still_learns() {
+        let mut run = Run::start("", DICTATED).await;
+        *run.desktop.field.lock().unwrap() = Some(FIXED.into());
+        for _ in 0..200 {
+            let _ = run.notify.send(FieldEvent::Changed);
+        }
+        assert!(run.save_within(3000).await.is_some());
+        let run = run.finish().await;
+        assert!(run.reads() < 20, "{} reads", run.reads());
+    }
+    /// Cancel wins before a save starts: no write, no notice.
+    #[tokio::test]
+    async fn cancel_before_admission_saves_nothing_and_stops_the_reads() {
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        run.admission.store(SAVE_CANCELLED, Ordering::Release);
+        drop(run.finalize.take());
+        (&mut run.task).await.unwrap();
+        let reads = run.reads();
+        assert_eq!(run.outcomes(), ["cancelled"]);
+        assert!(!run.path.exists());
+        assert!(run.save_within(100).await.is_none());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(run.reads(), reads);
+        // A save that reached admission after Cancel is refused too.
+        let (completion, _saves) = mpsc::channel(8);
+        let mut learner = test_learner(run.path.clone(), completion, Arc::new(AtomicU64::new(0)));
+        learner.admission = Some(run.admission.clone());
+        assert!(matches!(
+            learn(&learner, DICTATED.into(), FIXED.into(), &[]).await,
+            Ok(Err("cancelled"))
+        ));
+        assert!(run.dictionary().words.is_empty());
+    }
+    /// Fix then Undo in the field (N10, CEN5): within the wait nothing is saved;
+    /// after it, the save is taken back and the reverse is never learned.
+    #[tokio::test]
+    async fn taking_a_correction_back_in_the_field_saves_nothing() {
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        run.edit(DICTATED);
+        assert!(run.save_within(2800).await.is_none());
+        let run = run.finish().await;
+        assert!(run.dictionary().words.is_empty());
+
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        let Some(Completion::Learned { change: Some(change), .. }) = run.save_within(3000).await
+        else {
+            panic!("no save");
+        };
+        run.edit(DICTATED);
+        let Some(Completion::Retract { op }) = run.save_within(1000).await else {
+            panic!("no retraction");
+        };
+        assert_eq!(op, change.id);
+        assert!(run.save_within(2800).await.is_none(), "the reverse was learned");
+        run.finish().await;
+    }
+    /// A hidden clear: a read of a retype unchanged by a further notification.
+    #[tokio::test]
+    async fn only_small_bursts_cross_a_read_and_nothing_crosses_a_clear() {
+        assert!(burst("post gres", "post gress", 1));
+        assert!(burst("post gres is", "Post gres is", 3));
+        assert!(!burst("post gres is ready", "Postgres is ready for staging", 2));
+        assert!(!burst("Please ask Veronika", "Hi", 2));
+    }
+    /// Two terms of the full loop, cleanup included: a first correction, then the
+    /// recognizer says the same again and the provider hint is ignored.
+    #[tokio::test]
+    async fn the_next_dictation_is_right_on_raw_cleanup_and_fallback_paths() {
+        for (transformer, label) in [
+            (None, "raw"),
+            // The model puts the misspelling back: corrected after it.
+            (Some(RecordingTransformer(Mutex::default(), Some("post gres is ready to go"))), "cleanup"),
+            // The model keeps the corrected text: unchanged, one pass.
+            (Some(RecordingTransformer(Mutex::default(), Some("Postgres is ready to go"))), "kept"),
+            // The model answers instead: the local text, already corrected.
+            (Some(RecordingTransformer(Mutex::default(), Some("I cannot help with that request today sorry"))), "rejected"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            let (notify, field_events) = mpsc::unbounded_channel();
+            let desktop = Arc::new(RecordingDesktop {
+                field: Arc::new(Mutex::new(Some(String::new()))),
+                field_events: Mutex::new(Some(field_events)),
+                ..RecordingDesktop::default()
+            });
+            let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+            let (mut engine, tx, rx, mut events, _) =
+                fixture(Config::default(), desktop.clone(), store);
+            engine.config_path = Some(path.clone());
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+            success(&mut events).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            *desktop.field.lock().unwrap() = Some("Postgres is ready ".into());
+            notify.send(FieldEvent::Changed).unwrap();
+            learned_message(&mut events).await;
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+            assert_eq!(
+                Config::load(&path).unwrap().dictionary.replacements,
+                [Replacement { from: "post gres".into(), to: "Postgres".into() }]
+            );
+
+            let desktop = Arc::new(RecordingDesktop::default());
+            let store = Store::open(&dir.path().join("h2.db"), true, 10).unwrap();
+            let mut config = Config::load(&path).unwrap();
+            let cleaning = transformer.is_some();
+            if cleaning {
+                config.cleanup.mode = CleanupMode::Polished;
+            }
+            let (mut engine, tx, rx, mut events, _) = fixture(config, desktop, store);
+            engine.services.transformer =
+                transformer.map(|t| Arc::new(t) as Arc<dyn TextTransformer>);
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+            let text = success(&mut events).await.text.unwrap();
+            assert!(text.starts_with("Postgres is ready"), "{label}: {text}");
+            assert!(!text.contains("post gres"), "{label}: {text}");
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    /// Only a dictation that may be learned from starts a watch.
+    #[tokio::test]
+    async fn a_watch_starts_only_for_a_learnable_dictation() {
+        let dir = tempfile::tempdir().unwrap();
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some(String::new()))),
+            ..RecordingDesktop::default()
+        });
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let mut config = Config::default();
+        config.dictionary.auto_learn = false;
+        let (mut engine, tx, rx, mut events, _) = fixture(config, desktop.clone(), store);
+        engine.config_path = Some(dir.path().join("config.toml"));
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        success(&mut events).await;
+        assert_eq!(desktop.watches.load(Ordering::SeqCst), 0);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
     async fn learned_message(events: &mut broadcast::Receiver<Response>) -> String {
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if let Some(message) = events.recv().await.unwrap().message {
                     if message.starts_with("Added") {
@@ -6353,7 +6831,7 @@ mod tests {
         );
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Postgres"]);
-        assert!(dictionary.replacements.is_empty());
+        assert_eq!(dictionary.replacements.len(), 1);
         // The same misrecognition now comes out as the learned spelling.
         *desktop.field.lock().unwrap() = None;
         ask(&tx, Request::start()).await;
@@ -6696,7 +7174,6 @@ mod tests {
         );
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Postgres"]);
-        assert!(dictionary.replacements.is_empty());
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }

@@ -564,48 +564,30 @@ mod tests {
     }
 
     #[test]
-    fn notice_waits_for_recording_and_shows_once_while_current() {
-        let mut notices = Notices::default();
-        // Idle: shown at once, and never again for the same change.
+    fn notice_shows_at_once_even_while_recording_and_only_once() {
+        let mut state = Notices::default();
+        // Shown as soon as it is saved, whatever else is on screen.
         assert_eq!(
-            notices.step(Step::Latest(Some(notice(1)), false)),
+            state.step(Step::Latest(Some(notice(1)))),
             [Action::Show(notice(1))]
         );
-        assert!(notices.step(Step::Exited).is_empty());
-        assert!(notices
-            .step(Step::Latest(Some(notice(1)), false))
-            .is_empty());
-        // Saved during a session (often finalized by the next dictation): it
-        // waits through the 25 Hz level frames, which are not session starts,
-        // and shows once the pill is idle.
-        assert!(notices.step(Step::Session).is_empty());
-        assert!(notices.step(Step::Latest(Some(notice(2)), true)).is_empty());
-        assert_eq!(notices.pending, Some(notice(2)));
+        // The same change again is not shown twice.
+        assert!(state.step(Step::Latest(Some(notice(1)))).is_empty());
+        // Replaced: the old one goes, the new one shows.
         assert_eq!(
-            notices.step(Step::Latest(Some(notice(2)), false)),
-            [Action::Show(notice(2))]
+            state.step(Step::Latest(Some(notice(2)))),
+            [Action::Kill, Action::Show(notice(2))]
         );
-        // A new session removes a visible notice at once and drops a waiting one.
-        assert_eq!(notices.step(Step::Session), [Action::Kill]);
-        assert!(notices.step(Step::Latest(Some(notice(3)), true)).is_empty());
-        assert!(notices.step(Step::Session).is_empty());
-        assert!(notices
-            .step(Step::Latest(Some(notice(3)), false))
-            .is_empty());
-        // A newer change replaces the visible notice; one that can no longer be
-        // undone takes it away, and a waiting one is forgotten.
+        // No longer undoable: gone at once, and never back.
+        assert_eq!(state.step(Step::Latest(None)), [Action::Kill]);
+        assert!(state.step(Step::Latest(Some(notice(2)))).is_empty());
+        // Exited by itself: nothing to kill afterwards.
         assert_eq!(
-            notices.step(Step::Latest(Some(notice(4)), false)),
-            [Action::Show(notice(4))]
+            state.step(Step::Latest(Some(notice(3)))),
+            [Action::Show(notice(3))]
         );
-        assert_eq!(
-            notices.step(Step::Latest(Some(notice(5)), false)),
-            [Action::Kill, Action::Show(notice(5))]
-        );
-        assert_eq!(notices.step(Step::Latest(None, false)), [Action::Kill]);
-        assert!(notices.step(Step::Latest(Some(notice(6)), true)).is_empty());
-        assert!(notices.step(Step::Latest(None, true)).is_empty());
-        assert!(notices.step(Step::Latest(None, false)).is_empty());
+        state.step(Step::Exited);
+        assert!(state.step(Step::Latest(None)).is_empty());
     }
 
     #[test]

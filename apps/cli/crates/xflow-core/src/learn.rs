@@ -123,10 +123,8 @@ impl Receipt {
     }
     fn start(&self, field: &str) -> Option<usize> {
         let chars = self.before.chars().count();
-        ANCHOR_PARTS
-            .iter()
-            .filter(|&&n| n <= chars)
-            .find_map(|&n| {
+        anchor_parts(chars)
+            .find_map(|n| {
                 let cut = self.before.char_indices().nth(chars - n)?.0;
                 let part = &self.before[cut..];
                 once(field, part, self.near.0.checked_sub(part.len())).map(|at| at + part.len())
@@ -134,11 +132,8 @@ impl Receipt {
             .or_else(|| once(field, edge(self.inserted.trim_end(), false), Some(self.near.0)))
     }
     fn end(&self, field: &str) -> Option<usize> {
-        let chars = self.after.chars().count();
-        ANCHOR_PARTS
-            .iter()
-            .filter(|&&n| n <= chars)
-            .find_map(|&n| {
+        anchor_parts(self.after.chars().count())
+            .find_map(|n| {
                 let cut = self
                     .after
                     .char_indices()
@@ -209,8 +204,10 @@ impl Receipt {
         self.before.is_empty() && self.after.is_empty()
     }
 }
-/// Nearest-first parts of an anchor to look for, in characters.
-const ANCHOR_PARTS: [usize; 4] = [ANCHOR_CHARS, 12, 8, 4];
+/// How much of an anchor of `chars` characters to look for, nearest the span.
+fn anchor_parts(chars: usize) -> impl Iterator<Item = usize> {
+    std::iter::once(chars).chain([12, 8, 4].into_iter().filter(move |&n| n < chars))
+}
 /// The dictation's first or last words, at least six bytes: the edge of the span
 /// when its anchor is gone. Empty when the text is too short to mean anything.
 fn edge(text: &str, last: bool) -> &str {
@@ -552,7 +549,9 @@ fn hunk(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
 }
 /// A word without the punctuation around it.
 fn key(token: &str) -> &str {
-    token.trim_matches(|c: char| !c.is_alphanumeric())
+    token.trim_matches(|c: char| {
+        !c.is_alphanumeric() && unicode_normalization::char::canonical_combining_class(c) == 0
+    })
 }
 /// One edit is learnable when it replaces 1-3 plain dictated words (four for a
 /// term of one or two) with a term of 1-3 words that looks or sounds like them.
@@ -1221,26 +1220,208 @@ mod tests {
             }
         }
     }
+    fn adopt(dictionary: &mut DictionaryConfig, original: &str, corrected: &str) -> Adopted {
+        let found = review(original, corrected, dictionary).unwrap();
+        dictionary.adopt(&found, &mut vec![])
+    }
     #[test]
-    fn learning_adds_vocabulary_only_and_removed_words_stay_removed() {
+    fn a_saved_word_is_known_and_removed_words_stay_removed() {
         let mut dictionary = DictionaryConfig::default();
-        let found = corrections("use kubernetis", "use Kubernetes", &dictionary).unwrap();
-        assert_eq!(dictionary.learn(&found), ["Kubernetes"]);
+        let done = adopt(&mut dictionary, "use kubernetis", "use Kubernetes");
+        assert_eq!(done.added, ["Kubernetes"]);
         assert_eq!(dictionary.words, ["Kubernetes"]);
         assert_eq!(dictionary.learned, ["Kubernetes"]);
-        let found = corrections("we use dev terms", "we use DevTerms", &dictionary).unwrap();
-        assert_eq!(dictionary.learn(&found), ["DevTerms"]);
-        // Never a replacement, even for a join that #64's snap pass now handles.
-        assert!(dictionary.replacements.is_empty());
+        assert_eq!(adopt(&mut dictionary, "we use dev terms", "we use DevTerms").added, ["DevTerms"]);
         assert_eq!(
             corrections("use kubernetis", "use Kubernetes", &dictionary).unwrap_err(),
             "known"
         );
-        dictionary.forget("Kubernetes");
+        assert_eq!(dictionary.forget("Kubernetes"), 1);
         assert_eq!(dictionary.words, ["DevTerms"]);
         assert_eq!(dictionary.learned, ["DevTerms"]);
         assert!(corrections("use kubernetis", "use Kubernetes", &dictionary).is_err());
         assert!(corrections("use Kubernetes", "use kubernetis", &dictionary).is_err());
+    }
+    /// The approved policy, on the baseline's words. Tier 3 returns no candidate.
+    #[test]
+    fn corrections_earn_by_tier() {
+        // Tier 1: uncommon source, close spelling: word and rule at once.
+        for (from, to) in [
+            ("Veronika", "Veronica"),
+            ("Zorblax", "Zorblex"),
+            ("definately", "definitely"),
+            ("Rimpas or Kar", "Rimpa Sarkar"),
+            ("post gres", "Postgres"),
+            ("kubernetis", "Kubernetes"),
+        ] {
+            let mut d = DictionaryConfig::default();
+            let done = adopt(&mut d, &format!("ask {from} today"), &format!("ask {to} today"));
+            assert_eq!(done.added, [to], "{from}");
+            assert_eq!(done.rules, [rule(from, to)], "{from}");
+            assert_eq!(d.replacements, [rule(from, to)], "{from}");
+        }
+        // Tier 2: common source, uncommon destination: word only, rule on repeat.
+        for (from, to) in [
+            ("cloud", "Claude"),
+            ("Linear", "Linea"),
+            ("Brian", "Bryan"),
+            ("re act", "React"),
+        ] {
+            let mut d = DictionaryConfig::default();
+            let mut seen = vec![];
+            let (a, b) = (format!("ask {from} today"), format!("ask {to} today"));
+            let done = d.adopt(&review(&a, &b, &d).unwrap(), &mut seen);
+            assert_eq!(done.added, [to], "{from}");
+            assert!(done.rules.is_empty() && d.replacements.is_empty(), "{from}");
+            // The same correction again: its own rule.
+            let done = d.adopt(&review(&a, &b, &d).unwrap(), &mut seen);
+            assert!(done.added.is_empty(), "{from}");
+            assert_eq!(done.rules, [rule(from, to)], "{from}");
+            assert!(seen.is_empty(), "{from}");
+        }
+        // A different source for the same word is not a repeat.
+        let mut d = DictionaryConfig::default();
+        let mut seen = vec![];
+        d.adopt(&review("ask cloud", "ask Claude", &d).unwrap(), &mut seen);
+        let done = d.adopt(&review("ask clued", "ask Claude", &d).unwrap(), &mut seen);
+        assert!(done.rules.is_empty());
+        // A word added by hand: its first correction from a common source is a first.
+        let mut d = known(&["Claude"]);
+        let mut seen = vec![];
+        assert!(d.adopt(&review("ask cloud", "ask Claude", &d).unwrap(), &mut seen).rules.is_empty());
+        assert_eq!(d.adopt(&review("ask cloud", "ask Claude", &d).unwrap(), &mut seen).rules.len(), 1);
+    }
+    /// Tier 3: never a word, never a rule.
+    #[test]
+    fn hard_negatives_save_nothing() {
+        for (original, corrected) in [
+            // Rewrite, deletion, addition.
+            ("Please send the report before lunch", "We should postpone everything until Monday"),
+            ("Please bring the small cat home tomorrow", "Please bring the cat home tomorrow"),
+            ("Please bring the cat home tomorrow", "Please bring the small cat home tomorrow"),
+            // Both common, or not close.
+            ("Please bring the cat home tomorrow", "Please bring the dog home tomorrow"),
+            ("Please bring the cat home tomorrow", "Please bring the car home tomorrow"),
+            ("we deploy it", "we deployed it"),
+            ("it will affect us", "it will effect us"),
+            ("we went their", "we went there"),
+            ("meet Rimpa circa soon", "meet Rimpa Sarkar soon"),
+            // Case and punctuation only, also canonically equal spellings.
+            ("Please ask veronica about tomorrow plans", "Please ask Veronica, about tomorrow plans!"),
+            ("send the e-mail", "send the email"),
+            ("visit the cafe\u{301} today", "visit the caf\u{e9} today"),
+            // Unchanged, or a completion typed after the dictation.
+            ("Please ask Veronika", "Please ask Veronika"),
+            ("Please ask Veronika", "Please ask Veronika about Veronica"),
+            ("a very long", "a very long term of Kubernetes"),
+        ] {
+            let mut d = DictionaryConfig::default();
+            if let Ok(found) = review(original, corrected, &d) {
+                let done = d.adopt(&found, &mut vec![]);
+                assert_eq!(done, Adopted::default(), "{original} -> {corrected}");
+            }
+            assert!(d.words.is_empty() && d.replacements.is_empty());
+        }
+    }
+    #[test]
+    fn several_corrections_all_count_and_aliases_of_one_word_are_kept() {
+        let mut d = DictionaryConfig::default();
+        let done = adopt(
+            &mut d,
+            "Please ask Veronika and Zorblax tomorrow",
+            "Please ask Veronica and Zorblex tomorrow",
+        );
+        assert_eq!(done.added.len(), 2);
+        assert_eq!(done.rules.len(), 2);
+        let mut d = DictionaryConfig::default();
+        let done = adopt(&mut d, "Kuberntes and Kubernetis today", "Kubernetes and Kubernetes today");
+        assert_eq!(done.added, ["Kubernetes"]);
+        assert_eq!(done.rules.len(), 2);
+    }
+    #[test]
+    fn rules_are_capped_and_never_collide() {
+        let pair = rule("Rimpas or Kar", "Rimpa Sarkar");
+        let refused = |d: &DictionaryConfig, c: &Replacement| {
+            assert!(matches!(d.rule_conflict(c), Some(Conflict::Refused)), "{c:?}");
+        };
+        let d = known(&["Rimpa Sarkar"]);
+        assert!(d.rule_conflict(&pair).is_none());
+        // The same rule is no change.
+        let mut same = known(&["Rimpa Sarkar"]);
+        same.replacements.push(rule("rimpas  or kar", "Rimpa Sarkar"));
+        assert!(matches!(same.rule_conflict(&pair), Some(Conflict::Present)));
+        // A manual rule for the phrase is never replaced, whatever its target.
+        let mut manual = known(&["Rimpa Sarkar"]);
+        manual.replacements.push(rule("rimpas  or kar", "Rimpa S."));
+        refused(&manual, &pair);
+        for from in ["kar", "or Kar", "Hi Rimpas or Kar"] {
+            let mut manual = known(&["Rimpa Sarkar"]);
+            manual.replacements.push(rule(from, "Manual spelling"));
+            refused(&manual, &pair);
+        }
+        // Chains: a source some rule writes, a target some rule rewrites, a cycle.
+        let mut chain = known(&["Beta"]);
+        chain.replacements.push(rule("Alpha", "Zorblax"));
+        refused(&chain, &rule("Zorblax", "Beta"));
+        chain.replacements = vec![rule("Zorblex", "Gamma")];
+        refused(&chain, &rule("Zorblax", "Zorblex"));
+        // A phrase holding another dictionary word is left to that word; a word
+        // the user removed stays removed.
+        refused(&known(&["Rimpa Sarkar", "Kar"]), &pair);
+        let mut removed = known(&["Rimpa Sarkar"]);
+        removed.never_learn.push("rimpa sarkar".into());
+        refused(&removed, &pair);
+        // At most three rules per term and a hundred that target dictionary words.
+        let mut capped = known(&["Rimpa Sarkar"]);
+        for from in ["Rimpaz Sarkaz", "Rimpos Sarkor", "Rumpas Sarkur"] {
+            capped.replacements.push(rule(from, "Rimpa Sarkar"));
+        }
+        refused(&capped, &pair);
+        let mut full = known(&["Rimpa Sarkar"]);
+        for i in 0..MAX_RULES {
+            let word = format!("Term{i}");
+            full.words.push(word.clone());
+            full.replacements.push(rule(&format!("termz{i} termx"), &word));
+        }
+        refused(&full, &pair);
+        // Refused still saves the word and says so.
+        let mut d = DictionaryConfig {
+            words: vec!["Zorblex".into()],
+            replacements: (0..3).map(|i| rule(&format!("zorb{i}x"), "Zorblex")).collect(),
+            ..DictionaryConfig::default()
+        };
+        let done = d.adopt(&review("ask Zorblax", "ask Zorblex", &d).unwrap(), &mut vec![]);
+        assert!(done.refused && done.rules.is_empty());
+    }
+    #[test]
+    fn non_latin_and_combining_spellings_are_compared_whole() {
+        // Hindi with a virama: the mark is part of the word, not punctuation.
+        let (from, to) = ("कृष्णन", "कृष्णा");
+        let found = review(&format!("ask {from} now"), &format!("ask {to} now"), &DictionaryConfig::default());
+        assert_eq!(found.unwrap().new, [rule(from, to)]);
+        assert!(uncommon_source("Sarkaar"));
+        assert!(!uncommon_source("the car"));
+        assert!(!uncommon_source("an d or"));
+    }
+    #[test]
+    fn the_caret_decides_when_a_correction_is_finished() {
+        let found = pending("Please ask Veronika today", "Please ask Veronica today");
+        assert_eq!(found, [rule("Veronika", "Veronica")]);
+        let field = "Please ask Veronica today";
+        let on = |caret| caret_on(&found, word_at(field, caret).as_deref());
+        assert!(on(19), "at its end");
+        assert!(on(11), "at its start");
+        assert!(on(15), "inside");
+        assert!(!on(20), "on the next word");
+        assert!(!on(5));
+        assert!(!on(25));
+        assert_eq!(word_at("a  b", 2), None);
+        // Typing on after the fix is not on the fixed word.
+        assert!(!caret_on(&pending("ask Veronika", "ask Veronica and din"), word_at("ask Veronica and din", 20).as_deref()));
+        // A shorter word may be half typed; one at least as long is not held back.
+        assert!(complete_on_caret(&found));
+        assert!(!complete_on_caret(&pending("ask Veronika today", "ask Veronic today")));
+        assert!(!pending("ask Veronika today", "ask Veronic today").is_empty());
     }
 
     #[test]
@@ -1518,99 +1699,24 @@ mod tests {
     }
 
     #[test]
-    fn a_second_correction_adds_only_a_narrow_exact_rule() {
-        let mut dictionary = known(&["Rimpa Sarkar"]);
-        let found = review("Hi Rimpas or Kar", "Hi Rimpa Sarkar", &dictionary).unwrap();
-        assert_eq!(
-            dictionary.derive(&found.known),
-            [rule("Rimpas or Kar", "Rimpa Sarkar")]
-        );
-        assert_eq!(
-            dictionary.replacements,
-            [rule("Rimpas or Kar", "Rimpa Sarkar")]
-        );
-        // The same phrase again: already a rule.
-        assert!(dictionary.derive(&found.known).is_empty());
-        assert_eq!(dictionary.replacements.len(), 1);
-
-        let refused = |dictionary: &DictionaryConfig, from: &str, to: &str| {
-            assert_eq!(dictionary.phrase(&rule(from, to)), None, "{from} -> {to}");
-        };
-        let dictionary = known(&[
-            "Rimpa Sarkar",
-            "Claud",
-            "adaws",
-            "Rimpasorkar",
-            "Sarkarion",
-            "Kasa Bianca",
-        ]);
-        // Never a single word: "cloud" stays "cloud" everywhere.
-        refused(&dictionary, "cloud", "Claud");
-        refused(&dictionary, "casa", "Kasa Bianca");
-        // Everyday or name outer words, a middle word that is not a function word,
-        // no word of five letters, or not plain ASCII letters.
-        refused(&dictionary, "Rimpas or car", "Rimpa Sarkar");
-        refused(&dictionary, "ad AWS", "adaws");
-        refused(&dictionary, "kar do", "Rimpa Sarkar");
-        refused(&dictionary, "Rimpas aur Kar", "Rimpa Sarkar");
-        refused(&dictionary, "Rimp or Kar", "Rimpa Sarkar");
-        refused(&dictionary, "Rímpas or Kar", "Rimpa Sarkar");
-        refused(&dictionary, "Rimpas, or Kar", "Rimpa Sarkar");
-        // The same letters, or a phrase snap already restores.
-        refused(&dictionary, "Rimpas or Kar", "Rimpasorkar");
-        refused(&dictionary, "Sarkar ian", "Sarkarion");
-        // Only a term the dictionary has, and never one the user removed.
-        refused(&dictionary, "Rimpas or Kar", "Rimpa Sarkhar");
-        let mut removed = known(&["Rimpa Sarkar"]);
-        removed.never_learn.push("rimpa sarkar".into());
-        refused(&removed, "Rimpas or Kar", "Rimpa Sarkar");
-        // A manual rule for the phrase is never replaced, whatever its target.
-        let mut manual = known(&["Rimpa Sarkar"]);
-        manual.replacements.push(rule("rimpas  or kar", "Rimpa S."));
-        refused(&manual, "Rimpas or Kar", "Rimpa Sarkar");
-        for from in ["kar", "or Kar", "Hi Rimpas or Kar"] {
-            let mut manual = known(&["Rimpa Sarkar"]);
-            manual.replacements.push(rule(from, "Manual spelling"));
-            refused(&manual, "Rimpas or Kar", "Rimpa Sarkar");
-        }
-        // A phrase holding another dictionary word is left to that word.
-        refused(
-            &known(&["Rimpa Sarkar", "Kar"]),
-            "Rimpas or Kar",
-            "Rimpa Sarkar",
-        );
-        // At most three rules per term and a hundred that target dictionary words.
-        let mut capped = known(&["Rimpa Sarkar"]);
-        for from in ["Rimpaz Sarkaz", "Rimpos Sarkor", "Rumpas Sarkur"] {
-            capped.replacements.push(rule(from, "Rimpa Sarkar"));
-        }
-        refused(&capped, "Rimpas or Kar", "Rimpa Sarkar");
-        let mut full = known(&["Rimpa Sarkar"]);
-        for i in 0..MAX_DERIVED {
-            let word = format!("Term{i}");
-            full.words.push(word.clone());
-            full.replacements
-                .push(rule(&format!("termz{i} termx"), &word));
-        }
-        refused(&full, "Rimpas or Kar", "Rimpa Sarkar");
-    }
-
-    #[test]
-    fn removing_a_word_keeps_and_names_the_rules_that_write_it() {
+    fn deleting_a_word_takes_every_rule_that_writes_it_and_says_how_many() {
         let mut dictionary = known(&["Rimpa Sarkar"]);
         dictionary.learned = vec!["Rimpa Sarkar".into()];
         dictionary.replacements = vec![
             rule("Rimpas or Kar", "Rimpa Sarkar"),
+            rule("Rim pass", "rimpa sarkar"),
             rule("gonna", "going to"),
         ];
-        dictionary.forget("rimpa sarkar");
+        assert_eq!(dictionary.forget("rimpa sarkar"), 2);
         assert!(dictionary.words.is_empty() && dictionary.learned.is_empty());
         assert_eq!(dictionary.never_learn, ["rimpa sarkar"]);
-        assert_eq!(dictionary.replacements.len(), 2);
-        assert_eq!(
-            dictionary.targeting("Rimpa Sarkar"),
-            [&rule("Rimpas or Kar", "Rimpa Sarkar")]
-        );
+        assert_eq!(dictionary.replacements, [rule("gonna", "going to")]);
+        // A word added by hand goes with its rules too, and may be learned again.
+        let mut dictionary = known(&["Kubernetes"]);
+        dictionary.replacements = vec![rule("kube", "Kubernetes")];
+        assert_eq!(dictionary.forget("Kubernetes"), 1);
+        assert!(dictionary.never_learn.is_empty() && dictionary.replacements.is_empty());
+        assert_eq!(DictionaryConfig::default().forget("absent"), 0);
     }
 
     #[test]
@@ -1713,5 +1819,55 @@ mod delivery_tests {
         assert_eq!(r.corrected("😀 header Veronica tail"), Some("Veronica"));
         assert!(Receipt::delivery("😀", (1, 0), "x").is_none());
         assert!(Receipt::delivery("x", (usize::MAX, 1), "x").is_none());
+    }
+    const DICTATED: &str = "Please ask Veronika about tomorrow plans ";
+    /// T14: a change inside the 16-character anchor, plus the spelling fix.
+    #[test]
+    fn an_edited_anchor_still_finds_the_span_by_what_is_left_of_it() {
+        let r = Receipt::delivery("Some context: ", (14, 0), DICTATED).unwrap();
+        assert_eq!(r.inserted(), DICTATED);
+        let fixed = "Please ask Veronica about tomorrow plans ";
+        assert_eq!(r.corrected(&format!("Other context: {fixed}")), Some(fixed));
+        // Nothing of the anchor left: the dictation's own first word marks the edge.
+        assert_eq!(r.corrected(&format!("Rewritten> {fixed}")), Some(fixed));
+        // The first word fixed too: no edge at all.
+        assert_eq!(r.corrected("Rewritten> Pleese ask Veronica about tomorrow plans "), None);
+        // The end works the same way, also after a fixed last word.
+        let r = Receipt::delivery("Before.  After the text", (8, 0), "ask Veronika tomorrow").unwrap();
+        assert_eq!(
+            r.corrected("Before. ask Veronica tomorrow  after the text"),
+            Some("ask Veronica tomorrow")
+        );
+        assert_eq!(
+            r.corrected("Before. ask Veronica tomorrow  xxxxxxxxxxxxxx"),
+            Some("ask Veronica tomorrow")
+        );
+    }
+    /// T03: a short dictation that filled the field is compared like any other.
+    #[test]
+    fn a_short_field_is_found_but_a_different_text_is_not_it() {
+        let r = Receipt::delivery("", (0, 0), "Hi Veronika ").unwrap();
+        assert!(r.whole_field());
+        assert_eq!(r.corrected("Hi Veronica "), Some("Hi Veronica "));
+        assert_eq!(r.corrected("lunch at noon anyone"), None);
+    }
+    /// A repeated anchor only resolves exactly where the span last sat.
+    #[test]
+    fn repeated_context_needs_the_span_where_it_was() {
+        let filler = "synthetic filler ".repeat(4);
+        let mut r = Receipt::delivery(&filler, (filler.len(), 0), "ask Veronika today").unwrap();
+        let field = format!("{filler}ask Veronica today");
+        assert_eq!(r.corrected(&field), Some("ask Veronica today"));
+        r.track(&field);
+        // The same anchor text moved: ambiguous, so no span.
+        assert_eq!(r.corrected(&format!("x{filler}ask Veronica today")), None);
+    }
+    /// Typography an app applied to the delivered text is the delivery, not an edit.
+    #[test]
+    fn what_the_app_made_of_the_text_is_the_baseline() {
+        let r = Receipt::delivery("", (0, 0), "don't ask Veronika ").unwrap();
+        assert!(r.delivered("don’t ask Veronika\u{a0}"));
+        assert!(r.delivered("Don't ask Veronika"));
+        assert!(!r.delivered("don't ask Veronica "));
     }
 }
