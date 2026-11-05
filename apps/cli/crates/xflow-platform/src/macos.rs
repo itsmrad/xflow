@@ -454,6 +454,12 @@ fn has_chromium_framework(bundle: &std::path::Path) -> bool {
 fn focus() -> Focus {
     focus_waiting(true)
 }
+/// The front process, which AX focus queries fall back on.
+fn front_pid() -> Option<i32> {
+    let mut psn = ProcessSerialNumber::default();
+    let mut pid = 0;
+    (unsafe { GetFrontProcess(&mut psn) == 0 && GetProcessPID(&psn, &mut pid) == 0 }).then_some(pid)
+}
 /// `wait`: give Electron and Chromium up to 300 ms to build their AX tree.
 fn focus_waiting(wait: bool) -> Focus {
     static TIMEOUT: Once = Once::new();
