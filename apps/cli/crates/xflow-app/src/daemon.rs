@@ -135,6 +135,7 @@ enum Completion {
         generation: u64,
         processed: Processed,
         result: Result<Option<InjectionOutcome>>,
+        ticket: Option<xflow_core::DeliveryTicket>,
     },
     /// `seq`: the dictionary clock, read before the file was (see `Learned`).
     Reloaded {
@@ -1641,6 +1642,7 @@ impl Engine {
     async fn cancel(&mut self) -> Result<()> {
         let processing = (self.state == State::Processing).then_some(self.generation);
         self.advance();
+        self.observing.take(); // Dropped sender aborts observation; never finalizes a save.
         if let Some(job) = self.job.take() {
             job.abort();
         }
@@ -1871,7 +1873,7 @@ impl Engine {
                     }
                     // Late, from a canceled session: nothing it kept may stay.
                     Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
-                    Completion::Finished { generation, mut processed, result } => {
+                    Completion::Finished { generation, mut processed, result, ticket } => {
                         self.delivering = false;
                         if generation != self.generation { continue; }
                         self.abort_context();
@@ -1890,7 +1892,7 @@ impl Engine {
                                     if let Some(path) = self.config_path.clone() {
                                         let (finalize, finalized) = oneshot::channel();
                                         self.observing = Some(finalize);
-                                        tokio::spawn(observe(self.services.desktop.clone(), processed.target.clone(), processed.text.clone(), finalized, path, completion_tx.clone(), self.dictionary_clock.clone(), self.learning.clone()));
+                                        tokio::spawn(observe(ticket, finalized, path, completion_tx.clone(), self.dictionary_clock.clone(), self.learning.clone()));
                                     }
                                 }
                                 self.state = State::Success; self.message = message; let mut r = self.status();
@@ -1934,13 +1936,14 @@ impl Engine {
                         // The selection must still be the one rewritten: same app, window and text.
                         let moved = delivery == Delivery::Inject && processed.rewrite && desktop.context_with_selection().await.ok().as_ref() != Some(&processed.target);
                         if moved { add_warning(&mut processed.warning, "Selection changed; rewrite copied"); }
-                        let result = match delivery { Delivery::Inject if processed.copy || moved => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
+                        let mut ticket = None;
+                        let result = match delivery { Delivery::Inject if processed.copy || moved => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::Inject => desktop.inject_observed(&processed.text, &processed.target).await.map(|delivered| { ticket = delivered.ticket; Some(delivered.outcome) }), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
                         if delivery != Delivery::None { processed.timings.inject_ms = Some(ms(start.elapsed())); }
                         processed.timings.total_ms = ms(processed.stopped.elapsed());
                         if let Some(entry) = &mut processed.entry { entry.latency_ms = Some(processed.timings.total_ms as u64); if store.set_latency(entry.id, processed.timings.total_ms as u64).await.is_err() { add_warning(&mut processed.warning, "History latency update failed"); } }
                         // After delivery: the terms it mentions lead the next dictation's hints.
                         let text = recent.as_ref().map(|_| processed.text.clone());
-                        let _ = tx.send(Completion::Finished { generation, processed, result }).await;
+                        let _ = tx.send(Completion::Finished { generation, processed, result, ticket }).await;
                         if let (Some(recent), Some(text)) = (recent, text) { lock(&recent).note(&text); }
                     });
                 }
@@ -2194,9 +2197,7 @@ fn fit_history(r: &mut Response, rows: Vec<HistoryEntry>) -> Result<()> {
 /// field text.
 #[allow(clippy::too_many_arguments)]
 async fn observe(
-    desktop: Arc<dyn Desktop>,
-    target: AppContext,
-    inserted: String,
+    ticket: Option<xflow_core::DeliveryTicket>,
     finalize: oneshot::Receiver<()>,
     path: PathBuf,
     completion: mpsc::Sender<Completion>,
@@ -2204,7 +2205,10 @@ async fn observe(
     learning: Arc<std::sync::Mutex<Learning>>,
 ) {
     let mut counts = Counts::default();
-    let watched = watch_counted(&*desktop, &target, &inserted, finalize, &mut counts).await;
+    let watched = match ticket {
+        Some(ticket) => watch_owned(ticket, finalize, &mut counts).await,
+        None => Err(Some("safe-miss:unsupported-or-late")),
+    };
     let outcome: String = match watched {
         Ok((original, corrected)) => {
             match learn(path, original, corrected, completion, clock, true).await {
@@ -2283,24 +2287,60 @@ async fn watch_edit(
 ) -> std::result::Result<(String, String), Option<&'static str>> {
     watch_counted(desktop, target, inserted, finalize, &mut Counts::default()).await
 }
-/// `watch_edit`, counting reads and notifications into `counts`.
+/// Test adapter for legacy scripted fields. Production accepts delivery tickets only.
+#[cfg(test)]
 async fn watch_counted(
     desktop: &dyn Desktop,
     target: &AppContext,
     inserted: &str,
+    finalize: oneshot::Receiver<()>,
+    counts: &mut Counts,
+) -> std::result::Result<(String, String), Option<&'static str>> {
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let mut field = desktop
+        .watch_field(target)
+        .await
+        .ok_or(Some("unreadable"))?;
+    let text = field.read().await.ok_or(Some("unreadable"))?;
+    let receipt = xflow_core::learn::Receipt::new(&text.value, inserted, text.caret)
+        .ok_or(Some("no-receipt"))?;
+    watch_owned(
+        xflow_core::DeliveryTicket {
+            field,
+            receipt,
+            selection: (0, 0),
+            delivered: (0, inserted.encode_utf16().count()),
+        },
+        finalize,
+        counts,
+    )
+    .await
+}
+async fn watch_owned(
+    mut ticket: xflow_core::DeliveryTicket,
+    finalize: oneshot::Receiver<()>,
+    counts: &mut Counts,
+) -> std::result::Result<(String, String), Option<&'static str>> {
+    let result = watch_pinned(&mut ticket.field, ticket.receipt, finalize, counts).await;
+    ticket.field.stop().await;
+    result
+}
+async fn watch_pinned(
+    field: &mut Box<dyn xflow_core::FieldWatch>,
+    initial: xflow_core::learn::Receipt,
     mut finalize: oneshot::Receiver<()>,
     counts: &mut Counts,
 ) -> std::result::Result<(String, String), Option<&'static str>> {
     use tokio::time::{sleep_until, timeout, Instant};
-    // Too long to ever compare (see corrections): no reads at all.
-    if inserted.split_whitespace().count() > xflow_core::learn::MAX_DIFF_WORDS {
+    if initial.inserted().split_whitespace().count() > xflow_core::learn::MAX_DIFF_WORDS {
         return Err(Some("too-long"));
     }
     async fn read(field: &mut Box<dyn xflow_core::FieldWatch>) -> Option<xflow_core::FieldText> {
-        timeout(Duration::from_millis(250), field.read())
+        timeout(Duration::from_millis(250), field.snapshot())
             .await
             .ok()
             .flatten()
+            .map(|s| s.text)
     }
     // Takes the notifications already queued, without waiting: a change that
     // arrived during a read, or behind a finalize, is still a change. Returns
@@ -2314,23 +2354,22 @@ async fn watch_counted(
             match event {
                 FieldEvent::Changed => changed += 1,
                 FieldEvent::Merged => merged += 1,
+                FieldEvent::Invalidated | FieldEvent::Overflow => {
+                    *recheck = Some(Instant::now());
+                    return (usize::MAX / 2, 0);
+                }
                 FieldEvent::Focus => *recheck = Some(Instant::now() + Duration::from_millis(250)),
             }
         }
         (changed, merged)
     }
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
-    tokio::time::sleep(Duration::from_millis(120)).await;
     let started = Instant::now();
-    let mut field = timeout(Duration::from_secs(1), desktop.watch_field(target))
-        .await
-        .ok()
-        .flatten()
-        .ok_or(Some("unreadable"))?;
     let deadline = started + Duration::from_secs(60);
-    let mut receipt: Option<xflow_core::learn::Receipt> = None;
+    let receipt: Option<xflow_core::learn::Receipt> = Some(initial);
     // The last span read, and the last one read twice in a row.
-    let (mut good, mut settled) = (String::new(), String::new());
+    let original = receipt.as_ref().unwrap().inserted().to_owned();
+    let (mut good, mut settled) = (original.clone(), original);
     let (mut dirty, mut left, mut lost) = (true, false, false);
     // The last read showed the user retyping part of the dictation.
     let mut editing = false;
@@ -2372,6 +2411,8 @@ async fn watch_counted(
                     merged += 1;
                     counts.merged = counts.merged.saturating_add(1);
                 }
+                Some(FieldEvent::Invalidated) => { left = true; break; }
+                Some(FieldEvent::Overflow) => return Err(Some("overflow")),
                 Some(FieldEvent::Focus) => recheck = Some(Instant::now() + Duration::from_millis(250)),
                 None => break,
             },
@@ -2379,40 +2420,25 @@ async fn watch_counted(
                 dirty = false;
                 let unread = std::mem::take(&mut changes);
                 let folded = std::mem::take(&mut merged);
-                let text = read(&mut field).await;
+                let text = tokio::select! {
+                    biased;
+                    _ = &mut finalize => return Err(None),
+                    text = read(field) => text,
+                };
                 last_read = Instant::now();
                 counts.reads = counts.reads.saturating_add(1);
                 counts.unread_max = counts.unread_max.max(count(unread));
-                let Some(anchored) = &receipt else {
-                    let readable = text.is_some();
-                    receipt = text.and_then(|t| xflow_core::learn::Receipt::new(&t.value, inserted, t.caret));
-                    match &receipt {
-                        Some(r) => {
-                            good = r.inserted().to_owned();
-                            settled = good.clone();
-                        }
-                        // Electron and Chromium can show the paste late.
-                        None if started.elapsed() < Duration::from_secs(1) => {
-                            dirty = true;
-                            next_read = last_read + Duration::from_millis(50);
-                        }
-                        None => return Err(Some(if readable { "no-receipt" } else { "unreadable" })),
-                    }
-                    continue;
-                };
+                let anchored = receipt.as_ref().unwrap();
                 let Some(text) = text else {
                     // A failed read saw nothing; its changes are still unread.
                     changes += unread;
                     merged += folded;
                     continue;
                 };
-                if unread > 1 {
-                    return Err(Some("unsettled"));
-                }
                 // Changes announced while the read ran: after its value, so they
                 // are carried to the next read, but they count if this read
                 // finds the dictation gone.
-                let (late, late_merged) = drain(&mut field, &mut recheck);
+                let (late, late_merged) = drain(field, &mut recheck);
                 counts.late = counts.late.saturating_add(count(late));
                 counts.merged = counts.merged.saturating_add(count(late_merged));
                 merged += late_merged;
@@ -2469,22 +2495,22 @@ async fn watch_counted(
     // Finalize, focus leave and the deadline win over queued notifications in
     // the select above; count those before deciding.
     if !lost {
-        let (pending, pending_merged) = drain(&mut field, &mut recheck);
+        let (pending, pending_merged) = drain(field, &mut recheck);
         notified |= pending > 0;
         changes += pending;
         merged += pending_merged;
         counts.merged = counts.merged.saturating_add(count(pending_merged));
     }
-    if !lost && notified {
+    if !lost && notified && !left {
         let unread = changes;
         counts.unread_max = counts.unread_max.max(count(unread));
         if unread > 1 {
             return Err(Some("unsettled"));
         }
-        let text = read(&mut field).await;
+        let text = read(field).await;
         counts.reads = counts.reads.saturating_add(1);
         // Still changing while the final read ran: its value is not final.
-        let (late, late_merged) = drain(&mut field, &mut recheck);
+        let (late, late_merged) = drain(field, &mut recheck);
         if late + late_merged > 0 {
             counts.late = counts.late.saturating_add(count(late));
             return Err(Some("unsettled"));
@@ -2521,14 +2547,14 @@ async fn watch_counted(
     // that was never read: either way the last read was not final.
     if lost && !settled.is_empty() && good != receipt.inserted() {
         tokio::time::sleep(FIELD_SETTLE).await;
-        let (late, late_merged) = drain(&mut field, &mut recheck);
+        let (late, late_merged) = drain(field, &mut recheck);
         if late + late_merged > 0 {
             counts.late = counts.late.saturating_add(count(late));
             counts.merged = counts.merged.saturating_add(count(late_merged));
             settled.clear();
         }
     }
-    drop(field);
+
     if good == receipt.inserted() {
         return Err(Some(if lost {
             "anchors-lost"
@@ -3889,6 +3915,27 @@ mod tests {
                 field.push_str(text);
             }
             Ok(self.outcome.unwrap_or(InjectionOutcome::Pasted))
+        }
+        async fn inject_observed(
+            &self,
+            text: &str,
+            target: &AppContext,
+        ) -> Result<xflow_core::ObservedDelivery> {
+            let before = self.field.lock().unwrap().clone();
+            let field = self.watch_field(target).await;
+            let receipt = before.as_ref().and_then(|b| {
+                xflow_core::learn::Receipt::delivery(b, (b.encode_utf16().count(), 0), text)
+            });
+            let outcome = self.inject(text, target).await?;
+            let ticket = field
+                .zip(receipt)
+                .map(|(field, receipt)| xflow_core::DeliveryTicket {
+                    field,
+                    receipt,
+                    selection: (0, 0),
+                    delivered: (0, text.encode_utf16().count()),
+                });
+            Ok(xflow_core::ObservedDelivery { outcome, ticket })
         }
         async fn watch_field(&self, _: &AppContext) -> Option<Box<dyn xflow_core::FieldWatch>> {
             self.field.lock().unwrap().as_ref()?;
@@ -5884,9 +5931,12 @@ mod tests {
         tokio::time::timeout(
             Duration::from_secs(20),
             observe(
-                desktop,
-                target,
-                original.into(),
+                Some(xflow_core::DeliveryTicket {
+                    field: desktop.watch_field(&target).await.unwrap(),
+                    receipt: xflow_core::learn::Receipt::new(original, original, None).unwrap(),
+                    selection: (0, 0),
+                    delivered: (0, original.len()),
+                }),
                 finalized,
                 path.clone(),
                 completion,

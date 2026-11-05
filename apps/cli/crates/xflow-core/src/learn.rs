@@ -75,6 +75,20 @@ impl Receipt {
             after: after.into(),
         })
     }
+    /// Build the receipt before delivery from the exact selected range. No late
+    /// substring search can accidentally adopt another field or an early edit.
+    pub fn delivery(field: &str, selection: (usize, usize), inserted: &str) -> Option<Self> {
+        let (start, len) = selection;
+        let end = start.checked_add(len)?;
+        let a = utf16_to_byte(field, start)?;
+        let b = utf16_to_byte(field, end)?;
+        let predicted = format!("{}{}{}", &field[..a], inserted, &field[b..]);
+        Self::new(
+            &predicted,
+            inserted,
+            Some(start.checked_add(inserted.encode_utf16().count())?),
+        )
+    }
     pub fn inserted(&self) -> &str {
         &self.inserted
     }
@@ -1499,5 +1513,17 @@ mod tests {
         time("periodic 64 KB, 18 KB needle", || {
             assert!(Receipt::new(&field, &needle, None).is_none());
         });
+    }
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    #[test]
+    fn prepared_receipt_survives_early_edit_and_uses_selected_utf16_span() {
+        let r = Receipt::delivery("😀 header old tail", (10, 3), "Veronika").unwrap();
+        assert_eq!(r.corrected("😀 header Veronica tail"), Some("Veronica"));
+        assert!(Receipt::delivery("😀", (1, 0), "x").is_none());
+        assert!(Receipt::delivery("x", (usize::MAX, 1), "x").is_none());
     }
 }

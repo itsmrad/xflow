@@ -229,6 +229,14 @@ pub trait AudioCapture: Send + Sync {
 pub trait Desktop: Send + Sync {
     async fn context(&self) -> Result<AppContext>;
     async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome>;
+    /// Optional observation must be prepared by injection itself, before keys.
+    /// Unsupported adapters deliver normally and explicitly report a safe miss.
+    async fn inject_observed(&self, text: &str, target: &AppContext) -> Result<ObservedDelivery> {
+        Ok(ObservedDelivery {
+            outcome: self.inject(text, target).await?,
+            ticket: None,
+        })
+    }
     async fn copy(&self, text: &str) -> Result<()>;
     /// The current text selection (PRIMARY) for command mode; `None` when
     /// nothing is selected or the desktop cannot provide it.
@@ -259,6 +267,25 @@ pub trait Desktop: Send + Sync {
     }
 }
 
+/// A delivery-owned field and span. Never obtained by searching for text after delivery.
+pub struct DeliveryTicket {
+    pub field: Box<dyn FieldWatch>,
+    pub receipt: learn::Receipt,
+    pub selection: (usize, usize),
+    pub delivered: (usize, usize),
+}
+pub struct ObservedDelivery {
+    pub outcome: InjectionOutcome,
+    /// None is an unsupported/late-readiness safe miss, never permission to reacquire.
+    pub ticket: Option<DeliveryTicket>,
+}
+/// Selection and generation belong to the same guarded bounded read as text.
+pub struct FieldSnapshot {
+    pub text: FieldText,
+    pub selection: Option<(usize, usize)>,
+    pub generation: u64,
+    pub range_start: usize,
+}
 /// A pinned text field, for learning user corrections.
 #[async_trait]
 pub trait FieldWatch: Send {
@@ -267,14 +294,25 @@ pub trait FieldWatch: Send {
     async fn next(&mut self) -> Option<FieldEvent>;
     /// A notification already queued, without waiting.
     fn try_next(&mut self) -> Option<FieldEvent>;
-    /// The field's value and caret now, read from the pinned element even when
-    /// focus has moved on.
+    /// Bounded text from the pinned element, only while it still owns focus.
     async fn read(&mut self) -> Option<FieldText>;
     /// Whether the pinned field still has keyboard focus.
     async fn focused(&mut self) -> bool;
+    async fn snapshot(&mut self) -> Option<FieldSnapshot> {
+        Some(FieldSnapshot {
+            text: self.read().await?,
+            selection: None,
+            generation: 0,
+            range_start: 0,
+        })
+    }
+    /// Invalidate immediately, then acknowledge that native reads/observer have drained.
+    async fn stop(&mut self) {}
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldEvent {
+    Invalidated,
+    Overflow,
     Changed,
     /// Focus may have left the field; re-check after a short grace.
     Focus,
@@ -285,8 +323,7 @@ pub enum FieldEvent {
     /// the last one a cleared field held.
     Merged,
 }
-/// Fields longer than this (UTF-16 units) are not read for learning: each read
-/// copies the whole value across processes, on every edit.
+/// Maximum requested native range length, in UTF-16 units. No whole-value fallback.
 pub const MAX_FIELD_UTF16: usize = 20_000;
 pub struct FieldText {
     pub value: String,

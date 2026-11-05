@@ -725,16 +725,6 @@ fn decision(text: &str, method: InjectionMethod, target: &AppContext, current: &
 }
 /// A field's character count, value and selected-text length (UTF-16 units).
 type Snapshot = (Option<i64>, Option<String>, i64);
-fn snapshot(field: &Owned) -> Snapshot {
-    let selected = field
-        .text("AXSelectedText")
-        .map_or(0, |s| s.encode_utf16().count() as i64);
-    (
-        field.number("AXNumberOfCharacters"),
-        field.text("AXValue"),
-        selected,
-    )
-}
 fn content_len(s: &Snapshot) -> Option<i64> {
     s.1.as_deref()
         .map(|v| v.encode_utf16().count() as i64)
@@ -746,9 +736,12 @@ fn inserted(before: &Snapshot, after: &Snapshot, text: &str) -> bool {
     let replaced = content_len(before)
         .zip(content_len(after))
         .is_some_and(|(b, a)| a == b - before.2 + text.encode_utf16().count() as i64);
+    let equivalent = |s: &str| s.replace('\u{a0}', " ");
+    let text = equivalent(text);
     match (&before.1, &after.1) {
         (Some(b), Some(a)) => {
-            a.matches(text).count() > b.matches(text).count() || (replaced && a.contains(text))
+            let (b, a) = (equivalent(b), equivalent(a));
+            a.matches(&text).count() > b.matches(&text).count() || (replaced && a.contains(&text))
         }
         (None, _) => replaced,
         (Some(_), None) => false,
@@ -1002,6 +995,13 @@ impl Desktop for MacDesktop {
         self.write(text)
     }
     async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome> {
+        Ok(self.inject_observed(text, target).await?.outcome)
+    }
+    async fn inject_observed(
+        &self,
+        text: &str,
+        target: &AppContext,
+    ) -> Result<xflow_core::ObservedDelivery> {
         if text.len() > MAX_TEXT {
             bail!("injection text exceeds 64 KiB");
         }
@@ -1014,18 +1014,22 @@ impl Desktop for MacDesktop {
         // restore the flag here, off the async runtime.
         // shortcut: a clipboard error (`?`) or cancellation before the worker restores it on the
         // async thread (two AX calls, each capped by the 0.2 s messaging timeout); fine while rare.
-        let (action, accessibility) = tokio::task::spawn_blocking(move || {
+        let (action, accessibility, watch) = tokio::task::spawn_blocking(move || {
             let mut focus = focus();
             let action = decision(&text_owned, method, &target_owned, &focus);
             let keys = matches!(action, Decision::Paste | Decision::Type);
-            (action, focus._accessibility.take().filter(|_| keys))
+            let watch = keys.then(|| observe::prepare(&focus)).flatten();
+            (action, focus._accessibility.take().filter(|_| keys), watch)
         })
         .await?;
         match action {
             Decision::Refuse => bail!("refusing delivery into a secure field"),
             Decision::Copy => {
                 self.write(text)?;
-                return Ok(InjectionOutcome::ClipboardOnly);
+                return Ok(xflow_core::ObservedDelivery {
+                    outcome: InjectionOutcome::ClipboardOnly,
+                    ticket: None,
+                });
             }
             _ => {}
         }
@@ -1042,7 +1046,10 @@ impl Desktop for MacDesktop {
                 self.write(text)?;
                 // Restore off the runtime, still under the delivery lock.
                 let _ = tokio::task::spawn_blocking(move || drop(accessibility)).await;
-                return Ok(InjectionOutcome::ClipboardOnly);
+                return Ok(xflow_core::ObservedDelivery {
+                    outcome: InjectionOutcome::ClipboardOnly,
+                    ticket: None,
+                });
             }
         }
         let target = target.clone();
@@ -1063,19 +1070,47 @@ impl Desktop for MacDesktop {
             }
             if action == Decision::Copy {
                 let copied = clipboard().and_then(|c| c.write(&text_owned));
-                return drop(reply.send(copied.map(|()| (Decision::Copy, false))));
+                return drop(reply.send(copied.map(|()| (Decision::Copy, false, None))));
             }
-            let field = current
-                .element
-                .as_ref()
-                .filter(|_| text_reads_allowed(&current))
-                .map(|f| (f, snapshot(f)))
-                .filter(|(_, before)| before.0.is_some() || before.1.is_some());
+            // Exact element/window pinned before delivery; never reacquire on a late handoff.
+            let watch = watch.filter(|w| w.same(&current));
+            let reader = watch.as_ref().map(|w| w.delivery_reader());
+            let before = reader.as_ref().and_then(|r| r.current());
+            let eligible = watch.as_ref().is_some_and(|w| w.ready()) && before.is_some();
+            let (ticket_watch, _receipt_watch) = if eligible {
+                (watch, None)
+            } else {
+                (None, watch)
+            };
+            let ticket = ticket_watch
+                .zip(before.as_ref())
+                .and_then(|(watch, before)| {
+                    let selection = before.selection?;
+                    let receipt = xflow_core::learn::Receipt::delivery(
+                        &before.text.value,
+                        selection,
+                        &text_owned,
+                    )?;
+                    let delivered = (selection.0, text_owned.encode_utf16().count());
+                    Some(xflow_core::DeliveryTicket {
+                        field: Box::new(watch),
+                        receipt,
+                        selection,
+                        delivered,
+                    })
+                });
+            let field = before.as_ref().map(|b| {
+                (
+                    Some(b.text.value.encode_utf16().count() as i64),
+                    Some(b.text.value.clone()),
+                    b.selection.map_or(0, |(_, len)| len as i64),
+                )
+            });
             if let Err(e) = send_keys(&text_owned, action == Decision::Type) {
                 return drop(reply.send(Err(e)));
             }
             if action == Decision::Type {
-                return drop(reply.send(Ok((action, false))));
+                return drop(reply.send(Ok((action, false, ticket))));
             }
             let restore_previous = || {
                 if let (Some(previous), Ok(clipboard)) = (&previous, clipboard()) {
@@ -1086,19 +1121,35 @@ impl Desktop for MacDesktop {
                 || {
                     field
                         .as_ref()
-                        .is_some_and(|(f, before)| inserted(before, &snapshot(f), &text_owned))
+                        .zip(reader.as_ref())
+                        .is_some_and(|(before, r)| {
+                            r.current().is_some_and(|after| {
+                                inserted(
+                                    before,
+                                    &(
+                                        Some(after.text.value.encode_utf16().count() as i64),
+                                        Some(after.text.value),
+                                        0,
+                                    ),
+                                    &text_owned,
+                                )
+                            })
+                        })
                 },
-                reply_budget(field.as_ref().map(|(_, b)| b), restore_delay_ms, started),
+                reply_budget(field.as_ref(), restore_delay_ms, started),
                 |confirmed| {
                     if confirmed {
                         restore_previous();
                     }
-                    let _ = reply.send(Ok((action, confirmed)));
+                    let _ = reply.send(Ok((action, confirmed, ticket)));
                 },
             );
         });
-        let (action, confirmed) = outcome.await.context("delivery task stopped")??;
-        Ok(injection_outcome(action, confirmed))
+        let (action, confirmed, ticket) = outcome.await.context("delivery task stopped")??;
+        Ok(xflow_core::ObservedDelivery {
+            outcome: injection_outcome(action, confirmed),
+            ticket,
+        })
     }
 }
 fn injection_outcome(action: Decision, confirmed: bool) -> InjectionOutcome {
@@ -1871,6 +1922,20 @@ mod tests {
             &s(Some(11), None, 0),
             &s(Some(5), None, 0),
             "hello"
+        ));
+    }
+    #[test]
+    fn receipt_accepts_nbsp_but_not_a_different_spelling() {
+        let before = (Some(0), Some(String::new()), 0);
+        assert!(inserted(
+            &before,
+            &(Some(9), Some("Veronika\u{a0}".into()), 0),
+            "Veronika "
+        ));
+        assert!(!inserted(
+            &before,
+            &(Some(9), Some("Veronica ".into()), 0),
+            "Veronika "
         ));
     }
     #[test]
