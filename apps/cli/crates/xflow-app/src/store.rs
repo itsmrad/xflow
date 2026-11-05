@@ -470,6 +470,15 @@ fn escape_like(query: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn bundled_sqlite_has_the_wal_reset_fix() {
+        assert!(
+            rusqlite::version_number() >= 3_051_003,
+            "SQLite {} predates the WAL-reset fix",
+            rusqlite::version()
+        );
+    }
+
     fn entry(text: &str) -> HistoryEntry {
         HistoryEntry {
             text: text.into(),
@@ -595,6 +604,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preserves_v3_database_file_after_engine_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let snapshot = |connection: &Connection| {
+            let mut statement = connection
+                .prepare("SELECT * FROM history WHERE id <= 99 ORDER BY id")
+                .unwrap();
+            statement
+                .query_map([], |row| {
+                    (0..row.as_ref().column_count())
+                        .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let schema = |connection: &Connection| {
+            connection
+                .query_row(
+                    "SELECT group_concat(sql, char(10)) FROM (SELECT sql FROM sqlite_schema ORDER BY name)",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        };
+        let v3 = Connection::open(&path).unwrap();
+        v3.execute_batch(include_str!("../tests/fixtures/history-v3.sql"))
+            .unwrap();
+        let original = snapshot(&v3);
+        let original_schema = schema(&v3);
+        drop(v3);
+
+        let store = Store::open(&path, true, 500).unwrap();
+        assert_eq!(snapshot(&store.connection.lock().unwrap()), original);
+        assert_eq!(schema(&store.connection.lock().unwrap()), original_schema);
+        let (original_entries, total) = store.history(10, 0, None).await.unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(original_entries[0].id, 99);
+        assert_eq!(original_entries[1].mode, Mode::Command);
+        assert_eq!(original_entries[2].cleanup, Some(CleanupOutcome::Applied));
+        assert_eq!(store.stats().await.unwrap().words, 4);
+        let saved = store.append(entry("new row")).await.unwrap().unwrap();
+        assert_eq!(saved.id, 100);
+        assert_eq!(
+            store.update(saved.id, "edited row".into()).await.unwrap(),
+            Some("new row".into())
+        );
+        store.set_latency(saved.id, 123).await.unwrap();
+        let edited = store.get(saved.id).await.unwrap().unwrap();
+        assert_eq!(edited.raw_text.as_deref(), Some("new row"));
+        assert_eq!(edited.latency_ms, Some(123));
+        drop(store);
+
+        let reopened = Store::open(&path, true, 500).unwrap();
+        assert_eq!(snapshot(&reopened.connection.lock().unwrap()), original);
+        assert_eq!(
+            schema(&reopened.connection.lock().unwrap()),
+            original_schema
+        );
+        let mut expected = vec![edited];
+        expected.extend(original_entries);
+        assert_eq!(reopened.history(10, 0, None).await.unwrap(), (expected, 4));
+        assert!(reopened
+            .append(entry("after reopen"))
+            .await
+            .unwrap()
+            .is_some());
+        let connection = reopened.connection.lock().unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+    }
+
+    #[tokio::test]
     async fn migrates_v1_database_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("history.db");
@@ -615,7 +708,7 @@ mod tests {
         assert!(rows[1].model.is_none() && rows[1].latency_ms.is_none());
         let stats = store.stats().await.unwrap();
         assert_eq!((stats.sessions, stats.words), (2, 5));
-        store.append(entry("new")).await.unwrap();
+        let saved = store.append(entry("new")).await.unwrap().unwrap();
         drop(store);
         let version: i64 = Connection::open(&path)
             .unwrap()
@@ -623,15 +716,16 @@ mod tests {
             .unwrap();
         assert_eq!(version, 3);
         // Reopening an already-migrated database is a no-op.
-        assert_eq!(
-            Store::open(&path, true, 500)
-                .unwrap()
-                .history(10, 0, None)
-                .await
-                .unwrap()
-                .1,
-            3
-        );
+        let reopened = Store::open(&path, true, 500).unwrap();
+        let mut expected = vec![saved];
+        expected.extend(rows);
+        assert_eq!(reopened.history(10, 0, None).await.unwrap(), (expected, 3));
+        assert!(reopened
+            .append(entry("after reopen"))
+            .await
+            .unwrap()
+            .is_some());
+        drop(reopened);
         // A database from a newer xflow is refused, not rewritten.
         Connection::open(&path)
             .unwrap()
