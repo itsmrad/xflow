@@ -1,26 +1,25 @@
 //! Watches the field a dictation was pasted into, for learning corrections.
 //! An AXObserver on a run-loop thread that exists only while a watch does, so
 //! the idle daemon has no thread, timer or AX traffic. Text is read only on
-//! request and never leaves the daemon. Also reads the few characters around
-//! the caret that smart spacing needs.
+//! request, in bounded ranges behind a guard (`xflow_core::read_field`), and
+//! never leaves the daemon. Also reads the few characters around the caret that
+//! smart spacing needs.
 use super::{
     cf_text, focus_waiting, search_or_address, text_reads_allowed, AXUIElementCreateApplication,
     AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementSetMessagingTimeout,
-    AccessibilityGuard, CFGetTypeID, CFRelease, Focus, Owned, Ref,
+    AccessibilityGuard, CFGetTypeID, Focus, Owned, Ref,
 };
 use async_trait::async_trait;
 use std::{
+    cell::Cell,
     ffi::c_void,
     ptr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
-use xflow_core::{AppContext, FieldEvent, FieldText, FieldWatch};
+use xflow_core::{BoundedReader, FieldEvent, FieldSource, FieldText, FieldWatch, ReadGate};
 
 type Callback = unsafe extern "C" fn(Ref, Ref, Ref, *mut c_void);
 #[repr(C)]
@@ -61,8 +60,6 @@ extern "C" {
     fn CFRunLoopAddSource(runloop: MutRef, source: MutRef, mode: MutRef);
     fn CFRunLoopRemoveSource(runloop: MutRef, source: MutRef, mode: MutRef);
     fn CFRunLoopRunInMode(mode: MutRef, seconds: f64, return_after_source: bool) -> i32;
-    fn CFRunLoopStop(runloop: MutRef);
-    fn CFRunLoopWakeUp(runloop: MutRef);
 }
 
 /// CF and AX references are thread-safe; Owned is only !Send for its raw pointer.
@@ -70,138 +67,60 @@ struct Shared(Owned);
 unsafe impl Send for Shared {}
 unsafe impl Sync for Shared {}
 
-#[derive(Default)]
-struct State {
-    stop: AtomicBool,
-    invalid: AtomicBool,
-    overflow: AtomicBool,
-    generation: std::sync::atomic::AtomicU64,
-    ready: AtomicBool,
-}
-struct Reader {
+/// The exact element and window a delivery targeted. Holds no text and starts
+/// nothing: delivery receipts and caret reads need no observer.
+pub(super) struct Reader {
     pid: i32,
     app: Shared,
     element: Shared,
     window: Shared,
-    state: Arc<State>,
-    terminal: bool,
-}
-pub(super) struct Watch {
-    reader: Arc<Reader>,
-    events: mpsc::Receiver<FieldEvent>,
-    observer: Option<thread::JoinHandle<()>>,
-    inflight: Option<tokio::task::JoinHandle<Option<xflow_core::FieldSnapshot>>>,
 }
 fn retain(value: &Owned) -> Owned {
     Owned(unsafe { CFRetain(value.0 as MutRef) } as Ref)
 }
-/// Prepare without waiting for observer readiness. Injection checks `ready` before keys.
-pub(super) fn prepare(focus: &Focus) -> Option<Watch> {
-    if !readable(focus) {
-        return None;
+impl Reader {
+    /// None unless focus is a known-editable field whose text may be read.
+    pub(super) fn new(focus: &Focus) -> Option<Arc<Self>> {
+        if !readable(focus) {
+            return None;
+        }
+        Self::pinned(focus.element.as_ref()?, focus.window.as_ref()?)
     }
-    let element = focus.element.as_ref()?;
-    let window = focus.window.as_ref()?;
-    let mut pid = 0;
-    if unsafe { AXUIElementGetPid(element.0, &mut pid) } != 0 {
-        return None;
+    fn pinned(element: &Owned, window: &Owned) -> Option<Arc<Self>> {
+        let mut pid = 0;
+        if unsafe { AXUIElementGetPid(element.0, &mut pid) } != 0 {
+            return None;
+        }
+        let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) })?;
+        for e in [&app, element, window] {
+            unsafe { AXUIElementSetMessagingTimeout(e.0, 0.1) };
+        }
+        Some(Arc::new(Self {
+            pid,
+            app: Shared(app),
+            element: Shared(retain(element)),
+            window: Shared(retain(window)),
+        }))
     }
-    let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) })?;
-    for e in [&app, element, window] {
-        unsafe { AXUIElementSetMessagingTimeout(e.0, 0.1) };
+    pub(super) fn same(&self, f: &Focus) -> bool {
+        f.element
+            .as_ref()
+            .is_some_and(|e| unsafe { CFEqual(e.0, self.element.0 .0) })
+            && f.window
+                .as_ref()
+                .is_some_and(|w| unsafe { CFEqual(w.0, self.window.0 .0) })
     }
-    let reader = Arc::new(Reader {
-        pid,
-        app: Shared(app),
-        element: Shared(retain(element)),
-        window: Shared(retain(window)),
-        state: Arc::new(State::default()),
-        terminal: super::terminal_context(&focus.context),
-    });
-    let (tx, events) = mpsc::channel(32);
-    let r = reader.clone();
-    let observer = thread::Builder::new()
-        .name("xflow-observe".into())
-        .stack_size(256 * 1024)
-        .spawn(move || unsafe {
-            let mut observer = ptr::null();
-            if AXObserverCreate(pid, callback, &mut observer) != 0 {
-                return;
-            }
-            let Some(observer) = Owned::new(observer) else {
-                return;
-            };
-            let mut context = Box::new(Context {
-                events: tx,
-                reader: r.clone(),
-            });
-            let ptr = (&mut *context as *mut Context).cast();
-            let add = |element: Ref, name: &str| {
-                let name = Owned::string(name);
-                AXObserverAddNotification(observer.0, element, name.0, ptr) == 0
-            };
-            // App-wide value notifications cannot prove the emitting field's identity.
-            let capable = add(r.element.0 .0, "AXValueChanged")
-                && add(r.element.0 .0, "AXUIElementDestroyed")
-                && add(r.app.0 .0, "AXFocusedUIElementChanged")
-                && add(r.app.0 .0, "AXFocusedWindowChanged")
-                && add(r.app.0 .0, "AXApplicationDeactivated");
-            if !capable {
-                return;
-            }
-            let source = AXObserverGetRunLoopSource(observer.0) as MutRef;
-            let runloop = CFRunLoopGetCurrent();
-            CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
-            r.state.ready.store(true, Ordering::Release);
-            while !r.state.stop.load(Ordering::Acquire)
-                && CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true) != 1
-            {}
-            CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
-        })
-        .ok();
-    Some(Watch {
-        reader,
-        events,
-        observer,
-        inflight: None,
-    })
-}
-pub(super) fn watch(target: &AppContext) -> Option<Watch> {
-    let f = focus_waiting(false);
-    if f.context.app_id != target.app_id || f.context.window_id != target.window_id {
-        return None;
-    }
-    prepare(&f)
-}
-fn readable(focus: &Focus) -> bool {
-    focus.editable == Some(true) && text_reads_allowed(focus)
-}
-struct Context {
-    events: mpsc::Sender<FieldEvent>,
-    reader: Arc<Reader>,
-}
-#[cfg(test)]
-const SAME_EDIT: Duration = Duration::from_millis(5);
-#[cfg(test)]
-fn new_edit(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    last.is_none_or(|t| now.duration_since(t) >= SAME_EDIT)
-}
-unsafe extern "C" fn callback(_: Ref, element: Ref, notification: Ref, context: *mut c_void) {
-    let context = &*(context as *const Context);
-    let r = &context.reader;
-    let event = if cf_text(notification).as_deref() == Some("AXValueChanged")
-        && CFEqual(element, r.element.0 .0)
-    {
-        r.state.generation.fetch_add(1, Ordering::AcqRel);
-        FieldEvent::Changed
-    } else {
-        // A focus journey is terminal even if focus returns before the next read.
-        r.state.invalid.store(true, Ordering::Release);
-        FieldEvent::Invalidated
-    };
-    if context.events.try_send(event).is_err() {
-        r.state.overflow.store(true, Ordering::Release);
-        r.state.invalid.store(true, Ordering::Release);
+    /// Length and selection only, for a field whose text cannot be read within
+    /// the bound: enough for a paste receipt, never for learning.
+    pub(super) fn counts(&self) -> Option<(usize, usize)> {
+        if !self.guard() {
+            return None;
+        }
+        let selected = selection(&self.element.0)?;
+        if !self.guard() {
+            return None;
+        }
+        Some((self.count()?, selected.length as usize))
     }
 }
 /// Unsupported optional metadata is distinct from a failed privacy query.
@@ -214,96 +133,185 @@ fn optional_attribute(element: &Owned, name: &str) -> Option<Option<Owned>> {
         _ => None,
     }
 }
-impl Reader {
-    fn valid(&self) -> bool {
-        !self.state.stop.load(Ordering::Acquire)
-            && !self.state.invalid.load(Ordering::Acquire)
-            && !self.state.overflow.load(Ordering::Acquire)
-    }
-    fn guard(&self) -> Option<()> {
-        if !self.valid() || self.terminal {
+/// Neither secure nor protected, as far as the element will say. An error or an
+/// unknown answer is not safe; an attribute the element lacks says nothing.
+fn secure_ok(e: &Owned) -> Option<()> {
+    let role = e.text("AXRole")?;
+    let subrole = match optional_attribute(e, "AXSubrole")? {
+        Some(v) => Some(cf_text(v.0)?),
+        None => None,
+    };
+    if let Some(p) = optional_attribute(e, "AXProtectedContent")? {
+        if unsafe { CFGetTypeID(p.0) != super::CFBooleanGetTypeID() || super::CFBooleanGetValue(p.0) } {
             return None;
         }
+    }
+    (role != "AXSecureTextField" && subrole.as_deref() != Some("AXSecureTextField")).then_some(())
+}
+impl FieldSource for Reader {
+    fn policy(&self) -> bool {
         let e = &self.element.0;
-        let role = e.text("AXRole")?;
-        let subrole = match optional_attribute(e, "AXSubrole")? {
-            Some(v) => Some(cf_text(v.0)?),
-            None => None,
-        };
-        let protected = optional_attribute(e, "AXProtectedContent")?;
-        if let Some(p) = protected {
-            if unsafe {
-                CFGetTypeID(p.0) != super::CFBooleanGetTypeID() || super::CFBooleanGetValue(p.0)
-            } {
-                return None;
-            }
-        }
-        if role == "AXSecureTextField"
-            || subrole.as_deref() == Some("AXSecureTextField")
-            || e.flag("AXEnabled") != Some(true)
-            || e.flag("AXEditable") == Some(false)
-            || !(e.flag("AXEditable") == Some(true) || e.settable("AXSelectedText"))
-            || search_or_address(e)
-        {
-            return None;
-        }
-        for name in ["AXTitle", "AXDescription", "AXIdentifier"] {
-            if e.text(name)
-                .is_some_and(|s| super::terminal_input_label(&s))
-            {
-                return None;
-            }
-        }
-        if e.attribute("AXDOMClassList")
-            .is_some_and(|v| super::dom_class(&v, "xterm-helper-textarea"))
-            || !focused(self.pid, &self.app.0, e)
-            || !e
-                .attribute("AXWindow")
-                .is_some_and(|w| unsafe { CFEqual(w.0, self.window.0 .0) })
-        {
-            return None;
-        }
-        self.valid().then_some(())
+        e.flag("AXEnabled") != Some(false)
+            && e.flag("AXEditable") != Some(false)
+            && !search_or_address(e)
+            && !["AXTitle", "AXDescription", "AXIdentifier"]
+                .iter()
+                .any(|name| e.text(name).is_some_and(|s| super::terminal_input_label(&s)))
+            && !e
+                .attribute("AXDOMClassList")
+                .is_some_and(|v| super::dom_class(&v, "xterm-helper-textarea"))
     }
-    fn snapshot(&self) -> Option<xflow_core::FieldSnapshot> {
-        let generation = self.state.generation.load(Ordering::Acquire);
-        self.guard()?;
-        let selected = selection(&self.element.0)?;
-        self.guard()?;
-        let count = usize::try_from(self.element.0.number("AXNumberOfCharacters")?).ok()?;
-        if count > xflow_core::MAX_FIELD_UTF16 {
-            return None;
-        }
-        let end = (selected.location as usize).checked_add(selected.length as usize)?;
-        if end > count {
-            return None;
-        }
-        self.guard()?;
-        let value = string_range(&self.element.0, 0, count)?;
-        self.guard()?;
-        if self.element.0.number("AXNumberOfCharacters")? != count as i64
-            || generation != self.state.generation.load(Ordering::Acquire)
-        {
-            return None;
-        }
-        self.guard()?;
-        let after = selection(&self.element.0)?;
-        self.guard()?;
-        if after.location != selected.location
-            || after.length != selected.length
-            || generation != self.state.generation.load(Ordering::Acquire)
-        {
-            return None;
-        }
-        Some(xflow_core::FieldSnapshot {
-            text: FieldText {
-                value,
-                caret: Some(end),
-            },
-            selection: Some((selected.location as usize, selected.length as usize)),
-            generation,
-            range_start: 0,
+    fn guard(&self) -> bool {
+        let e = &self.element.0;
+        secure_ok(e).is_some()
+            && focused(self.pid, &self.app.0, e)
+            && e.attribute("AXWindow")
+                .is_some_and(|w| unsafe { CFEqual(w.0, self.window.0 .0) })
+    }
+    fn selection(&self) -> Option<(usize, usize)> {
+        let r = selection(&self.element.0)?;
+        Some((r.location as usize, r.length as usize))
+    }
+    fn count(&self) -> Option<usize> {
+        usize::try_from(self.element.0.number("AXNumberOfCharacters")?).ok()
+    }
+    fn range(&self, start: usize, len: usize) -> Option<String> {
+        string_range(&self.element.0, start, len)
+    }
+}
+pub(super) struct Watch {
+    source: Arc<Reader>,
+    reader: BoundedReader<Reader>,
+    gate: Arc<ReadGate>,
+    events: mpsc::Receiver<FieldEvent>,
+    observer: Option<thread::JoinHandle<()>>,
+    /// Chromium's accessibility stays on for the watch; restored on its thread.
+    accessibility: Arc<Mutex<Option<AccessibilityGuard<Owned>>>>,
+}
+/// Start observing without waiting: registration takes AX round trips into the
+/// target app. A late one only means the first read finds an unannounced edit,
+/// which is a safe miss.
+pub(super) fn arm(source: Arc<Reader>) -> Watch {
+    let gate = Arc::new(ReadGate::default());
+    let accessibility = Arc::new(Mutex::new(None));
+    let (tx, events) = mpsc::channel(32);
+    let (r, g, kept) = (source.clone(), gate.clone(), accessibility.clone());
+    let observer = thread::Builder::new()
+        .name("xflow-observe".into())
+        .stack_size(256 * 1024)
+        .spawn(move || unsafe {
+            if !observing(&r, &g, tx) {
+                g.unsupported.store(true, Ordering::Release);
+            }
+            let held: Option<AccessibilityGuard<Owned>> =
+                kept.lock().ok().and_then(|mut kept| kept.take());
+            drop(held);
         })
+        .ok();
+    if observer.is_none() {
+        gate.unsupported.store(true, Ordering::Release);
+    }
+    Watch {
+        reader: BoundedReader::new(source.clone(), gate.clone()),
+        source,
+        gate,
+        events,
+        observer,
+        accessibility,
+    }
+}
+/// Run until stopped. False when the app cannot report what the watch relies on.
+unsafe fn observing(r: &Arc<Reader>, gate: &Arc<ReadGate>, events: mpsc::Sender<FieldEvent>) -> bool {
+    let mut observer = ptr::null();
+    if AXObserverCreate(r.pid, callback, &mut observer) != 0 {
+        return false;
+    }
+    let Some(observer) = Owned::new(observer) else {
+        return false;
+    };
+    let mut context = Box::new(Context {
+        events,
+        reader: r.clone(),
+        gate: gate.clone(),
+        app_scoped: false,
+        last_change: Cell::new(None),
+    });
+    let ptr: *mut Context = &mut *context;
+    let refcon: *mut c_void = ptr.cast();
+    let add = |element: Ref, name: &str| {
+        let name = Owned::string(name);
+        AXObserverAddNotification(observer.0, element, name.0, refcon) == 0
+    };
+    // Some apps post value changes only on the application: then each is a hint
+    // to reread the pinned field, never a reason to read anything else.
+    if !add(r.element.0 .0, "AXValueChanged") {
+        (*ptr).app_scoped = true;
+        if !add(r.app.0 .0, "AXValueChanged") {
+            return false;
+        }
+    }
+    // Without this a recycled element's reads still fail the focus guard.
+    add(r.element.0 .0, "AXUIElementDestroyed");
+    if !(add(r.app.0 .0, "AXFocusedUIElementChanged")
+        && add(r.app.0 .0, "AXFocusedWindowChanged")
+        && add(r.app.0 .0, "AXApplicationDeactivated"))
+    {
+        return false;
+    }
+    let source = AXObserverGetRunLoopSource(observer.0) as MutRef;
+    let runloop = CFRunLoopGetCurrent();
+    CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
+    while !gate.stop.load(Ordering::Acquire)
+        && CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true) != 1
+    {}
+    CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
+    true
+}
+fn readable(focus: &Focus) -> bool {
+    focus.editable == Some(true) && text_reads_allowed(focus)
+}
+struct Context {
+    events: mpsc::Sender<FieldEvent>,
+    reader: Arc<Reader>,
+    gate: Arc<ReadGate>,
+    app_scoped: bool,
+    /// Only the observer thread touches this.
+    last_change: Cell<Option<Instant>>,
+}
+/// Two value notifications this close are one edit (see `FieldEvent::Merged`).
+const SAME_EDIT: Duration = Duration::from_millis(5);
+fn new_edit(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|t| now.duration_since(t) >= SAME_EDIT)
+}
+unsafe extern "C" fn callback(_: Ref, element: Ref, notification: Ref, context: *mut c_void) {
+    let context = &*(context as *const Context);
+    let (r, gate) = (&context.reader, &context.gate);
+    let name = cf_text(notification);
+    let event = match name.as_deref() {
+        Some("AXValueChanged") => {
+            if !context.app_scoped && !CFEqual(element, r.element.0 .0) {
+                return;
+            }
+            gate.generation.fetch_add(1, Ordering::AcqRel);
+            let now = Instant::now();
+            if new_edit(context.last_change.replace(Some(now)), now) {
+                FieldEvent::Changed
+            } else {
+                FieldEvent::Merged
+            }
+        }
+        // The same element or window announced again: nothing moved (T17).
+        Some("AXFocusedUIElementChanged") if CFEqual(element, r.element.0 .0) => return,
+        Some("AXFocusedWindowChanged") if CFEqual(element, r.window.0 .0) => return,
+        // A focus journey is terminal even if focus returns before the next read.
+        _ => {
+            gate.invalid.store(true, Ordering::Release);
+            FieldEvent::Invalidated
+        }
+    };
+    if context.events.try_send(event).is_err() {
+        gate.overflow.store(true, Ordering::Release);
+        gate.invalid.store(true, Ordering::Release);
     }
 }
 /// A fixed request bound applies even if the provider grows the field mid-call.
@@ -328,30 +336,12 @@ fn string_range(element: &Owned, start: usize, len: usize) -> Option<String> {
     let value = cf_text(Owned::new(value)?.0)?;
     (value.encode_utf16().count() == len).then_some(value)
 }
-pub(super) struct DeliveryReader(Arc<Reader>);
-impl DeliveryReader {
-    pub(super) fn current(&self) -> Option<xflow_core::FieldSnapshot> {
-        self.0.snapshot()
-    }
-}
 impl Watch {
-    pub(super) fn delivery_reader(&self) -> DeliveryReader {
-        DeliveryReader(self.reader.clone())
-    }
-    pub(super) fn ready(&self) -> bool {
-        self.reader.state.ready.load(Ordering::Acquire) && self.reader.valid()
-    }
-    pub(super) fn current(&self) -> Option<xflow_core::FieldSnapshot> {
-        self.reader.snapshot()
-    }
-    pub(super) fn same(&self, f: &Focus) -> bool {
-        f.element
-            .as_ref()
-            .is_some_and(|e| unsafe { CFEqual(e.0, self.reader.element.0 .0) })
-            && f.window
-                .as_ref()
-                .is_some_and(|w| unsafe { CFEqual(w.0, self.reader.window.0 .0) })
-            && self.reader.valid()
+    /// Keep Chromium's accessibility on until this watch ends.
+    pub(super) fn hold(&self, accessibility: Option<AccessibilityGuard<Owned>>) {
+        if let Ok(mut held) = self.accessibility.lock() {
+            *held = accessibility;
+        }
     }
 }
 fn selection(element: &Owned) -> Option<CFRange> {
@@ -373,31 +363,28 @@ const BEFORE: isize = 32;
 const AFTER: isize = 16;
 /// The focused editable field's text around the caret. None for secure,
 /// terminal and unknown fields and on any AX error. Blocking: after one look at
-/// focus, two AX calls with a selection, three without, each bounded at 100 ms.
+/// focus, two AX calls with a selection, three without, each bounded at 100 ms,
+/// each behind a fresh security check.
 pub(super) fn neighbors() -> Option<(String, String)> {
     // No waiting for a Chromium tree to appear: the whole read has 100 ms.
     let focus = focus_waiting(false);
-    if !readable(&focus) {
-        return None;
-    }
-    let watch = prepare(&focus)?;
-    let r = &watch.reader;
-    r.guard()?;
-    let selected = selection(&r.element.0)?;
+    let r = Reader::new(&focus)?;
+    let e = &r.element.0;
+    secure_ok(e)?;
+    let selected = selection(e)?;
     let caret = selected.location;
     let start = (caret - BEFORE).max(0);
-    r.guard()?;
     let stop = if selected.length == 0 {
-        (caret + AFTER).min(isize::try_from(r.element.0.number("AXNumberOfCharacters")?).ok()?)
+        secure_ok(e)?;
+        (caret + AFTER).min(isize::try_from(e.number("AXNumberOfCharacters")?).ok()?)
     } else {
         caret
     };
     if stop < caret {
         return None;
     }
-    r.guard()?;
-    let text = string_range(&r.element.0, start as usize, (stop - start) as usize)?;
-    r.guard()?;
+    secure_ok(e)?;
+    let text = string_range(e, start as usize, (stop - start) as usize)?;
     split(&text, (stop - start) as usize, (caret - start) as usize)
 }
 /// `text`, `len` UTF-16 units long, cut at unit `at`. None when the length is
@@ -427,47 +414,49 @@ fn focused(pid: i32, app: &Owned, element: &Owned) -> bool {
 #[async_trait]
 impl FieldWatch for Watch {
     async fn next(&mut self) -> Option<FieldEvent> {
-        if self.reader.state.overflow.load(Ordering::Acquire) {
-            return Some(FieldEvent::Overflow);
+        let flag = |g: &ReadGate| {
+            if g.overflow.load(Ordering::Acquire) {
+                Some(FieldEvent::Overflow)
+            } else if g.unsupported.load(Ordering::Acquire) {
+                Some(FieldEvent::Unsupported)
+            } else if !g.open() {
+                Some(FieldEvent::Invalidated)
+            } else {
+                None
+            }
+        };
+        if let Some(event) = flag(&self.gate) {
+            return Some(event);
         }
-        if !self.reader.valid() {
-            return Some(FieldEvent::Invalidated);
+        match self.events.recv().await {
+            None => flag(&self.gate),
+            event => event,
         }
-        self.events.recv().await
     }
     fn try_next(&mut self) -> Option<FieldEvent> {
-        if self.reader.state.overflow.swap(false, Ordering::AcqRel) {
+        // Reported once: the caller stops instead of draining forever.
+        if self.gate.overflow.swap(false, Ordering::AcqRel) {
             return Some(FieldEvent::Overflow);
         }
-        // Return terminal state once; the caller stops instead of draining forever.
         self.events.try_recv().ok()
     }
     async fn read(&mut self) -> Option<FieldText> {
         self.snapshot().await.map(|s| s.text)
     }
     async fn snapshot(&mut self) -> Option<xflow_core::FieldSnapshot> {
-        if !self.reader.valid() {
-            return None;
-        }
-        if self.inflight.is_none() {
-            let reader = self.reader.clone();
-            self.inflight = Some(tokio::task::spawn_blocking(move || reader.snapshot()));
-        }
-        let result = self.inflight.as_mut()?.await.ok().flatten();
-        self.inflight = None;
-        self.reader.valid().then_some(result).flatten()
+        self.reader.snapshot().await
     }
     async fn focused(&mut self) -> bool {
-        let r = self.reader.clone();
-        tokio::task::spawn_blocking(move || r.guard().is_some())
+        if !self.gate.open() {
+            return false;
+        }
+        let r = self.source.clone();
+        tokio::task::spawn_blocking(move || r.guard())
             .await
             .unwrap_or(false)
     }
     async fn stop(&mut self) {
-        self.reader.state.stop.store(true, Ordering::Release);
-        if let Some(read) = self.inflight.take() {
-            let _ = read.await;
-        }
+        self.reader.stop().await;
         if let Some(observer) = self.observer.take() {
             let _ = tokio::task::spawn_blocking(move || observer.join()).await;
         }
@@ -475,7 +464,7 @@ impl FieldWatch for Watch {
 }
 impl Drop for Watch {
     fn drop(&mut self) {
-        self.reader.state.stop.store(true, Ordering::Release);
+        self.gate.stop.store(true, Ordering::Release);
     }
 }
 
@@ -588,11 +577,11 @@ mod tests {
         assert!(window.contains(&expected), "focused window is {window:?}");
         let idle = threads();
         let started = Instant::now();
-        let mut watch = observe(pid, focused(), None).unwrap();
+        let focused_window = editor.attribute("AXWindow").unwrap();
+        let mut watch = arm(Reader::pinned(&focused(), &focused_window).unwrap());
         println!(
-            "role={:?} observer={} observe_ms={} threads idle={idle} watching={}",
+            "role={:?} observe_ms={} threads idle={idle} watching={}",
             editor.text("AXRole"),
-            watch.reader.state.ready.load(Ordering::Acquire),
             started.elapsed().as_millis(),
             threads()
         );
@@ -615,6 +604,9 @@ mod tests {
                     }
                     FieldEvent::Focus => focus_events += 1,
                     FieldEvent::Merged => merged += 1,
+                    FieldEvent::Invalidated | FieldEvent::Overflow | FieldEvent::Unsupported => {
+                        break
+                    }
                 }
             }
         })
@@ -635,9 +627,13 @@ mod tests {
             after.value.contains(marker),
             "the read does not show the edit"
         );
-        drop(watch);
-        std::thread::sleep(Duration::from_millis(1200));
-        println!("threads after drop={}", threads());
+        watch.stop().await;
+        println!(
+            "threads after stop={} reads started={} finished={}",
+            threads(),
+            watch.gate.started.load(Ordering::Acquire),
+            watch.gate.finished.load(Ordering::Acquire)
+        );
     }
     /// Cost of a watch with no edits: CPU time and RSS over 20 s, and that its
     /// thread is gone after drop. Pins XFLOW_OBSERVE_PID's application element.
@@ -663,9 +659,10 @@ mod tests {
         let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) }).unwrap();
         let idle = threads();
         let (cpu0, rss0) = usage();
-        let watch = observe(pid, app, None).unwrap();
+        let mut watch = arm(Reader::pinned(&app, &app).unwrap());
+        std::thread::sleep(Duration::from_millis(200));
         assert!(
-            watch.reader.state.ready.load(Ordering::Acquire),
+            !watch.gate.unsupported.load(Ordering::Acquire),
             "observer not created"
         );
         let watching = threads();
@@ -679,10 +676,9 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).contains("xflow-observe")
         };
         assert!(named(), "sample cannot see the observer thread");
-        drop(watch);
-        std::thread::sleep(Duration::from_millis(1200));
+        watch.stop().await;
         println!(
-            "20 s watch: cpu={}ms rss {}->{} KiB threads idle={idle} watching={watching} after_drop={} (other threads are AX/libdispatch workers)",
+            "20 s watch: cpu={}ms rss {}->{} KiB threads idle={idle} watching={watching} after_stop={} (other threads are AX/libdispatch workers)",
             (cpu1 - cpu0).as_millis(),
             rss0,
             rss1,

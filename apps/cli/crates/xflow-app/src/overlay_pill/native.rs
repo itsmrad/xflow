@@ -253,6 +253,17 @@ fn sized_frame(screen: Rect, position: &str, scale: f64, win_w: f64) -> Rect {
     )
 }
 
+/// `frame` moved one window height off the screen edge the pill sits on.
+fn beside_pill(mut frame: Rect, position: &str, scale: f64) -> Rect {
+    let step = WIN_H * scale;
+    frame.origin.y += if position.starts_with("top") {
+        -step
+    } else {
+        step
+    };
+    frame
+}
+
 /// The alert held after release, at most this long including the fade.
 const ALERT_SECS: f64 = 2.0;
 
@@ -332,7 +343,8 @@ unsafe fn status_panel(window: Rect, label: Id) -> Result<Id> {
 }
 
 /// How long the learning notice stays, from its first frame: no hover hold.
-const NOTICE: Duration = Duration::from_millis(1000);
+/// Long enough to read the word and reach Undo with the mouse.
+const NOTICE: Duration = Duration::from_millis(4000);
 /// The notice window's width before `scale`; the capsule fits its text.
 const NOTICE_W: f64 = 360.0;
 
@@ -409,13 +421,13 @@ fn undo(op: u64) {
     }
 }
 
-/// The learning notice: the saved word and an Undo (×) for one second, timed
+/// The learning notice: the saved word and an Undo (×) for four seconds, timed
 /// from its first committed frame (the screen shows it up to a frame later),
-/// then gone. No animation, no hover extension. The
-/// panel never activates, so the caret stays in the user's app; the × is a
-/// real momentary button (VoiceOver: "Undo: remove … from dictionary",
-/// pressed through accessibility like a click), and the save is announced, as
-/// one second is too short to reach the button: `xflow dictionary undo` is the
+/// then gone. No animation, no hover extension. The panel never activates, so
+/// the caret stays in the user's app, and it sits one pill clear of where the
+/// recording pill draws, so both can show. The × is a real momentary button
+/// (VoiceOver: "Undo: remove … from dictionary", pressed through accessibility
+/// like a click); the save is also announced, and `xflow dictionary undo` is the
 /// durable route.
 pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
     let s: f64 = settings.get("scale")?.parse()?;
@@ -451,11 +463,15 @@ pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
         let (w, h) = (text_w + BUTTON * s + 3.0 * pad + 6.0 * s, PILL_H * s);
         // The window is the capsule plus its padding: clicks beside it reach the app below.
         let win_w = w / s + (WIN_H - PILL_H);
-        let window = sized_frame(
-            rect_of(screen, c"visibleFrame"),
+        let window = beside_pill(
+            sized_frame(
+                rect_of(screen, c"visibleFrame"),
+                position.trim_matches('\''),
+                s,
+                win_w,
+            ),
             position.trim_matches('\''),
             s,
-            win_w,
         );
         let panel = status_panel(window, string(&text))?;
         let view = msg!(panel, c"contentView"; Id);

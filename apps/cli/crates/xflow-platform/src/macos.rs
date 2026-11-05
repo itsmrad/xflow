@@ -962,9 +962,15 @@ impl Desktop for MacDesktop {
     }
     async fn watch_field(&self, target: &AppContext) -> Option<Box<dyn FieldWatch>> {
         let target = target.clone();
-        let watch = tokio::task::spawn_blocking(move || observe::watch(&target))
-            .await
-            .ok()??;
+        let watch = tokio::task::spawn_blocking(move || {
+            let focus = focus_waiting(false);
+            (focus.context.app_id == target.app_id && focus.context.window_id == target.window_id)
+                .then(|| observe::Reader::new(&focus))
+                .flatten()
+                .map(observe::arm)
+        })
+        .await
+        .ok()??;
         Some(Box::new(watch))
     }
     async fn neighbors(&self) -> Option<(String, String)> {
@@ -995,13 +1001,29 @@ impl Desktop for MacDesktop {
         self.write(text)
     }
     async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome> {
-        Ok(self.inject_observed(text, target).await?.outcome)
+        Ok(self.deliver(text, target, false).await?.outcome)
     }
     async fn inject_observed(
         &self,
         text: &str,
         target: &AppContext,
     ) -> Result<xflow_core::ObservedDelivery> {
+        self.deliver(text, target, true).await
+    }
+}
+impl MacDesktop {
+    /// `observe`: also hand back a watch on the exact field, armed before the keys
+    /// so an edit right after the paste is still announced. Nobody else starts one.
+    async fn deliver(
+        &self,
+        text: &str,
+        target: &AppContext,
+        observe: bool,
+    ) -> Result<xflow_core::ObservedDelivery> {
+        let copied = xflow_core::ObservedDelivery {
+            outcome: InjectionOutcome::ClipboardOnly,
+            ticket: None,
+        };
         if text.len() > MAX_TEXT {
             bail!("injection text exceeds 64 KiB");
         }
@@ -1014,22 +1036,25 @@ impl Desktop for MacDesktop {
         // restore the flag here, off the async runtime.
         // shortcut: a clipboard error (`?`) or cancellation before the worker restores it on the
         // async thread (two AX calls, each capped by the 0.2 s messaging timeout); fine while rare.
-        let (action, accessibility, watch) = tokio::task::spawn_blocking(move || {
+        let (action, accessibility, reader, watch) = tokio::task::spawn_blocking(move || {
             let mut focus = focus();
             let action = decision(&text_owned, method, &target_owned, &focus);
             let keys = matches!(action, Decision::Paste | Decision::Type);
-            let watch = keys.then(|| observe::prepare(&focus)).flatten();
-            (action, focus._accessibility.take().filter(|_| keys), watch)
+            let reader = keys.then(|| observe::Reader::new(&focus)).flatten();
+            let watch = reader.clone().filter(|_| observe).map(observe::arm);
+            (
+                action,
+                focus._accessibility.take().filter(|_| keys),
+                reader,
+                watch,
+            )
         })
         .await?;
         match action {
             Decision::Refuse => bail!("refusing delivery into a secure field"),
             Decision::Copy => {
                 self.write(text)?;
-                return Ok(xflow_core::ObservedDelivery {
-                    outcome: InjectionOutcome::ClipboardOnly,
-                    ticket: None,
-                });
+                return Ok(copied);
             }
             _ => {}
         }
@@ -1045,11 +1070,12 @@ impl Desktop for MacDesktop {
             if !clipboard()?.owned() {
                 self.write(text)?;
                 // Restore off the runtime, still under the delivery lock.
-                let _ = tokio::task::spawn_blocking(move || drop(accessibility)).await;
-                return Ok(xflow_core::ObservedDelivery {
-                    outcome: InjectionOutcome::ClipboardOnly,
-                    ticket: None,
-                });
+                let _ = tokio::task::spawn_blocking(move || {
+                    drop(watch);
+                    drop(accessibility)
+                })
+                .await;
+                return Ok(copied);
             }
         }
         let target = target.clone();
@@ -1060,7 +1086,7 @@ impl Desktop for MacDesktop {
         tokio::task::spawn_blocking(move || {
             let _delivery = delivery;
             // Dropped before the lock, so the next paste sees the original flag.
-            let _accessibility = accessibility;
+            let mut accessibility = accessibility;
             let current = focus();
             let action = decision(&text_owned, method, &target, &current);
             if action == Decision::Refuse {
@@ -1072,40 +1098,55 @@ impl Desktop for MacDesktop {
                 let copied = clipboard().and_then(|c| c.write(&text_owned));
                 return drop(reply.send(copied.map(|()| (Decision::Copy, false, None))));
             }
-            // Exact element/window pinned before delivery; never reacquire on a late handoff.
-            let watch = watch.filter(|w| w.same(&current));
-            let reader = watch.as_ref().map(|w| w.delivery_reader());
-            let before = reader.as_ref().and_then(|r| r.current());
-            let eligible = watch.as_ref().is_some_and(|w| w.ready()) && before.is_some();
-            let (ticket_watch, _receipt_watch) = if eligible {
-                (watch, None)
-            } else {
-                (None, watch)
+            // The exact element and window, or nothing is read and nothing is learned.
+            // Receipts have their own gate: they outlive a dropped watch.
+            let reader = reader.filter(|r| r.same(&current));
+            let gate = xflow_core::ReadGate::default();
+            let read = |r: &std::sync::Arc<observe::Reader>| -> Option<Snapshot> {
+                let bounded = xflow_core::read_field(&**r, &gate).map(|s| {
+                    let selected = s.selection.map_or(0, |(_, len)| len as i64);
+                    (
+                        Some(s.text.value.encode_utf16().count() as i64),
+                        Some(s.text.value),
+                        selected,
+                    )
+                });
+                bounded.or_else(|| {
+                    r.counts()
+                        .map(|(count, selected)| (Some(count as i64), None, selected as i64))
+                })
             };
-            let ticket = ticket_watch
+            let before = reader
+                .as_ref()
+                .and_then(|r| xflow_core::read_field(&**r, &gate));
+            let ticket = watch
+                .filter(|_| reader.is_some())
                 .zip(before.as_ref())
                 .and_then(|(watch, before)| {
-                    let selection = before.selection?;
                     let receipt = xflow_core::learn::Receipt::delivery(
                         &before.text.value,
-                        selection,
+                        before.selection?,
                         &text_owned,
                     )?;
-                    let delivered = (selection.0, text_owned.encode_utf16().count());
+                    watch.hold(accessibility.take());
                     Some(xflow_core::DeliveryTicket {
                         field: Box::new(watch),
                         receipt,
-                        selection,
-                        delivered,
                     })
                 });
-            let field = before.as_ref().map(|b| {
-                (
-                    Some(b.text.value.encode_utf16().count() as i64),
-                    Some(b.text.value.clone()),
-                    b.selection.map_or(0, |(_, len)| len as i64),
-                )
-            });
+            let field: Option<Snapshot> = match &before {
+                Some(s) => Some((
+                    Some(s.text.value.encode_utf16().count() as i64),
+                    Some(s.text.value.clone()),
+                    s.selection.map_or(0, |(_, len)| len as i64),
+                )),
+                None => reader.as_ref().and_then(|r| {
+                    r.counts()
+                        .map(|(count, selected)| (Some(count as i64), None, selected as i64))
+                }),
+            };
+            // Field text stays only in the ticket's receipt from here on.
+            drop(before);
             if let Err(e) = send_keys(&text_owned, action == Decision::Type) {
                 return drop(reply.send(Err(e)));
             }
@@ -1123,17 +1164,7 @@ impl Desktop for MacDesktop {
                         .as_ref()
                         .zip(reader.as_ref())
                         .is_some_and(|(before, r)| {
-                            r.current().is_some_and(|after| {
-                                inserted(
-                                    before,
-                                    &(
-                                        Some(after.text.value.encode_utf16().count() as i64),
-                                        Some(after.text.value),
-                                        0,
-                                    ),
-                                    &text_owned,
-                                )
-                            })
+                            read(r).is_some_and(|after| inserted(before, &after, &text_owned))
                         })
                 },
                 reply_budget(field.as_ref(), restore_delay_ms, started),

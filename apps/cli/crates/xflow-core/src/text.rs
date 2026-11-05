@@ -287,6 +287,23 @@ pub fn prepare(
     };
     (text, outcome)
 }
+/// Dictionary replacements again, for what model cleanup returned: it may have
+/// put back a spelling `prepare` already fixed. Every word gets one pass: a rule
+/// with a source word any rule writes (A -> B next to B -> C, or x -> x y) ran
+/// in `prepare` alone, so text a rule inserted is never rewritten by this one.
+pub fn reapply(text: &str, config: &Config) -> String {
+    let lower = |s: &str| -> Vec<String> {
+        words(s).iter().map(|w| w.text.to_lowercase()).collect()
+    };
+    let replacements = &config.dictionary.replacements;
+    let written: Vec<String> = replacements.iter().flat_map(|r| lower(&r.to)).collect();
+    let pairs: Vec<_> = replacements
+        .iter()
+        .filter(|r| !lower(&r.from).iter().any(|w| written.contains(w)))
+        .map(|r| (r.from.as_str(), r.to.as_str()))
+        .collect();
+    replace(text, &pairs, false)
+}
 pub fn after_cleanup(text: &str, config: &Config) -> String {
     let pairs: Vec<_> = config
         .snippets
