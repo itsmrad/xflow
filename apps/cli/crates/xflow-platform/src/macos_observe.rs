@@ -142,7 +142,9 @@ fn secure_ok(e: &Owned) -> Option<()> {
         None => None,
     };
     if let Some(p) = optional_attribute(e, "AXProtectedContent")? {
-        if unsafe { CFGetTypeID(p.0) != super::CFBooleanGetTypeID() || super::CFBooleanGetValue(p.0) } {
+        if unsafe {
+            CFGetTypeID(p.0) != super::CFBooleanGetTypeID() || super::CFBooleanGetValue(p.0)
+        } {
             return None;
         }
     }
@@ -156,7 +158,10 @@ impl FieldSource for Reader {
             && !search_or_address(e)
             && !["AXTitle", "AXDescription", "AXIdentifier"]
                 .iter()
-                .any(|name| e.text(name).is_some_and(|s| super::terminal_input_label(&s)))
+                .any(|name| {
+                    e.text(name)
+                        .is_some_and(|s| super::terminal_input_label(&s))
+                })
             && !e
                 .attribute("AXDOMClassList")
                 .is_some_and(|v| super::dom_class(&v, "xterm-helper-textarea"))
@@ -221,7 +226,11 @@ pub(super) fn arm(source: Arc<Reader>) -> Watch {
     }
 }
 /// Run until stopped. False when the app cannot report what the watch relies on.
-unsafe fn observing(r: &Arc<Reader>, gate: &Arc<ReadGate>, events: mpsc::Sender<FieldEvent>) -> bool {
+unsafe fn observing(
+    r: &Arc<Reader>,
+    gate: &Arc<ReadGate>,
+    events: mpsc::Sender<FieldEvent>,
+) -> bool {
     let mut observer = ptr::null();
     if AXObserverCreate(r.pid, callback, &mut observer) != 0 {
         return false;
@@ -261,9 +270,14 @@ unsafe fn observing(r: &Arc<Reader>, gate: &Arc<ReadGate>, events: mpsc::Sender<
     let source = AXObserverGetRunLoopSource(observer.0) as MutRef;
     let runloop = CFRunLoopGetCurrent();
     CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
-    while !gate.stop.load(Ordering::Acquire)
-        && CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true) != 1
-    {}
+    // Sleeps in the run loop, waking at least every 20 ms to see a stop.
+    loop {
+        if gate.stop.load(Ordering::Acquire)
+            || CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true) == 1
+        {
+            break;
+        }
+    }
     CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
     true
 }
@@ -471,7 +485,7 @@ impl Drop for Watch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
+    use xflow_core::AppContext;
 
     #[test]
     fn secure_terminal_and_unknown_fields_are_never_read() {
@@ -579,6 +593,7 @@ mod tests {
         let started = Instant::now();
         let focused_window = editor.attribute("AXWindow").unwrap();
         let mut watch = arm(Reader::pinned(&focused(), &focused_window).unwrap());
+        std::thread::sleep(Duration::from_millis(100));
         println!(
             "role={:?} observe_ms={} threads idle={idle} watching={}",
             editor.text("AXRole"),

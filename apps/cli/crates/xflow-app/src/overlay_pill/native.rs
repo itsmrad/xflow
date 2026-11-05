@@ -848,7 +848,10 @@ mod tests {
             } else {
                 (pill, notice)
             };
-            assert!(low.origin.y + low.size.height <= high.origin.y + 1e-6, "{position}");
+            assert!(
+                low.origin.y + low.size.height <= high.origin.y + 1e-6,
+                "{position}"
+            );
         }
     }
 

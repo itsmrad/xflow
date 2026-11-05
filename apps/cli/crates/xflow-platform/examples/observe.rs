@@ -46,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
                     tokio::time::sleep(Duration::from_millis(250)).await;
                     println!("focus t={}ms still_focused={}", started.elapsed().as_millis(), watch.focused().await);
                 }
+                Some(other) => { println!("{other:?} t={}ms", started.elapsed().as_millis()); break }
                 None => { println!("ended"); break }
             }
         }

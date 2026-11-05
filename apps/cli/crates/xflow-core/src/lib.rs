@@ -348,14 +348,16 @@ pub fn read_field<S: FieldSource>(source: &S, gate: &ReadGate) -> Option<FieldSn
     if value.encode_utf16().count() != count || !admit() || source.count()? != count {
         return None;
     }
-    (gate.open() && generation == gate.generation.load(Ordering::Acquire)).then_some(FieldSnapshot {
-        text: FieldText {
-            value,
-            caret: Some(end),
+    (gate.open() && generation == gate.generation.load(Ordering::Acquire)).then_some(
+        FieldSnapshot {
+            text: FieldText {
+                value,
+                caret: Some(end),
+            },
+            selection: Some(selection),
+            generation,
         },
-        selection: Some(selection),
-        generation,
-    })
+    )
 }
 /// At most one native read at a time, off the async runtime. A caller that timed
 /// out finds its read still in flight and joins it instead of starting another.
@@ -553,7 +555,11 @@ mod tests {
             };
             let gate = ReadGate::default();
             assert!(read_field(&field, &gate).is_none(), "{at}");
-            assert_eq!(field.calls.load(Ordering::SeqCst), at, "no call after step {at}");
+            assert_eq!(
+                field.calls.load(Ordering::SeqCst),
+                at,
+                "no call after step {at}"
+            );
         }
         let field = Field::with("visible");
         let snapshot = read_field(&field, &ReadGate::default()).unwrap();
@@ -590,7 +596,11 @@ mod tests {
         assert!(read_field(&field, &ReadGate::default()).is_none());
         assert_eq!(field.calls.load(Ordering::SeqCst), 2);
         // Exactly at the bound is fine.
-        assert!(read_field(&Field::with(&"x".repeat(MAX_FIELD_UTF16)), &ReadGate::default()).is_some());
+        assert!(read_field(
+            &Field::with(&"x".repeat(MAX_FIELD_UTF16)),
+            &ReadGate::default()
+        )
+        .is_some());
         // Growing while read.
         let field = Field {
             grow_by: 1,
@@ -622,7 +632,9 @@ mod tests {
             tokio::time::timeout(std::time::Duration::from_millis(20), reader.snapshot()).await;
         assert!(timed_out.is_err());
         let wait = entered.clone();
-        tokio::task::spawn_blocking(move || wait.wait()).await.unwrap();
+        tokio::task::spawn_blocking(move || wait.wait())
+            .await
+            .unwrap();
         assert_eq!(gate.started.load(Ordering::SeqCst), 1);
         assert_eq!(gate.finished.load(Ordering::SeqCst), 0);
         // Stop closes the gate at once and is not done until the read has drained.
@@ -637,7 +649,9 @@ mod tests {
         assert!(!gate.open());
         assert!(!drained.load(Ordering::SeqCst));
         let wait = release.clone();
-        tokio::task::spawn_blocking(move || wait.wait()).await.unwrap();
+        tokio::task::spawn_blocking(move || wait.wait())
+            .await
+            .unwrap();
         let mut reader = stopping.await.unwrap();
         assert!(drained.load(Ordering::SeqCst));
         assert_eq!(gate.started.load(Ordering::SeqCst), 1);
@@ -666,9 +680,13 @@ mod tests {
                 .is_err()
         );
         let wait = entered.clone();
-        tokio::task::spawn_blocking(move || wait.wait()).await.unwrap();
+        tokio::task::spawn_blocking(move || wait.wait())
+            .await
+            .unwrap();
         let wait = release.clone();
-        tokio::task::spawn_blocking(move || wait.wait()).await.unwrap();
+        tokio::task::spawn_blocking(move || wait.wait())
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         // Completed behind a timed-out caller; the field then changed.
         gate.generation.fetch_add(1, Ordering::SeqCst);

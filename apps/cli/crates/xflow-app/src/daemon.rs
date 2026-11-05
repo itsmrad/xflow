@@ -159,7 +159,9 @@ enum Completion {
         change: Option<Change>,
     },
     /// The user took back in the field a correction just saved: undo the save.
-    Retract { op: u64 },
+    Retract {
+        op: u64,
+    },
 }
 /// The latest automatic dictionary change, kept in memory only while it can
 /// be undone once (see `config_edit::Undo`).
@@ -1650,7 +1652,9 @@ impl Engine {
         self.advance();
         // Dropping the sender aborts the watch. A save already past admission stands.
         if let Some(observation) = self.observing.take() {
-            observation.admission.store(SAVE_CANCELLED, Ordering::Release);
+            observation
+                .admission
+                .store(SAVE_CANCELLED, Ordering::Release);
         }
         if let Some(job) = self.job.take() {
             job.abort();
@@ -1817,8 +1821,9 @@ impl Engine {
                     while desktop_ops.try_join_next().is_some() {}
                     if (is_query(&request) || matches!(request, Request::Reload | Request::UndoLearned { .. })) && queries.len() + desktop_ops.len() >= 32 { let _ = reply.send(Response::error(self.state, "daemon request capacity reached")); continue; }
                     if let Request::HistoryUpdate { id, text } = request {
-                        let status = self.status(); let store = self.store.clone(); let path = self.config_path.clone(); let tx = completion_tx.clone(); let clock = self.dictionary_clock.clone(); let seen = self.seen.clone();
-                        queries.spawn(async move { let state = status.state; let response = edit_history(status, store, id, text, path, tx, clock, seen).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
+                        let status = self.status(); let store = self.store.clone();
+                        let learner = self.config_path.clone().map(|path| Learner { path, completion: completion_tx.clone(), clock: self.dictionary_clock.clone(), seen: self.seen.clone(), notice: false, admission: None });
+                        queries.spawn(async move { let state = status.state; let response = edit_history(status, store, id, text, learner).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
                         continue;
                     }
                     if let Request::UndoLearned { op } = request {
@@ -2255,12 +2260,19 @@ struct Commits {
 }
 impl Commits {
     /// Save and count what `corrected` adds. Err: nothing new.
-    async fn save(&mut self, original: String, corrected: String) -> std::result::Result<(), String> {
+    async fn save(
+        &mut self,
+        original: String,
+        corrected: String,
+    ) -> std::result::Result<(), String> {
         let saved = learn(&self.learner, original, corrected, &self.done).await;
         match saved {
             Ok(Ok(learned)) => {
                 if let Some(at) = self.edited {
-                    log("debug", &format!("auto-learn: edit_to_save_ms={}", at.elapsed().as_millis()));
+                    log(
+                        "debug",
+                        &format!("auto-learn: edit_to_save_ms={}", at.elapsed().as_millis()),
+                    );
                 }
                 self.last = learned.op.or(self.last);
                 self.done.extend(learned.pairs);
@@ -2958,7 +2970,8 @@ async fn learn(
         }
         let revision = file.save_tracked();
         if let Some(a) = &admission {
-            let _ = a.compare_exchange(SAVE_RUNNING, SAVE_OPEN, Ordering::AcqRel, Ordering::Acquire);
+            let _ =
+                a.compare_exchange(SAVE_RUNNING, SAVE_OPEN, Ordering::AcqRel, Ordering::Acquire);
         }
         let revision = revision?;
         *lock(&seen) = remembered;
@@ -3064,10 +3077,7 @@ async fn edit_history(
     store: Store,
     id: i64,
     text: String,
-    path: Option<PathBuf>,
-    completion: mpsc::Sender<Completion>,
-    clock: Arc<AtomicU64>,
-    seen: Arc<std::sync::Mutex<Vec<Replacement>>>,
+    learner: Option<Learner>,
 ) -> Result<Response> {
     if text.trim().is_empty() || text.len() > 32 * 1024 {
         bail!("corrected text must be non-empty and at most 32 KiB");
@@ -3079,15 +3089,7 @@ async fn edit_history(
     r.entry = store.get(id).await?;
     // Command-mode output is the model's text, not speech recognition; nothing to learn.
     let dictated = r.entry.as_ref().is_some_and(|e| e.mode == Mode::Dictation);
-    if let Some(path) = path.filter(|_| dictated) {
-        let learner = Learner {
-            path,
-            completion,
-            clock,
-            seen,
-            notice: false,
-            admission: None,
-        };
+    if let Some(learner) = learner.filter(|_| dictated) {
         r.message = match learn(&learner, original, text, &[]).await {
             Ok(learned) => learned.ok().map(|learned| learned.message),
             Err(e) => Some(format!("Transcript saved; dictionary not updated: {e:#}")),
@@ -6241,8 +6243,14 @@ mod tests {
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Gress", "Postgres"]);
         assert_eq!(dictionary.learned, ["Postgres", "Gress"]);
-        // An uncommon source earns its literal rule at once.
-        assert_eq!(dictionary.replacements.len(), 2);
+        // An uncommon source earns its literal rule at once; the second overlaps it.
+        assert_eq!(
+            dictionary.replacements,
+            [Replacement {
+                from: "post gres".into(),
+                to: "Postgres".into()
+            }]
+        );
         assert!(
             !ask(
                 &tx,
@@ -6437,12 +6445,18 @@ mod tests {
         run.edit("Please ask Veronica and Zorblax tomorrow ");
         let started = Instant::now();
         assert!(run.save_within(1500).await.is_none(), "too early");
-        let Some(Completion::Learned { change: Some(change), .. }) = run.save_within(1500).await
+        let Some(Completion::Learned {
+            change: Some(change),
+            ..
+        }) = run.save_within(1500).await
         else {
             panic!("nothing saved within 3 s of the edit");
         };
         let took = started.elapsed();
-        assert!(took >= Duration::from_millis(1900) && took < Duration::from_millis(2800), "{took:?}");
+        assert!(
+            took >= Duration::from_millis(1900) && took < Duration::from_millis(2800),
+            "{took:?}"
+        );
         assert_eq!(change.words, ["Veronica"]);
         assert!(change.notice);
         run.edit("Please ask Veronica and Zorblex tomorrow ");
@@ -6475,7 +6489,10 @@ mod tests {
         let partial = "Please ask Veronic about tomorrow plans ";
         run.edit(partial);
         run.caret(Some(18));
-        assert!(run.save_within(5500).await.is_none(), "saved a partial word");
+        assert!(
+            run.save_within(5500).await.is_none(),
+            "saved a partial word"
+        );
         run.edit(FIXED);
         run.caret(Some(21));
         assert!(run.save_within(3000).await.is_some());
@@ -6522,7 +6539,14 @@ mod tests {
     /// CEN2: a clear, then the same words as a new message, saves nothing.
     #[tokio::test]
     async fn a_select_all_retype_learns_unless_the_field_emptied() {
-        let keys = ["P", "Ple", "Please ", "Please ask Veron", "Please ask Veronica about ", FIXED];
+        let keys = [
+            "P",
+            "Ple",
+            "Please ",
+            "Please ask Veron",
+            "Please ask Veronica about ",
+            FIXED,
+        ];
         let mut run = Run::start("", DICTATED).await;
         for text in keys {
             run.edit(text);
@@ -6588,7 +6612,9 @@ mod tests {
             test_learner(path.clone(), completion, Arc::new(AtomicU64::new(0))),
             learning,
         ));
-        assert!(tokio::time::timeout(Duration::from_secs(3), saves.recv()).await.is_ok());
+        assert!(tokio::time::timeout(Duration::from_secs(3), saves.recv())
+            .await
+            .is_ok());
         let _ = finish.send(());
         task.await.unwrap();
         assert_eq!(Config::load(&path).unwrap().dictionary.words, ["Veronica"]);
@@ -6703,7 +6729,10 @@ mod tests {
 
         let mut run = Run::start("", DICTATED).await;
         run.edit(FIXED);
-        let Some(Completion::Learned { change: Some(change), .. }) = run.save_within(3000).await
+        let Some(Completion::Learned {
+            change: Some(change),
+            ..
+        }) = run.save_within(3000).await
         else {
             panic!("no save");
         };
@@ -6712,7 +6741,10 @@ mod tests {
             panic!("no retraction");
         };
         assert_eq!(op, change.id);
-        assert!(run.save_within(2800).await.is_none(), "the reverse was learned");
+        assert!(
+            run.save_within(2800).await.is_none(),
+            "the reverse was learned"
+        );
         run.finish().await;
     }
     /// A hidden clear: a read of a retype unchanged by a further notification.
@@ -6720,7 +6752,11 @@ mod tests {
     async fn only_small_bursts_cross_a_read_and_nothing_crosses_a_clear() {
         assert!(burst("post gres", "post gress", 1));
         assert!(burst("post gres is", "Post gres is", 3));
-        assert!(!burst("post gres is ready", "Postgres is ready for staging", 2));
+        assert!(!burst(
+            "post gres is ready",
+            "Postgres is ready for staging",
+            2
+        ));
         assert!(!burst("Please ask Veronika", "Hi", 2));
     }
     /// Two terms of the full loop, cleanup included: a first correction, then the
@@ -6730,11 +6766,29 @@ mod tests {
         for (transformer, label) in [
             (None, "raw"),
             // The model puts the misspelling back: corrected after it.
-            (Some(RecordingTransformer(Mutex::default(), Some("post gres is ready to go"))), "cleanup"),
+            (
+                Some(RecordingTransformer(
+                    Mutex::default(),
+                    Some("post gres is ready to go"),
+                )),
+                "cleanup",
+            ),
             // The model keeps the corrected text: unchanged, one pass.
-            (Some(RecordingTransformer(Mutex::default(), Some("Postgres is ready to go"))), "kept"),
+            (
+                Some(RecordingTransformer(
+                    Mutex::default(),
+                    Some("Postgres is ready to go"),
+                )),
+                "kept",
+            ),
             // The model answers instead: the local text, already corrected.
-            (Some(RecordingTransformer(Mutex::default(), Some("I cannot help with that request today sorry"))), "rejected"),
+            (
+                Some(RecordingTransformer(
+                    Mutex::default(),
+                    Some("I cannot help with that request today sorry"),
+                )),
+                "rejected",
+            ),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("config.toml");
@@ -6760,7 +6814,10 @@ mod tests {
             task.await.unwrap();
             assert_eq!(
                 Config::load(&path).unwrap().dictionary.replacements,
-                [Replacement { from: "post gres".into(), to: "Postgres".into() }]
+                [Replacement {
+                    from: "post gres".into(),
+                    to: "Postgres".into()
+                }]
             );
 
             let desktop = Arc::new(RecordingDesktop::default());
@@ -7772,9 +7829,9 @@ mod tests {
         let learning = status.learning.unwrap();
         assert_eq!(
             (learning.words, learning.learned, learning.replacements),
-            (1, 1, 0)
+            (1, 1, 1)
         );
-        // The paste with no readable field was watched and counted.
+        // The paste with no field to watch was counted as a safe miss.
         let learning = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let learning = ask(&tx, Request::Status).await.learning.unwrap();
@@ -7787,7 +7844,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(learning.watches, 1);
-        assert_eq!(learning.outcomes.get("unreadable"), Some(&1));
+        assert_eq!(
+            learning.outcomes.get("safe-miss:unsupported-or-late"),
+            Some(&1)
+        );
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
@@ -9460,7 +9520,9 @@ mod tests {
             .contains("check it landed"));
         assert_eq!(ask(&tx, Request::Last).await.text, event.text);
         tokio::time::sleep(Duration::from_millis(150)).await;
-        assert_eq!(desktop.watches.load(Ordering::SeqCst), 0);
+        // The watch armed for the delivery is stopped, unread and uncounted.
+        assert_eq!(desktop.field_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(ask(&tx, Request::Status).await.learning.unwrap().watches, 0);
         let message = delivery_message(Some("Cleanup failed".into()), event.injection).unwrap();
         assert!(message.contains("Cleanup failed") && message.contains("check it landed"));
         ask(&tx, Request::Shutdown).await;

@@ -129,7 +129,13 @@ impl Receipt {
                 let part = &self.before[cut..];
                 once(field, part, self.near.0.checked_sub(part.len())).map(|at| at + part.len())
             })
-            .or_else(|| once(field, edge(self.inserted.trim_end(), false), Some(self.near.0)))
+            .or_else(|| {
+                once(
+                    field,
+                    edge(self.inserted.trim_end(), false),
+                    Some(self.near.0),
+                )
+            })
     }
     fn end(&self, field: &str) -> Option<usize> {
         anchor_parts(self.after.chars().count())
@@ -165,7 +171,8 @@ impl Receipt {
     /// The field's own text of a delivery: what the app made of the text just
     /// sent, typography and a dropped trailing space included. Not an edit.
     pub fn delivered(&self, span: &str) -> bool {
-        let keys = |s: &str| -> Vec<char> { folded(s.trim_end()).into_iter().map(|c| c.0).collect() };
+        let keys =
+            |s: &str| -> Vec<char> { folded(s.trim_end()).into_iter().map(|c| c.0).collect() };
         keys(&self.inserted) == keys(span)
     }
     /// The span the app shows for the text sent becomes the baseline.
@@ -787,9 +794,8 @@ impl DictionaryConfig {
             if !known && !done.added.contains(&c.to) {
                 done.added.push(c.to.clone());
             }
-            let pair = |s: &Replacement| {
-                s.from.to_lowercase() == c.from.to_lowercase() && s.to == c.to
-            };
+            let pair =
+                |s: &Replacement| s.from.to_lowercase() == c.from.to_lowercase() && s.to == c.to;
             let earned = uncommon_source(&c.from) || (known && seen.iter().any(pair));
             if !earned {
                 if !seen.iter().any(pair) {
@@ -832,9 +838,11 @@ impl DictionaryConfig {
             !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
         };
         let lower = c.to.to_lowercase();
-        if self.replacements.iter().any(|r| {
-            words(&r.from) == from && r.to.to_lowercase() == lower
-        }) {
+        if self
+            .replacements
+            .iter()
+            .any(|r| words(&r.from) == from && r.to.to_lowercase() == lower)
+        {
             return Some(Conflict::Present);
         }
         let per_term = self
@@ -858,9 +866,10 @@ impl DictionaryConfig {
                 || f.iter().any(|w| to.contains(w))
         });
         // A word the dictionary keeps is never rewritten, even inside a phrase.
-        let holds_word = self.words.iter().any(|w| {
-            w.to_lowercase() != lower && inside(&words(w), &from)
-        });
+        let holds_word = self
+            .words
+            .iter()
+            .any(|w| w.to_lowercase() != lower && inside(&words(w), &from));
         let removed = self.never_learn.iter().any(|w| w.to_lowercase() == lower);
         (clash
             || holds_word
@@ -961,10 +970,17 @@ pub fn pending(original: &str, span: &str) -> Vec<Replacement> {
 pub fn word_at(field: &str, caret: usize) -> Option<String> {
     let at = utf16_to_byte(field, caret)?;
     let (before, after) = field.split_at(at);
-    let inside = |c: &char| c.is_alphanumeric() || unicode_normalization::char::canonical_combining_class(*c) != 0;
+    let inside = |c: &char| {
+        c.is_alphanumeric() || unicode_normalization::char::canonical_combining_class(*c) != 0
+    };
     let head: String = before.chars().rev().take_while(inside).collect();
     let tail: String = after.chars().take_while(inside).collect();
-    let word: String = head.chars().rev().chain(tail.chars()).flat_map(char::to_lowercase).collect();
+    let word: String = head
+        .chars()
+        .rev()
+        .chain(tail.chars())
+        .flat_map(char::to_lowercase)
+        .collect();
     (!word.is_empty()).then_some(word)
 }
 /// Whether the caret is on one of `found`'s corrected words.
@@ -1231,7 +1247,10 @@ mod tests {
         assert_eq!(done.added, ["Kubernetes"]);
         assert_eq!(dictionary.words, ["Kubernetes"]);
         assert_eq!(dictionary.learned, ["Kubernetes"]);
-        assert_eq!(adopt(&mut dictionary, "we use dev terms", "we use DevTerms").added, ["DevTerms"]);
+        assert_eq!(
+            adopt(&mut dictionary, "we use dev terms", "we use DevTerms").added,
+            ["DevTerms"]
+        );
         assert_eq!(
             corrections("use kubernetis", "use Kubernetes", &dictionary).unwrap_err(),
             "known"
@@ -1255,7 +1274,11 @@ mod tests {
             ("kubernetis", "Kubernetes"),
         ] {
             let mut d = DictionaryConfig::default();
-            let done = adopt(&mut d, &format!("ask {from} today"), &format!("ask {to} today"));
+            let done = adopt(
+                &mut d,
+                &format!("ask {from} today"),
+                &format!("ask {to} today"),
+            );
             assert_eq!(done.added, [to], "{from}");
             assert_eq!(done.rules, [rule(from, to)], "{from}");
             assert_eq!(d.replacements, [rule(from, to)], "{from}");
@@ -1288,26 +1311,52 @@ mod tests {
         // A word added by hand: its first correction from a common source is a first.
         let mut d = known(&["Claude"]);
         let mut seen = vec![];
-        assert!(d.adopt(&review("ask cloud", "ask Claude", &d).unwrap(), &mut seen).rules.is_empty());
-        assert_eq!(d.adopt(&review("ask cloud", "ask Claude", &d).unwrap(), &mut seen).rules.len(), 1);
+        assert!(d
+            .adopt(&review("ask cloud", "ask Claude", &d).unwrap(), &mut seen)
+            .rules
+            .is_empty());
+        assert_eq!(
+            d.adopt(&review("ask cloud", "ask Claude", &d).unwrap(), &mut seen)
+                .rules
+                .len(),
+            1
+        );
     }
     /// Tier 3: never a word, never a rule.
     #[test]
     fn hard_negatives_save_nothing() {
         for (original, corrected) in [
             // Rewrite, deletion, addition.
-            ("Please send the report before lunch", "We should postpone everything until Monday"),
-            ("Please bring the small cat home tomorrow", "Please bring the cat home tomorrow"),
-            ("Please bring the cat home tomorrow", "Please bring the small cat home tomorrow"),
+            (
+                "Please send the report before lunch",
+                "We should postpone everything until Monday",
+            ),
+            (
+                "Please bring the small cat home tomorrow",
+                "Please bring the cat home tomorrow",
+            ),
+            (
+                "Please bring the cat home tomorrow",
+                "Please bring the small cat home tomorrow",
+            ),
             // Both common, or not close.
-            ("Please bring the cat home tomorrow", "Please bring the dog home tomorrow"),
-            ("Please bring the cat home tomorrow", "Please bring the car home tomorrow"),
+            (
+                "Please bring the cat home tomorrow",
+                "Please bring the dog home tomorrow",
+            ),
+            (
+                "Please bring the cat home tomorrow",
+                "Please bring the car home tomorrow",
+            ),
             ("we deploy it", "we deployed it"),
             ("it will affect us", "it will effect us"),
             ("we went their", "we went there"),
             ("meet Rimpa circa soon", "meet Rimpa Sarkar soon"),
             // Case and punctuation only, also canonically equal spellings.
-            ("Please ask veronica about tomorrow plans", "Please ask Veronica, about tomorrow plans!"),
+            (
+                "Please ask veronica about tomorrow plans",
+                "Please ask Veronica, about tomorrow plans!",
+            ),
             ("send the e-mail", "send the email"),
             ("visit the cafe\u{301} today", "visit the caf\u{e9} today"),
             // Unchanged, or a completion typed after the dictation.
@@ -1334,7 +1383,11 @@ mod tests {
         assert_eq!(done.added.len(), 2);
         assert_eq!(done.rules.len(), 2);
         let mut d = DictionaryConfig::default();
-        let done = adopt(&mut d, "Kuberntes and Kubernetis today", "Kubernetes and Kubernetes today");
+        let done = adopt(
+            &mut d,
+            "Kuberntes and Kubernetis today",
+            "Kubernetes and Kubernetes today",
+        );
         assert_eq!(done.added, ["Kubernetes"]);
         assert_eq!(done.rules.len(), 2);
     }
@@ -1342,13 +1395,17 @@ mod tests {
     fn rules_are_capped_and_never_collide() {
         let pair = rule("Rimpas or Kar", "Rimpa Sarkar");
         let refused = |d: &DictionaryConfig, c: &Replacement| {
-            assert!(matches!(d.rule_conflict(c), Some(Conflict::Refused)), "{c:?}");
+            assert!(
+                matches!(d.rule_conflict(c), Some(Conflict::Refused)),
+                "{c:?}"
+            );
         };
         let d = known(&["Rimpa Sarkar"]);
         assert!(d.rule_conflict(&pair).is_none());
         // The same rule is no change.
         let mut same = known(&["Rimpa Sarkar"]);
-        same.replacements.push(rule("rimpas  or kar", "Rimpa Sarkar"));
+        same.replacements
+            .push(rule("rimpas  or kar", "Rimpa Sarkar"));
         assert!(matches!(same.rule_conflict(&pair), Some(Conflict::Present)));
         // A manual rule for the phrase is never replaced, whatever its target.
         let mut manual = known(&["Rimpa Sarkar"]);
@@ -1381,23 +1438,33 @@ mod tests {
         for i in 0..MAX_RULES {
             let word = format!("Term{i}");
             full.words.push(word.clone());
-            full.replacements.push(rule(&format!("termz{i} termx"), &word));
+            full.replacements
+                .push(rule(&format!("termz{i} termx"), &word));
         }
         refused(&full, &pair);
         // Refused still saves the word and says so.
         let mut d = DictionaryConfig {
             words: vec!["Zorblex".into()],
-            replacements: (0..3).map(|i| rule(&format!("zorb{i}x"), "Zorblex")).collect(),
+            replacements: (0..3)
+                .map(|i| rule(&format!("zorb{i}x"), "Zorblex"))
+                .collect(),
             ..DictionaryConfig::default()
         };
-        let done = d.adopt(&review("ask Zorblax", "ask Zorblex", &d).unwrap(), &mut vec![]);
+        let done = d.adopt(
+            &review("ask Zorblax", "ask Zorblex", &d).unwrap(),
+            &mut vec![],
+        );
         assert!(done.refused && done.rules.is_empty());
     }
     #[test]
     fn non_latin_and_combining_spellings_are_compared_whole() {
         // Hindi with a virama: the mark is part of the word, not punctuation.
         let (from, to) = ("कृष्णन", "कृष्णा");
-        let found = review(&format!("ask {from} now"), &format!("ask {to} now"), &DictionaryConfig::default());
+        let found = review(
+            &format!("ask {from} now"),
+            &format!("ask {to} now"),
+            &DictionaryConfig::default(),
+        );
         assert_eq!(found.unwrap().new, [rule(from, to)]);
         assert!(uncommon_source("Sarkaar"));
         assert!(!uncommon_source("the car"));
@@ -1417,10 +1484,16 @@ mod tests {
         assert!(!on(25));
         assert_eq!(word_at("a  b", 2), None);
         // Typing on after the fix is not on the fixed word.
-        assert!(!caret_on(&pending("ask Veronika", "ask Veronica and din"), word_at("ask Veronica and din", 20).as_deref()));
+        assert!(!caret_on(
+            &pending("ask Veronika", "ask Veronica and din"),
+            word_at("ask Veronica and din", 20).as_deref()
+        ));
         // A shorter word may be half typed; one at least as long is not held back.
         assert!(complete_on_caret(&found));
-        assert!(!complete_on_caret(&pending("ask Veronika today", "ask Veronic today")));
+        assert!(!complete_on_caret(&pending(
+            "ask Veronika today",
+            "ask Veronic today"
+        )));
         assert!(!pending("ask Veronika today", "ask Veronic today").is_empty());
     }
 
@@ -1831,9 +1904,13 @@ mod delivery_tests {
         // Nothing of the anchor left: the dictation's own first word marks the edge.
         assert_eq!(r.corrected(&format!("Rewritten> {fixed}")), Some(fixed));
         // The first word fixed too: no edge at all.
-        assert_eq!(r.corrected("Rewritten> Pleese ask Veronica about tomorrow plans "), None);
+        assert_eq!(
+            r.corrected("Rewritten> Pleese ask Veronica about tomorrow plans "),
+            None
+        );
         // The end works the same way, also after a fixed last word.
-        let r = Receipt::delivery("Before.  After the text", (8, 0), "ask Veronika tomorrow").unwrap();
+        let r =
+            Receipt::delivery("Before.  After the text", (8, 0), "ask Veronika tomorrow").unwrap();
         assert_eq!(
             r.corrected("Before. ask Veronica tomorrow  after the text"),
             Some("ask Veronica tomorrow")
