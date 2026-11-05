@@ -2490,13 +2490,19 @@ impl App {
                 }
                 let pos = pos.saturating_sub(self.adds());
                 let file = self.file.as_mut().unwrap();
+                let mut removed = None;
                 let result = match self.page {
                     Page::Dictionary => {
                         let mut dictionary = self.config.dictionary.clone();
                         if pos < dictionary.words.len() {
                             // Same as `xflow dictionary remove`: a learned word is never learned again.
                             let word = dictionary.words[pos].clone();
-                            dictionary.forget(&word);
+                            let rules = dictionary.forget(&word);
+                            removed = Some(match rules {
+                                0 => format!("Removed “{word}”"),
+                                1 => format!("Removed “{word}” and 1 correction rule"),
+                                n => format!("Removed “{word}” and {n} correction rules"),
+                            });
                             file.set_typed("dictionary.words", &dictionary.words)
                                 .and_then(|()| {
                                     file.set_typed("dictionary.learned", &dictionary.learned)
@@ -2505,6 +2511,12 @@ impl App {
                                     file.set_typed(
                                         "dictionary.never_learn",
                                         &dictionary.never_learn,
+                                    )
+                                })
+                                .and_then(|()| {
+                                    file.set_typed(
+                                        "dictionary.replacements",
+                                        &dictionary.replacements,
                                     )
                                 })
                         } else if pos - dictionary.words.len() < dictionary.replacements.len() {
@@ -2531,7 +2543,12 @@ impl App {
                     _ => Ok(()),
                 };
                 match result {
-                    Ok(()) => self.sync_config(),
+                    Ok(()) => {
+                        self.sync_config();
+                        if let Some(removed) = removed {
+                            self.toast = Some(options::plain(&removed));
+                        }
+                    }
                     Err(e) => self.toast = Some(options::plain(&format!("{e:#}"))),
                 };
                 let _ = self.select(0);

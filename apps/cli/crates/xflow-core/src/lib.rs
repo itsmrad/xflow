@@ -2,6 +2,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+    Arc,
+};
 
 pub mod backtrack;
 pub mod code;
@@ -271,8 +275,6 @@ pub trait Desktop: Send + Sync {
 pub struct DeliveryTicket {
     pub field: Box<dyn FieldWatch>,
     pub receipt: learn::Receipt,
-    pub selection: (usize, usize),
-    pub delivered: (usize, usize),
 }
 pub struct ObservedDelivery {
     pub outcome: InjectionOutcome,
@@ -284,7 +286,123 @@ pub struct FieldSnapshot {
     pub text: FieldText,
     pub selection: Option<(usize, usize)>,
     pub generation: u64,
-    pub range_start: usize,
+}
+/// The native calls one bounded field read is made of. Each runs only after a
+/// fresh `guard`, so a field that turns secure or loses focus stops the read
+/// before any more of its text crosses processes.
+pub trait FieldSource: Send + Sync + 'static {
+    /// Labels and capabilities that rarely change: checked once per read.
+    fn policy(&self) -> bool;
+    /// Not secure, not protected, still focused. Unknown or failed is false.
+    fn guard(&self) -> bool;
+    /// Selection start and length, UTF-16 units.
+    fn selection(&self) -> Option<(usize, usize)>;
+    /// The field's length, UTF-16 units.
+    fn count(&self) -> Option<usize>;
+    /// Exactly `len` units from `start`.
+    fn range(&self, start: usize, len: usize) -> Option<String>;
+}
+/// One watch's stop and invalidation state, set from any thread. Latched: a focus
+/// journey ends the watch even if focus returns before the next read.
+#[derive(Default)]
+pub struct ReadGate {
+    pub stop: AtomicBool,
+    pub invalid: AtomicBool,
+    pub overflow: AtomicBool,
+    /// The observer could not cover the field; nothing it reports can be trusted.
+    pub unsupported: AtomicBool,
+    /// Bumped by every value notification.
+    pub generation: AtomicU64,
+    /// Native reads admitted and finished; `stop` waits for them to match.
+    pub started: AtomicU32,
+    pub finished: AtomicU32,
+}
+impl ReadGate {
+    pub fn open(&self) -> bool {
+        !self.stop.load(Ordering::Acquire)
+            && !self.invalid.load(Ordering::Acquire)
+            && !self.overflow.load(Ordering::Acquire)
+            && !self.unsupported.load(Ordering::Acquire)
+    }
+}
+/// One guarded read: at most MAX_FIELD_UTF16 units, never a whole-value copy.
+/// Returns nothing if the gate closes, the guard fails or the field or its
+/// generation moves at any step. Blocking.
+pub fn read_field<S: FieldSource>(source: &S, gate: &ReadGate) -> Option<FieldSnapshot> {
+    let generation = gate.generation.load(Ordering::Acquire);
+    let admit = || gate.open() && source.guard();
+    if !gate.open() || !source.policy() || !admit() {
+        return None;
+    }
+    let selection = source.selection()?;
+    if !admit() {
+        return None;
+    }
+    let count = source.count()?;
+    let end = selection.0.checked_add(selection.1)?;
+    if count > MAX_FIELD_UTF16 || end > count || !admit() {
+        return None;
+    }
+    let value = source.range(0, count)?;
+    // Too late to take back, but a field that moved during the copy is not used.
+    if value.encode_utf16().count() != count || !admit() || source.count()? != count {
+        return None;
+    }
+    (gate.open() && generation == gate.generation.load(Ordering::Acquire)).then_some(FieldSnapshot {
+        text: FieldText {
+            value,
+            caret: Some(end),
+        },
+        selection: Some(selection),
+        generation,
+    })
+}
+/// At most one native read at a time, off the async runtime. A caller that timed
+/// out finds its read still in flight and joins it instead of starting another.
+pub struct BoundedReader<S: FieldSource> {
+    source: Arc<S>,
+    gate: Arc<ReadGate>,
+    inflight: Option<tokio::task::JoinHandle<Option<FieldSnapshot>>>,
+}
+impl<S: FieldSource> BoundedReader<S> {
+    pub fn new(source: Arc<S>, gate: Arc<ReadGate>) -> Self {
+        Self {
+            source,
+            gate,
+            inflight: None,
+        }
+    }
+    /// A read whose generation is still current, or nothing.
+    pub async fn snapshot(&mut self) -> Option<FieldSnapshot> {
+        if !self.gate.open() {
+            return None;
+        }
+        if self.inflight.is_none() {
+            let (source, gate) = (self.source.clone(), self.gate.clone());
+            self.inflight = Some(tokio::task::spawn_blocking(move || {
+                gate.started.fetch_add(1, Ordering::AcqRel);
+                let read = read_field(&*source, &gate);
+                gate.finished.fetch_add(1, Ordering::AcqRel);
+                read
+            }));
+        }
+        let read = self.inflight.as_mut()?.await.ok().flatten();
+        self.inflight = None;
+        read.filter(|r| {
+            self.gate.open() && r.generation == self.gate.generation.load(Ordering::Acquire)
+        })
+    }
+    /// Close the gate, then wait out a native call already running: it cannot be
+    /// preempted, and its result is discarded. No read starts after this.
+    pub async fn stop(&mut self) {
+        self.gate.stop.store(true, Ordering::Release);
+        if let Some(read) = self.inflight.take() {
+            let _ = read.await;
+        }
+    }
+    pub fn gate(&self) -> &ReadGate {
+        &self.gate
+    }
 }
 /// A pinned text field, for learning user corrections.
 #[async_trait]
@@ -303,7 +421,6 @@ pub trait FieldWatch: Send {
             text: self.read().await?,
             selection: None,
             generation: 0,
-            range_start: 0,
         })
     }
     /// Invalidate immediately, then acknowledge that native reads/observer have drained.
@@ -311,8 +428,12 @@ pub trait FieldWatch: Send {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldEvent {
+    /// A real departure, a destroyed element or a stop: terminal, nothing more is read.
     Invalidated,
+    /// Notifications were lost: the field's history is unknown.
     Overflow,
+    /// The observer could not cover this field.
+    Unsupported,
     Changed,
     /// Focus may have left the field; re-check after a short grace.
     Focus,

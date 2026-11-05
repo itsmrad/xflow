@@ -308,14 +308,12 @@ pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) 
         }
         Remove { words } => {
             for word in words {
-                config.dictionary.forget(word);
-                // Replacements are kept, whoever added them: say which still write it.
-                for rule in config.dictionary.targeting(word) {
-                    kept.push(format!(
-                        "\"{}\" still becomes \"{}\"; to stop it: xflow dictionary unreplace \"{}\"",
-                        rule.from, rule.to, rule.from
-                    ));
-                }
+                let rules = config.dictionary.forget(word);
+                kept.push(match rules {
+                    0 => format!("Removed \"{word}\""),
+                    1 => format!("Removed \"{word}\" and 1 correction rule that wrote it"),
+                    n => format!("Removed \"{word}\" and {n} correction rules that wrote it"),
+                });
             }
             file.set_typed("dictionary.learned", &config.dictionary.learned)
                 .map_err(Error::config)?;
