@@ -485,6 +485,195 @@ pub trait Overlay: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{log_enabled, stable_hash};
+    use super::{read_field, BoundedReader, FieldSource, ReadGate, MAX_FIELD_UTF16};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A scripted field: `secure_at` turns it secure just before that native call
+    /// (0 selection, 1 count, 2 range, 3 recount), and each call is counted.
+    #[derive(Default)]
+    struct Field {
+        text: String,
+        secure_at: Option<usize>,
+        grow_by: usize,
+        bump: Option<Arc<ReadGate>>,
+        calls: AtomicUsize,
+        policy_false: bool,
+        guards: AtomicUsize,
+        hold: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
+    }
+    impl Field {
+        fn native(&self) -> usize {
+            self.calls.fetch_add(1, Ordering::SeqCst)
+        }
+        fn with(text: &str) -> Self {
+            Field {
+                text: text.into(),
+                ..Field::default()
+            }
+        }
+    }
+    impl FieldSource for Field {
+        fn policy(&self) -> bool {
+            !self.policy_false
+        }
+        fn guard(&self) -> bool {
+            self.guards.fetch_add(1, Ordering::SeqCst);
+            self.secure_at
+                .is_none_or(|at| self.calls.load(Ordering::SeqCst) < at)
+        }
+        fn selection(&self) -> Option<(usize, usize)> {
+            self.native();
+            Some((0, 0))
+        }
+        fn count(&self) -> Option<usize> {
+            let call = self.native();
+            Some(self.text.encode_utf16().count() + if call > 1 { self.grow_by } else { 0 })
+        }
+        fn range(&self, start: usize, len: usize) -> Option<String> {
+            self.native();
+            assert!(len <= MAX_FIELD_UTF16, "unbounded request");
+            if let Some((entered, release)) = &self.hold {
+                entered.wait();
+                release.wait();
+            }
+            if let Some(gate) = &self.bump {
+                gate.generation.fetch_add(1, Ordering::SeqCst);
+            }
+            assert_eq!(start, 0);
+            Some(self.text.clone())
+        }
+    }
+    #[test]
+    fn a_field_turning_secure_stops_the_read_at_that_step() {
+        for at in 0..=3 {
+            let field = Field {
+                secure_at: Some(at),
+                ..Field::with("private")
+            };
+            let gate = ReadGate::default();
+            assert!(read_field(&field, &gate).is_none(), "{at}");
+            assert_eq!(field.calls.load(Ordering::SeqCst), at, "no call after step {at}");
+        }
+        let field = Field::with("visible");
+        let snapshot = read_field(&field, &ReadGate::default()).unwrap();
+        assert_eq!(snapshot.text.value, "visible");
+        assert_eq!(snapshot.selection, Some((0, 0)));
+        // A guard before each of the four native calls.
+        assert_eq!(field.guards.load(Ordering::SeqCst), 4);
+    }
+    #[test]
+    fn policy_and_a_closed_gate_read_nothing() {
+        let field = Field {
+            policy_false: true,
+            ..Field::with("search box")
+        };
+        assert!(read_field(&field, &ReadGate::default()).is_none());
+        assert_eq!(field.calls.load(Ordering::SeqCst), 0);
+        for close in [
+            |g: &ReadGate| g.stop.store(true, Ordering::SeqCst),
+            |g: &ReadGate| g.invalid.store(true, Ordering::SeqCst),
+            |g: &ReadGate| g.overflow.store(true, Ordering::SeqCst),
+            |g: &ReadGate| g.unsupported.store(true, Ordering::SeqCst),
+        ] {
+            let field = Field::with("field");
+            let gate = ReadGate::default();
+            close(&gate);
+            assert!(read_field(&field, &gate).is_none());
+            assert_eq!(field.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+    #[test]
+    fn an_oversized_or_moving_field_is_not_kept() {
+        // Over the bound: only metadata, no text crosses.
+        let field = Field::with(&"x".repeat(MAX_FIELD_UTF16 + 1));
+        assert!(read_field(&field, &ReadGate::default()).is_none());
+        assert_eq!(field.calls.load(Ordering::SeqCst), 2);
+        // Exactly at the bound is fine.
+        assert!(read_field(&Field::with(&"x".repeat(MAX_FIELD_UTF16)), &ReadGate::default()).is_some());
+        // Growing while read.
+        let field = Field {
+            grow_by: 1,
+            ..Field::with("growing")
+        };
+        assert!(read_field(&field, &ReadGate::default()).is_none());
+        // A notification during the read: its value is stale.
+        let gate = Arc::new(ReadGate::default());
+        let field = Field {
+            bump: Some(gate.clone()),
+            ..Field::with("edited")
+        };
+        assert!(read_field(&field, &gate).is_none());
+    }
+    #[tokio::test]
+    async fn stop_waits_out_a_running_read_discards_it_and_starts_no_other() {
+        let (entered, release) = (
+            Arc::new(std::sync::Barrier::new(2)),
+            Arc::new(std::sync::Barrier::new(2)),
+        );
+        let field = Arc::new(Field {
+            hold: Some((entered.clone(), release.clone())),
+            ..Field::with("in flight")
+        });
+        let gate = Arc::new(ReadGate::default());
+        let mut reader = BoundedReader::new(field.clone(), gate.clone());
+        // The caller times out; the native read keeps going and stays owned.
+        let timed_out =
+            tokio::time::timeout(std::time::Duration::from_millis(20), reader.snapshot()).await;
+        assert!(timed_out.is_err());
+        let wait = entered.clone();
+        tokio::task::spawn_blocking(move || wait.wait()).await.unwrap();
+        assert_eq!(gate.started.load(Ordering::SeqCst), 1);
+        assert_eq!(gate.finished.load(Ordering::SeqCst), 0);
+        // Stop closes the gate at once and is not done until the read has drained.
+        let drained = Arc::new(AtomicBool::new(false));
+        let done = drained.clone();
+        let stopping = tokio::spawn(async move {
+            reader.stop().await;
+            done.store(true, Ordering::SeqCst);
+            reader
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(!gate.open());
+        assert!(!drained.load(Ordering::SeqCst));
+        let wait = release.clone();
+        tokio::task::spawn_blocking(move || wait.wait()).await.unwrap();
+        let mut reader = stopping.await.unwrap();
+        assert!(drained.load(Ordering::SeqCst));
+        assert_eq!(gate.started.load(Ordering::SeqCst), 1);
+        assert_eq!(gate.finished.load(Ordering::SeqCst), 1);
+        // Nothing starts afterwards.
+        let calls = field.calls.load(Ordering::SeqCst);
+        assert!(reader.snapshot().await.is_none());
+        assert_eq!(gate.started.load(Ordering::SeqCst), 1);
+        assert_eq!(field.calls.load(Ordering::SeqCst), calls);
+    }
+    #[tokio::test]
+    async fn a_read_that_finished_before_a_change_is_not_adopted() {
+        let (entered, release) = (
+            Arc::new(std::sync::Barrier::new(2)),
+            Arc::new(std::sync::Barrier::new(2)),
+        );
+        let field = Arc::new(Field {
+            hold: Some((entered.clone(), release.clone())),
+            ..Field::with("old text")
+        });
+        let gate = Arc::new(ReadGate::default());
+        let mut reader = BoundedReader::new(field, gate.clone());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), reader.snapshot())
+                .await
+                .is_err()
+        );
+        let wait = entered.clone();
+        tokio::task::spawn_blocking(move || wait.wait()).await.unwrap();
+        let wait = release.clone();
+        tokio::task::spawn_blocking(move || wait.wait()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        // Completed behind a timed-out caller; the field then changed.
+        gate.generation.fetch_add(1, Ordering::SeqCst);
+        assert!(reader.snapshot().await.is_none());
+    }
 
     #[test]
     fn stable_hash_is_fnv_1a_64() {

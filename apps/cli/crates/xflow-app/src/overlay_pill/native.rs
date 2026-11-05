@@ -837,6 +837,20 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_notice_sits_clear_of_the_recording_pill() {
+        let screen = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        for (position, scale) in [("bottom-center", 1.0), ("top-right", 1.5)] {
+            let pill = sized_frame(screen, position, scale, 200.0);
+            let notice = beside_pill(pill, position, scale);
+            let (low, high) = if position.starts_with("top") {
+                (notice, pill)
+            } else {
+                (pill, notice)
+            };
+            assert!(low.origin.y + low.size.height <= high.origin.y + 1e-6, "{position}");
+        }
+    }
 
     #[test]
     fn label_text_matches_the_daemon_messages_and_alerts_win() {
