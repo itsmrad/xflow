@@ -310,7 +310,10 @@ unsafe fn appkit() -> Result<(Id, Id, *mut c_void)> {
     }
     let pool = msg!(class(c"NSAutoreleasePool"), c"new"; Id);
     let app = msg!(class(c"NSApplication"), c"sharedApplication"; Id);
-    msg!(app, c"setActivationPolicy:", 1isize => isize; i8); // Accessory: no Dock icon.
+    // Prohibited, not Accessory: launched while the user is idle, an accessory app
+    // becomes the front application at `finishLaunching` whatever its window's
+    // style says, and every key goes to it until it exits (FB01).
+    msg!(app, c"setActivationPolicy:", 2isize => isize; i8);
     Ok((pool, app, appkit))
 }
 
