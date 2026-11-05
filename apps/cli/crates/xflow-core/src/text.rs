@@ -292,9 +292,8 @@ pub fn prepare(
 /// with a source word any rule writes (A -> B next to B -> C, or x -> x y) ran
 /// in `prepare` alone, so text a rule inserted is never rewritten by this one.
 pub fn reapply(text: &str, config: &Config) -> String {
-    let lower = |s: &str| -> Vec<String> {
-        words(s).iter().map(|w| w.text.to_lowercase()).collect()
-    };
+    let lower =
+        |s: &str| -> Vec<String> { words(s).iter().map(|w| w.text.to_lowercase()).collect() };
     let replacements = &config.dictionary.replacements;
     let written: Vec<String> = replacements.iter().flat_map(|r| lower(&r.to)).collect();
     let pairs: Vec<_> = replacements
@@ -650,19 +649,28 @@ mod tests {
         assert_eq!(reapply(&local, &config), local);
         // A model that restores a misspelling is corrected, once.
         assert_eq!(
-            reapply("Rimpas or Kar is definately zorblax, Beta Gamma gpt model", &config),
+            reapply(
+                "Rimpas or Kar is definately zorblax, Beta Gamma gpt model",
+                &config
+            ),
             "Rimpa Sarkar is definitely Zorblex, Beta Gamma gpt model"
         );
         // Longest first, whole words, and never across punctuation.
         assert_eq!(reapply("Rimpas, or Kar", &config), "Rimpas, or Kar");
-        assert_eq!(reapply("undefinately Zorblaxes", &config), "undefinately Zorblaxes");
+        assert_eq!(
+            reapply("undefinately Zorblaxes", &config),
+            "undefinately Zorblaxes"
+        );
         // Literal targets, combining marks and curly apostrophes in the source.
         config.dictionary.replacements = vec![
             rule("कृष्णन", "कृष्णा"),
             rule("dont’t", "don’t"),
             rule("veroniká", "Veronica"),
         ];
-        assert_eq!(reapply("कृष्णन dont’t VERONIKÁ", &config), "कृष्णा don’t Veronica");
+        assert_eq!(
+            reapply("कृष्णन dont’t VERONIKÁ", &config),
+            "कृष्णा don’t Veronica"
+        );
     }
     use crate::config::{Replacement, Snippet};
     #[test]
