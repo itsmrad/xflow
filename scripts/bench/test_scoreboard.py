@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Scoreboard aggregation, gate and rendering checks with fake samples; no daemon."""
+import io
 import json
 import os
 from pathlib import Path
@@ -86,6 +87,60 @@ class Gate(unittest.TestCase):
     def test_committed_baseline_is_well_formed(self):
         base = json.loads((scoreboard.ROOT / "docs/benchmarks/ci-baseline.json").read_text())
         self.assertEqual(failed(scoreboard.check(base["result"], base["result"], base["limits"])), [])
+
+    def test_committed_binary_ceilings_allow_one_percent_and_fail_one_byte_over(self):
+        base = json.loads((scoreboard.ROOT / "docs/benchmarks/ci-baseline.json").read_text())
+        ceilings = {"xflow": 8_179_642, "xflowd": 12_268_874}
+        at_limit = dict(base["result"], binary_bytes=ceilings)
+        self.assertEqual(failed(scoreboard.check(at_limit, base["result"], base["limits"])), [])
+        for name in ceilings:
+            with self.subTest(binary=name):
+                over = dict(at_limit, binary_bytes=dict(ceilings, **{name: ceilings[name] + 1}))
+                self.assertEqual(failed(scoreboard.check(over, base["result"], base["limits"])), [f"{name} bytes"])
+
+    def fake_gate(self, *, target="x86_64-unknown-linux-gnu", rustc="rustc 1", size=6_000_000):
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(scoreboard, "environment", return_value={"rustc": rustc}), \
+                patch.object(scoreboard, "startup", return_value={"warm_ms": {"p50": 4.0}}) as startup, \
+                patch.object(scoreboard, "idle", return_value={"mem_kib": 6000, "rss_kib": 9000,
+                    "cpu_percent": 0.0, "runs": [{"processes": 1}]}) as idle, \
+                patch("sys.stderr", new_callable=io.StringIO) as errors, \
+                patch("sys.stdout", new_callable=io.StringIO):
+            root = Path(temp)
+            cli, daemon, baseline = root / "xflow", root / "xflowd", root / "baseline.json"
+            for path, length in ((cli, size), (daemon, 5_000_000)):
+                with path.open("wb") as f:
+                    f.truncate(length)
+            baseline.write_text(json.dumps({"target": "x86_64-unknown-linux-gnu", "rustc": "rustc 1",
+                                            "result": BASE, "limits": dict(LIMITS, binary_pct=1)}))
+            output = root / "out.json"
+            args = scoreboard.argparse.Namespace(daemon=daemon, cli=cli, target=target, baseline=baseline,
+                startup_samples=2, idle_seconds=20, warmup_seconds=5, launches=3, output=output)
+            code = scoreboard.gate(args)
+            return code, errors.getvalue(), startup.called, idle.called, \
+                json.loads(output.read_text()) if output.exists() else None
+
+    def test_gate_records_matching_target_and_passes_at_ceiling(self):
+        code, errors, started, idled, receipt = self.fake_gate(size=6_060_000)
+        self.assertEqual((code, errors, started, idled), (0, "", True, True))
+        self.assertEqual(receipt["environment"]["target"], "x86_64-unknown-linux-gnu")
+
+    def test_gate_rejects_wrong_or_missing_provenance_before_running_binaries(self):
+        for changes in ({"target": "aarch64-apple-darwin"}, {"target": None}, {"rustc": "rustc 2"}):
+            with self.subTest(changes=changes):
+                code, errors, started, idled, _ = self.fake_gate(**changes)
+                self.assertEqual((code, started, idled), (1, False, False))
+                self.assertIn("provenance mismatch", errors)
+                self.assertIn("pinned compiler and target", errors)
+                self.assertIn("budget change in the PR", errors)
+
+    def test_size_failure_explains_the_explicit_budget_change(self):
+        code, errors, _, _, receipt = self.fake_gate(size=6_060_001)
+        self.assertEqual(code, 1)
+        self.assertEqual(failed(receipt["checks"]), ["xflow bytes"])
+        for instruction in ("result.binary_bytes", "matching CI receipts", "limits.binary_pct at 1",
+                            "regenerate the scoreboard docs", "reason in the same PR", "scripts/bench/README.md"):
+            self.assertIn(instruction, errors)
 
 
 class Run(unittest.TestCase):
@@ -193,7 +248,7 @@ class Baseline(unittest.TestCase):
     @staticmethod
     def gate_artifact(pss, launches, run):
         return {"environment": {"ci_run": f"https://ci/{run}", "git_commit": "abcdef0123", "rustc": "rustc 1",
-                                "cpu": "Fake CPU", "logical_cpus": 4},
+                                "target": "x86_64-unknown-linux-gnu", "cpu": "Fake CPU", "logical_cpus": 4},
                 "result": dict(result(idle_pss_kib=pss), startup_p50_ms=2.0),
                 "idle": {"runs": [{"mem_kib": {"p50": p}} for p in launches]}}
 
@@ -201,6 +256,7 @@ class Baseline(unittest.TestCase):
         gates = [self.gate_artifact(9500, [9400, 9500, 9600], 1), self.gate_artifact(9000, [8900, 9000, 9100], 2),
                  self.gate_artifact(9200, [9200, 9200, 9300], 3)]
         base = scoreboard.make_baseline(gates, LIMITS)
+        self.assertEqual((base["target"], base["rustc"]), ("x86_64-unknown-linux-gnu", "rustc 1"))
         self.assertEqual(base["result"]["idle_pss_kib"], 9200)
         self.assertEqual([r["ci_run"] for r in base["runs"]], ["https://ci/1", "https://ci/2", "https://ci/3"])
         text = scoreboard.render(base)
@@ -208,6 +264,14 @@ class Baseline(unittest.TestCase):
         self.assertIn("per-launch medians 8,900–9,600 KiB (8 %)", text)
         self.assertIn("allows +920 KiB, 1.3× the per-launch spread", text)
         self.assertIn("`xflowd` 5,000,000 B in every run", text)
+
+    def test_baseline_refuses_mixed_target_or_compiler_receipts(self):
+        for key, value in (("target", "aarch64-unknown-linux-gnu"), ("target", None), ("rustc", "rustc 2")):
+            with self.subTest(key=key, value=value):
+                gates = [self.gate_artifact(9000, [9000], 1), self.gate_artifact(9200, [9200], 2)]
+                gates[1]["environment"][key] = value
+                with self.assertRaisesRegex(ValueError, "same explicit target and rustc"):
+                    scoreboard.make_baseline(gates, LIMITS)
 
 
 if __name__ == "__main__":

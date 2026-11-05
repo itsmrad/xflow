@@ -565,6 +565,15 @@ def check(result, base, limits):
 
 def gate(args):
     binaries = {"xflowd": Path(args.daemon), "xflow": Path(args.cli)}
+    env = dict(environment(binaries), target=args.target)
+    base = json.loads(Path(args.baseline).read_text()) if Path(args.baseline).exists() else None
+    if base and any(env[key] != base.get(key) for key in ("target", "rustc")):
+        print(f"error: size budget provenance mismatch: built {env['target']} / {env['rustc']}; "
+              f"baseline {base.get('target')} / {base.get('rustc')}. "
+              "Use the scoreboard's pinned compiler and target, or commit a matching baseline "
+              "from CI receipts and explain the budget change in the PR. See scripts/bench/README.md#linux-ci-gate.",
+              file=sys.stderr)
+        return 1
     measured_startup = startup(args.daemon, args.startup_samples)
     measured_idle = idle(args.daemon, args.idle_seconds, args.warmup_seconds, args.launches)
     result = {"binary_bytes": {k: v.stat().st_size for k, v in binaries.items()},
@@ -572,9 +581,8 @@ def gate(args):
               "idle_cpu_percent": measured_idle["cpu_percent"],
               "idle_processes": max(r["processes"] for r in measured_idle["runs"]),
               "startup_p50_ms": measured_startup["warm_ms"]["p50"]}
-    out = {"schema": "xflow-scoreboard-gate/1", "environment": environment(binaries), "result": result,
+    out = {"schema": "xflow-scoreboard-gate/1", "environment": env, "result": result,
            "startup": measured_startup, "idle": measured_idle}
-    base = json.loads(Path(args.baseline).read_text()) if Path(args.baseline).exists() else None
     if base:
         out["baseline"], out["checks"] = base, check(result, base["result"], base["limits"])
     write_json(args.output, out)
@@ -588,17 +596,27 @@ def gate(args):
     if not base:
         print(f"error: baseline {args.baseline} missing; commit one from this result", file=sys.stderr)
         return 1
+    if any(not c["ok"] and c["unit"] == "B" for c in out["checks"]):
+        print(f"error: binary size exceeds its ceiling. For intentional growth, update only the affected binary's "
+              f"result.binary_bytes in {args.baseline} from matching CI receipts; keep limits.binary_pct at 1 "
+              "and regenerate the scoreboard docs. Commit the explicit budget change and its reason in the same PR. "
+              "See scripts/bench/README.md#linux-ci-gate.", file=sys.stderr)
     return 0 if all(c["ok"] for c in out["checks"]) else 1
 
 
 BASELINE_SCHEMA = "xflow-scoreboard-baseline/1"
-DEFAULT_LIMITS = {"binary_pct": 5, "pss_kib": 1024, "pss_pct": 10, "cpu_percent": 0.1, "startup_ms": 100}
+DEFAULT_LIMITS = {"binary_pct": 1, "pss_kib": 1024, "pss_pct": 10, "cpu_percent": 0.1, "startup_ms": 100}
 
 
 def make_baseline(gates, limits):
     """Gate artifacts -> baseline: the median-PSS run is the reference, every run is noise evidence."""
+    target, rustc = gates[0]["environment"].get("target"), gates[0]["environment"].get("rustc")
+    if not target or not rustc or any(g["environment"].get("target") != target or
+                                    g["environment"].get("rustc") != rustc for g in gates):
+        raise ValueError("baseline receipts must use the same explicit target and rustc")
     runs = sorted(gates, key=lambda g: g["result"]["idle_pss_kib"])
-    return {"schema": BASELINE_SCHEMA, "limits": limits, "result": runs[(len(runs) - 1) // 2]["result"],
+    return {"schema": BASELINE_SCHEMA, "target": target, "rustc": rustc,
+            "limits": limits, "result": runs[(len(runs) - 1) // 2]["result"],
             "about": "Linux CI gate baseline. Regenerate with `scoreboard.py baseline` from scoreboard-gate "
                      "artifacts in the PR that intentionally changes it.",
             "runs": [{"ci_run": g["environment"].get("ci_run"), "commit": g["environment"]["git_commit"],
@@ -785,6 +803,7 @@ def main(argv=None):
     run_args.add_argument("--idle-seconds", type=float, default=300)
     run_args.add_argument("--startup-samples", type=int, default=30)
     gate_args.add_argument("--baseline", default="docs/benchmarks/ci-baseline.json")
+    gate_args.add_argument("--target", required=True, help="explicit Cargo build target; must match the baseline")
     # PSS is flat within a launch; 20 s still resolves 0.05 % CPU per daemon.
     gate_args.add_argument("--idle-seconds", type=float, default=20)
     gate_args.add_argument("--startup-samples", type=int, default=10)
