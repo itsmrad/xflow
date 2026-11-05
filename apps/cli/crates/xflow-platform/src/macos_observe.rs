@@ -129,7 +129,8 @@ fn optional_attribute(element: &Owned, name: &str) -> Option<Option<Owned>> {
     let mut value = ptr::null();
     match unsafe { super::AXUIElementCopyAttributeValue(element.0, name.0, &mut value) } {
         0 => Some(Some(Owned::new(value)?)),
-        -25205 => Some(None), // kAXErrorAttributeUnsupported
+        // kAXErrorAttributeUnsupported, kAXErrorNoValue: an answer, and it is no.
+        -25205 | -25212 => Some(None),
         _ => None,
     }
 }
@@ -413,17 +414,21 @@ fn split(text: &str, len: usize, at: usize) -> Option<(String, String)> {
         String::from_utf16(&units[at..]).ok()?,
     ))
 }
+/// `element` holds keyboard focus. The system-wide answer can be missing for
+/// seconds in Chromium apps, as `focus_waiting` also finds; the front process
+/// stands in only then. The app's own focused element is always required.
 fn focused(pid: i32, app: &Owned, element: &Owned) -> bool {
     let Some(system) = Owned::new(unsafe { AXUIElementCreateSystemWide() }) else {
         return false;
     };
-    let mut front = 0;
-    system
-        .attribute("AXFocusedApplication")
-        .is_some_and(|a| unsafe { AXUIElementGetPid(a.0, &mut front) == 0 } && front == pid)
-        && app
-            .attribute("AXFocusedUIElement")
-            .is_some_and(|e| unsafe { CFEqual(e.0, element.0) })
+    let mut owner = 0;
+    let owns = match system.attribute("AXFocusedApplication") {
+        Some(a) => (unsafe { AXUIElementGetPid(a.0, &mut owner) }) == 0 && owner == pid,
+        None => super::front_pid() == Some(pid),
+    };
+    owns && app
+        .attribute("AXFocusedUIElement")
+        .is_some_and(|e| unsafe { CFEqual(e.0, element.0) })
 }
 #[async_trait]
 impl FieldWatch for Watch {
