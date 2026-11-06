@@ -27,7 +27,7 @@ installed, Yes reports that recording is unavailable and captures nothing.
 
 A native call ends automatically after both its input and call window have
 been gone for eight seconds, or its app has quit for eight seconds. A browser
-call ends after an explicit post-call Rejoin screen plus eight seconds without
+Meet call ends after an explicit post-call Rejoin screen plus eight seconds without
 input, or after its browser quits. A hidden tab and a muted call are ambiguous:
 Xflow keeps recording and offers **Still recording. Stop?** instead of silently
 cutting off the meeting. The recorder's persistent Stop control always remains.
@@ -52,6 +52,8 @@ and daemon shutdown also close the control pipe. No recording restarts itself.
 Known limits: English call-control labels; Accessibility denial or unreadable
 controls require manual start. Safari's shared WebKit microphone process is
 not attributed, so use manual recording there. Browser mute with hidden tabs
-may require manual Stop. Native Zoom/Teams/Chime call controls still need
+may require manual Stop. Teams/Chime without readable post-call controls may
+require manual Stop or app quit. Browser call codes are currently recognized
+only for Meet; other browser adapters need manual Stop or app quit. Native Zoom/Teams/Chime call controls still need
 validation in real joined calls. Amazon Chime service support ended in 2026;
 its adapter is retained for compatible existing clients.

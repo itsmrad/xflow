@@ -293,18 +293,23 @@ impl Detector {
                 since.is_some_and(|t| at_ms.saturating_sub(t) >= GONE_AFTER_MS)
             };
             let browser = ADAPTERS[s.id.adapter].kind == Kind::Browser;
-            // A browser's input is shared by its tabs: another meeting holding it
-            // in that browser, with this one's window gone, means this one ended.
-            let replaced = browser && candidates.iter().any(|c| c.0 != s.id && c.1 == s.bundle);
             // A background tab looks exactly like a closed one (window titles show
             // the active tab only), so a browser never ends on "window gone" alone.
-            let ended = app.is_some_and(|a| {
-                a.windows.as_ref().is_some_and(|ws| {
-                    ws.iter()
-                        .any(|w| w.in_call == Some(false) && browser_id(&a.bundle, w) == Some(s.id))
-                })
-            });
-            let gone = held(s.gone_since) && (replaced || (!browser && held(s.quiet_since)));
+            // Only Meet currently supplies a call code; a Teams landing URL
+            // cannot distinguish an ended tab from another background call.
+            let identified = ADAPTERS[s.id.adapter].title.iter().any(|p| p.contains('@'));
+            let ended = identified
+                && app.is_some_and(|a| {
+                    a.windows.as_ref().is_some_and(|ws| {
+                        ws.iter().any(|w| {
+                            w.in_call == Some(false) && browser_id(&a.bundle, w) == Some(s.id)
+                        }) && ws
+                            .iter()
+                            .filter(|w| browser_id(&a.bundle, w) == Some(s.id))
+                            .all(|w| w.in_call == Some(false))
+                    })
+                });
+            let gone = held(s.gone_since) && !browser && held(s.quiet_since);
             let ended = ended && held(s.quiet_since);
             let id = s.id;
             if s.declined {
@@ -619,6 +624,19 @@ mod tests {
     }
 
     #[test]
+    fn another_browser_call_is_not_proof_the_background_call_ended() {
+        let mut d = Detector::new();
+        let mut trace = hold(0, 3000, vec![chrome(true, vec![meet("abc-defg-hij")])]);
+        trace.extend(hold(
+            4000,
+            60_000,
+            vec![chrome(true, vec![meet("xyz-wxyz-xyz")])],
+        ));
+        let events = run(&mut d, &trace);
+        assert_eq!(events, ["2000 Google Meet start", "6000 Google Meet start"]);
+    }
+
+    #[test]
     fn browser_prejoin_and_unrelated_microphone_stay_silent() {
         for in_call in [None, Some(false)] {
             let mut w = meet("abc-defg-hij");
@@ -647,6 +665,20 @@ mod tests {
                 "12000 Google Meet maybe ended",
                 "21000 Google Meet end"
             ]
+        );
+    }
+
+    #[test]
+    fn an_ended_browser_window_never_overrides_a_live_window() {
+        let mut d = Detector::new();
+        let call = meet("abc-defg-hij");
+        let mut ended = call.clone();
+        ended.in_call = Some(false);
+        let mut trace = hold(0, 3000, vec![chrome(true, vec![call.clone()])]);
+        trace.extend(hold(4000, 20_000, vec![chrome(false, vec![call, ended])]));
+        assert_eq!(
+            run(&mut d, &trace),
+            ["2000 Google Meet start", "12000 Google Meet maybe ended"]
         );
     }
 
@@ -754,11 +786,7 @@ mod tests {
         ));
         assert_eq!(
             run(&mut d, &trace),
-            [
-                "2000 Google Meet start",
-                "6000 Google Meet start",
-                "12000 Google Meet end"
-            ]
+            ["2000 Google Meet start", "6000 Google Meet start"]
         );
     }
 
