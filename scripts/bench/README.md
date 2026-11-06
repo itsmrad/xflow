@@ -223,7 +223,8 @@ the same intended commit, compiler, target, release flags and features. Record
 their exact sizes, hashes and build provenance; update only the authorized
 binary's `result.binary_bytes` in `docs/benchmarks/ci-baseline.json`, retaining
 `limits.binary_pct = 1` and unrelated budgets. Update the ceiling expectations in
-`scripts/bench/test_scoreboard.py`, regenerate the text and run the tests below.
+`scripts/bench/test_scoreboard.py` and the current ceiling values above, regenerate
+the text and run the tests below.
 An intentional compiler/target change also needs matching receipts and an
 explicit update to the baseline's `rustc`/`target` and the workflow pins/cache keys.
 For a deliberate full baseline refresh (including runtime measurements), use:
