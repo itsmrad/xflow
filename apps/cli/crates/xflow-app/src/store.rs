@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
+use rusqlite::{ffi, params, Connection, OpenFlags, OptionalExtension, Row};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -17,6 +17,21 @@ const SCHEMA_VERSION: i64 = 3;
 pub const MAX_PAGE: usize = 200;
 const COLUMNS: &str =
     "id, created_at, text, provider, model, raw_text, app_id, language, duration_ms, latency_ms, mode, cleanup";
+
+/// Skips SQLite's initial bulk page-cache allocation, idle memory a small history
+/// doesn't need. Returns whether SQLite accepted it; it refuses once initialized.
+///
+/// # Safety
+/// SQLite requires that no other thread uses it during this call, so call it at
+/// process start, before any connection exists.
+pub unsafe fn skip_bulk_page_cache() -> bool {
+    ffi::sqlite3_config(
+        ffi::SQLITE_CONFIG_PAGECACHE,
+        std::ptr::null_mut::<std::ffi::c_void>(),
+        0,
+        0,
+    ) == ffi::SQLITE_OK
+}
 
 #[derive(Clone)]
 pub struct Store {
@@ -470,6 +485,40 @@ fn escape_like(query: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn bundled_sqlite_has_the_wal_reset_fix() {
+        assert!(
+            rusqlite::version_number() >= 3_051_003,
+            "SQLite {} predates the WAL-reset fix",
+            rusqlite::version()
+        );
+    }
+
+    #[test]
+    fn page_cache_setting_applies_before_sqlite_starts_and_is_refused_after() {
+        const CHILD: &str = "XFLOW_STORE_PAGE_CACHE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            // SAFETY: this child process runs only this test, so nothing else uses SQLite.
+            assert!(unsafe { skip_bulk_page_cache() });
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(&dir.path().join("history.db"), true, 10).unwrap();
+            store.reopen(true, 10).unwrap();
+            Store::open(&dir.path().join("disabled.db"), false, 10).unwrap();
+            // SAFETY: as above; a late call is refused and changes nothing.
+            assert!(!unsafe { skip_bulk_page_cache() });
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "store::tests::page_cache_setting_applies_before_sqlite_starts_and_is_refused_after",
+            ])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
     fn entry(text: &str) -> HistoryEntry {
         HistoryEntry {
             text: text.into(),
@@ -595,6 +644,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preserves_v3_database_file_after_engine_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let snapshot = |connection: &Connection| {
+            let mut statement = connection
+                .prepare("SELECT * FROM history WHERE id <= 99 ORDER BY id")
+                .unwrap();
+            statement
+                .query_map([], |row| {
+                    (0..row.as_ref().column_count())
+                        .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let schema = |connection: &Connection| {
+            connection
+                .query_row(
+                    "SELECT group_concat(sql, char(10)) FROM (SELECT sql FROM sqlite_schema ORDER BY name)",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        };
+        let v3 = Connection::open(&path).unwrap();
+        v3.execute_batch(include_str!("../tests/fixtures/history-v3.sql"))
+            .unwrap();
+        let original = snapshot(&v3);
+        let original_schema = schema(&v3);
+        drop(v3);
+
+        let store = Store::open(&path, true, 500).unwrap();
+        assert_eq!(snapshot(&store.connection.lock().unwrap()), original);
+        assert_eq!(schema(&store.connection.lock().unwrap()), original_schema);
+        let (original_entries, total) = store.history(10, 0, None).await.unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(original_entries[0].id, 99);
+        assert_eq!(original_entries[1].mode, Mode::Command);
+        assert_eq!(original_entries[2].cleanup, Some(CleanupOutcome::Applied));
+        assert_eq!(store.stats().await.unwrap().words, 4);
+        let saved = store.append(entry("new row")).await.unwrap().unwrap();
+        assert_eq!(saved.id, 100);
+        assert_eq!(
+            store.update(saved.id, "edited row".into()).await.unwrap(),
+            Some("new row".into())
+        );
+        store.set_latency(saved.id, 123).await.unwrap();
+        let edited = store.get(saved.id).await.unwrap().unwrap();
+        assert_eq!(edited.raw_text.as_deref(), Some("new row"));
+        assert_eq!(edited.latency_ms, Some(123));
+        drop(store);
+
+        let reopened = Store::open(&path, true, 500).unwrap();
+        assert_eq!(snapshot(&reopened.connection.lock().unwrap()), original);
+        assert_eq!(
+            schema(&reopened.connection.lock().unwrap()),
+            original_schema
+        );
+        let mut expected = vec![edited];
+        expected.extend(original_entries);
+        assert_eq!(reopened.history(10, 0, None).await.unwrap(), (expected, 4));
+        assert!(reopened
+            .append(entry("after reopen"))
+            .await
+            .unwrap()
+            .is_some());
+        let connection = reopened.connection.lock().unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+    }
+
+    #[tokio::test]
     async fn migrates_v1_database_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("history.db");
@@ -615,7 +748,7 @@ mod tests {
         assert!(rows[1].model.is_none() && rows[1].latency_ms.is_none());
         let stats = store.stats().await.unwrap();
         assert_eq!((stats.sessions, stats.words), (2, 5));
-        store.append(entry("new")).await.unwrap();
+        let saved = store.append(entry("new")).await.unwrap().unwrap();
         drop(store);
         let version: i64 = Connection::open(&path)
             .unwrap()
@@ -623,15 +756,16 @@ mod tests {
             .unwrap();
         assert_eq!(version, 3);
         // Reopening an already-migrated database is a no-op.
-        assert_eq!(
-            Store::open(&path, true, 500)
-                .unwrap()
-                .history(10, 0, None)
-                .await
-                .unwrap()
-                .1,
-            3
-        );
+        let reopened = Store::open(&path, true, 500).unwrap();
+        let mut expected = vec![saved];
+        expected.extend(rows);
+        assert_eq!(reopened.history(10, 0, None).await.unwrap(), (expected, 3));
+        assert!(reopened
+            .append(entry("after reopen"))
+            .await
+            .unwrap()
+            .is_some());
+        drop(reopened);
         // A database from a newer xflow is refused, not rewritten.
         Connection::open(&path)
             .unwrap()
