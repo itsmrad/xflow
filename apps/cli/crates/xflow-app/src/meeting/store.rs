@@ -572,6 +572,11 @@ fn private_sidecars(path: &Path, tighten: bool) -> Result<()> {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+                    // APFS can report nlink 0 while another process's SQLite
+                    // unlinks its journal: the name is already gone.
+                    if meta.nlink() == 0 {
+                        continue;
+                    }
                     ensure!(
                         meta.uid() == unsafe { libc::geteuid() } && meta.nlink() == 1,
                         "unsafe meeting sidecar permissions"
