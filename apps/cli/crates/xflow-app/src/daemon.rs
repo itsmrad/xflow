@@ -1888,9 +1888,18 @@ impl Engine {
                     Completion::Finished { generation, mut processed, result, ticket } => {
                         self.delivering = false;
                         // Late, or for a dictation that will not be watched: wait out its reads.
-                        let watched = matches!(result, Ok(Some(InjectionOutcome::Pasted | InjectionOutcome::Typed))) && generation == self.generation && self.mode == Mode::Dictation && self.config.dictionary.auto_learn && self.config_path.is_some();
+                        let replay = ticket.as_ref().is_some_and(|ticket| ticket.keys.is_some());
+                        let landed = matches!(result, Ok(Some(InjectionOutcome::Pasted | InjectionOutcome::Typed))) || (replay && matches!(result, Ok(Some(InjectionOutcome::Uncertain))));
+                        let watched = landed && generation == self.generation && self.mode == Mode::Dictation && self.config.dictionary.auto_learn && self.config_path.is_some();
                         let ticket = if watched { ticket } else {
-                            if let Some(mut ticket) = ticket { tokio::spawn(async move { ticket.field.stop().await; }); }
+                            if let Some(mut ticket) = ticket {
+                                tokio::spawn(async move {
+                                    ticket.field.stop().await;
+                                    if let Some(mut keys) = ticket.keys.take() {
+                                        keys.stop();
+                                    }
+                                });
+                            }
                             None
                         };
                         if generation != self.generation { continue; }
@@ -2382,14 +2391,19 @@ async fn observe(
     };
     let watched = match ticket {
         Some(mut ticket) => {
-            let result = watch_pinned(
-                &mut ticket.field,
-                ticket.receipt,
-                finalize,
-                &mut counts,
-                Some(&mut commits),
-            )
-            .await;
+            let result = if let Some(keys) = ticket.keys.take() {
+                let original = ticket.receipt.inserted().to_owned();
+                watch_replay(keys, original, finalize, Some(&mut commits)).await
+            } else {
+                watch_pinned(
+                    &mut ticket.field,
+                    ticket.receipt,
+                    finalize,
+                    &mut counts,
+                    Some(&mut commits),
+                )
+                .await
+            };
             // Acknowledged: no read is running and the observer has gone.
             ticket.field.stop().await;
             result
@@ -2550,6 +2564,92 @@ async fn watch_edit(
     let result = watch_pinned(&mut field, receipt, finalize, &mut Counts::default(), None).await;
     field.stop().await;
     result
+}
+/// Replay keys over the pasted line and save through the same commit path as a
+/// field watch. The line is cleared before this returns.
+async fn watch_replay(
+    mut keys: Box<dyn xflow_core::replay::KeyReplay>,
+    original: String,
+    mut finalize: oneshot::Receiver<()>,
+    mut commits: Option<&mut Commits>,
+) -> std::result::Result<(String, String), Option<&'static str>> {
+    use tokio::time::{sleep_until, Instant};
+    use xflow_core::replay::{Applied, Line, Moment, ReplayIn, Verdict};
+    let mut editor = Line::new(&original);
+    let mut since = Instant::now();
+    let deadline = since + Duration::from_secs(60);
+    let mut commit_at: Option<Instant> = None;
+    let result = loop {
+        tokio::select! {
+            biased;
+            end = &mut finalize => {
+                if end.is_err() {
+                    break Err(None);
+                }
+                break replay_settle(&original, &editor, since, Moment::Leave(since.elapsed()), &mut commits).await;
+            }
+            _ = sleep_until(deadline) => {
+                break replay_settle(&original, &editor, since, Moment::Leave(since.elapsed()), &mut commits).await;
+            }
+            incoming = keys.next() => match incoming {
+                None | Some(ReplayIn::Missed) => break Err(Some("abstain")),
+                Some(ReplayIn::Secure) => break Err(Some("secure")),
+                Some(ReplayIn::Leave) => {
+                    break replay_settle(&original, &editor, since, Moment::Leave(since.elapsed()), &mut commits).await;
+                }
+                Some(ReplayIn::Key(key)) => match editor.apply(key) {
+                    Applied::Stop => break Err(Some("abstain")),
+                    Applied::Submit => {
+                        break replay_settle(&original, &editor, since, Moment::Submit, &mut commits).await;
+                    }
+                    Applied::Edit { changed } => {
+                        if changed {
+                            since = Instant::now();
+                            commit_at = Some(since + Duration::from_millis(xflow_core::learn::COMMIT_QUIET_MS));
+                        }
+                    }
+                },
+            },
+            _ = sleep_until(commit_at.unwrap_or(deadline)), if commit_at.is_some() => {
+                let quiet = since.elapsed();
+                match xflow_core::replay::verdict(&original, editor.text().unwrap_or(""), editor.caret_utf16(), Moment::Quiet(quiet)) {
+                    Verdict::Save => {
+                        commit_at = None;
+                        let _ = replay_settle(&original, &editor, since, Moment::Quiet(quiet), &mut commits).await;
+                    }
+                    Verdict::Recheck => commit_at = Some(Instant::now() + COMMIT_RECHECK),
+                    Verdict::Wait | Verdict::Drop(_) => commit_at = None,
+                }
+            }
+        }
+    };
+    editor.stop();
+    keys.stop();
+    result
+}
+async fn replay_settle(
+    original: &str,
+    editor: &xflow_core::replay::Line,
+    since: tokio::time::Instant,
+    moment: xflow_core::replay::Moment,
+    commits: &mut Option<&mut Commits>,
+) -> std::result::Result<(String, String), Option<&'static str>> {
+    use xflow_core::replay::{verdict, Verdict};
+    let Some(text) = editor.text() else {
+        return Err(Some("abstain"));
+    };
+    let text = text.to_owned();
+    match verdict(original, &text, editor.caret_utf16(), moment) {
+        Verdict::Save => {
+            if let Some(commits) = commits.as_deref_mut() {
+                commits.edited = Some(since);
+                let _ = commits.save(original.to_owned(), text.clone()).await;
+            }
+            Ok((original.to_owned(), text))
+        }
+        Verdict::Drop(reason) => Err(Some(reason)),
+        Verdict::Wait | Verdict::Recheck => Err(Some("unsettled")),
+    }
 }
 /// Follow the field a dictation was pasted into, from the moment of delivery, and
 /// return (dictated, corrected) spans when the watch ends with a correction it
@@ -4507,7 +4607,11 @@ mod tests {
             let outcome = self.inject(text, target).await?;
             let ticket = field
                 .zip(receipt)
-                .map(|(field, receipt)| xflow_core::DeliveryTicket { field, receipt });
+                .map(|(field, receipt)| xflow_core::DeliveryTicket {
+                    field,
+                    receipt,
+                    keys: None,
+                });
             Ok(xflow_core::ObservedDelivery { outcome, ticket })
         }
         async fn watch_field(&self, _: &AppContext) -> Option<Box<dyn xflow_core::FieldWatch>> {
@@ -6516,6 +6620,7 @@ mod tests {
                 Some(xflow_core::DeliveryTicket {
                     field: desktop.watch_field(&target).await.unwrap(),
                     receipt: xflow_core::learn::Receipt::new(original, original, None).unwrap(),
+                    keys: None,
                 }),
                 finalized,
                 test_learner(path.clone(), completion, Arc::new(AtomicU64::new(0))),
@@ -7470,6 +7575,123 @@ mod tests {
         let result = watch_edit(&*desktop, &AppContext::default(), pasted, finalize).await;
         script.abort();
         result
+    }
+    struct IdleField;
+    #[async_trait]
+    impl xflow_core::FieldWatch for IdleField {
+        async fn next(&mut self) -> Option<FieldEvent> {
+            std::future::pending().await
+        }
+        fn try_next(&mut self) -> Option<FieldEvent> {
+            None
+        }
+        async fn read(&mut self) -> Option<xflow_core::FieldText> {
+            None
+        }
+        async fn focused(&mut self) -> bool {
+            true
+        }
+    }
+    struct Script(mpsc::UnboundedReceiver<xflow_core::replay::ReplayIn>);
+    #[async_trait]
+    impl xflow_core::replay::KeyReplay for Script {
+        async fn next(&mut self) -> Option<xflow_core::replay::ReplayIn> {
+            self.0.recv().await
+        }
+        fn stop(&mut self) {}
+    }
+    /// Feeds `keys` to a terminal replay and returns the learning counts.
+    async fn replay_watch(original: &str, keys: Vec<xflow_core::replay::ReplayIn>) -> Learning {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (finalize, finalized) = oneshot::channel();
+        let (completion, _saves) = mpsc::channel(4);
+        let learning = Arc::new(std::sync::Mutex::new(Learning::default()));
+        let end = original.encode_utf16().count();
+        let ticket = xflow_core::DeliveryTicket {
+            field: Box::new(IdleField),
+            receipt: xflow_core::learn::Receipt::new(original, original, Some(end)).unwrap(),
+            keys: Some(Box::new(Script(rx))),
+        };
+        let task = tokio::spawn(observe(
+            Some(ticket),
+            finalized,
+            test_learner(path, completion, Arc::new(AtomicU64::new(0))),
+            learning.clone(),
+        ));
+        for key in keys {
+            tx.send(key).unwrap();
+        }
+        drop(tx);
+        task.await.unwrap();
+        drop(finalize);
+        let learned = { lock(&learning).clone() };
+        drop(dir);
+        learned
+    }
+    fn replay_key(key: xflow_core::replay::Key) -> xflow_core::replay::ReplayIn {
+        xflow_core::replay::ReplayIn::Key(key)
+    }
+    #[tokio::test]
+    async fn terminal_replay_learns_a_submitted_correction() {
+        use xflow_core::replay::Key;
+        let mut keys = Vec::new();
+        for _ in 0.."kubernetis".chars().count() {
+            keys.push(replay_key(Key::Backspace));
+        }
+        for c in "Kubernetes".chars() {
+            keys.push(replay_key(Key::Insert(c.to_string())));
+        }
+        keys.push(replay_key(Key::Submit));
+        let learning = replay_watch("use kubernetis", keys).await;
+        assert_eq!(learning.outcomes.get("learned").copied(), Some(1));
+        assert!(!learning.outcomes.contains_key("abstain"));
+    }
+    #[tokio::test]
+    async fn terminal_replay_abstain_secure_and_a_short_word_save_nothing() {
+        use xflow_core::replay::{Key, ReplayIn};
+        let click = replay_watch(
+            "use kubernetis",
+            vec![
+                replay_key(Key::Abstain),
+                replay_key(Key::Insert("X".into())),
+            ],
+        )
+        .await;
+        assert_eq!(click.outcomes.get("abstain").copied(), Some(1));
+        assert!(!click.outcomes.contains_key("learned"));
+        let secure = replay_watch("use kubernetis", vec![ReplayIn::Secure]).await;
+        assert_eq!(secure.outcomes.get("secure").copied(), Some(1));
+        assert!(!secure.outcomes.contains_key("learned"));
+        // One step before the start of the paste, then a typed letter: not a word.
+        let mut steps = vec![
+            replay_key(Key::LineStart),
+            replay_key(Key::Left),
+            replay_key(Key::Insert("X".into())),
+        ];
+        let lost = replay_watch("kubernetis", steps.split_off(0)).await;
+        assert_eq!(
+            lost.outcomes.get("abstain").copied(),
+            Some(1),
+            "{:?}",
+            lost.outcomes
+        );
+        // Shorter than the dictated word, caret still on it: a leave saves nothing.
+        let mut keys = vec![
+            replay_key(Key::Backspace),
+            replay_key(Key::Backspace),
+            replay_key(Key::Insert("k".into())),
+        ];
+        keys.push(ReplayIn::Leave);
+        let held = replay_watch("Priyanca", keys).await;
+        assert_eq!(
+            held.outcomes.get("partial").copied(),
+            Some(1),
+            "{:?}",
+            held.outcomes
+        );
+        assert!(!held.outcomes.contains_key("learned"));
     }
     #[tokio::test]
     async fn sent_dictation_ends_observation_before_the_next_message() {
