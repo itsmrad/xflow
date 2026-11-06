@@ -339,23 +339,19 @@ fn worker_survives_its_cli_terminal_and_sighup() {
     let audio = sandbox.wav("call.wav", 180, 1);
     // A real pseudo-terminal as the CLI's controlling terminal.
     let (master, slave) = unsafe {
-        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
-        assert!(master >= 0);
-        assert_eq!(libc::grantpt(master), 0);
-        assert_eq!(libc::unlockpt(master), 0);
-        let mut name = [0 as libc::c_char; 128];
-        assert_eq!(libc::ptsname_r(master, name.as_mut_ptr(), name.len()), 0);
-        let path = std::ffi::CStr::from_ptr(name.as_ptr())
-            .to_string_lossy()
-            .into_owned();
-        (
-            master,
-            std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(path)
-                .unwrap(),
-        )
+        let (mut master, mut slave) = (-1, -1);
+        assert_eq!(
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null()
+            ),
+            0
+        );
+        use std::os::fd::FromRawFd;
+        (master, std::fs::File::from_raw_fd(slave))
     };
     let mut command = sandbox.xflow(&["meeting", "process", &audio, "--wait"]);
     command
@@ -364,7 +360,7 @@ fn worker_survives_its_cli_terminal_and_sighup() {
         .stderr(Stdio::from(slave));
     unsafe {
         command.pre_exec(|| {
-            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY, 0) == -1 {
+            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())

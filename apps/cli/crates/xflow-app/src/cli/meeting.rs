@@ -662,6 +662,8 @@ fn wait_for(db: &Path, meeting: Option<&MeetingId>, config: &Path, out: &Output)
             sum.failed += m.windows.failed;
             sum.pending += m.windows.pending;
             sum.waiting += m.windows.waiting;
+            sum.retained += m.windows.retained;
+            sum.abandoned += m.windows.abandoned;
         }
         if verbose && (sum.accepted, sum.total) != shown {
             shown = (sum.accepted, sum.total);

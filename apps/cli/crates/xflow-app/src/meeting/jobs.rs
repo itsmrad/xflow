@@ -387,7 +387,14 @@ fn segments(
             match (previous, previous_accepted) {
                 (_, false) => first.dedup = "unchecked",
                 (None, true) => {}
-                (Some(previous), true) => dedup(first, previous, max_tokens),
+                (Some(previous), true) => {
+                    dedup(first, previous, max_tokens);
+                    if matches!(&result.timing, Timing::Segments(spans) if spans.iter().any(|s| s.start_ms < overlap_ms && s.end_ms > overlap_ms))
+                        && first.dedup == "none"
+                    {
+                        first.dedup = "uncertain";
+                    }
+                }
             }
         }
     }
@@ -410,7 +417,7 @@ fn segments(
 fn overlap_token_budget(spans: &[TimedSpan], overlap_ms: u32) -> usize {
     spans
         .iter()
-        .take_while(|s| s.start_ms < overlap_ms)
+        .take_while(|s| s.end_ms <= overlap_ms)
         .map(|s| tokens(&s.text).len())
         .sum::<usize>()
         .min(12)
@@ -543,6 +550,7 @@ pub struct Windows {
     pub waiting: i64,
     pub failed: i64,
     pub abandoned: i64,
+    pub retained: i64,
 }
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct PendingAudio {
@@ -672,6 +680,7 @@ pub fn status(
             pending: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='pending'")?,
             waiting: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='waiting'")?,
             failed: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='failed'")?,
+            retained: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='retained'")?,
             abandoned: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='abandoned'")?,
         };
         let (pieces, bytes, samples): (i64, i64, i64) = db.query_row(
@@ -764,6 +773,22 @@ mod tests {
             end_ms,
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn crossing_segment_keeps_words_and_marks_uncertainty() {
+        let out = segments(
+            &job(1),
+            &timed(
+                "on Friday we ship",
+                Timing::Segments(vec![span(1900, 6000, "on Friday we ship")]),
+            ),
+            Some("we meet on Friday"),
+            true,
+        );
+        assert_eq!(out[0].text, "on Friday we ship");
+        assert_eq!(out[0].dedup, "uncertain");
+        assert_eq!(out[0].trimmed, None);
     }
 
     #[test]

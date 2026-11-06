@@ -757,7 +757,7 @@ fn plan_jobs(
         let tiny = end - start < MIN_JOB_SAMPLES;
         db.execute("INSERT INTO jobs(meeting_id,source_idx,win,overlap_sample,start_sample,end_sample,state,error) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             params![meeting, source, win, (start - OVERLAP_SAMPLES).max(0), start, end,
-                if tiny {"abandoned"} else {"pending"}, tiny.then_some("under 100 ms; not sent")])?;
+                if tiny {"retained"} else {"pending"}, tiny.then_some("under 100 ms; not sent")])?;
         if tiny {
             let source_id: String = db.query_row(
                 "SELECT source_id FROM capture_sources WHERE meeting_id=?1 AND idx=?2",
@@ -777,7 +777,7 @@ fn plan_jobs(
     }
 }
 
-/// Pieces whose every dependent job is accepted or abandoned. While a source
+/// Pieces whose every dependent job is accepted. While a source
 /// is still capturing, a piece reaching into the next window's 2 s overlap
 /// waits for that window. Run inside the accepting transaction.
 pub(crate) fn release_pieces(db: &Connection, meeting: i64) -> Result<usize> {
@@ -785,7 +785,7 @@ pub(crate) fn release_pieces(db: &Connection, meeting: i64) -> Result<usize> {
     Ok(db.execute(&format!(
         "UPDATE pieces SET state='unlink_pending' WHERE meeting_id=?1 AND state IN ('ready','missing')
          AND EXISTS (SELECT 1 FROM jobs j WHERE {OVERLAPS})
-         AND NOT EXISTS (SELECT 1 FROM jobs j WHERE {OVERLAPS} AND j.state NOT IN ('accepted','abandoned'))
+         AND NOT EXISTS (SELECT 1 FROM jobs j WHERE {OVERLAPS} AND j.state!='accepted')
          AND (EXISTS (SELECT 1 FROM capture_sources c WHERE c.meeting_id=pieces.meeting_id AND c.idx=pieces.source_idx AND c.finished=1)
               OR pieces.start_sample+pieces.samples<=(SELECT (MAX(j.win)+1)*{WINDOW_SAMPLES}-{OVERLAP_SAMPLES} FROM jobs j WHERE j.meeting_id=pieces.meeting_id AND j.source_idx=pieces.source_idx))"),
         [meeting])?)
@@ -1040,6 +1040,8 @@ pub fn recover(db_path: &Path) -> Result<Recovery> {
         "UPDATE jobs SET state='failed',error='all attempts used; the last reply was never recorded' WHERE state IN ('pending','waiting') AND attempts>=budget",
         [],
     )?;
+    // Older journals called unsent tiny tails abandoned; retain their durable audio.
+    db.execute("UPDATE jobs SET state='retained' WHERE state='abandoned' AND error='under 100 ms; not sent'", [])?;
     let _ = remove_deleted_audio(db_path, &store, &db);
     let captures = {
         let mut statement =

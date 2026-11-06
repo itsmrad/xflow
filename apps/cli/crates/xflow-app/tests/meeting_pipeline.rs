@@ -848,3 +848,78 @@ async fn overlap_survives_while_capture_is_still_running() {
     assert_eq!(sql(&s.db, "SELECT count(*) FROM gaps"), 0);
     assert_eq!(texts(&s.db, &meeting).len(), 2);
 }
+
+fn assert_tiny_tail_retained(count: usize) {
+    let s = scratch();
+    let wav = s._dir.path().join("original.wav");
+    let mut writer = hound::WavWriter::create(
+        &wav,
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        },
+    )
+    .unwrap();
+    for sample in samples(0, 0, count) {
+        writer.write_sample(sample).unwrap();
+    }
+    writer.finalize().unwrap();
+    let original = std::fs::read(&wav).unwrap();
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["original.wav".into()],
+            expected_ms: None,
+            queued: false,
+        },
+        limits(),
+    )
+    .unwrap();
+    let pcm = hound::WavReader::open(&wav)
+        .unwrap()
+        .samples::<i16>()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    capture.push(0, &pcm).unwrap();
+    let meeting = capture.finish().unwrap();
+    // Simulate the first 30 s having been durably accepted; the fresh 50 ms was not.
+    let db = Connection::open(&s.db).unwrap();
+    db.execute(
+        "UPDATE jobs SET state='accepted' WHERE win=0 AND end_sample>=480000",
+        [],
+    )
+    .unwrap();
+    drop(db);
+    for _ in 0..2 {
+        journal::recover(&s.db).unwrap();
+    }
+    assert!(
+        !audio_files(&s.db).is_empty(),
+        "{count} samples lost untranscribed audio"
+    );
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM pieces WHERE start_sample+samples>480000 OR start_sample=0"
+        ),
+        1
+    );
+    assert_eq!(std::fs::read(&wav).unwrap(), original);
+    let status = jobs::status(&s.db, Some(meeting.id), limits(), transcribe::now_ms()).unwrap();
+    assert!(status.meetings[0].pending_audio.bytes > 0);
+    assert_eq!(status.meetings[0].windows.retained, 1);
+    assert_eq!(status.meetings[0].windows.abandoned, 0);
+}
+
+#[test]
+fn fresh_30_second_wav_tail_survives_recovery() {
+    assert_tiny_tail_retained(30 * 16_000 + 800);
+}
+
+#[test]
+fn tiny_wav_tails_survive_recovery_without_accepted_text() {
+    assert_tiny_tail_retained(800);
+}
