@@ -106,6 +106,19 @@ impl MeetingReader {
     }
 
     pub fn list(&self, filter: &ListFilter, cursor: Option<&ListCursor>) -> Result<MeetingPage> {
+        self.list_limited(filter, cursor, MAX_PAGE_SEGMENTS)
+    }
+
+    pub fn list_limited(
+        &self,
+        filter: &ListFilter,
+        cursor: Option<&ListCursor>,
+        limit: usize,
+    ) -> Result<MeetingPage> {
+        ensure!(
+            (1..=MAX_PAGE_SEGMENTS).contains(&limit),
+            ContractError::InvalidQuery("invalid limit")
+        );
         ensure!(
             filter.since_ms >= 0 && filter.until_ms > filter.since_ms,
             ContractError::InvalidQuery("invalid start-date interval")
@@ -124,7 +137,7 @@ impl MeetingReader {
             let rows=statement.query_map(params![last,snap.highwater,filter.since_ms,filter.until_ms], |r| summary_row(r,&identity))?;
             let mut page=MeetingPage {meetings:Vec::new(),next:None};
             for row in rows {
-                if page.meetings.len()==MAX_PAGE_SEGMENTS {break;}
+                if page.meetings.len()==limit {break;}
                 let item=row?;
                 let next=ListCursor {store_id:identity.clone(),filter:filter.clone(),snapshot:snap,last_id:item.meeting.id};
                 page.meetings.push(item);
@@ -135,7 +148,7 @@ impl MeetingReader {
                     return Ok(page);
                 }
             }
-            if page.meetings.len()<MAX_PAGE_SEGMENTS {page.next=None;}
+            if page.meetings.len()<limit {page.next=None;}
             Ok(page)
         })
     }
@@ -160,6 +173,19 @@ impl MeetingReader {
     /// Literal, case-sensitive Unicode substring search; never accepts FTS syntax.
     /// Short (<3 scalar) terms inspect at most 256 indexed candidates per call.
     pub fn search(&self, query: &str, cursor: Option<&SearchCursor>) -> Result<SearchPage> {
+        self.search_limited(query, cursor, MAX_PAGE_SEGMENTS)
+    }
+
+    pub fn search_limited(
+        &self,
+        query: &str,
+        cursor: Option<&SearchCursor>,
+        limit: usize,
+    ) -> Result<SearchPage> {
+        ensure!(
+            (1..=MAX_PAGE_SEGMENTS).contains(&limit),
+            ContractError::InvalidQuery("invalid limit")
+        );
         ensure!(
             !query.is_empty()
                 && query.len() <= 256
@@ -191,7 +217,7 @@ impl MeetingReader {
                 let item=segment(row,&identity)?;
                 scanned+=1;
                 if item.text.contains(query) {
-                    if page.segments.len()==MAX_PAGE_SEGMENTS {exhausted=false;break;}
+                    if page.segments.len()==limit {exhausted=false;break;}
                     let id=item.id;
                     page.segments.push(item);
                     let old=page.next.replace(SearchCursor {store_id:identity.clone(),query:query.to_owned(),snapshot:snap,last_id:id});

@@ -3,7 +3,7 @@ title: Use xflow with AI clients
 description: Search private dictation history from a local MCP client, with explicit consent.
 ---
 
-xflow's read-only MCP server lets an AI client search your cleaned dictation history and fetch a dictation. It runs as a separate local process; no daemon restart or xflow account is needed. Meeting history is not available yet.
+xflow's read-only MCP server lets an AI client search your cleaned dictation history and fetch a dictation. It runs as a separate local process; no daemon restart or xflow account is needed. It also reads private meeting transcripts after separate consent.
 
 Measured macOS arm64 M1 release sizes (2026-11-06, stripped, fat LTO): `xflow` is 8.05 MiB and `xflowd` is 8.23 MiB. The daemon's byte count is unchanged. Direct history access adds bundled SQLite to the CLI; MCP/context adds 215,168 bytes beyond SQLite alone. The optional MCP process runs only while a client uses it.
 
@@ -13,21 +13,34 @@ xflow mcp install claude-code --dictations
 xflow mcp status
 ```
 
-You can also do this in the TUI: run `xflow` and open **AI apps** (press `0`). It has the global **Dictation history** switch, which asks for the same consent before turning on, and one row per client showing whether it was found, whether xflow is registered, the registered binary's path, and a warning when that binary's version differs. Enter on a client installs or removes xflow with the same code as `xflow mcp install` and `uninstall`, and asks before replacing a different xflow entry. Zed, LM Studio and Windsurf show the snippet to add yourself.
+You can also do this in the TUI: run `xflow` and open **AI apps** (press `0`). It has the global **Dictation history** and **Meeting transcripts** switches, which asks for the same consent before turning on, and one row per client showing whether it was found, whether xflow is registered, the registered binary's path, and a warning when that binary's version differs. Enter on a client installs or removes xflow with the same code as `xflow mcp install` and `uninstall`, and asks before replacing a different xflow entry. Zed, LM Studio and Windsurf show the snippet to add yourself.
 
 Use the installed `xflow` binary when registering. A development binary under `target/` or a temporary directory can disappear. Registration uses that binary's path and the argument `mcp`; Homebrew installs use the stable `bin/xflow` symlink when available.
 
-Restart your client after registration, then ask: “Search my xflow dictations for the release plan.” The client must request a tool call before xflow returns matching text. The tools are `search_dictations` (snippets, date filters and pagination) and `get_dictation` (cleaned text, with size limits). Raw transcripts are never returned.
+Restart your client after registration, then ask: “Search my xflow dictations for the release plan.” The client must request a tool call before xflow returns matching text. The tools are `search_dictations` (snippets, date filters and pagination) and `get_dictation` (cleaned text, with size limits). Raw dictation transcripts are never returned.
+
+Meeting tools (read-only):
+
+| Tool | Inputs | Results |
+| --- | --- | --- |
+| `list_meetings` | Optional `since`/`until` Unix milliseconds (half-open), `limit` 1–20 (default 10), `cursor` | Meeting IDs, titles, start/end, duration, timezone, notes availability |
+| `search_meetings` | Literal case-sensitive `query`, optional `limit` 1–20 (default 10), `cursor` | Meeting IDs/titles, segment times, source labels, snippets up to 300 characters |
+| `get_transcript` | `meeting_id`, optional `start_ms`, `end_ms` (half-open offsets), `cursor` | Ordered segments, overlapping gaps, window, `next_cursor` |
+| `get_meeting_notes` | `meeting_id` | Notes status; currently empty with “no notes for this meeting yet” |
+
+Use the `meeting_id` object (`store_id`, `id`) returned by list/search. Keep filters unchanged when following `next_cursor`, including on empty pages. Edits/deletes invalidate cursors. Transcript pages advance through ten-minute windows within the 24 KB response budget. Imported timing and source attribution are unverified. The current store supports at most 1,024 segments per imported meeting and has no generated notes.
 
 ## Consent and privacy
 
-Sharing starts off. `--dictations` explicitly enables it. In a terminal, installation otherwise asks for consent with No as the default. A noninteractive installation without that flag leaves sources off.
+Sharing starts off. `--dictations` and `--meetings` explicitly enable their respective sources. In a terminal, installation otherwise asks for consent with No as the default. A noninteractive installation without that flag leaves sources off.
 
 Consent is **global across MCP clients**, stored in `mcp.toml` next to xflow's `config.toml`. Changing it affects every registration, including running servers from their next tool call; if the file becomes unreadable or malformed, sharing stays off until it is fixed:
 
 ```sh
 xflow mcp sources --dictations on
 xflow mcp sources --dictations off
+xflow mcp sources --meetings on
+xflow mcp sources --meetings off
 ```
 
 History must also be enabled by `privacy.history`. xflow reads history locally, but the matching snippets or dictation text returned to your AI client are sent to that client's model vendor (for example Anthropic, OpenAI or Google). Disabling sharing prevents future reads; it cannot retract text already sent to a client.
@@ -58,10 +71,16 @@ Uninstall removes only xflow's registration and keeps global consent. For client
 
 ## ChatGPT
 
-Use **Codex** in ChatGPT desktop or the Codex CLI/IDE through `xflow mcp install codex`. Plain ChatGPT chat support through an export is planned for a later milestone.
+Use **Codex** in ChatGPT desktop or the Codex CLI/IDE through `xflow mcp install codex`. For plain ChatGPT chat, export a meeting and attach the Markdown file:
+
+```sh
+xflow meeting export <id> --format md --output meeting.md
+```
+
+The attached transcript is sent to ChatGPT when you submit it.
 
 An advanced option is OpenAI's user-run [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Follow OpenAI's setup and permission instructions, and configure the tunnel to launch your installed `xflow mcp` stdio process. This sends tool results through OpenAI, requires your own OpenAI Platform setup, and has **not been tested by xflow**. xflow does not start or publish a tunnel; do not expose your history through a public tunnel.
 
 ## Harnesses
 
-An application with its own consent can start `xflow mcp --sources dictations`. This overrides only that server process's MCP consent and still respects `privacy.history`; `none`, `meetings`, and `dictations,meetings` are also accepted (meetings have no tools yet). Normal client registrations never include this override.
+An application with its own consent can start `xflow mcp --sources dictations`. This overrides only that server process's MCP consent and still respects `privacy.history`; `none`, `meetings`, and `dictations,meetings` are also accepted (meeting tools require the meetings source). Normal client registrations never include this override.

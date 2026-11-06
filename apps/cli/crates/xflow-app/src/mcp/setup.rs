@@ -25,7 +25,7 @@ pub(crate) const CLIENTS: [&str; 10] = [
 pub(crate) fn print_only(client: &str) -> bool {
     matches!(client, "zed" | "lm-studio" | "windsurf" | "chatgpt")
 }
-pub(crate) const CHATGPT: &str = "Use `xflow mcp install codex` for Codex in ChatGPT desktop. Plain ChatGPT chat: export arrives later. Advanced, user-run Secure MCP Tunnel: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels (results transit OpenAI; not tested by xflow). No public tunnel is needed.";
+pub(crate) const CHATGPT: &str = "Use `xflow mcp install codex` for Codex in ChatGPT desktop. Plain ChatGPT chat: run `xflow meeting export <id> --format md --output meeting.md` and attach meeting.md. Advanced, user-run Secure MCP Tunnel: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels (results transit OpenAI; not tested by xflow). No public tunnel is needed.";
 /// What an install or uninstall did, for the CLI to print and the TUI to show.
 #[derive(Debug, Default)]
 pub(crate) struct Report {
@@ -505,6 +505,7 @@ fn registered(client: &str) -> Result<Option<Value>> {
 pub(crate) fn install(
     client: &str,
     dictations: bool,
+    meetings: bool,
     force: bool,
     print: bool,
     ask: bool,
@@ -539,11 +540,13 @@ pub(crate) fn install(
             sources.dictations = true;
             write_sources(consent, sources)?;
         }
+        meeting_consent(client, meetings, ask, consent, &mut report)?;
         report.manual = Some(serde_json::to_string_pretty(&snippet(client, &exe))?);
         if !sources.dictations {
-            report
-                .notes
-                .push("Sources stay off. Enable with `xflow mcp sources --dictations on`.".into());
+            report.notes.push(
+                "Dictation history stays off. Enable with `xflow mcp sources --dictations on`."
+                    .into(),
+            );
         }
         report.notes.push(format!(
             "Consent is global across all MCP clients; matching text is sent to {}.",
@@ -581,10 +584,11 @@ pub(crate) fn install(
     if dictations || (!sources.dictations && confirm(ask, &format!("Share your dictation history with {client}? When you ask about it, matching text is sent to {}.",vendor(client)))?) {
         sources.dictations=true; write_sources(consent,sources)?;
     }
+    meeting_consent(client, meetings, ask, consent, &mut report)?;
     if !sources.dictations {
-        report
-            .notes
-            .push("Sources stay off. Enable with `xflow mcp sources --dictations on`.".into());
+        report.notes.push(
+            "Dictation history stays off. Enable with `xflow mcp sources --dictations on`.".into(),
+        );
     }
     report.notes.push(format!(
         "Consent is global across all MCP clients; matching text is sent to {}.",
@@ -628,6 +632,25 @@ pub(crate) fn install(
         }
     }
     Ok(report)
+}
+fn meeting_consent(
+    client: &str,
+    explicit: bool,
+    ask: bool,
+    consent: &Path,
+    report: &mut Report,
+) -> Result<()> {
+    let mut sources = read_sources(consent);
+    if explicit || (!sources.meetings && confirm(ask, &format!("Share your meeting transcripts with {client}? When you ask about them, meeting transcripts are sent to {}.", vendor(client)))?) {
+        sources.meetings = true;
+        write_sources(consent, sources)?;
+    }
+    if !sources.meetings {
+        report.notes.push(
+            "Meeting transcripts stay off. Enable with `xflow mcp sources --meetings on`.".into(),
+        );
+    }
+    Ok(())
 }
 /// Claude Code refuses `mcp add` for an existing name, so remove first and
 /// put the old entry back if the new add fails.

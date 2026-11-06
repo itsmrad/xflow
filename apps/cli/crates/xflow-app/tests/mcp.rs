@@ -184,14 +184,14 @@ fn install_uses_fakes_and_never_registers_source_override() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("Sources stay off."));
+    assert!(stdout.contains("Dictation history stays off."));
     assert!(stdout.contains("sources --dictations on"));
     assert!(!d.path().join("config/xflow/mcp.toml").exists());
     let args = fs::read_to_string(log).unwrap();
     assert!(args.ends_with("mcp\n"));
     assert!(!args.contains("--sources"));
     let out = command(d.path())
-        .args(["mcp", "install", "cursor", "--dictations"])
+        .args(["mcp", "install", "cursor", "--dictations", "--meetings"])
         .output()
         .unwrap();
     assert!(
@@ -202,6 +202,9 @@ fn install_uses_fakes_and_never_registers_source_override() {
     assert!(fs::read_to_string(d.path().join("config/xflow/mcp.toml"))
         .unwrap()
         .contains("dictations = true"));
+    assert!(fs::read_to_string(d.path().join("config/xflow/mcp.toml"))
+        .unwrap()
+        .contains("meetings = true"));
     let out = command(d.path())
         .args(["mcp", "sources", "--dictations", "off"])
         .output()
@@ -295,7 +298,7 @@ async fn rmcp_client_oracle_both_lifecycles() {
         .unwrap()
         .unwrap();
         let list = client.list_tools(None).await.unwrap();
-        assert_eq!(list.tools.len(), 2);
+        assert_eq!(list.tools.len(), 6);
         let result = client
             .call_tool(CallToolRequestParams::new("search_dictations"))
             .await
@@ -574,4 +577,89 @@ fn status_reports_detection_and_version_and_replacing_needs_force() {
     assert!(run(&["mcp", "install", "claude-code", "--force"])
         .status
         .success());
+}
+
+#[test]
+fn meeting_tools_protocol_consent_and_validation() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut child, mut input, mut output) = server(d.path(), None);
+    for (name, arguments) in [
+        ("list_meetings", json!({})),
+        ("search_meetings", json!({"query":"Kubernetes"})),
+        (
+            "get_transcript",
+            json!({"meeting_id":{"store_id":"fixture","id":1}}),
+        ),
+        (
+            "get_meeting_notes",
+            json!({"meeting_id":{"store_id":"fixture","id":1}}),
+        ),
+    ] {
+        writeln!(input,"{}",json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":arguments}})).unwrap();
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        let r: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(r["result"]["isError"], false, "{line}");
+        assert!(r["result"]["structuredContent"]["notice"]
+            .as_str()
+            .unwrap()
+            .contains("not been allowed"));
+        let mut args = arguments;
+        args["cursor"] = Value::Null;
+        writeln!(input,"{}",json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":name,"arguments":args}})).unwrap();
+        line.clear();
+        output.read_line(&mut line).unwrap();
+        let r: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(r["error"]["code"], -32602);
+    }
+    drop(input);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn meeting_calls_read_imported_data_and_live_consent() {
+    let d = tempfile::tempdir().unwrap();
+    let store = xflow_app::meeting::MeetingStore::at(d.path().join("data/xflow/meetings.db"));
+    let id = store
+        .import_json(include_bytes!("fixtures/meeting-notes/mixed-script.json"))
+        .unwrap()
+        .meeting;
+    let (mut child, mut input, mut output) = server(d.path(), None);
+    for enabled in [true, false, true] {
+        let out = command(d.path())
+            .args([
+                "mcp",
+                "sources",
+                "--meetings",
+                if enabled { "on" } else { "off" },
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        for (name, args) in [
+            ("list_meetings", json!({})),
+            ("search_meetings", json!({"query":"useEffect"})),
+            ("get_transcript", json!({"meeting_id":id})),
+            ("get_meeting_notes", json!({"meeting_id":id})),
+        ] {
+            writeln!(input,"{}",json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":args}})).unwrap();
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap();
+            let v: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(v["result"]["isError"], false, "{line}");
+            let r = &v["result"]["structuredContent"];
+            if !enabled {
+                assert!(r["notice"].as_str().unwrap().contains("not been allowed"));
+            } else {
+                match name {
+                    "list_meetings" => assert_eq!(r["items"][0]["meeting_id"], json!(id)),
+                    "search_meetings" => assert_eq!(r["items"].as_array().unwrap().len(), 1),
+                    "get_transcript" => assert_eq!(r["segments"].as_array().unwrap().len(), 12),
+                    _ => assert_eq!(r["notice"], "no notes for this meeting yet"),
+                }
+            }
+        }
+    }
+    drop(input);
+    assert!(child.wait().unwrap().success());
 }

@@ -105,11 +105,12 @@ Arguments:
 Options:
       --dictations     Explicitly allow sharing dictation history with clients' model vendors
       --json           Emit machine-readable JSON (watch emits one object per event)
-      --force          Replace a different existing xflow entry
+      --meetings       Explicitly allow meeting transcripts to be sent to clients' AI providers
   -q, --quiet          Suppress confirmations; requested data and errors remain visible
       --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
-      --print          Print registration without changing client configuration or consent
+      --force          Replace a different existing xflow entry
       --config <PATH>  Read/write an alternate configuration file
+      --print          Print registration without changing client configuration or consent
   -h, --help           Print help
 ```
 
@@ -162,6 +163,7 @@ Usage: xflow mcp sources [OPTIONS]
 Options:
       --dictations <DICTATIONS>  [possible values: on, off]
       --json                     Emit machine-readable JSON (watch emits one object per event)
+      --meetings <MEETINGS>      [possible values: on, off]
   -q, --quiet                    Suppress confirmations; requested data and errors remain visible
       --color <COLOR>            Control colour in human output [default: auto] [possible values: auto, always, never]
       --config <PATH>            Read/write an alternate configuration file

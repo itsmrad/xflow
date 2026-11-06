@@ -101,6 +101,7 @@ pub enum Action {
     Replace,
     /// AI apps: confirmed sharing dictation history.
     Share,
+    ShareMeetings,
 }
 #[derive(Clone)]
 pub struct Command {
@@ -2471,7 +2472,9 @@ impl App {
     fn confirmed(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::Quit => self.quit = true,
-            Action::Share | Action::Replace => return ai_apps::action(self, action),
+            Action::Share | Action::ShareMeetings | Action::Replace => {
+                return ai_apps::action(self, action)
+            }
             Action::Delete => {
                 let pos = self.selected();
                 if self.page == Page::History {
