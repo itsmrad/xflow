@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use rusqlite::{ffi, params, Connection, OpenFlags, OptionalExtension, Row};
+use rusqlite::{ffi, params, Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -12,7 +12,7 @@ use xflow_core::{
     Mode,
 };
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 /// Largest history page; the daemon additionally trims pages to one IPC frame.
 pub const MAX_PAGE: usize = 200;
 const COLUMNS: &str =
@@ -45,49 +45,7 @@ impl Store {
         if enabled && limit == 0 {
             bail!("history_limit must be positive when history is enabled");
         }
-        let mut connection = if enabled {
-            let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-                bail!("history path needs a parent directory and file name");
-            };
-            crate::paths::private_dir(parent)?;
-            // SQLite NOFOLLOW rejects symlinked ancestors such as macOS /var -> /private/var.
-            // Resolve only the validated parent, re-check it, and keep NOFOLLOW on the file.
-            let parent = parent.canonicalize()?;
-            crate::paths::private_dir(&parent)?;
-            let path = &parent.join(name);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                let file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .mode(0o600)
-                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                    .open(path)?;
-                use std::os::unix::fs::{MetadataExt, PermissionsExt};
-                let metadata = file.metadata()?;
-                if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } {
-                    bail!("unsafe history database file");
-                }
-                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-            }
-            Connection::open_with_flags(
-                path,
-                OpenFlags::SQLITE_OPEN_READ_WRITE
-                    | OpenFlags::SQLITE_OPEN_CREATE
-                    | OpenFlags::SQLITE_OPEN_NOFOLLOW
-                    | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )?
-        } else {
-            Connection::open_in_memory()?
-        };
-        connection.busy_timeout(std::time::Duration::from_secs(2))?;
-        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > SCHEMA_VERSION {
-            bail!("history database schema {version} is newer than this xflow");
-        }
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;")?;
+        let mut connection = open_connection(enabled.then_some(path))?;
         migrate(&mut connection)?;
         let store = Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -99,6 +57,48 @@ impl Store {
             prune(&store.connection.lock().unwrap(), limit)?;
         }
         Ok(store)
+    }
+    /// Builds MCP's search index off the startup path, serialized with history writes.
+    pub async fn upgrade_search_index(&self) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        self.run(move |connection| {
+            let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+            if version == 4 {
+                return Ok(());
+            }
+            // Use the store queue: a second connection can invalidate a correction's
+            // read snapshot, and a long rebuild can exceed its busy timeout.
+            // shortcut: history operations wait for the rebuild; batch it if large histories need lower latency.
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let version: i64 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+            if version == 4 {
+                return Ok(());
+            }
+            if version != 3 {
+                bail!("history search upgrade requires schema 3");
+            }
+            tx.execute_batch(
+                "CREATE VIRTUAL TABLE history_fts USING fts5(text, content='history', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2');
+                 INSERT INTO history_fts(history_fts, rank) VALUES('secure-delete', 1);
+                 CREATE TRIGGER history_ai AFTER INSERT ON history BEGIN
+                     INSERT INTO history_fts(rowid,text) VALUES(new.id,new.text);
+                 END;
+                 CREATE TRIGGER history_ad AFTER DELETE ON history BEGIN
+                     INSERT INTO history_fts(history_fts,rowid,text) VALUES('delete',old.id,old.text);
+                 END;
+                 CREATE TRIGGER history_au AFTER UPDATE OF text ON history BEGIN
+                     INSERT INTO history_fts(history_fts,rowid,text) VALUES('delete',old.id,old.text);
+                     INSERT INTO history_fts(rowid,text) VALUES(new.id,new.text);
+                 END;
+                 INSERT INTO history_fts(history_fts) VALUES('rebuild');
+                 PRAGMA user_version = 4;",
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
     }
     /// The same database file with new privacy settings (config reload).
     pub fn reopen(&self, enabled: bool, limit: usize) -> Result<Self> {
@@ -244,7 +244,9 @@ impl Store {
             return Ok(None);
         }
         self.run(move |conn| {
-            let tx = conn.transaction()?;
+            // Reads before writing, so it must wait for the write lock up front: a deferred
+            // read-then-write fails at once if the index upgrade commits in between.
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let old: Option<String> = tx
                 .query_row("SELECT text FROM history WHERE id = ?1", [id], |row| {
                     row.get(0)
@@ -367,6 +369,53 @@ impl Store {
         .await
     }
 }
+fn open_connection(path: Option<&Path>) -> Result<Connection> {
+    let connection = if let Some(path) = path {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            bail!("history path needs a parent directory and file name");
+        };
+        crate::paths::private_dir(parent)?;
+        // SQLite NOFOLLOW rejects symlinked ancestors such as macOS /var -> /private/var.
+        // Resolve only the validated parent, re-check it, and keep NOFOLLOW on the file.
+        let parent = parent.canonicalize()?;
+        crate::paths::private_dir(&parent)?;
+        let path = &parent.join(name);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(path)?;
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } {
+                bail!("unsafe history database file");
+            }
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?
+    } else {
+        Connection::open_in_memory()?
+    };
+    connection.busy_timeout(std::time::Duration::from_secs(2))?;
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        bail!("history database schema {version} is newer than this xflow");
+    }
+    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;")?;
+    Ok(connection)
+}
+
 fn clear_database(conn: &mut Connection) -> Result<()> {
     conn.execute("DELETE FROM history", [])?;
     let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
@@ -383,7 +432,7 @@ fn migrate(connection: &mut Connection) -> Result<()> {
     if version > SCHEMA_VERSION {
         bail!("history database schema {version} is newer than this xflow; upgrade xflow or move the database aside");
     }
-    if version == SCHEMA_VERSION {
+    if version >= 3 {
         return Ok(());
     }
     let tx = connection.transaction()?;
@@ -417,7 +466,7 @@ fn migrate(connection: &mut Connection) -> Result<()> {
     if version < 3 {
         tx.execute_batch("ALTER TABLE history ADD COLUMN cleanup TEXT;")?;
     }
-    tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+    tx.execute_batch("PRAGMA user_version = 3;")?;
     tx.commit()?;
     Ok(())
 }
@@ -525,6 +574,394 @@ mod tests {
             provider: "test".into(),
             ..HistoryEntry::default()
         }
+    }
+
+    fn snapshot(connection: &Connection) -> Vec<Vec<rusqlite::types::Value>> {
+        let mut statement = connection
+            .prepare("SELECT * FROM history ORDER BY id")
+            .unwrap();
+        statement
+            .query_map([], |row| {
+                (0..row.as_ref().column_count())
+                    .map(|i| row.get(i))
+                    .collect()
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    fn version(connection: &Connection) -> i64 {
+        connection
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn matches(store: &Store, query: &str) -> Vec<i64> {
+        let connection = store.connection.lock().unwrap();
+        let mut statement = connection
+            .prepare("SELECT rowid FROM history_fts WHERE history_fts MATCH ?1 ORDER BY rowid")
+            .unwrap();
+        statement
+            .query_map([query], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    fn check_fts(store: &Store) {
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO history_fts(history_fts, rank) VALUES('integrity-check', 1)",
+                [],
+            )
+            .unwrap();
+    }
+
+    fn checkpoint(store: &Store) {
+        let connection = store.connection.lock().unwrap();
+        let busy: i64 = connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(busy, 0);
+    }
+
+    fn contains_token(path: &Path, token: &str) -> bool {
+        std::fs::read(path)
+            .unwrap_or_else(|error| {
+                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+                vec![]
+            })
+            .windows(token.len())
+            .any(|bytes| bytes == token.as_bytes())
+    }
+
+    #[tokio::test]
+    async fn search_upgrade_preserves_all_v3_columns_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let original = Connection::open(&path).unwrap();
+        original
+            .execute_batch(include_str!("../tests/fixtures/history-v3.sql"))
+            .unwrap();
+        let rows = snapshot(&original);
+        drop(original);
+        let store = Store::open(&path, true, 500).unwrap();
+        assert_eq!(version(&store.connection.lock().unwrap()), 3);
+        assert_eq!(
+            store
+                .connection
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT count(*) FROM sqlite_schema WHERE name='history_fts'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        let (first, second) =
+            tokio::join!(store.upgrade_search_index(), store.upgrade_search_index());
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(version(&store.connection.lock().unwrap()), 4);
+        assert_eq!(snapshot(&store.connection.lock().unwrap()), rows);
+        assert_eq!(matches(&store, "hello"), [7]);
+        assert_eq!(matches(&store, "command"), [42]);
+        check_fts(&store);
+        checkpoint(&store);
+        let before = std::fs::read(&path).unwrap();
+        store.upgrade_search_index().await.unwrap();
+        let reopened = store.reopen(true, 500).unwrap();
+        assert_eq!(snapshot(&reopened.connection.lock().unwrap()), rows);
+        checkpoint(&store);
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn search_triggers_follow_append_edit_delete_prune_and_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db"), true, 3).unwrap();
+        store.upgrade_search_index().await.unwrap();
+        let first = store.append(entry("running café")).await.unwrap().unwrap();
+        assert_eq!(matches(&store, "run AND cafe"), [first.id]);
+        store.update(first.id, "replacement".into()).await.unwrap();
+        assert!(matches(&store, "run").is_empty());
+        assert_eq!(matches(&store, "replacement"), [first.id]);
+        // A metadata-only update must not write any FTS shadow table.
+        let before: Vec<Vec<rusqlite::types::Value>> = {
+            let connection = store.connection.lock().unwrap();
+            let mut statement = connection.prepare(
+                "SELECT id, block FROM history_fts_data UNION ALL SELECT segid, term FROM history_fts_idx"
+            ).unwrap();
+            statement
+                .query_map([], |r| Ok(vec![r.get(0)?, r.get(1)?]))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let changes = store.connection.lock().unwrap().total_changes();
+        store.set_latency(first.id, 123).await.unwrap();
+        assert_eq!(
+            store.connection.lock().unwrap().total_changes() - changes,
+            1
+        );
+        {
+            let connection = store.connection.lock().unwrap();
+            let mut statement = connection.prepare(
+                "SELECT id, block FROM history_fts_data UNION ALL SELECT segid, term FROM history_fts_idx"
+            ).unwrap();
+            let after = statement
+                .query_map([], |r| Ok(vec![r.get(0)?, r.get(1)?]))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<Vec<rusqlite::types::Value>>>>()
+                .unwrap();
+            assert_eq!(before, after);
+        }
+        let deleted = store.append(entry("deleted")).await.unwrap().unwrap();
+        store.delete(deleted.id).await.unwrap();
+        assert!(matches(&store, "deleted").is_empty());
+        for text in ["second", "third", "fourth"] {
+            let saved = store.append(entry(text)).await.unwrap().unwrap();
+            assert_eq!(matches(&store, text), [saved.id]);
+        }
+        assert!(matches(&store, "replacement").is_empty());
+        check_fts(&store);
+        // Reopen retention also deletes through the trigger.
+        let pruned = store.reopen(true, 1).unwrap();
+        assert!(matches(&pruned, "second OR third").is_empty());
+        check_fts(&pruned);
+        pruned.clear().await.unwrap();
+        assert!(matches(&pruned, "fourth").is_empty());
+        check_fts(&pruned);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn search_upgrade_serializes_with_a_history_correction() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db"), true, 10).unwrap();
+        let saved = store
+            .append(entry("before correction"))
+            .await
+            .unwrap()
+            .unwrap();
+        let (reading, read_started) = tokio::sync::oneshot::channel();
+        let (continue_write, writing) = std::sync::mpsc::channel();
+        let correcting = store.clone();
+        let correction = tokio::spawn(async move {
+            correcting
+                .run(move |conn| {
+                    // Reproduce the old read-then-write correction while an upgrade starts.
+                    let tx = conn.transaction()?;
+                    tx.query_row("SELECT text FROM history WHERE id=?1", [saved.id], |r| {
+                        r.get::<_, String>(0)
+                    })?;
+                    reading.send(()).unwrap();
+                    writing.recv().unwrap();
+                    tx.execute(
+                        "UPDATE history SET text='after correction' WHERE id=?1",
+                        [saved.id],
+                    )?;
+                    tx.commit()?;
+                    Ok(())
+                })
+                .await
+        });
+        read_started.await.unwrap();
+        let upgrading = store.clone();
+        let mut upgrade = tokio::spawn(async move { upgrading.upgrade_search_index().await });
+        // A second connection completes here and invalidates the correction's
+        // snapshot. The store queue instead waits until that correction commits.
+        let early = tokio::time::timeout(std::time::Duration::from_millis(100), &mut upgrade).await;
+        continue_write.send(()).unwrap();
+        correction.await.unwrap().unwrap();
+        match early {
+            Ok(result) => result.unwrap().unwrap(),
+            Err(_) => upgrade.await.unwrap().unwrap(),
+        }
+        assert_eq!(matches(&store, "after"), [saved.id]);
+        assert!(matches(&store, "before").is_empty());
+        check_fts(&store);
+    }
+
+    async fn privacy_store(path: &Path, token: &str) -> Store {
+        let store = Store::open(path, true, 500).unwrap();
+        store.append(entry(token)).await.unwrap();
+        for _ in 0..100 {
+            store.append(entry("synthetic filler")).await.unwrap();
+        }
+        store.upgrade_search_index().await.unwrap();
+        checkpoint(&store);
+        assert!(contains_token(path, token));
+        store
+    }
+
+    fn assert_token_erased(store: &Store, token: &str) {
+        checkpoint(store);
+        for path in [store.path.clone(), store.path.with_extension("db-wal")] {
+            assert!(
+                !contains_token(&path, token),
+                "deleted token remains in {}",
+                path.display()
+            );
+        }
+        assert!(matches(store, token).is_empty());
+        check_fts(store);
+    }
+
+    #[tokio::test]
+    async fn search_single_delete_erases_token_from_database_and_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = "zxqvuniquedeletetokenabcdefgh";
+        let store = privacy_store(&dir.path().join("history.db"), token).await;
+        assert!(store.delete(1).await.unwrap());
+        assert_token_erased(&store, token);
+        assert_eq!(store.history(1, 0, None).await.unwrap().1, 100);
+    }
+
+    #[tokio::test]
+    async fn search_clear_erases_token_from_database_and_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = "zxqvuniquecleartokenabcdefgh";
+        let store = privacy_store(&dir.path().join("history.db"), token).await;
+        store.clear().await.unwrap();
+        assert_token_erased(&store, token);
+    }
+
+    #[tokio::test]
+    async fn search_upgrade_disabled_leaves_files_untouched_and_clear_erases_v4() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing/history.db");
+        let disabled = Store::open(&missing, false, 0).unwrap();
+        disabled.upgrade_search_index().await.unwrap();
+        assert!(!missing.parent().unwrap().exists());
+        assert_eq!(
+            disabled
+                .connection
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT count(*) FROM sqlite_schema WHERE name='history_fts'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        let path = dir.path().join("history.db");
+        let token = "zxqvdisabledcleartokenabcdefgh";
+        let store = privacy_store(&path, token).await;
+        let before = std::fs::read(&path).unwrap();
+        let disabled = store.reopen(false, 0).unwrap();
+        disabled.upgrade_search_index().await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            disabled
+                .connection
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT count(*) FROM sqlite_schema WHERE name='history_fts'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        disabled.clear().await.unwrap();
+        assert_token_erased(&store, token);
+        assert_eq!(store.stats().await.unwrap().sessions, 0);
+    }
+
+    #[tokio::test]
+    async fn search_failed_upgrade_rolls_back_and_retries() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db"), true, 10).unwrap();
+        store.append(entry("preserved on failure")).await.unwrap();
+        let before = snapshot(&store.connection.lock().unwrap());
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute_batch("CREATE TRIGGER history_au AFTER UPDATE ON history BEGIN SELECT 1; END;")
+            .unwrap();
+        assert!(store.upgrade_search_index().await.is_err());
+        {
+            let connection = store.connection.lock().unwrap();
+            assert_eq!(version(&connection), 3);
+            assert_eq!(snapshot(&connection), before);
+            assert_eq!(connection.query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name LIKE 'history_fts%' OR name IN ('history_ai','history_ad')",
+                [], |r| r.get::<_, i64>(0)
+            ).unwrap(), 0);
+            connection
+                .execute_batch("DROP TRIGGER history_au;")
+                .unwrap();
+        }
+        // Ordinary history writes still work after the failed upgrade.
+        let saved = store.append(entry("after failure")).await.unwrap().unwrap();
+        store.upgrade_search_index().await.unwrap();
+        assert_eq!(matches(&store, "after"), [saved.id]);
+        check_fts(&store);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "release measurement: 100,000 synthetic 40-word rows with concurrent appends"]
+    async fn search_upgrade_large_history_measurement() {
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db"), true, 200_000).unwrap();
+        let text = (0..39)
+            .map(|i| format!("word{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        {
+            let mut connection = store.connection.lock().unwrap();
+            let tx = connection.transaction().unwrap();
+            {
+                let mut insert = tx
+                    .prepare("INSERT INTO history(text,provider,words) VALUES(?1,'synthetic',40)")
+                    .unwrap();
+                for i in 0..100_000 {
+                    insert.execute([format!("{text} unique{i}")]).unwrap();
+                }
+            }
+            tx.commit().unwrap();
+        }
+        let upgrading = store.clone();
+        let upgrade = tokio::spawn(async move {
+            let start = Instant::now();
+            let result = upgrading.upgrade_search_index().await;
+            (start.elapsed(), result)
+        });
+        let mut slowest = std::time::Duration::ZERO;
+        let mut successes = 0;
+        let mut failures = vec![];
+        let mut over_timeout = 0;
+        while !upgrade.is_finished() {
+            let start = Instant::now();
+            let result = store.append(entry("concurrent synthetic append")).await;
+            let elapsed = start.elapsed();
+            slowest = slowest.max(elapsed);
+            over_timeout += usize::from(elapsed > std::time::Duration::from_secs(2));
+            match result {
+                Ok(Some(_)) => successes += 1,
+                other => failures.push(format!("{other:?}")),
+            }
+        }
+        let (duration, result) = upgrade.await.unwrap();
+        eprintln!("M1A upgrade_ms={:.3} slowest_append_ms={:.3} successful_appends={successes} failures={failures:?} appends_over_2s={over_timeout}", duration.as_secs_f64()*1000.0, slowest.as_secs_f64()*1000.0);
+        result.unwrap();
+        assert_eq!(
+            store.history(1, 0, None).await.unwrap().1,
+            100_000 + successes
+        );
+        assert_eq!(matches(&store, "unique99999").len(), 1);
+        check_fts(&store);
     }
 
     #[tokio::test]
@@ -769,7 +1206,7 @@ mod tests {
         // A database from a newer xflow is refused, not rewritten.
         Connection::open(&path)
             .unwrap()
-            .execute_batch("PRAGMA user_version=4;")
+            .execute_batch("PRAGMA user_version=5;")
             .unwrap();
         assert!(Store::open(&path, true, 500).is_err());
     }
