@@ -39,6 +39,8 @@ struct State {
     generation: u64,
     active: bool,
     closed: bool,
+    /// Set once `release` has handed this generation back. A later release is stale.
+    released: bool,
     sample_rate: u32,
     channels: u16,
     epoch: u64,
@@ -63,6 +65,7 @@ impl State {
             generation: 0,
             active: false,
             closed: false,
+            released: false,
             sample_rate: 0,
             channels: 0,
             epoch: 0,
@@ -207,6 +210,11 @@ pub(crate) struct MeetingHub {
     generation_flag: AtomicU64,
     pending_chunks: AtomicU64,
     pending_frames: AtomicU64,
+    /// Callbacks that already observed an active lease. `release` waits for zero
+    /// before it finishes the gap, so a `try_lock` miss is not a silent tail.
+    inflight: AtomicU64,
+    /// `MeetingLease` drop could not queue a release. The audio thread closes hardware.
+    close_stream: AtomicBool,
     inner: Mutex<State>,
 }
 
@@ -219,8 +227,18 @@ impl MeetingHub {
             generation_flag: AtomicU64::new(0),
             pending_chunks: AtomicU64::new(0),
             pending_frames: AtomicU64::new(0),
+            inflight: AtomicU64::new(0),
+            close_stream: AtomicBool::new(false),
             inner: Mutex::new(State::empty()),
         })
+    }
+
+    pub(crate) fn request_stream_close(&self) {
+        self.close_stream.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn take_stream_close(&self) -> bool {
+        self.close_stream.load(Ordering::Acquire) && self.close_stream.swap(false, Ordering::AcqRel)
     }
 
     pub(crate) fn is_active(&self) -> bool {
@@ -257,6 +275,7 @@ impl MeetingHub {
         state.ensure_slots();
         state.active = true;
         state.closed = false;
+        state.released = false;
         state.sample_rate = format.sample_rate;
         state.channels = format.channels;
         state.epoch = format.epoch;
@@ -289,6 +308,8 @@ impl MeetingHub {
     where
         f32: FromSample<T>,
     {
+        // Inactive lease: one atomic load. Do not add atomics on this path.
+        // shortcut: inflight starts after this load so a no-lease callback stays one atomic; enter before the load when a missed tail after stop is worth those atomics.
         if !self.hot.load(Ordering::Acquire) || input.is_empty() {
             return None;
         }
@@ -296,19 +317,25 @@ impl MeetingHub {
         if channels == 0 {
             return None;
         }
+        let frames = (input.len() / channels) as u64;
+        let _flight = Flight::enter(&self.inflight);
+        if !self.hot.load(Ordering::Acquire) {
+            self.note_gap(frames);
+            return None;
+        }
         let host_us = opened.elapsed().as_micros() as u64;
         let rms = rms_of(input);
-        let frames = (input.len() / channels) as u64;
         let mut state = match self.inner.try_lock() {
             Ok(guard) => guard,
             Err(TryLockError::WouldBlock) => {
-                self.pending_chunks.fetch_add(1, Ordering::Relaxed);
-                self.pending_frames.fetch_add(frames, Ordering::Relaxed);
+                self.note_gap(frames);
                 return Some((rms, self.generation_flag.load(Ordering::Acquire)));
             }
             Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
         };
         if !state.active {
+            // The callback already saw the lease. A sealed release still owes this gap.
+            state.lose(frames.max(1));
             return None;
         }
         fold_pending(&mut state, &self.pending_chunks, &self.pending_frames);
@@ -330,18 +357,71 @@ impl MeetingHub {
         state.take_envelopes()
     }
 
-    /// Ends this generation. A different generation is left untouched, including its audio.
+    /// Ends this generation and hands back whatever is still queued, including after
+    /// `supersede`. A different generation, or a generation already released, is stale.
     pub(crate) fn release(&self, generation: u64) -> MeetingPull {
-        let mut state = self.lock();
-        if state.generation != generation || state.closed {
-            return MeetingPull::stale();
+        {
+            let mut state = self.lock();
+            if generation == 0 || state.generation != generation || state.released {
+                return MeetingPull::stale();
+            }
+            state.active = false;
+            state.closed = true;
+            state.released = true;
+            self.hot.store(false, Ordering::Release);
+            self.level.store(0, Ordering::Relaxed);
         }
-        state.active = false;
-        state.closed = true;
-        self.hot.store(false, Ordering::Release);
-        self.level.store(0, Ordering::Relaxed);
+        self.collect()
+    }
+
+    /// Frames that landed after `release` built its pull. Same generation only.
+    pub(crate) fn fold_late(&self, generation: u64, pull: &mut MeetingPull) {
+        while self.inflight.load(Ordering::Acquire) != 0 {
+            std::hint::spin_loop();
+        }
+        let mut state = self.lock();
+        if state.generation != generation {
+            return;
+        }
         fold_pending(&mut state, &self.pending_chunks, &self.pending_frames);
-        state.take_envelopes()
+        apply_gap(pull, &state);
+    }
+
+    fn note_gap(&self, frames: u64) {
+        self.pending_chunks.fetch_add(1, Ordering::Relaxed);
+        self.pending_frames
+            .fetch_add(frames.max(1), Ordering::Relaxed);
+    }
+
+    fn collect(&self) -> MeetingPull {
+        let mut pull = MeetingPull {
+            stale: false,
+            envelopes: Vec::new(),
+            fault: None,
+        };
+        let mut took = false;
+        loop {
+            while self.inflight.load(Ordering::Acquire) != 0 {
+                std::hint::spin_loop();
+            }
+            let mut state = self.lock();
+            fold_pending(&mut state, &self.pending_chunks, &self.pending_frames);
+            let quiet = self.inflight.load(Ordering::Acquire) == 0
+                && self.pending_chunks.load(Ordering::Acquire) == 0;
+            if !took && quiet {
+                pull = state.take_envelopes();
+                took = true;
+                fold_pending(&mut state, &self.pending_chunks, &self.pending_frames);
+            }
+            if took {
+                apply_gap(&mut pull, &state);
+                if self.inflight.load(Ordering::Acquire) == 0
+                    && self.pending_chunks.load(Ordering::Acquire) == 0
+                {
+                    return pull;
+                }
+            }
+        }
     }
 
     pub(crate) fn supersede(&self, reason: &str) -> bool {
@@ -365,6 +445,55 @@ impl MeetingHub {
         }
         state.detail = Some(message.to_owned());
         state.fault = Fault::Hardware;
+    }
+}
+
+struct Flight<'a>(&'a AtomicU64);
+
+impl<'a> Flight<'a> {
+    fn enter(counter: &'a AtomicU64) -> Self {
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self(counter)
+    }
+}
+
+impl Drop for Flight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Release);
+    }
+}
+
+fn apply_gap(pull: &mut MeetingPull, state: &State) {
+    if let Some(gap) = state.gap() {
+        if let Some(envelope) = pull
+            .envelopes
+            .iter_mut()
+            .find(|envelope| envelope.gap.is_some())
+        {
+            envelope.gap = Some(gap);
+        } else if let Some(envelope) = pull.envelopes.first_mut() {
+            envelope.gap = Some(gap);
+        } else {
+            pull.envelopes.push(CaptureEnvelope {
+                generation: state.generation,
+                source_id: state.source_id,
+                sample_rate: state.sample_rate,
+                channels: state.channels,
+                epoch: state.epoch,
+                host_us: 0,
+                frame_offset: state.frame_cursor,
+                frame_count: 0,
+                sequence: gap.to_sequence,
+                gap: Some(gap),
+                samples: Vec::new(),
+            });
+        }
+    }
+    match state.fault {
+        Fault::Overflow => pull.fault = state.fault_message(),
+        Fault::None => {}
+        _ if pull.fault.is_none() => pull.fault = state.fault_message(),
+        _ => {}
     }
 }
 
@@ -804,5 +933,45 @@ mod tests {
         let pulled = hub.pull(generation);
         assert_eq!(pulled.envelopes[0].samples, vec![0.2, 0.3]);
         assert!(pulled.fault.unwrap().contains("unplugged"));
+    }
+
+    #[test]
+    fn release_after_supersede_returns_the_queued_audio_and_the_reason() {
+        let hub = MeetingHub::inactive();
+        let generation = hub.activate(format()).unwrap();
+        hub.push(&[0.4_f32, 0.6], Instant::now());
+        assert!(hub.supersede(
+            "meeting capture stopped: dictation switched microphone; dictation settings were kept"
+        ));
+        let pulled = hub.release(generation);
+        assert!(!pulled.stale);
+        assert_eq!(pulled.envelopes[0].samples, vec![0.4, 0.6]);
+        assert!(pulled.fault.unwrap().contains("switched microphone"));
+        assert!(hub.release(generation).stale);
+    }
+
+    #[test]
+    fn callback_that_saw_the_lease_after_it_was_sealed_is_a_gap() {
+        let hub = MeetingHub::inactive();
+        let generation = hub.activate(format()).unwrap();
+        {
+            let mut state = hub.inner.lock().unwrap();
+            state.active = false;
+        }
+        hub.push(&[0.5_f32, 0.25, 0.125], Instant::now());
+        let pulled = hub.release(generation);
+        assert!(!pulled.stale);
+        let gap = pulled
+            .envelopes
+            .iter()
+            .find_map(|envelope| envelope.gap)
+            .unwrap();
+        assert_eq!(gap.frames, 3);
+        let delivered: u64 = pulled
+            .envelopes
+            .iter()
+            .map(|envelope| u64::from(envelope.frame_count))
+            .sum();
+        assert_eq!(delivered, 0);
     }
 }

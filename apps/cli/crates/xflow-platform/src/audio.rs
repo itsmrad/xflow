@@ -951,6 +951,14 @@ impl CpalCapture {
                             Err(_) => break,
                         },
                     };
+                    // A lease drop that found the command queue full already released the hub.
+                    if meeting.take_stream_close() {
+                        let dictation = dictation_active(&stream, &completed);
+                        if !fanout::stream_after_meeting_end(dictation, deadline, Instant::now()) {
+                            stream = None;
+                            deadline = None;
+                        }
+                    }
                     // Before any command uses the stream: if the bounded wake queue was
                     // full, the next command still observes the limit/failure flag. A
                     // failed idle warm stream has no recording but must not be reused.
@@ -963,12 +971,7 @@ impl CpalCapture {
                     match command {
                         Command::Start(reply) => {
                             let result = (|| {
-                                if completed.is_some()
-                                    || stream.as_ref().is_some_and(|s| {
-                                        s.buffer.active.load(Ordering::Acquire)
-                                            || s.buffer.limited.load(Ordering::Relaxed)
-                                    })
-                                {
+                                if dictation_busy(&stream, &completed) {
                                     bail!("already recording");
                                 }
                                 thread_finished.store(false, Ordering::Release);
@@ -1060,24 +1063,22 @@ impl CpalCapture {
                             }
                         }
                         Command::Stop(reply) => {
-                            let buffer = if let Some(open) = &stream {
+                            let taken = if let Some(open) = &stream {
                                 #[cfg(target_os = "macos")]
                                 open.check_input();
                                 let us = open.buffer.first_callback_us.load(Ordering::Relaxed);
                                 xflow_core::log("debug", &format!(
                                     "microphone startup latency open_to_first_callback_us={us}"
                                 ));
-                                let result = open.buffer.take();
-                                open.buffer.limited.store(false, Ordering::Release);
-                                result
+                                Some(end_dictation_take(open, &mut completed))
                             } else {
-                                Ok(None)
+                                None
                             };
-                            let result = buffer
-                                .and_then(|buffer| {
-                                    buffer.or_else(|| completed.take()).context("not recording")
-                                })
-                                .and_then(Recording::finish);
+                            let result = match taken {
+                                Some(result) => result,
+                                None => completed.take().context("not recording"),
+                            }
+                            .and_then(Recording::finish);
                             deadline = if result.is_ok() {
                                 warm_deadline(&config, stream.is_some(), Instant::now())
                             } else {
@@ -1139,7 +1140,6 @@ impl CpalCapture {
                                 &config,
                                 device.as_deref(),
                                 &mut stream,
-                                &mut completed,
                                 &mut generation,
                                 &meeting,
                                 &callback_sender,
@@ -1230,7 +1230,11 @@ impl MeetingLease {
             .context("audio thread stopped")?;
         // The command is queued; Drop must not release this generation again.
         self.generation = 0;
-        receive.await.context("audio thread stopped")
+        let mut pull = receive.await.context("audio thread stopped")?;
+        if !pull.stale {
+            self.hub.fold_late(generation, &mut pull);
+        }
+        Ok(pull)
     }
 }
 
@@ -1239,12 +1243,34 @@ impl Drop for MeetingLease {
         if self.generation == 0 {
             return;
         }
+        let generation = self.generation;
+        self.generation = 0;
         let (reply, _receive) = oneshot::channel();
-        let _ = self.sender.send(Command::MeetingRelease {
-            generation: self.generation,
-            reply,
-        });
+        if self
+            .sender
+            .try_send(Command::MeetingRelease { generation, reply })
+            .is_err()
+        {
+            // The queue is full or the thread is gone. Release here so the lease
+            // cannot stay hot, and ask the thread to close hardware if it is still alive.
+            self.hub.release(generation);
+            self.hub.request_stream_close();
+        }
     }
+}
+
+fn dictation_busy(stream: &Option<OpenStream>, completed: &Option<Recording>) -> bool {
+    completed.is_some()
+        || stream.as_ref().is_some_and(|open| {
+            open.buffer.active.load(Ordering::Acquire)
+                || open.buffer.limited.load(Ordering::Relaxed)
+        })
+}
+
+fn end_dictation_take(open: &OpenStream, completed: &mut Option<Recording>) -> Result<Recording> {
+    let taken = open.buffer.take();
+    open.buffer.limited.store(false, Ordering::Release);
+    taken.and_then(|buffer| buffer.or_else(|| completed.take()).context("not recording"))
 }
 
 fn dictation_active(stream: &Option<OpenStream>, completed: &Option<Recording>) -> bool {
@@ -1290,6 +1316,14 @@ fn retire_capture(
     }
     if failed && meeting.is_active() {
         meeting.fail_hardware("microphone stream failed");
+        if let Some(open) = stream.take() {
+            if completed.is_none() {
+                *completed = open.buffer.take().ok().flatten();
+            }
+        }
+        *deadline = None;
+        level.store(0, Ordering::Relaxed);
+        return;
     }
     if let Some(open) = stream.take() {
         *completed = open.buffer.take().ok().flatten();
@@ -1298,12 +1332,25 @@ fn retire_capture(
     level.store(0, Ordering::Relaxed);
 }
 
+fn accept_opened_meeting(
+    open: OpenStream,
+    stream: &mut Option<OpenStream>,
+    finished: &AtomicBool,
+    level: &AtomicU32,
+) {
+    // open_stream starts a dictation buffer. Nobody asked dictation to record.
+    let _ = open.buffer.take();
+    open.buffer.limited.store(false, Ordering::Release);
+    finished.store(false, Ordering::Release);
+    level.store(0, Ordering::Relaxed);
+    *stream = Some(open);
+}
+
 #[allow(clippy::too_many_arguments)] // one audio-thread call; the handles are the thread's locals
 fn acquire_meeting(
     config: &RecordingConfig,
     device: Option<&str>,
     stream: &mut Option<OpenStream>,
-    completed: &mut Option<Recording>,
     generation: &mut u64,
     meeting: &fanout::MeetingHub,
     callback_sender: &mpsc::SyncSender<Command>,
@@ -1339,14 +1386,8 @@ fn acquire_meeting(
         if let Ok(mut slot) = microphone.lock() {
             *slot = Some(open.microphone.clone());
         }
-        // open_stream starts a dictation buffer. Nobody asked dictation to record.
-        let _ = open.buffer.take();
-        open.buffer.limited.store(false, Ordering::Release);
-        finished.store(false, Ordering::Release);
-        level.store(0, Ordering::Relaxed);
-        *completed = None;
         // shortcut: callbacks during open_stream itself are before the lease; no meeting prebuffer, arm the callback with the format before play when that can be done without touching the macOS openers.
-        *stream = Some(open);
+        accept_opened_meeting(open, stream, finished, level);
     }
     let (name, sample_rate, channels, epoch, device_id) = {
         let open = stream.as_ref().context("microphone did not open")?;
@@ -2993,5 +3034,143 @@ mod tests {
             "meeting capture stopped: dictation switched microphone; dictation settings were kept",
         );
         assert!(!capture.meeting.is_active());
+    }
+
+    fn idle_stream(buffer: Arc<CaptureBuffer>) -> OpenStream {
+        OpenStream {
+            _stream: Box::new(()),
+            buffer,
+            sample_rate: 8_000,
+            channels: 1,
+            generation: 1,
+            microphone: "test".into(),
+            device_id: None,
+            #[cfg(target_os = "macos")]
+            render_errors: Default::default(),
+        }
+    }
+
+    fn limited_lease() -> (
+        Arc<CaptureBuffer>,
+        Arc<fanout::MeetingHub>,
+        Option<OpenStream>,
+    ) {
+        let finished = Arc::new(AtomicBool::new(false));
+        let buffer = CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished).unwrap();
+        buffer
+            .recording
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .push(&[0.2_f32, 0.4, 0.6]);
+        buffer.active.store(false, Ordering::Release);
+        buffer.limited.store(true, Ordering::Release);
+        let meeting = Arc::clone(&buffer.meeting);
+        meeting
+            .activate(fanout::Format {
+                sample_rate: 8_000,
+                channels: 1,
+                epoch: 1,
+                source_id: 1,
+            })
+            .unwrap();
+        let stream = Some(idle_stream(buffer.clone()));
+        (buffer, meeting, stream)
+    }
+
+    #[test]
+    fn device_failure_keeps_a_parked_dictation_clip() {
+        let (buffer, meeting, mut stream) = limited_lease();
+        let mut completed = None;
+        let mut deadline = None;
+        let level = AtomicU32::new(0);
+        retire_capture(&mut stream, &mut completed, &mut deadline, &meeting, &level);
+        assert!(stream.is_some());
+        assert_eq!(completed.as_ref().unwrap().samples, vec![0.2, 0.4, 0.6]);
+        buffer.failed.store(true, Ordering::Release);
+        retire_capture(&mut stream, &mut completed, &mut deadline, &meeting, &level);
+        assert!(stream.is_none());
+        assert_eq!(completed.unwrap().samples, vec![0.2, 0.4, 0.6]);
+    }
+
+    #[test]
+    fn limit_on_a_live_lease_restarts_on_the_kept_stream_after_stop() {
+        let (_buffer, meeting, mut stream) = limited_lease();
+        let mut completed = None;
+        let mut deadline = None;
+        let level = AtomicU32::new(0);
+        retire_capture(&mut stream, &mut completed, &mut deadline, &meeting, &level);
+        assert!(dictation_busy(&stream, &completed));
+        if stream
+            .as_ref()
+            .is_some_and(|open| open.buffer.limited.load(Ordering::Acquire))
+        {
+            retire_capture(&mut stream, &mut completed, &mut deadline, &meeting, &level);
+        }
+        let clip = end_dictation_take(stream.as_ref().unwrap(), &mut completed).unwrap();
+        assert_eq!(clip.samples, vec![0.2, 0.4, 0.6]);
+        assert!(!dictation_busy(&stream, &completed));
+        assert!(stream.is_some());
+        assert!(!fanout::drop_stream_on_dictation_stop(
+            meeting.is_active(),
+            None
+        ));
+        stream
+            .as_ref()
+            .unwrap()
+            .buffer
+            .begin(Recording::new(8_000, 1, &RecordingConfig::default()).unwrap())
+            .unwrap();
+        stream
+            .as_ref()
+            .unwrap()
+            .buffer
+            .recording
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .push(&[0.9_f32]);
+        assert_eq!(clip.samples, vec![0.2, 0.4, 0.6]);
+        assert_eq!(
+            stream
+                .as_ref()
+                .unwrap()
+                .buffer
+                .recording
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .samples,
+            vec![0.9]
+        );
+    }
+
+    #[test]
+    fn drop_on_a_full_command_channel_releases_the_lease() {
+        let hub = fanout::MeetingHub::inactive();
+        let generation = hub
+            .activate(fanout::Format {
+                sample_rate: 8_000,
+                channels: 1,
+                epoch: 1,
+                source_id: 1,
+            })
+            .unwrap();
+        hub.push(&[0.2_f32, 0.3], Instant::now());
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(0);
+        let lease = MeetingLease {
+            hub: Arc::clone(&hub),
+            sender,
+            generation,
+        };
+        let started = Instant::now();
+        drop(lease);
+        assert!(started.elapsed() < Duration::from_millis(200));
+        assert!(!hub.is_active());
+        assert!(hub.take_stream_close());
+        assert!(hub.release(generation).stale);
     }
 }
