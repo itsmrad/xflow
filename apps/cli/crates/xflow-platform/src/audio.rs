@@ -2,6 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SizedSample};
+use std::cell::RefCell;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     mpsc, Arc, Mutex,
@@ -10,8 +11,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use xflow_core::{
     config::{RecordingConfig, MAX_RECORDING_SECS},
-    AudioCapture, AudioClip,
+    meeting_blocked_by_dictation, AudioCapture, AudioClip, MeetingPull,
 };
+
+#[path = "audio/fanout.rs"]
+mod fanout;
 
 enum Command {
     Start(oneshot::Sender<Result<()>>),
@@ -19,6 +23,18 @@ enum Command {
     Cancel(oneshot::Sender<Result<()>>),
     Drain(oneshot::Sender<Result<Option<AudioClip>>>),
     Limit(u64),
+    MeetingAcquire {
+        device: Option<String>,
+        reply: oneshot::Sender<Result<u64>>,
+    },
+    MeetingRelease {
+        generation: u64,
+        reply: oneshot::Sender<MeetingPull>,
+    },
+    MeetingSupersede {
+        reason: String,
+        reply: oneshot::Sender<()>,
+    },
     Shutdown,
 }
 
@@ -29,6 +45,22 @@ pub struct CpalCapture {
     level: Arc<AtomicU32>,
     finished: Arc<AtomicBool>,
     microphone: Arc<Mutex<Option<String>>>,
+    meeting: Arc<fanout::MeetingHub>,
+}
+
+// The macOS openers call `CaptureBuffer::open` and then build the callback.
+// The hub has to already be inside that buffer, or those openers would need
+// new parameters. The audio thread publishes it here before any open.
+thread_local! {
+    static MEETING_OPEN: RefCell<Option<Arc<fanout::MeetingHub>>> = const { RefCell::new(None) };
+}
+
+fn meeting_for_open() -> Arc<fanout::MeetingHub> {
+    MEETING_OPEN.with(|slot| {
+        slot.borrow()
+            .clone()
+            .unwrap_or_else(fanout::MeetingHub::inactive)
+    })
 }
 
 struct Recording {
@@ -602,6 +634,7 @@ struct CaptureBuffer {
     // Per buffer, unlike `limited`: also set when an idle warm stream fails.
     failed: AtomicBool,
     first_callback_us: AtomicU64,
+    meeting: Arc<fanout::MeetingHub>,
 }
 
 impl CaptureBuffer {
@@ -636,6 +669,7 @@ impl CaptureBuffer {
             limited,
             failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
+            meeting: meeting_for_open(),
         }))
     }
 
@@ -885,9 +919,13 @@ impl CpalCapture {
         let microphone = Arc::new(Mutex::new(None));
         let thread_microphone = microphone.clone();
         let config = config.clone();
+        let meeting = fanout::MeetingHub::inactive();
+        let thread_meeting = Arc::clone(&meeting);
         std::thread::Builder::new()
             .name("xflow-audio".into())
             .spawn(move || {
+                MEETING_OPEN.with(|slot| *slot.borrow_mut() = Some(Arc::clone(&thread_meeting)));
+                let meeting = thread_meeting;
                 let mut stream: Option<OpenStream> = None;
                 let mut completed: Option<Recording> = None;
                 let mut generation = 0_u64;
@@ -899,8 +937,11 @@ impl CpalCapture {
                         {
                             Ok(command) => command,
                             Err(mpsc::RecvTimeoutError::Timeout) => {
-                                stream = None;
                                 deadline = None;
+                                // Warm window ended. A meeting lease is the remaining owner.
+                                if fanout::drop_stream_on_dictation_cancel(meeting.is_active()) {
+                                    stream = None;
+                                }
                                 continue;
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -917,11 +958,7 @@ impl CpalCapture {
                         s.buffer.limited.load(Ordering::Acquire)
                             || s.buffer.failed.load(Ordering::Acquire)
                     }) {
-                        if let Some(open) = stream.take() {
-                            completed = open.buffer.take().ok().flatten();
-                        }
-                        deadline = None;
-                        thread_level.store(0, Ordering::Relaxed);
+                        retire_capture(&mut stream, &mut completed, &mut deadline, &meeting, &thread_level);
                     }
                     match command {
                         Command::Start(reply) => {
@@ -960,10 +997,23 @@ impl CpalCapture {
                                 if stream.as_ref().zip(selected.as_ref()).is_some_and(
                                     |(open, (_, choice))| open.device_id != choice.device_id,
                                 ) {
+                                    if meeting.is_active() {
+                                        meeting.supersede(
+                                            "meeting capture stopped: dictation switched microphone; dictation settings were kept",
+                                        );
+                                    }
                                     stream = None;
                                 }
                                 #[cfg(target_os = "macos")]
-                                retire_dead_warm(&mut stream)?;
+                                {
+                                    let armed = meeting.is_active();
+                                    if let Err(error) = retire_dead_warm(&mut stream) {
+                                        if armed {
+                                            meeting.fail_hardware("warm microphone disconnected");
+                                        }
+                                        return Err(error);
+                                    }
+                                }
                                 if let Some(open) = &mut stream {
                                     if let Some((_, choice)) = &selected {
                                         open.microphone = choice.description();
@@ -1000,9 +1050,13 @@ impl CpalCapture {
                             })();
                             let started = result.is_ok();
                             if reply.send(result).is_err() && started {
-                                stream = None;
-                                completed = None;
-                                thread_level.store(0, Ordering::Relaxed);
+                                if meeting.is_active() {
+                                    disarm_dictation(&stream, &mut completed, &thread_level);
+                                } else {
+                                    stream = None;
+                                    completed = None;
+                                    thread_level.store(0, Ordering::Relaxed);
+                                }
                             }
                         }
                         Command::Stop(reply) => {
@@ -1029,7 +1083,7 @@ impl CpalCapture {
                             } else {
                                 None
                             };
-                            if deadline.is_none() {
+                            if fanout::drop_stream_on_dictation_stop(meeting.is_active(), deadline) {
                                 stream = None;
                             }
                             thread_level.store(0, Ordering::Relaxed);
@@ -1037,11 +1091,17 @@ impl CpalCapture {
                             let _ = reply.send(result);
                         }
                         Command::Cancel(reply) => {
-                            stream = None;
-                            completed = None;
-                            deadline = None;
-                            thread_level.store(0, Ordering::Relaxed);
-                            thread_finished.store(false, Ordering::Release);
+                            if fanout::drop_stream_on_dictation_cancel(meeting.is_active()) {
+                                stream = None;
+                                completed = None;
+                                deadline = None;
+                                thread_level.store(0, Ordering::Relaxed);
+                                thread_finished.store(false, Ordering::Release);
+                            } else {
+                                disarm_dictation(&stream, &mut completed, &thread_level);
+                                deadline = None;
+                                thread_finished.store(false, Ordering::Release);
+                            }
                             let _ = reply.send(Ok(()));
                         }
                         Command::Drain(reply) => {
@@ -1065,14 +1125,57 @@ impl CpalCapture {
                             if stream.as_ref().is_some_and(|s| {
                                 s.generation == source && s.buffer.limited.load(Ordering::Acquire)
                             }) {
-                                if let Some(open) = stream.take() {
-                                    completed = open.buffer.take().ok().flatten();
-                                }
-                                deadline = None;
-                                thread_level.store(0, Ordering::Relaxed);
+                                retire_capture(
+                                    &mut stream,
+                                    &mut completed,
+                                    &mut deadline,
+                                    &meeting,
+                                    &thread_level,
+                                );
                             }
                         }
-                        Command::Shutdown => break,
+                        Command::MeetingAcquire { device, reply } => {
+                            let result = acquire_meeting(
+                                &config,
+                                device.as_deref(),
+                                &mut stream,
+                                &mut completed,
+                                &mut generation,
+                                &meeting,
+                                &callback_sender,
+                                &thread_level,
+                                &thread_finished,
+                                &thread_microphone,
+                            );
+                            let _ = reply.send(result);
+                        }
+                        Command::MeetingRelease { generation: lease, reply } => {
+                            let pull = meeting.release(lease);
+                            if !pull.stale {
+                                let dictation = dictation_active(&stream, &completed);
+                                if !fanout::stream_after_meeting_end(dictation, deadline, Instant::now())
+                                {
+                                    stream = None;
+                                    deadline = None;
+                                }
+                            }
+                            let _ = reply.send(pull);
+                        }
+                        Command::MeetingSupersede { reason, reply } => {
+                            if meeting.supersede(&reason) {
+                                let dictation = dictation_active(&stream, &completed);
+                                if !fanout::stream_after_meeting_end(dictation, deadline, Instant::now())
+                                {
+                                    stream = None;
+                                    deadline = None;
+                                }
+                            }
+                            let _ = reply.send(());
+                        }
+                        Command::Shutdown => {
+                            meeting.supersede("audio capture stopped");
+                            break;
+                        }
                     }
                 }
             })
@@ -1082,8 +1185,198 @@ impl CpalCapture {
             level,
             finished,
             microphone,
+            meeting,
         })
     }
+
+    /// Internal meeting subscription. Not a CLI, config, or IPC entry point.
+    pub async fn acquire_meeting(&self, device: Option<String>) -> Result<MeetingLease> {
+        let (reply, receive) = oneshot::channel();
+        self.sender
+            .send(Command::MeetingAcquire { device, reply })
+            .context("audio thread stopped")?;
+        let generation = receive.await.context("audio thread stopped")??;
+        Ok(MeetingLease {
+            hub: Arc::clone(&self.meeting),
+            sender: self.sender.clone(),
+            generation,
+        })
+    }
+}
+
+/// Dictation's compatibility handle is [`AudioCapture`] on [`CpalCapture`].
+/// This lease is the other consumer of the same microphone.
+pub struct MeetingLease {
+    hub: Arc<fanout::MeetingHub>,
+    sender: mpsc::SyncSender<Command>,
+    generation: u64,
+}
+
+impl MeetingLease {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub fn level(&self) -> f32 {
+        self.hub.level()
+    }
+    pub fn drain(&self) -> MeetingPull {
+        self.hub.pull(self.generation)
+    }
+    pub async fn stop(mut self) -> Result<MeetingPull> {
+        let generation = self.generation;
+        let (reply, receive) = oneshot::channel();
+        self.sender
+            .send(Command::MeetingRelease { generation, reply })
+            .context("audio thread stopped")?;
+        // The command is queued; Drop must not release this generation again.
+        self.generation = 0;
+        receive.await.context("audio thread stopped")
+    }
+}
+
+impl Drop for MeetingLease {
+    fn drop(&mut self) {
+        if self.generation == 0 {
+            return;
+        }
+        let (reply, _receive) = oneshot::channel();
+        let _ = self.sender.send(Command::MeetingRelease {
+            generation: self.generation,
+            reply,
+        });
+    }
+}
+
+fn dictation_active(stream: &Option<OpenStream>, completed: &Option<Recording>) -> bool {
+    completed.is_some()
+        || stream
+            .as_ref()
+            .is_some_and(|open| open.buffer.active.load(Ordering::Acquire))
+}
+
+fn disarm_dictation(
+    stream: &Option<OpenStream>,
+    completed: &mut Option<Recording>,
+    level: &AtomicU32,
+) {
+    if let Some(open) = stream {
+        let _ = open.buffer.take();
+        open.buffer.limited.store(false, Ordering::Release);
+    }
+    *completed = None;
+    level.store(0, Ordering::Relaxed);
+}
+
+/// Dictation hit its sample cap or the device failed. A live meeting keeps a
+/// healthy stream; a dead device closes for both.
+fn retire_capture(
+    stream: &mut Option<OpenStream>,
+    completed: &mut Option<Recording>,
+    deadline: &mut Option<Instant>,
+    meeting: &fanout::MeetingHub,
+    level: &AtomicU32,
+) {
+    let failed = stream
+        .as_ref()
+        .is_some_and(|open| open.buffer.failed.load(Ordering::Acquire));
+    if meeting.is_active() && !failed {
+        if completed.is_none() {
+            if let Some(open) = stream.as_ref() {
+                *completed = open.buffer.take().ok().flatten();
+            }
+        }
+        level.store(0, Ordering::Relaxed);
+        return;
+    }
+    if failed && meeting.is_active() {
+        meeting.fail_hardware("microphone stream failed");
+    }
+    if let Some(open) = stream.take() {
+        *completed = open.buffer.take().ok().flatten();
+    }
+    *deadline = None;
+    level.store(0, Ordering::Relaxed);
+}
+
+#[allow(clippy::too_many_arguments)] // one audio-thread call; the handles are the thread's locals
+fn acquire_meeting(
+    config: &RecordingConfig,
+    device: Option<&str>,
+    stream: &mut Option<OpenStream>,
+    completed: &mut Option<Recording>,
+    generation: &mut u64,
+    meeting: &fanout::MeetingHub,
+    callback_sender: &mpsc::SyncSender<Command>,
+    level: &Arc<AtomicU32>,
+    finished: &Arc<AtomicBool>,
+    microphone: &Arc<Mutex<Option<String>>>,
+) -> Result<u64> {
+    if meeting.is_active() {
+        bail!("a meeting capture is already active");
+    }
+    let live = stream.as_ref().map(|open| fanout::LiveCapture {
+        device_name: open.microphone.clone(),
+        sample_rate: open.sample_rate,
+        channels: open.channels,
+    });
+    if let Some(why) = fanout::meeting_refusal(config, live.as_ref(), device) {
+        bail!(why);
+    }
+    let opened_here = stream.is_none();
+    if opened_here {
+        let opened = Instant::now();
+        let selected = select_device(config)?;
+        *generation = generation.wrapping_add(1);
+        let open = open_stream(
+            config,
+            selected,
+            callback_sender.clone(),
+            Arc::clone(level),
+            *generation,
+            Arc::clone(finished),
+            opened,
+        )?;
+        if let Ok(mut slot) = microphone.lock() {
+            *slot = Some(open.microphone.clone());
+        }
+        // open_stream starts a dictation buffer. Nobody asked dictation to record.
+        let _ = open.buffer.take();
+        open.buffer.limited.store(false, Ordering::Release);
+        finished.store(false, Ordering::Release);
+        level.store(0, Ordering::Relaxed);
+        *completed = None;
+        // shortcut: callbacks during open_stream itself are before the lease; no meeting prebuffer, arm the callback with the format before play when that can be done without touching the macOS openers.
+        *stream = Some(open);
+    }
+    let (name, sample_rate, channels, epoch, device_id) = {
+        let open = stream.as_ref().context("microphone did not open")?;
+        (
+            open.microphone.clone(),
+            open.sample_rate,
+            open.channels,
+            open.generation,
+            open.device_id,
+        )
+    };
+    let live = fanout::LiveCapture {
+        device_name: name,
+        sample_rate,
+        channels,
+    };
+    if let Some(why) = fanout::meeting_refusal(config, Some(&live), device) {
+        if opened_here {
+            *stream = None;
+        }
+        bail!(why);
+    }
+    meeting
+        .activate(fanout::Format {
+            sample_rate,
+            channels,
+            epoch,
+            source_id: u64::from(device_id.unwrap_or(0)),
+        })
+        .map_err(|error| anyhow!(error))
 }
 
 fn open_stream(
@@ -1203,6 +1496,8 @@ where
 {
     let mut first = true;
     let mut smoothed = 0.0;
+    let mut meeting_smoothed = 0.0;
+    let mut meeting_generation = 0_u64;
     move |input: &[T]| {
         if first {
             buffer.first_callback_us.store(
@@ -1210,6 +1505,19 @@ where
                 Ordering::Relaxed,
             );
             first = false;
+        }
+        // Inactive lease: one atomic load, then the dictation path below is unchanged.
+        if let Some((rms, generation)) = buffer.meeting.push(input, opened) {
+            if generation != meeting_generation {
+                meeting_generation = generation;
+                meeting_smoothed = 0.0;
+            }
+            meeting_smoothed = smooth_level(
+                meeting_smoothed,
+                rms,
+                input.len() as f32 / samples_per_second,
+            );
+            buffer.meeting.store_level(meeting_smoothed);
         }
         if !buffer.active.load(Ordering::Acquire) {
             smoothed = 0.0;
@@ -1258,7 +1566,11 @@ where
             config,
             move |input: &[T], _| handle(input),
             move |error| {
-                error_buffer.fail(error.to_string());
+                let message = error.to_string();
+                if error_buffer.meeting.is_active() {
+                    error_buffer.meeting.fail_hardware(&message);
+                }
+                error_buffer.fail(message);
                 // Never block a CPAL callback on the worker that drops its stream.
                 let _ = sender.try_send(Command::Limit(generation));
             },
@@ -1531,6 +1843,27 @@ impl AudioCapture for CpalCapture {
     }
     fn finished(&self) -> bool {
         self.finished.load(Ordering::Acquire)
+    }
+    fn meeting_conflict(&self, old: &RecordingConfig, next: &RecordingConfig) -> Option<String> {
+        if !self.meeting.is_active() {
+            return None;
+        }
+        meeting_blocked_by_dictation(old, next).map(str::to_owned)
+    }
+    fn end_meeting(&self, reason: &str) {
+        let (reply, receive) = oneshot::channel();
+        if self
+            .sender
+            .send(Command::MeetingSupersede {
+                reason: reason.to_owned(),
+                reply,
+            })
+            .is_err()
+        {
+            self.meeting.supersede(reason);
+            return;
+        }
+        let _ = receive.blocking_recv();
     }
 }
 
@@ -2251,6 +2584,7 @@ mod tests {
             limited: Arc::new(AtomicBool::new(false)),
             failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
+            meeting: fanout::MeetingHub::inactive(),
         };
         assert!(buffer.take().unwrap().is_none());
         buffer
@@ -2352,6 +2686,7 @@ mod tests {
             limited: Arc::new(AtomicBool::new(false)),
             failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
+            meeting: fanout::MeetingHub::inactive(),
         };
         buffer
             .recording
@@ -2467,6 +2802,7 @@ mod tests {
             limited: finished.clone(),
             failed: AtomicBool::new(false),
             first_callback_us: AtomicU64::new(0),
+            meeting: fanout::MeetingHub::inactive(),
         };
         let (sender, _receiver) = mpsc::sync_channel(16);
         let capture = CpalCapture {
@@ -2474,6 +2810,7 @@ mod tests {
             level: Arc::new(AtomicU32::new(0)),
             finished,
             microphone: Arc::new(Mutex::new(None)),
+            meeting: fanout::MeetingHub::inactive(),
         };
         buffer
             .begin(Recording::new(2, 1, &RecordingConfig::default()).unwrap())
@@ -2510,5 +2847,151 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn callback_fans_out_and_either_drain_leaves_the_other_intact() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let buffer =
+            CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished.clone()).unwrap();
+        let generation = buffer
+            .meeting
+            .activate(fanout::Format {
+                sample_rate: 8_000,
+                channels: 1,
+                epoch: 1,
+                source_id: 4,
+            })
+            .unwrap();
+        let level = Arc::new(AtomicU32::new(0));
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let mut handle = input_handler::<f32>(
+            buffer.clone(),
+            sender,
+            level.clone(),
+            1,
+            Instant::now(),
+            8_000.0,
+        );
+        handle(&[0.5, -0.25, 0.25]);
+        let dictation = buffer.drain().unwrap().unwrap();
+        let meeting = buffer.meeting.pull(generation);
+        assert_eq!(dictation.samples, vec![0.5, -0.25, 0.25]);
+        assert_eq!(meeting.envelopes[0].samples, dictation.samples);
+        assert_eq!(meeting.envelopes[0].frame_count, 3);
+        let first_host = meeting.envelopes[0].host_us;
+        assert!(buffer.meeting.level() > 0.0);
+        assert!(f32::from_bits(level.load(Ordering::Relaxed)) > 0.0);
+        handle(&[0.125]);
+        let second = buffer.meeting.pull(generation);
+        assert!(second.envelopes[0].host_us >= first_host);
+        assert_eq!(second.envelopes[0].samples, vec![0.125]);
+        assert!(buffer.drain().unwrap().unwrap().samples == vec![0.125]);
+    }
+
+    #[test]
+    fn meeting_level_is_independent_while_dictation_is_idle() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let buffer = CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished).unwrap();
+        buffer.take().unwrap();
+        buffer
+            .meeting
+            .activate(fanout::Format {
+                sample_rate: 8_000,
+                channels: 1,
+                epoch: 1,
+                source_id: 1,
+            })
+            .unwrap();
+        let level = Arc::new(AtomicU32::new(0));
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let mut handle = input_handler::<f32>(
+            buffer.clone(),
+            sender,
+            level.clone(),
+            1,
+            Instant::now(),
+            8_000.0,
+        );
+        handle(&[0.8, 0.8, 0.8, 0.8]);
+        assert_eq!(level.load(Ordering::Relaxed), 0);
+        assert!(buffer.meeting.level() > 0.0);
+        assert!(buffer.recording.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn hardware_failure_reaches_dictation_and_the_meeting() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let buffer =
+            CaptureBuffer::open(8_000, 1, &RecordingConfig::default(), finished.clone()).unwrap();
+        let generation = buffer
+            .meeting
+            .activate(fanout::Format {
+                sample_rate: 8_000,
+                channels: 1,
+                epoch: 2,
+                source_id: 1,
+            })
+            .unwrap();
+        buffer
+            .recording
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .push(&[0.3_f32, 0.4]);
+        buffer.meeting.push(&[0.3_f32, 0.4], Instant::now());
+        if buffer.meeting.is_active() {
+            buffer
+                .meeting
+                .fail_hardware("microphone stream failed: unplugged");
+        }
+        buffer.fail("unplugged".into());
+        let meeting = buffer.meeting.pull(generation);
+        assert_eq!(meeting.envelopes[0].samples, vec![0.3, 0.4]);
+        assert!(meeting.fault.unwrap().contains("unplugged"));
+        let error = buffer.take().unwrap().unwrap().finish().unwrap_err();
+        assert!(error.to_string().contains("unplugged"));
+        assert!(finished.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn speaker_cancellation_and_a_different_device_refuse_before_open() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let speakers = RecordingConfig {
+            ignore_speakers: true,
+            ..RecordingConfig::default()
+        };
+        let capture = CpalCapture::new(&speakers).unwrap();
+        let error = match runtime.block_on(capture.acquire_meeting(None)) {
+            Err(error) => error.to_string(),
+            Ok(_lease) => panic!("speaker cancellation must refuse the lease"),
+        };
+        assert!(error.contains("ignore_speakers") && error.contains("unchanged"));
+        assert!(!capture.meeting.is_active());
+        drop(capture);
+
+        let named = RecordingConfig {
+            device: Some("Built-in".into()),
+            ..RecordingConfig::default()
+        };
+        let capture = CpalCapture::new(&named).unwrap();
+        let error = match runtime.block_on(capture.acquire_meeting(Some("USB Microphone".into()))) {
+            Err(error) => error.to_string(),
+            Ok(_lease) => panic!("a different microphone must refuse the lease"),
+        };
+        assert!(error.contains("USB Microphone"));
+        assert!(!capture.meeting.is_active());
+        let old = named.clone();
+        let mut next = named.clone();
+        next.device = Some("USB Microphone".into());
+        assert!(capture.meeting_conflict(&old, &next).is_none());
+        capture.end_meeting(
+            "meeting capture stopped: dictation switched microphone; dictation settings were kept",
+        );
+        assert!(!capture.meeting.is_active());
     }
 }

@@ -3331,11 +3331,25 @@ fn delivery_message(warning: Option<String>, outcome: Option<InjectionOutcome>) 
         warning.map(|s| bounded_message(&s))
     }
 }
+/// A recording-config change rebuilds the microphone owner. End a meeting lease
+/// first, with a reason, and leave dictation's new settings alone.
+fn release_meeting_for_dictation(
+    audio: &dyn AudioCapture,
+    old: &xflow_core::config::RecordingConfig,
+    next: &xflow_core::config::RecordingConfig,
+) {
+    if let Some(reason) = audio.meeting_conflict(old, next) {
+        audio.end_meeting(&reason);
+        log("warn", &reason);
+    }
+}
+
 fn native_services(old: &Config, config: &Config, services: Services) -> Result<Services> {
     let stt = xflow_providers::build_stt(&config.stt, config.privacy.offline)?;
     let transformer = build_transformer(config)?;
     #[cfg(feature = "test-support")]
     if let Some((audio, desktop)) = crate::test_support::adapters()? {
+        release_meeting_for_dictation(&*services.audio, &old.recording, &config.recording);
         return Ok(Services {
             audio,
             desktop,
@@ -3344,6 +3358,7 @@ fn native_services(old: &Config, config: &Config, services: Services) -> Result<
         });
     }
     let audio = if old.recording != config.recording {
+        release_meeting_for_dictation(&*services.audio, &old.recording, &config.recording);
         native_audio(&config.recording)?
     } else {
         services.audio
@@ -10065,5 +10080,69 @@ mod tests {
     fn escaped_transcript_must_fit_last_frame() {
         assert!(validate_last_frame(&"a".repeat(32 * 1024)).is_ok());
         assert!(validate_last_frame(&"\0".repeat(12 * 1024)).is_err());
+    }
+
+    struct LeaseAudio {
+        active: std::sync::atomic::AtomicBool,
+        ended: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl AudioCapture for LeaseAudio {
+        async fn start(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<AudioClip> {
+            Ok(AudioClip {
+                samples: vec![0.5],
+                sample_rate: 16_000,
+                channels: 1,
+            })
+        }
+        async fn cancel(&self) -> Result<()> {
+            Ok(())
+        }
+        fn level(&self) -> f32 {
+            0.0
+        }
+        fn meeting_conflict(
+            &self,
+            old: &xflow_core::config::RecordingConfig,
+            next: &xflow_core::config::RecordingConfig,
+        ) -> Option<String> {
+            self.active
+                .load(Ordering::SeqCst)
+                .then(|| xflow_core::meeting_blocked_by_dictation(old, next).map(str::to_owned))
+                .flatten()
+        }
+        fn end_meeting(&self, reason: &str) {
+            *self.ended.lock().unwrap() = Some(reason.to_owned());
+            self.active.store(false, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn reload_ends_a_meeting_lease_and_leaves_dictation_settings() {
+        let audio = LeaseAudio {
+            active: std::sync::atomic::AtomicBool::new(true),
+            ended: std::sync::Mutex::new(None),
+        };
+        let old = xflow_core::config::RecordingConfig::default();
+        let mut next = old.clone();
+        next.ignore_speakers = true;
+        release_meeting_for_dictation(&audio, &old, &next);
+        let reason = audio.ended.lock().unwrap().clone().unwrap();
+        assert!(reason.contains("speaker cancellation"));
+        assert!(next.ignore_speakers && !old.ignore_speakers);
+        assert!(!audio.active.load(Ordering::SeqCst));
+
+        let quiet = LeaseAudio {
+            active: std::sync::atomic::AtomicBool::new(false),
+            ended: std::sync::Mutex::new(None),
+        };
+        let mut silence = old.clone();
+        silence.silence_threshold = 0.2;
+        release_meeting_for_dictation(&quiet, &old, &silence);
+        assert!(quiet.ended.lock().unwrap().is_none());
     }
 }
