@@ -1,5 +1,5 @@
 use super::{
-    integrations,
+    ai_apps, integrations,
     options::{self, value_text},
     theme::{ColorMode, Theme, BUILTINS},
 };
@@ -37,8 +37,9 @@ pub enum Page {
     Overlay,
     Stats,
     Doctor,
+    AiApps,
 }
-pub const PAGES: [Page; 9] = [
+pub const PAGES: [Page; 10] = [
     Page::Home,
     Page::History,
     Page::Dictionary,
@@ -48,6 +49,7 @@ pub const PAGES: [Page; 9] = [
     Page::Overlay,
     Page::Stats,
     Page::Doctor,
+    Page::AiApps,
 ];
 impl Page {
     pub fn title(self) -> &'static str {
@@ -61,6 +63,7 @@ impl Page {
             Self::Overlay => "Pill",
             Self::Stats => "Your stats",
             Self::Doctor => "Check-up",
+            Self::AiApps => "AI apps",
         }
     }
     pub fn index(self) -> usize {
@@ -91,6 +94,13 @@ pub enum Action {
     Setup,
     Back,
     Quit,
+    /// AI apps: register xflow with the selected client, or remove it.
+    Install,
+    Remove,
+    /// AI apps: confirmed replacing a different xflow registration.
+    Replace,
+    /// AI apps: confirmed sharing dictation history.
+    Share,
 }
 #[derive(Clone)]
 pub struct Command {
@@ -105,7 +115,7 @@ pub fn commands() -> Vec<Command> {
         .map(|(i, p)| Command {
             action: Action::Go(*p),
             title: format!("Go to {}", p.title()),
-            key: ["1", "2", "3", "4", "5", "6", "7", "8", "9"][i],
+            key: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"][i],
         })
         .collect();
     for (action, title, key) in [
@@ -177,6 +187,8 @@ pub enum Effect {
     Globe,
     /// Start xflowd the way `xflow daemon start` does (launchd / systemd).
     StartHelper,
+    /// AI apps setup work (client CLIs, config files), with config.toml's path.
+    Mcp(ai_apps::Job, PathBuf),
 }
 /// A step still waiting this long likely faces an old, switched-on xflowd row.
 const STALE_AFTER: Duration = Duration::from_secs(10);
@@ -326,7 +338,7 @@ pub enum Modal {
 }
 pub struct App {
     pub page: Page,
-    pub selected: [usize; 9],
+    pub selected: [usize; PAGES.len()],
     pub file: Option<ConfigFile>,
     pub config: Config,
     pub path: PathBuf,
@@ -366,6 +378,7 @@ pub struct App {
     pub activity: Vec<u64>,
     pub overlay: Vec<Setting>,
     pub overlay_error: bool,
+    pub ai: ai_apps::AiApps,
     pub backups: Vec<String>,
     pub missing_key: bool,
     pub missing_cleanup_key: bool,
@@ -408,7 +421,7 @@ impl App {
         let theme = Theme::resolve("paper", &config.ui.themes, colors).expect("built-in theme");
         Self {
             page: Page::Home,
-            selected: [0; 9],
+            selected: [0; PAGES.len()],
             file: None,
             config,
             path,
@@ -440,6 +453,7 @@ impl App {
             activity: vec![],
             overlay: vec![],
             overlay_error: false,
+            ai: ai_apps::AiApps::default(),
             backups: Vec::new(),
             missing_key: false,
             missing_cleanup_key: false,
@@ -620,6 +634,7 @@ impl App {
                     .chain(self.diagnostics.iter().map(|s| (s.clone(), String::new())))
                     .collect()
             }
+            Page::AiApps => ai_apps::rows(self),
             _ => vec![],
         }
     }
@@ -1004,6 +1019,7 @@ impl App {
                 Effect::Request(Request::Status, Tag::Ordinary),
                 Effect::Request(Request::Last, Tag::Last),
             ],
+            Page::AiApps => ai_apps::refresh(self),
             _ => vec![Effect::Request(Request::Status, Tag::Ordinary)],
         }
     }
@@ -1173,6 +1189,7 @@ impl App {
         }
         let action = match key.code {
             KeyCode::Char(c @ '1'..='9') => Action::Go(PAGES[(c as u8 - b'1') as usize]),
+            KeyCode::Char('0') => Action::Go(Page::AiApps),
             KeyCode::Tab => Action::Go(PAGES[(self.page.index() + 1) % PAGES.len()]),
             KeyCode::BackTab => {
                 Action::Go(PAGES[(self.page.index() + PAGES.len() - 1) % PAGES.len()])
@@ -1598,6 +1615,7 @@ impl App {
             Action::Setup => return self.open_setup(Step::Welcome),
             Action::Choose => return self.choose(),
             Action::Add | Action::AddCorrection | Action::Edit => return self.open_editor(action),
+            Action::Install | Action::Remove => return ai_apps::action(self, action),
             _ => (),
         }
         vec![]
@@ -1640,6 +1658,7 @@ impl App {
                 }
             }
             Page::Settings => return self.open_setting(pos),
+            Page::AiApps => return ai_apps::choose(self),
             Page::Doctor => {
                 if let Some(grant) = self.doctor_grant(pos) {
                     return self.fix(grant, true);
@@ -1671,7 +1690,7 @@ impl App {
         }
         vec![]
     }
-    fn menu(&mut self, title: &str, items: Vec<(Action, &str)>) {
+    pub(super) fn menu(&mut self, title: &str, items: Vec<(Action, &str)>) {
         let choices = (0..items.len()).map(|i| i.to_string()).collect();
         let labels: Vec<String> = items.iter().map(|(_, l)| l.to_string()).collect();
         self.edit(
@@ -2402,6 +2421,7 @@ impl App {
     fn confirmed(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::Quit => self.quit = true,
+            Action::Share | Action::Replace => return ai_apps::action(self, action),
             Action::Delete => {
                 let pos = self.selected();
                 if self.page == Page::History {

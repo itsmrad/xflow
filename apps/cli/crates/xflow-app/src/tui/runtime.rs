@@ -1,5 +1,5 @@
 use super::{
-    integrations, options,
+    ai_apps, integrations, options,
     render::{self, HitMap},
     state::{Action, App, Effect, Modal, Page, Step, Tag},
     theme::ColorMode,
@@ -58,6 +58,7 @@ enum Update {
     Opened(Result<()>),
     MicTimeout,
     Globe(Option<bool>),
+    Mcp(Result<ai_apps::Done>),
     Started(Result<()>),
 }
 
@@ -413,6 +414,7 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             }
         },
         Update::Doctor(rows) => app.diagnostics = rows,
+        Update::Mcp(result) => effects = ai_apps::done(app, result),
         Update::Globe(globe) => {
             app.globe = globe;
             effects = app.globe_changed();
@@ -547,6 +549,9 @@ fn dispatch(
                 Effect::Open(url) => Update::Opened(blocking(move || open(url)).await),
                 Effect::Globe => Update::Globe(blocking(|| Ok(globe())).await.ok().flatten()),
                 Effect::StartHelper => Update::Started(blocking(start_helper).await),
+                Effect::Mcp(job, config) => {
+                    Update::Mcp(blocking(move || ai_apps::run(job, &config)).await)
+                }
                 Effect::AskAgain(grant) => {
                     // A fresh xflowd asks no grant by itself: ask it once it answers.
                     let restarted = blocking(restart).await.is_ok();

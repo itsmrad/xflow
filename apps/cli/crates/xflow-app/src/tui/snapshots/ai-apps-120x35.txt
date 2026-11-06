@@ -1,0 +1,35 @@
+ xflow  ·  AI apps                                                                                               ✓ Done
+╭────────────────╮╭ AI apps ────────────────────────────────────────────────╮╭ Details ────────────────────────────────╮
+│ 1  Home        ││› Dictation history:  off                                ││ Sharing · Dictation history is off.     │
+│ 2  History     ││  Claude Code         Found · set up                     ││ Enter to turn it on.                    │
+│ 3  Dictionary  ││  Claude Desktop      Not found · not set up             ││                                         │
+│ 4  Snippets    ││  Codex               Found · not set up                 ││ When you ask about it, matching text is │
+│ 5  Styles      ││  Cursor              Found · set up · ! other version   ││ sent to that app's AI provider. One     │
+│ 6  Settings    ││  VS Code             Not found · not set up             ││ switch for every AI app.                │
+│ 7  Pill        ││  Gemini CLI          Not found · not set up             ││                                         │
+│ 8  Your stats  ││  Zed                 Not found · add by hand            ││ Meetings can't be shared yet.           │
+│ 9  Check-up    ││  LM Studio           Not found · add by hand            ││                                         │
+│>0  AI apps     ││  Windsurf            Not found · add by hand            ││                                         │
+│                ││  ChatGPT             Use Codex                          ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                ││                                                         ││                                         │
+│                │╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────╯
+│                │ • Leaves this computer: matching text an AI app asks for, sent to that app's AI provider.
+│                │ • Dictated content is untrusted and can contain prompt injection; avoid combining it with tools that
+╰────────────────╯ can send private data out.
+
+ Enter choose · r refresh · Esc back · Tab next page · ? help · q quit

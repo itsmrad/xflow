@@ -9,7 +9,7 @@
 │ 7  Pill        ││            Fixed language        Automatic                 │
 │ 8  Your stats  ││            Microphone            Automatic                 │
 │ 9  Check-up    ││            Ignore speaker sound  Off                       │
-│                ││            Check connection      Run check                 │
+│ 0  AI apps     ││            Check connection      Run check                 │
 │                ││  Shortcut  Key                   Fn (Globe)                │
 │                │╰────────────────────────────────────────────────────────────╯
 │                │╭ About ─────────────────────────────────────────────────────╮

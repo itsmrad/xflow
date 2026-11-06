@@ -1,4 +1,5 @@
 //! Keyboard-first control center. Blocking desktop/config work lives off the UI task.
+mod ai_apps;
 mod integrations;
 mod options;
 mod render;
