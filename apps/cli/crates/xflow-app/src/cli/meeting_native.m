@@ -31,11 +31,15 @@ static atomic_bool running, audioDone;
 static double rate;
 static pid_t parentPID;
 static NSRunningApplication *selected;
+// A process that is not an app (by PID): tapped on its own.
+static pid_t targetPID;
+static NSString *targetName;
 static NSString *appRoot;
 static NSArray<NSNumber *> *targets;
 static NSTextField *label;
 static NSString *what;
 static NSDate *began;
+static id sleepObserver;
 static pthread_mutex_t outLock = PTHREAD_MUTEX_INITIALIZER;
 
 static void frame(char kind, const void *body, uint32_t length) {
@@ -68,7 +72,7 @@ static NSArray<NSNumber *> *family(void) API_AVAILABLE(macos(14.2)) {
         char path[PROC_PIDPATHINFO_MAXSIZE] = {0};
         if (proc_pidpath(pid, path, sizeof(path)) <= 0) continue;
         NSString *p = @(path);
-        if ([p hasPrefix:[appRoot stringByAppendingString:@"/"]] || pid == selected.processIdentifier) [out addObject:@(ids[i])];
+        if ((appRoot && [p hasPrefix:[appRoot stringByAppendingString:@"/"]]) || (selected && pid == selected.processIdentifier) || (targetPID && pid == targetPID)) [out addObject:@(ids[i])];
     }
     return [out sortedArrayUsingSelector:@selector(compare:)];
 }
@@ -166,7 +170,7 @@ static void drain(void) {
 static void writer(void) {
     while (true) {
         if (getppid() != parentPID) atomic_store(&running, false);
-        if (selected && selected.terminated) stopHere(@"the meeting app quit");
+        if ((selected && selected.terminated) || (targetPID && kill(targetPID, 0) != 0)) stopHere(@"the meeting app quit");
         drain();
         if (!atomic_load(&running) && atomic_load(&audioDone)) { drain(); break; }
         usleep(20000);
@@ -218,8 +222,12 @@ int xflow_meeting_native(const char *app, int mic, int yes, int mute) {
             NSMutableArray *matches = [NSMutableArray new];
             for (NSRunningApplication *a in [CLS(NSWorkspace) sharedWorkspace].runningApplications)
                 if ((a.bundleIdentifier && [a.bundleIdentifier caseInsensitiveCompare:bundle] == NSOrderedSame) || (a.localizedName && [a.localizedName caseInsensitiveCompare:choice] == NSOrderedSame) || (choice.intValue > 0 && a.processIdentifier == choice.intValue)) [matches addObject:a];
-            if (matches.count != 1) { text('E', [NSString stringWithFormat:@"%@ is not running, or matches more than one app. Pass its bundle ID or PID.", choice]); return 2; }
-            selected = matches[0];
+            char path[PROC_PIDPATHINFO_MAXSIZE] = {0};
+            if (!matches.count && choice.intValue > 0 && choice.intValue != getpid() && choice.intValue != parentPID && proc_pidpath(choice.intValue, path, sizeof(path)) > 0) {
+                targetPID = choice.intValue;
+                targetName = @(path).lastPathComponent;
+            } else if (matches.count != 1) { text('E', [NSString stringWithFormat:@"%@ is not running, or matches more than one app. Pass its bundle ID or PID.", choice]); return 2; }
+            else selected = matches[0];
         }
         if (!yes) {
             NSAlert *alert = [CLS(NSAlert) new];
@@ -240,15 +248,16 @@ int xflow_meeting_native(const char *app, int mic, int yes, int mute) {
             NSInteger index = picker.indexOfSelectedItem - (mic ? 1 : 0);
             selected = index >= 0 && index < (NSInteger)visible.count ? visible[index] : nil;
         }
-        if (!selected && !mic) { text('E', @"Choose an app to record, or record the microphone."); return 2; }
-        if (selected) {
+        if (!selected && !targetPID && !mic) { text('E', @"Choose an app to record, or record the microphone."); return 2; }
+        if (selected || targetPID) {
             appRoot = selected.bundleURL.path;
             if (@available(macOS 14.2, *)) targets = family();
-            if (!targets.count) { text('E', [NSString stringWithFormat:@"%@ has no audio yet. Join the call first, then start recording.", selected.localizedName]); return 2; }
+            if (!targetName) targetName = selected.localizedName;
+            if (!targets.count) { text('E', [NSString stringWithFormat:@"%@ has no audio yet. Join the call first, then start recording.", targetName]); return 2; }
         }
-        what = selected ? (mic ? [NSString stringWithFormat:@"microphone + %@", selected.localizedName] : selected.localizedName) : @"microphone";
+        what = targetName ? (mic ? [NSString stringWithFormat:@"microphone + %@", targetName] : targetName) : @"microphone";
         atomic_store(&running, true);
-        json('C', @{@"app": selected.localizedName ?: @"", @"bundle": selected.bundleIdentifier ?: @"", @"pid": @(selected ? selected.processIdentifier : 0)});
+        json('C', @{@"app": targetName ?: @"", @"bundle": selected.bundleIdentifier ?: @"", @"pid": @(selected ? selected.processIdentifier : targetPID)});
         NSPanel *panel = [[CLS(NSPanel) alloc] initWithContentRect:NSMakeRect(0, 0, 340, 64) styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
         panel.title = @"Xflow meeting";
         panel.level = NSFloatingWindowLevel;
@@ -269,14 +278,15 @@ int xflow_meeting_native(const char *app, int mic, int yes, int mute) {
         [panel orderFrontRegardless];
         void (*announce)(id, NSString *, NSDictionary *) = dlsym(RTLD_DEFAULT, "NSAccessibilityPostNotificationWithUserInfo");
         if (announce) announce(panel, @"AXAnnouncementRequested", @{@"AXAnnouncementKey": @"Xflow meeting recording is starting"});
-        [[CLS(NSWorkspace) sharedWorkspace].notificationCenter addObserverForName:@"NSWorkspaceWillSleepNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { stopHere(@"the Mac went to sleep"); }];
+        // The center does not retain block observers: keep the token alive.
+        sleepObserver = [[CLS(NSWorkspace) sharedWorkspace].notificationCenter addObserverForName:@"NSWorkspaceWillSleepNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { stopHere(@"the Mac went to sleep"); }];
         // Wait for the recorder's 's': it has the microphone and the journal open.
         [App run];
         if (quit || !atomic_load(&running)) { [panel close]; frame('X', NULL, 0); return 0; }
         began = [NSDate date];
         [NSTimer scheduledTimerWithTimeInterval:1 target:actions selector:@selector(tick:) userInfo:nil repeats:YES];
         [actions tick:nil];
-        if (selected) [NSThread detachNewThreadWithBlock:^{ if (@available(macOS 14.2, *)) tap(mute); }];
+        if (targetName) [NSThread detachNewThreadWithBlock:^{ if (@available(macOS 14.2, *)) tap(mute); }];
         else atomic_store(&audioDone, true);
         [NSThread detachNewThreadWithBlock:^{ writer(); }];
         [App run];

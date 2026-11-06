@@ -17,6 +17,7 @@ use xflow_app::meeting::journal::{self, Capture, CaptureSpec, Limits, RATE};
 const MAX_LIVE: Duration = Duration::from_secs(3 * 3600);
 /// A source this far behind the wall clock stopped delivering: a gap, not silence.
 const STALL_SAMPLES: i64 = 2 * RATE;
+const STALL: Duration = Duration::from_secs(2);
 
 pub struct Request<'a> {
     pub app: Option<&'a str>,
@@ -27,9 +28,11 @@ pub struct Request<'a> {
 }
 
 enum Msg {
-    Native(u8, Vec<u8>),
+    /// Audio and helper frames carry when they arrived, so a slow loop never
+    /// mistakes queued audio for a stalled source.
+    Native(u8, Vec<u8>, Instant),
     NativeGone,
-    Mic(xflow_app::meeting_mic::Frame),
+    Mic(xflow_app::meeting_mic::Frame, Instant),
     MicGone(String),
     Stop(&'static str),
 }
@@ -70,13 +73,13 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
     // Consent first: nothing opens until the user chose Record.
     let consent = loop {
         match rx.recv() {
-            Ok(Msg::Native(b'C', body)) => break body,
-            Ok(Msg::Native(b'D', _)) | Ok(Msg::Stop(_)) => {
+            Ok(Msg::Native(b'C', body, _)) => break body,
+            Ok(Msg::Native(b'D', _, _)) | Ok(Msg::Stop(_)) => {
                 native.quit();
                 out.text("Not recorded")?;
                 return Ok(());
             }
-            Ok(Msg::Native(b'E', body)) => {
+            Ok(Msg::Native(b'E', body, _)) => {
                 native.quit();
                 return Err(Error::new(
                     1,
@@ -148,7 +151,7 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
             match reader.recv() {
                 Ok(frame) => {
                     let end = matches!(frame, xflow_app::meeting_mic::Frame::End(_));
-                    if tx.send(Msg::Mic(frame)).is_err() || end {
+                    if tx.send(Msg::Mic(frame, Instant::now())).is_err() || end {
                         return;
                     }
                 }
@@ -176,16 +179,23 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
     let mut nudged = Instant::now();
     while !(mic_done && native_done) {
         let msg = rx.recv_timeout(Duration::from_millis(250));
+        let at = match &msg {
+            Ok(Msg::Mic(_, at)) | Ok(Msg::Native(_, _, at)) => *at,
+            _ => Instant::now(),
+        };
         let result: anyhow::Result<()> = match msg {
-            Ok(Msg::Mic(xflow_app::meeting_mic::Frame::Audio {
-                rate,
-                lost,
-                samples,
-            })) => match sources.mic {
-                Some(s) => tracks[s].push(&mut capture, s, rate, lost, &samples),
+            Ok(Msg::Mic(
+                xflow_app::meeting_mic::Frame::Audio {
+                    rate,
+                    lost,
+                    samples,
+                },
+                at,
+            )) => match sources.mic {
+                Some(s) => tracks[s].push(&mut capture, s, rate, lost, &samples, at),
                 None => Ok(()),
             },
-            Ok(Msg::Mic(xflow_app::meeting_mic::Frame::End(why))) => {
+            Ok(Msg::Mic(xflow_app::meeting_mic::Frame::End(why), _)) => {
                 mic_done = true;
                 if why != "released" {
                     stop_with(
@@ -207,7 +217,7 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
                 );
                 Ok(())
             }
-            Ok(Msg::Native(b'A', body)) if body.len() >= 12 => match sources.app {
+            Ok(Msg::Native(b'A', body, at)) if body.len() >= 12 => match sources.app {
                 Some(s) => {
                     let rate = u32::from_le_bytes(body[0..4].try_into().unwrap());
                     let lost = u64::from_le_bytes(body[4..12].try_into().unwrap());
@@ -217,11 +227,20 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
                         .iter()
                         .map(|b| f32::from_le_bytes(*b))
                         .collect();
-                    tracks[s].push(&mut capture, s, rate, lost, &samples)
+                    tracks[s].push(&mut capture, s, rate, lost, &samples, at)
                 }
                 None => Ok(()),
             },
-            Ok(Msg::Native(b'S', body)) => {
+            Ok(Msg::Native(b'R', _, _)) => {
+                if !out.json && !out.quiet {
+                    eprintln!(
+                        "xflow: capturing {} audio",
+                        app_name.as_deref().unwrap_or("app")
+                    );
+                }
+                Ok(())
+            }
+            Ok(Msg::Native(b'S', body, _)) => {
                 stop_with(
                     String::from_utf8_lossy(&body).into_owned(),
                     false,
@@ -230,7 +249,7 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
                 );
                 Ok(())
             }
-            Ok(Msg::Native(b'E', body)) => {
+            Ok(Msg::Native(b'E', body, _)) => {
                 stop_with(
                     String::from_utf8_lossy(&body).into_owned(),
                     true,
@@ -239,7 +258,7 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
                 );
                 Ok(())
             }
-            Ok(Msg::Native(b'X', _)) | Ok(Msg::NativeGone) => {
+            Ok(Msg::Native(b'X', _, _)) | Ok(Msg::NativeGone) => {
                 native_done = true;
                 // Fail-closed: no visible Stop indicator, no recording.
                 stop_with(
@@ -272,9 +291,9 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
             );
         }
         if stopping.is_none() {
-            let now = (elapsed.as_millis() as i64) * RATE / 1000;
+            let now = (at.saturating_duration_since(started).as_millis() as i64) * RATE / 1000;
             for s in [sources.mic, sources.app].into_iter().flatten() {
-                if let Err(e) = tracks[s].catch_up(&mut capture, s, now) {
+                if let Err(e) = tracks[s].catch_up(&mut capture, s, now, at) {
                     stop_with(format!("{e:#}"), true, &mut reason, &mut failed);
                 }
             }
@@ -437,6 +456,13 @@ struct Track {
     rate: u32,
     pending: Vec<f32>,
     seen: bool,
+    /// When this source last delivered audio.
+    last: Option<Instant>,
+    /// Samples already gapped by `catch_up` since the last delivery, so a
+    /// drop count for the same stall is not gapped twice.
+    gapped: i64,
+    /// Dropped native frames not yet a whole output sample.
+    lost: u64,
 }
 impl Track {
     fn push(
@@ -446,6 +472,7 @@ impl Track {
         rate: u32,
         lost: u64,
         samples: &[f32],
+        at: Instant,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
             (8_000..=192_000).contains(&rate),
@@ -454,16 +481,21 @@ impl Track {
         if rate != self.rate {
             self.flush(capture, source)?;
             self.rate = rate;
+            self.lost = 0;
         }
         if lost > 0 && self.seen {
-            self.flush(capture, source)?;
-            capture.gap(
-                source,
-                (lost * RATE as u64 / u64::from(rate)) as i64,
-                "audio frames were dropped",
-            )?;
+            self.lost += lost;
+            let whole = self.lost * RATE as u64 / u64::from(rate);
+            self.lost -= whole * u64::from(rate) / RATE as u64;
+            let missing = whole as i64 - self.gapped;
+            if missing > 0 {
+                self.flush(capture, source)?;
+                capture.gap(source, missing, "audio frames were dropped")?;
+            }
         }
         self.seen = true;
+        self.last = Some(at);
+        self.gapped = 0;
         self.pending.extend(samples.iter().map(|s| {
             if s.is_finite() {
                 s.clamp(-1.0, 1.0)
@@ -488,8 +520,19 @@ impl Track {
     }
     /// A stalled source (device change, a frozen tap) becomes an honest gap
     /// up to now, so its later audio stays at the right time.
-    fn catch_up(&mut self, capture: &mut Capture, source: usize, now: i64) -> anyhow::Result<()> {
-        if !self.seen {
+    fn catch_up(
+        &mut self,
+        capture: &mut Capture,
+        source: usize,
+        now: i64,
+        at: Instant,
+    ) -> anyhow::Result<()> {
+        // Only a source that delivered nothing for 2 s has stalled; audio
+        // still queued behind a slow write is not missing.
+        if !self
+            .last
+            .is_some_and(|l| at.saturating_duration_since(l) > STALL)
+        {
             return Ok(());
         }
         let buffered = self.pending.len() as i64 * RATE / i64::from(self.rate.max(1));
@@ -497,6 +540,7 @@ impl Track {
         if behind > STALL_SAMPLES {
             self.flush(capture, source)?;
             capture.gap(source, behind, "no audio arrived from this source")?;
+            self.gapped += behind;
         }
         Ok(())
     }
@@ -592,7 +636,7 @@ fn spawn_native(req: &Request, tx: mpsc::SyncSender<Msg>) -> Result<Native> {
             let _ = tx.send(Msg::NativeGone);
             return;
         }
-        if tx.send(Msg::Native(head[0], body)).is_err() {
+        if tx.send(Msg::Native(head[0], body, Instant::now())).is_err() {
             return;
         }
     });
@@ -640,6 +684,91 @@ mod tests {
         assert_eq!((s.mic, s.app), (Some(0), Some(1)));
         let s = capture_sources(false, true);
         assert_eq!((s.mic, s.app), (None, Some(0)));
+    }
+
+    fn gaps(db: &Path) -> Vec<(i64, i64)> {
+        let db = rusqlite::Connection::open(db).unwrap();
+        let mut statement = db.prepare("SELECT json FROM gaps ORDER BY rowid").unwrap();
+        let rows = statement
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|j| {
+                let v: serde_json::Value = serde_json::from_str(&j.unwrap()).unwrap();
+                (
+                    v["range"]["start_ms"].as_i64().unwrap(),
+                    v["range"]["end_ms"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        rows
+    }
+
+    #[test]
+    fn queued_audio_is_not_a_stall_but_silence_from_a_source_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("xflow");
+        xflow_app::paths::private_dir(&data).unwrap();
+        let db = data.join("meetings.db");
+        let mut capture = Capture::begin(
+            &db,
+            CaptureSpec {
+                title: None,
+                labels: vec!["Microphone".into()],
+                expected_ms: None,
+                queued: false,
+            },
+            Limits {
+                session_bytes: 1 << 30,
+                global_bytes: 1 << 30,
+                reserve_bytes: 0,
+            },
+        )
+        .unwrap();
+        let t0 = Instant::now();
+        let mut track = Track::default();
+        let second = vec![0.1f32; 48_000];
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let now = |ms: i64| ms * RATE / 1000;
+        // Three seconds that arrived on time but were processed late: no gap.
+        for s in 0..3u64 {
+            track
+                .push(&mut capture, 0, 48_000, 0, &second, at(s * 1000 + 1000))
+                .unwrap();
+            track
+                .catch_up(
+                    &mut capture,
+                    0,
+                    now(s as i64 * 1000 + 1000),
+                    at(s * 1000 + 1000),
+                )
+                .unwrap();
+        }
+        assert!(gaps(&db).is_empty());
+        // The source then delivers nothing for 5 s: one gap up to now.
+        track
+            .catch_up(&mut capture, 0, now(8_000), at(8_000))
+            .unwrap();
+        assert_eq!(gaps(&db), [(3_000, 8_000)]);
+        // A drop count for that same stall is not gapped again.
+        track
+            .push(&mut capture, 0, 48_000, 5 * 48_000, &second, at(9_000))
+            .unwrap();
+        assert_eq!(gaps(&db).len(), 1);
+        assert_eq!(
+            capture.position(0),
+            now(9_000),
+            "8 s plus the second that arrived"
+        );
+        // Single dropped frames add up to a sample instead of vanishing:
+        // 3 x 480 frames is 480 samples, plus 1 for the 3 dropped frames.
+        for _ in 0..3 {
+            track
+                .push(&mut capture, 0, 48_000, 1, &second[..480], at(9_100))
+                .unwrap();
+        }
+        track.flush(&mut capture, 0).unwrap();
+        assert_eq!(capture.position(0), now(9_000) + 480 + 1);
+        assert_eq!(track.lost, 0);
     }
 
     #[test]
