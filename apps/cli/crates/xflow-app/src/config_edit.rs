@@ -13,6 +13,7 @@ use xflow_core::config::Config;
 
 const TEMPLATE: &str = include_str!("../../../../../config/default.toml");
 
+#[derive(Clone)]
 pub struct ConfigFile {
     path: PathBuf,
     doc: DocumentMut,

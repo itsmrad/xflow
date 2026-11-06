@@ -3722,6 +3722,8 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit 0.22.27",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
  "xflow-core",
  "xflow-platform",
  "xflow-providers",

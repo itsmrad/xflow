@@ -1,11 +1,15 @@
 use super::{
-    ai_apps, integrations, options,
+    ai_apps,
+    chat::{self, Turn},
+    integrations, options,
     render::{self, HitMap},
     state::{Action, App, Effect, Modal, Page, Step, Tag},
     theme::ColorMode,
 };
 use crate::{
+    chat::{run_turn, TurnEnv, TurnEvent, MAX_OUTPUT_TOKENS},
     config_edit::ConfigFile,
+    context::{ContextEnv, Sources},
     gsettings::{GSettings, Setting},
     transport,
 };
@@ -35,15 +39,18 @@ use tokio::{
     io::{AsyncReadExt, BufReader},
     net::UnixStream,
     sync::mpsc,
-    task::JoinSet,
+    task::{AbortHandle, JoinSet},
 };
 use xflow_core::{
     config::Config,
     ipc::{Request, Response},
 };
-use xflow_providers::KeySource;
+use xflow_providers::{
+    llm::{build_provider, ChatProvider, LlmError, Message, Stop},
+    KeySource,
+};
 
-enum Update {
+pub(super) enum Update {
     Loaded(Result<(ConfigFile, Option<String>)>),
     Saved(ConfigFile, Result<()>),
     Reply(Tag, Result<Response>),
@@ -63,6 +70,9 @@ enum Update {
     InstallProgress(u64, u64),
     Installed(Result<bool>),
     Removed(Result<bool>),
+    ChatEvent(u64, TurnEvent),
+    ChatDone(u64, Result<Stop, LlmError>, Vec<Message>),
+    ChatKeys(Vec<(String, KeySource)>),
 }
 
 fn restore() {
@@ -182,11 +192,13 @@ pub async fn run(start: Option<Step>) -> Result<()> {
     let mut jobs = JoinSet::new();
     jobs.spawn(subscribe(tx.clone()));
     let generation = Arc::new(AtomicU64::new(0));
+    let mut chat_task = None;
     dispatch(
         vec![Effect::Load(app.path.clone())],
         &tx,
         &mut jobs,
         &generation,
+        &mut chat_task,
     );
     let mut input = EventStream::new();
     let mut hits = HitMap::default();
@@ -195,6 +207,8 @@ pub async fn run(start: Option<Step>) -> Result<()> {
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut recheck = tokio::time::interval(Duration::from_secs(1));
     recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut chat_frame = tokio::time::interval(chat::FRAME);
+    chat_frame.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         if app.quit {
             break;
@@ -261,6 +275,10 @@ pub async fn run(start: Option<Step>) -> Result<()> {
                 // The permission step's stale-row hint appears after a while.
                 redraw = matches!(app.modal, Some(Modal::Setup(Step::Permissions)));
             },
+            // Only while a turn streams; each event just marks the page dirty.
+            _ = chat_frame.tick(), if app.chat.running() => {
+                redraw = app.chat.take_dirty() && app.page == Page::Chat;
+            },
             _ = term.recv() => {
                 effects = app.action(Action::Quit);
                 redraw = true;
@@ -269,6 +287,8 @@ pub async fn run(start: Option<Step>) -> Result<()> {
                 match result {
                     // The panic hook already restored the terminal; drawing on would corrupt it.
                     Err(error) if error.is_panic() => break,
+                    // A cancelled chat turn.
+                    Err(error) if error.is_cancelled() => (),
                     Err(error) => {
                         app.toast = Some(options::plain(&error.to_string()));
                         redraw = true;
@@ -281,7 +301,7 @@ pub async fn run(start: Option<Step>) -> Result<()> {
         if app.dirty && !app.saving && app.file.is_some() {
             effects.extend(app.action(Action::Save));
         }
-        dispatch(effects, &tx, &mut jobs, &generation);
+        dispatch(effects, &tx, &mut jobs, &generation, &mut chat_task);
     }
     // Dropping a held start's socket cancels exactly the recording it began.
     jobs.abort_all();
@@ -289,9 +309,19 @@ pub async fn run(start: Option<Step>) -> Result<()> {
     Ok(())
 }
 
-fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
+pub(super) fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
     let mut effects = vec![];
     match update {
+        Update::ChatEvent(id, event) => {
+            let ctx = app.chat_ctx();
+            app.chat.event(id, event, &ctx);
+            *redraw = false;
+        }
+        Update::ChatDone(id, result, history) => {
+            let ctx = app.chat_ctx();
+            app.chat.finish(id, result, history, &ctx);
+        }
+        Update::ChatKeys(keys) => app.chat.keys = keys,
         Update::Loaded(result) => match result.and_then(|(file, disk)| app.load(file, disk)) {
             Ok(()) => {
                 effects.push(Effect::KeyStatus(app.config.clone()));
@@ -464,13 +494,27 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
     effects
 }
 
-fn dispatch(
+pub(super) fn dispatch(
     effects: Vec<Effect>,
     tx: &mpsc::Sender<Update>,
     jobs: &mut JoinSet<()>,
     generation: &Arc<AtomicU64>,
+    chat_task: &mut Option<AbortHandle>,
 ) {
     for mut effect in effects {
+        effect = match effect {
+            Effect::ChatTurn(run) => {
+                *chat_task = Some(jobs.spawn(chat_turn(*run, tx.clone())));
+                continue;
+            }
+            Effect::ChatCancel => {
+                if let Some(task) = chat_task.take() {
+                    task.abort();
+                }
+                continue;
+            }
+            other => other,
+        };
         // A recording the TUI starts lives only as long as the TUI (#57).
         if let Effect::Request(Request::Start { hold, .. } | Request::Toggle { hold, .. }, _) =
             &mut effect
@@ -528,6 +572,15 @@ fn dispatch(
                     })
                     .await,
                 ),
+                Effect::ChatTurn(_) | Effect::ChatCancel => return,
+                Effect::ChatKeys => {
+                    let mut keys = vec![];
+                    for choice in chat::choices().iter().filter(|c| c.needs_key) {
+                        let state = xflow_providers::key_status(choice.id, None).await;
+                        keys.push((choice.id.to_owned(), state));
+                    }
+                    Update::ChatKeys(keys)
+                }
                 Effect::KeyStatus(config) => {
                     let missing = integrations::missing_keys(&config).await;
                     Update::KeyStatus(
@@ -614,6 +667,73 @@ fn install_model(cancel: &tokio::sync::Notify, tx: &mpsc::Sender<Update>) -> Res
                 _ = cancel.notified() => bail!("cancelled"),
             }
         })
+}
+/// One chat turn, in its own task so the UI never waits on the network. Aborting
+/// this task drops the HTTP body; a late event would be ignored anyway.
+async fn chat_turn(run: chat::ChatRun, tx: mpsc::Sender<Update>) {
+    let chat::ChatRun {
+        turn,
+        model,
+        ai,
+        offline,
+        path,
+    } = run;
+    let budget = ai.max_context_tokens;
+    // Building TLS clients takes a moment, and this runtime has one thread.
+    let built = tokio::task::spawn_blocking(move || {
+        let gateway = build_provider(&ai, offline)?;
+        let mut context = ContextEnv::current().map_err(|e| LlmError::Provider(e.to_string()))?;
+        context.config = path;
+        context.client = "xflow tui".into();
+        Ok::<_, LlmError>((gateway, context))
+    })
+    .await
+    .unwrap_or_else(|_| Err(LlmError::Provider("xflow could not start the chat".into())));
+    match built {
+        Ok((gateway, context)) => {
+            let env = TurnEnv {
+                context: Arc::new(context),
+                model,
+                max_context_tokens: budget,
+                max_output_tokens: MAX_OUTPUT_TOKENS,
+            };
+            drive_turn(&gateway, &env, turn, &tx).await;
+        }
+        Err(error) => {
+            let _ = tx.send(Update::ChatDone(turn.id, Err(error), vec![])).await;
+        }
+    }
+}
+/// `run_turn` feeding a bounded channel, forwarded to the UI as updates.
+pub(super) async fn drive_turn(
+    provider: &dyn ChatProvider,
+    env: &TurnEnv,
+    turn: Turn,
+    tx: &mpsc::Sender<Update>,
+) {
+    let Turn {
+        id,
+        question,
+        mut history,
+        dictations,
+    } = turn;
+    let sources = Sources {
+        dictations,
+        meetings: false,
+    };
+    let (events, mut rx) = mpsc::channel(64);
+    let run = async {
+        let result = run_turn(provider, env, sources, &mut history, &question, &events).await;
+        drop(events);
+        result
+    };
+    let forward = async {
+        while let Some(event) = rx.recv().await {
+            let _ = tx.send(Update::ChatEvent(id, event)).await;
+        }
+    };
+    let (result, ()) = tokio::join!(run, forward);
+    let _ = tx.send(Update::ChatDone(id, result, history)).await;
 }
 /// "Press 🌐 key to" is Do Nothing (AppleFnUsageType 0; absent means Emoji).
 fn globe() -> Option<bool> {
@@ -1208,6 +1328,7 @@ mod tests {
             &tx,
             &mut jobs,
             &generation,
+            &mut None,
         );
         generation.store(2, Ordering::Relaxed);
         jobs.join_next().await.unwrap().unwrap();

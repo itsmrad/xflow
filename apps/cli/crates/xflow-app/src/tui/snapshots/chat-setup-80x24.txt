@@ -1,0 +1,24 @@
+ xflow  ·  Chat                                                   ○ Not running
+╭────────────────╮╭ Chat ──────────────────────────────────────────────────────╮
+│ 1  Home        ││› Groq                        No key yet                    │
+│ 2  History     ││  OpenAI                      No key yet                    │
+│ 3  Dictionary  ││  Anthropic                   Key saved                     │
+│ 4  Snippets    ││  OpenRouter                  Key from your environment     │
+│ 5  Styles      ││  Local (on this computer)    No key needed                 │
+│ 6  Settings    ││                                                            │
+│ 7  Pill        ││                                                            │
+│ 8  Your stats  ││                                                            │
+│ 9  Check-up    ││                                                            │
+│ 0  AI apps     ││                                                            │
+│>-  Chat        ││                                                            │
+│                │╰────────────────────────────────────────────────────────────╯
+│                │╭ Set up chat ───────────────────────────────────────────────╮
+│                ││ Choose where your questions go. Press Enter to set up      │
+│                ││ Groq.                                                      │
+│                ││                                                            │
+│                ││ The key stays encrypted on this computer. Your dictations  │
+│                ││ are shared only after you allow it.                        │
+│                ││                                                            │
+╰────────────────╯╰────────────────────────────────────────────────────────────╯
+
+ ↑↓ move · Enter choose · Esc back · Tab next page · ? help · q quit

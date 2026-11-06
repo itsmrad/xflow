@@ -10,7 +10,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 use xflow_app::{
-    chat::{self, TurnEnv, TurnEvent},
+    chat::{self, TurnEnv, TurnEvent, MAX_OUTPUT_TOKENS, MAX_QUESTION_BYTES},
     context::{ContextEnv, Sources},
 };
 use xflow_core::config::AiConfig;
@@ -19,9 +19,6 @@ use xflow_providers::{
     llm::{build_provider_with_cleanup, Event, LlmError, Stop},
     ProviderKind,
 };
-
-const MAX_QUESTION_BYTES: usize = 64 * 1024;
-const MAX_OUTPUT_TOKENS: u32 = 4096;
 
 /// One plain line, carrying its own next step.
 fn fail(code: u8, message: impl Into<String>) -> Error {
@@ -103,9 +100,7 @@ fn consent(path: &Path, ai: &AiConfig, args: &Ask) -> Result<()> {
             ),
         ));
     }
-    eprintln!(
-        "This leaves your computer: transcript excerpts that the search and read tools return, sent to {provider}."
-    );
+    eprintln!("{}", chat::consent_text(provider));
     let answer = config::ask("Allow it? [y/N] ", "n")?;
     if !matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes") {
         return Err(fail(

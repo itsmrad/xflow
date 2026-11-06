@@ -5,6 +5,7 @@ Run from the worktree: python3 apps/cli/crates/xflow-app/src/tui/smoke.py
 No audio, desktop delivery, keyring service, real daemon, or provider HTTP calls.
 """
 import fcntl
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -143,7 +144,10 @@ def run(online, columns, rows):
                 key(b" ")
                 key(b"2")
                 key(b"/Mock\r")
-                key(b"9")
+                key(b"8")
+                key(b"-")
+                assert b"OpenRouter" in output, "chat setup list"
+                key(b"\x1b")
                 assert any(r["command"] == "stats" for r in requests)
                 assert any(r["command"] == "history" and r.get("query") == "Mock" for r in requests)
             else:
@@ -184,7 +188,123 @@ def run(online, columns, rows):
             os.close(slave)
 
 
+def chat(columns, rows):
+    """The Chat page against a loopback streaming server: consent, answer, cancel, retry."""
+    requests = []
+
+    class Mock(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append(body)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            def event(data):
+                self.wfile.write(b"data: " + data + b"\n\n")
+                self.wfile.flush()
+            def text(value):
+                event(json.dumps(dict(choices=[dict(delta=dict(content=value))])).encode())
+            # The first "slow" question stalls until the client hangs up.
+            if "slow" in json.dumps(body["messages"][-1]) and sum("slow" in json.dumps(r["messages"][-1]) for r in requests) == 1:
+                text("partial-text")
+                time.sleep(4)
+                return
+            text("finished-answer")
+            event(json.dumps(dict(choices=[dict(delta={}, finish_reason="stop")])).encode())
+            event(b"[DONE]")
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Mock)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    with tempfile.TemporaryDirectory(dir=ROOT / "target/tui-tmp") as scratch:
+        base = Path(scratch)
+        for name in ("run", "cfg", "data"):
+            (base / name).mkdir(mode=0o700)
+        config = base / "cfg/xflow/config.toml"
+        config.parent.mkdir(mode=0o700)
+        config.write_text(f"[stt]\nprovider='custom'\nendpoint='http://127.0.0.1:1/transcribe'\nmodel='mock'\n[ai]\nprovider='custom'\nmodel='mock'\nendpoint='http://127.0.0.1:{server.server_port}/v1/chat/completions'\n")
+        env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY") and not k.endswith("_API_KEY")}
+        env.update(XDG_RUNTIME_DIR=str(base / "run"), XDG_CONFIG_HOME=str(base / "cfg"), XDG_DATA_HOME=str(base / "data"), DBUS_SESSION_BUS_ADDRESS=f"unix:path={base}/no-session-bus", TERM="xterm-256color", COLORTERM="truecolor")
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+        before = termios.tcgetattr(slave)
+        process = subprocess.Popen([BINARY, "tui"], stdin=slave, stdout=slave, stderr=slave, env=env, cwd=base)
+        output = bytearray()
+
+        def drain(duration=0.3):
+            deadline = time.monotonic() + duration
+            while time.monotonic() < deadline:
+                if select.select([master], [], [], 0.03)[0]:
+                    output.extend(os.read(master, 65536))
+
+        def key(value, duration=0.3):
+            os.write(master, value)
+            drain(duration)
+
+        def shown(text):
+            found = text in output
+            assert found, f"{text} not in {bytes(output[-2000:])}"
+
+        try:
+            drain(0.8)
+            key(b"-")
+            # Command letters are typing, and the first send asks.
+            key("quit? 日本語 private-question\r".encode())
+            shown(b"Allow")  # Painted with cursor moves over blank cells.
+            assert process.poll() is None, "typing q quit"
+            key(b"y", 0.1)  # Straight after Enter: ignored, nothing is sent.
+            assert not requests and "consented" not in config.read_text(), "early y answered consent"
+            drain(0.6)
+            key(b"y", 0.6)
+            shown(b"finished-answer")
+            assert "consented" in config.read_text() and "private-question" not in config.read_text()
+            output.clear()
+            key(b"slow\r", 0.5)
+            shown(b"partial-text")
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 14, 44, 0, 0))
+            process.send_signal(signal.SIGWINCH)
+            drain()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+            process.send_signal(signal.SIGWINCH)
+            key(b"\x1b", 0.5)
+            shown(b"Interrupted")
+            output.clear()
+            key(b"\x12", 0.6)  # Ctrl+R resends.
+            shown(b"finished-answer")
+            stat = Path(f"/proc/{process.pid}/stat")
+            ticks = lambda: sum(map(int, stat.read_text().split()[13:15]))
+            start = ticks()
+            drain(1)
+            idle_ticks = ticks() - start
+            assert idle_ticks <= 1, f"idle CPU ticks={idle_ticks}"
+            paste = "नमस्ते 日本語 ".encode() * 3500
+            started = time.monotonic()
+            key(b"\x1b[200~" + paste + b"\x1b[201~", 0.3)
+            key(b"!", 0.1)
+            paste_ms = int((time.monotonic() - started - 0.4) * 1000)
+            assert process.poll() is None
+            key(b"\x15")  # Ctrl+U.
+            key(b"\x03", 0.2)  # Ctrl+C.
+            process.wait(timeout=3)
+            drain()
+            assert process.returncode == 0, bytes(output[-2000:])
+            assert termios.tcgetattr(slave) == before, "terminal attributes not restored"
+            leaked = [p for p in base.rglob("*") if p.is_file() and b"private-question" in p.read_bytes()]
+            assert not leaked, f"chat text on disk: {leaked}"
+            print(json.dumps(dict(chat=True, size=f"{columns}x{rows}", model_requests=len(requests), idle_cpu_ticks=idle_ticks, paste_bytes=len(paste), paste_overhead_ms=paste_ms, on_disk=False, terminal_restored=True)))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            server.shutdown()
+            os.close(master)
+            os.close(slave)
+
+
 if __name__ == "__main__":
+    chat(80, 24)
     for columns, rows in ((80, 24), (120, 35)):
         run(False, columns, rows)
         run(True, columns, rows)

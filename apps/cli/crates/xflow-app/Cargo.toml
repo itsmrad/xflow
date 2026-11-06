@@ -41,6 +41,8 @@ rpassword = "7"
 # Already compiled for xflow-providers; the model installer (CLI only) uses them.
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "http2"] }
 ring = { version = "0.17", default-features = false }
+unicode-segmentation = "1"
+unicode-width = "0.2"
 # Streams WAV fixtures into the daemon in test-support builds only.
 hound = { version = "3.5", optional = true }
 

@@ -1,5 +1,5 @@
 use super::{
-    ai_apps,
+    ai_apps, chat_view,
     options::{self, glyph, value_text},
     state::{commands, fuzzy, Action, App, Editor, Modal, Page, Step, PAGES},
 };
@@ -22,7 +22,7 @@ pub struct HitMap {
     pub actions: Vec<(Rect, Action)>,
     pub options: Vec<(Rect, usize)>,
 }
-fn block(app: &App, title: impl Into<String>) -> Block<'static> {
+pub(super) fn block(app: &App, title: impl Into<String>) -> Block<'static> {
     let title = title.into();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -37,10 +37,10 @@ fn block(app: &App, title: impl Into<String>) -> Block<'static> {
         ))
     }
 }
-fn muted(app: &App) -> Style {
+pub(super) fn muted(app: &App) -> Style {
     app.theme.base().fg(app.theme.muted)
 }
-fn accent(app: &App) -> Style {
+pub(super) fn accent(app: &App) -> Style {
     app.theme.base().fg(app.theme.accent)
 }
 fn panel(
@@ -114,7 +114,13 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
     frame.render_widget(Block::default().style(theme.base()), area);
     if area.width < 40 || area.height < 12 {
         let (_, word, _, _) = status(app);
-        let text = format!("xflow · {word}\n\nThis window is too small.\nMake it bigger to see everything.\n\nq quit");
+        // Letters are typing on a ready Chat page.
+        let quit = if app.page == Page::Chat && app.chat_ready() {
+            "Ctrl+C quit"
+        } else {
+            "q quit"
+        };
+        let text = format!("xflow · {word}\n\nThis window is too small.\nMake it bigger to see everything.\n\n{quit}");
         frame.render_widget(
             Paragraph::new(text)
                 .wrap(Wrap { trim: false })
@@ -171,7 +177,11 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         .iter()
         .enumerate()
         .map(|(i, page)| {
-            let mut label = format!(" {}  {}", (i + 1) % 10, page.title());
+            let mut label = format!(
+                " {}  {}",
+                ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-"][i],
+                page.title()
+            );
             if i == selected {
                 label.replace_range(..1, ">");
             }
@@ -215,6 +225,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
                 parts[1],
             );
         }
+        Page::Chat if app.chat_ready() => chat_view::draw(frame, body[1], app),
         _ => listing(frame, body[1], app, &mut hits),
     }
     if let Some(toast) = &app.toast {
@@ -338,6 +349,8 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
             vec![("Enter remove", None), ("Esc keep", None)]
         }
         Some(Modal::OnDevice { .. }) => on_device_keys(app),
+        Some(Modal::ChatConsent { .. }) => vec![("y allow", None), ("n or Esc don't send", None)],
+        None if app.page == Page::Chat && app.chat_ready() => chat_view::keys(app),
         None => {
             let mut out: Vec<(&'static str, Option<Action>)> = match app.page {
                 Page::Home => vec![
@@ -360,6 +373,7 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                 Page::Settings | Page::Overlay => {
                     vec![("↑↓ move", None), ("Enter change", Some(Action::Choose))]
                 }
+                Page::Chat => vec![("↑↓ move", None), ("Enter choose", Some(Action::Choose))],
                 Page::Doctor if app.doctor_grant(app.selected()).is_some() => vec![
                     ("Enter fix", Some(Action::Choose)),
                     ("r refresh", Some(Action::Refresh)),
@@ -758,6 +772,7 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
         }).unwrap_or_default()),
         Page::Overlay => ("About", app.overlay.get(pos).map(|s| format!("{}\n{}\n\nEnter to change. Changes apply right away.", s.summary, super::state::overlay_value(&s.value))).unwrap_or_default()),
         Page::AiApps => ("Details", ai_apps::details(app)),
+        Page::Chat => ("Set up chat", app.chat_details(pos)),
         Page::Doctor => ("Details", rows.get(pos).map(|(row, more)| if more.is_empty() { row } else { more }.clone()).unwrap_or_else(|| "Checking…".into())),
         _ => ("", String::new()),
     }
@@ -855,10 +870,10 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
 fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mut HitMap) {
     let theme = app.theme;
     let height = match modal {
-        Modal::Help => 19,
+        Modal::Help => 23,
         Modal::Palette { .. } => 20,
         Modal::Search => 7,
-        Modal::Confirm { .. } => 7,
+        Modal::Confirm { .. } | Modal::ChatConsent { .. } => 8,
         Modal::Setup(_) => 16,
         Modal::OnDevice { .. } => 22,
         Modal::Editor(e) if e.picking() => {
@@ -882,6 +897,10 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
                 "Dictating".into(),
                 "  Space    start / stop    x       cancel".into(),
                 "  c        copy last       p       paste last".into(),
+                String::new(),
+                "Chat (typing goes to the box)".into(),
+                "  Enter    send            Esc     cancel or leave".into(),
+                "  Ctrl+R   retry           Ctrl+N  new chat".into(),
                 String::new(),
                 "Lists".into(),
                 "  n        add             Del     delete".into(),
@@ -938,6 +957,12 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
             Paragraph::new(format!("{prompt}\n\nEnter = yes   ·   Esc = no"))
                 .wrap(Wrap { trim: false })
                 .block(block(app, "Are you sure?").padding(pad)),
+            rect,
+        ),
+        Modal::ChatConsent { name, .. } => frame.render_widget(
+            Paragraph::new(App::chat_consent_text(name))
+                .wrap(Wrap { trim: false })
+                .block(block(app, "Share your dictations?").padding(pad)),
             rect,
         ),
         Modal::Setup(step) => setup(frame, rect, app, *step),
