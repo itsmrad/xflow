@@ -2031,3 +2031,98 @@ fn settings_selection_and_model_status_fit_small_terminals() {
         start.elapsed()
     );
 }
+
+#[test]
+fn pill_keeps_focus_values_hits_and_actions_at_every_supported_size() {
+    let started = std::time::Instant::now();
+    use crate::gsettings::{Kind, Setting};
+    let (_dir, mut app) = populated();
+    app.page = Page::Overlay;
+    app.overlay = [
+        ("Show pill", "true"),
+        (
+            "Kubernetes PostgreSQL useEffect git rebase OAuth kubectl",
+            "false",
+        ),
+        ("José Mei Fatima Chinedu", "true"),
+        ("Priya और José: कल API deploy करना है 42 3.14 14:30", "false"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (summary, value))| Setting {
+        key: format!("option-{i}"),
+        summary: summary.into(),
+        value: value.into(),
+        kind: Kind::Bool,
+    })
+    .collect();
+    let original = app.overlay.clone();
+    for (theme, mode) in [
+        ("midnight", ColorMode::TrueColor),
+        ("paper", ColorMode::TrueColor),
+        ("paper", ColorMode::None),
+    ] {
+        app.theme = Theme::resolve(theme, &BTreeMap::new(), mode).unwrap();
+        for (w, h) in [(120, 32), (80, 24), (40, 16), (40, 12)] {
+            for selected in 0..app.overlay.len() {
+                app.selected[Page::Overlay.index()] = selected;
+                let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+                let mut hits = render::HitMap::default();
+                terminal.draw(|f| hits = render::draw(f, &app)).unwrap();
+                let text = screen(&app, w, h);
+                assert!(text.contains(&format!("{}/4", selected + 1)), "{text}");
+                assert!(text.contains("Current value"), "{text}");
+                assert!(
+                    text.contains(if selected % 2 == 0 { "On" } else { "Off" }),
+                    "{text}"
+                );
+                assert!(
+                    text.contains("Enter change") && text.contains("q quit"),
+                    "{text}"
+                );
+                let (rect, _) = hits.rows.iter().find(|(_, i)| *i == selected).unwrap();
+                let cell = &terminal.backend().buffer()[(rect.x, rect.y)];
+                assert_eq!(cell.symbol(), ">");
+                assert!(cell.modifier.contains(Modifier::BOLD));
+                for (rect, _) in &hits.rows {
+                    assert!(rect.right() <= w && rect.bottom() <= h - 2);
+                }
+                assert!(hits
+                    .actions
+                    .iter()
+                    .any(|(_, a)| matches!(a, Action::Choose)));
+                assert!(hits.actions.iter().any(|(_, a)| matches!(a, Action::Quit)));
+            }
+        }
+    }
+    eprintln!(
+        "Pill: 96 TestBackend draws plus assertions in {:?}",
+        started.elapsed()
+    );
+    assert_eq!(app.overlay, original);
+    app.selected[Page::Overlay.index()] = 0;
+    key(&mut app, KeyCode::Down);
+    assert_eq!(app.selected(), 1);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.modal, Some(Modal::Editor(_))));
+    key(&mut app, KeyCode::Esc);
+    assert!(app.modal.is_none());
+    assert!(matches!(
+        key(&mut app, KeyCode::Char('r')).as_slice(),
+        [Effect::Overlay]
+    ));
+    app.overlay.clear();
+    app.selected[Page::Overlay.index()] = 0;
+    for failed in [false, true] {
+        app.overlay_error = failed;
+        let text = screen(&app, 40, 12);
+        assert!(
+            text.contains(if failed { "unavailable" } else { "Loading" }),
+            "{text}"
+        );
+        assert!(
+            text.contains("r refresh") && text.contains("q quit"),
+            "{text}"
+        );
+    }
+}
