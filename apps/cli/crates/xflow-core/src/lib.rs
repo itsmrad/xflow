@@ -16,6 +16,7 @@ pub mod ipc;
 pub mod learn;
 pub mod lists;
 pub mod meeting;
+pub mod replay;
 pub mod snap;
 pub mod text;
 pub mod title;
@@ -400,6 +401,8 @@ pub trait Desktop: Send + Sync {
 pub struct DeliveryTicket {
     pub field: Box<dyn FieldWatch>,
     pub receipt: learn::Receipt,
+    /// Terminal key replay for this paste. None when the field is read instead.
+    pub keys: Option<Box<dyn replay::KeyReplay>>,
 }
 pub struct ObservedDelivery {
     pub outcome: InjectionOutcome,

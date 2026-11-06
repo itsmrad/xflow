@@ -15,7 +15,7 @@ use std::{
     ffi::c_void,
     ptr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -29,6 +29,41 @@ type Callback = unsafe extern "C" fn(Ref, Ref, Ref, *mut c_void);
 struct CFRange {
     location: isize,
     length: isize,
+}
+#[repr(C)]
+#[derive(Default)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+#[repr(C)]
+#[derive(Default)]
+struct Size {
+    width: f64,
+    height: f64,
+}
+#[repr(C)]
+#[derive(Default)]
+struct Rect {
+    origin: Point,
+    size: Size,
+}
+impl Rect {
+    fn contains(&self, other: &Self) -> bool {
+        let valid = |r: &Self| {
+            [r.origin.x, r.origin.y, r.size.width, r.size.height]
+                .iter()
+                .all(|v| v.is_finite())
+                && r.size.width > 0.0
+                && r.size.height > 0.0
+        };
+        valid(self)
+            && valid(other)
+            && other.origin.x >= self.origin.x
+            && other.origin.y >= self.origin.y
+            && other.origin.x + other.size.width <= self.origin.x + self.size.width
+            && other.origin.y + other.size.height <= self.origin.y + self.size.height
+    }
 }
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -91,6 +126,14 @@ impl Reader {
         }
         Self::pinned(focus.element.as_ref()?, focus.window.as_ref()?)
     }
+    /// Terminal confirmation pins the delivery's screen, without making ordinary
+    /// field readers eligible to read a terminal.
+    pub(super) fn terminal(focus: &Focus) -> Option<Arc<Self>> {
+        if focus.secure || !super::is_terminal(focus.context.app_id.as_deref()) {
+            return None;
+        }
+        Self::pinned(focus.element.as_ref()?, focus.window.as_ref()?).filter(|r| r.pid == focus.pid)
+    }
     fn pinned(element: &Owned, window: &Owned) -> Option<Arc<Self>> {
         let mut pid = 0;
         if unsafe { AXUIElementGetPid(element.0, &mut pid) } != 0 {
@@ -127,6 +170,64 @@ impl Reader {
         }
         Some((self.count()?, selected.length as usize))
     }
+}
+impl xflow_core::replay::VisibleScreen for Reader {
+    fn safe(&self) -> bool {
+        !crate::macos_hotkey::secure_input()
+            && FieldSource::guard(self)
+            && self.element.0.flag("AXEnabled") != Some(false)
+    }
+    fn visible_range(&self) -> Option<(usize, usize)> {
+        let r = named_range(&self.element.0, "AXVisibleCharacterRange")?;
+        Some((r.location as usize, r.length as usize))
+    }
+    fn in_viewport(&self, start: usize, len: usize) -> bool {
+        self.tail_in_viewport(start, len).is_some()
+    }
+    fn range(&self, start: usize, len: usize) -> Option<String> {
+        string_range(&self.element.0, start, len)
+    }
+}
+impl Reader {
+    fn tail_in_viewport(&self, start: usize, len: usize) -> Option<()> {
+        if len == 0 || len > xflow_core::replay::MAX_CONFIRM_UTF16 {
+            return None;
+        }
+        let r = CFRange {
+            location: isize::try_from(start).ok()?,
+            length: isize::try_from(len).ok()?,
+        };
+        r.location.checked_add(r.length)?;
+        // iTerm2 advertises scrollback as visible. Check the proposed tail itself
+        // before requesting text; full-range or clipped bounds cannot widen it.
+        let e = &self.element.0;
+        let mut bounds = Rect::default();
+        ax_value(&parameterized(e, "AXBoundsForRange", &r)?, 3, &mut bounds)?;
+        // A document view can be as tall as scrollback; its scroll area's frame
+        // is the viewport. Without that independent bound, do not request text.
+        let mut parent = e.attribute("AXParent")?;
+        let mut viewport = None;
+        for _ in 0..4 {
+            if parent.text("AXRole").as_deref() == Some("AXScrollArea") {
+                viewport = Some(parent);
+                break;
+            }
+            parent = parent.attribute("AXParent")?;
+        }
+        if !frame(e)?.contains(&bounds)
+            || !frame(&viewport?)?.contains(&bounds)
+            || !frame(&self.window.0)?.contains(&bounds)
+        {
+            return None;
+        }
+        Some(())
+    }
+}
+fn frame(element: &Owned) -> Option<Rect> {
+    let mut rect = Rect::default();
+    ax_value(&element.attribute("AXPosition")?, 1, &mut rect.origin)?;
+    ax_value(&element.attribute("AXSize")?, 2, &mut rect.size)?;
+    Some(rect)
 }
 /// Unsupported optional metadata is distinct from a failed privacy query.
 fn optional_attribute(element: &Owned, name: &str) -> Option<Option<Owned>> {
@@ -364,9 +465,20 @@ fn string_range(element: &Owned, start: usize, len: usize) -> Option<String> {
         location: isize::try_from(start).ok()?,
         length: isize::try_from(len).ok()?,
     };
+    let value = parameterized(element, "AXStringForRange", &range)?;
+    if unsafe {
+        CFGetTypeID(value.0) != super::CFStringGetTypeID()
+            || super::CFStringGetLength(value.0) != len as isize
+    } {
+        return None;
+    }
+    let value = cf_text(value.0)?;
+    (value.encode_utf16().count() == len).then_some(value)
+}
+fn parameterized(element: &Owned, name: &str, range: &CFRange) -> Option<Owned> {
     let parameter =
-        Owned::new(unsafe { AXValueCreate(CF_RANGE, (&range as *const CFRange).cast()) })?;
-    let name = Owned::string("AXStringForRange");
+        Owned::new(unsafe { AXValueCreate(CF_RANGE, (range as *const CFRange).cast()) })?;
+    let name = Owned::string(name);
     let mut value = ptr::null();
     if unsafe {
         AXUIElementCopyParameterizedAttributeValue(element.0, name.0, parameter.0, &mut value)
@@ -374,8 +486,15 @@ fn string_range(element: &Owned, start: usize, len: usize) -> Option<String> {
     {
         return None;
     }
-    let value = cf_text(Owned::new(value)?.0)?;
-    (value.encode_utf16().count() == len).then_some(value)
+    Owned::new(value)
+}
+fn ax_value<T>(value: &Owned, kind: u32, out: &mut T) -> Option<()> {
+    // All callers pair the AX kind with its C-layout struct (point, size, rect).
+    unsafe {
+        (CFGetTypeID(value.0) == AXValueGetTypeID()
+            && AXValueGetValue(value.0, kind, (out as *mut T).cast()))
+        .then_some(())
+    }
 }
 impl Watch {
     /// Close the gate and wake the observer's run loop to notice.
@@ -399,7 +518,10 @@ impl Watch {
     }
 }
 fn selection(element: &Owned) -> Option<CFRange> {
-    let range = element.attribute("AXSelectedTextRange")?;
+    named_range(element, "AXSelectedTextRange")
+}
+fn named_range(element: &Owned, name: &str) -> Option<CFRange> {
+    let range = element.attribute(name)?;
     let mut r = CFRange {
         location: 0,
         length: 0,
@@ -527,9 +649,173 @@ impl Drop for Watch {
     }
 }
 
+/// App and window changes for a terminal replay. No text is read.
+pub(super) struct Departure {
+    pub(super) events: mpsc::Receiver<()>,
+    stop: Arc<AtomicBool>,
+    runloop: Arc<AtomicUsize>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+impl Departure {
+    pub(super) fn signal(&self) {
+        self.stop.store(true, Ordering::Release);
+        let runloop = self.runloop.swap(0, Ordering::AcqRel) as MutRef;
+        if !runloop.is_null() {
+            unsafe {
+                CFRunLoopStop(runloop);
+                CFRunLoopWakeUp(runloop);
+                CFRelease(runloop as Ref);
+            }
+        }
+    }
+}
+impl Drop for Departure {
+    fn drop(&mut self) {
+        self.signal();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+pub(super) fn departure(pid: i32, window: &Owned) -> Option<Departure> {
+    if pid <= 0 {
+        return None;
+    }
+    let (tx, events) = mpsc::channel(4);
+    let stop = Arc::new(AtomicBool::new(false));
+    let runloop = Arc::new(AtomicUsize::new(0));
+    let (flag, wake, kept) = (stop.clone(), runloop.clone(), Shared(retain(window)));
+    let thread = thread::Builder::new()
+        .name("xflow-replay-focus".into())
+        .stack_size(256 * 1024)
+        .spawn(move || unsafe { watch_departure(pid, kept, tx, &flag, &wake) })
+        .ok()?;
+    Some(Departure {
+        events,
+        stop,
+        runloop,
+        thread: Some(thread),
+    })
+}
+unsafe fn watch_departure(
+    pid: i32,
+    window: Shared,
+    events: mpsc::Sender<()>,
+    stop: &AtomicBool,
+    wake: &AtomicUsize,
+) {
+    let Some(app) = Owned::new(AXUIElementCreateApplication(pid)) else {
+        return;
+    };
+    AXUIElementSetMessagingTimeout(app.0, 0.1);
+    let mut observer = ptr::null();
+    if AXObserverCreate(pid, leave_callback, &mut observer) != 0 {
+        return;
+    }
+    let Some(observer) = Owned::new(observer) else {
+        return;
+    };
+    let mut context = Box::new(LeaveCtx {
+        events,
+        window,
+        app: Shared(app),
+        sent: Cell::new(false),
+    });
+    let app_ref = (context.app.0).0;
+    let refcon: *mut c_void = (&mut *context as *mut LeaveCtx).cast();
+    let mut added = true;
+    for name in ["AXApplicationDeactivated", "AXFocusedWindowChanged"] {
+        let name = Owned::string(name);
+        added &= AXObserverAddNotification(observer.0, app_ref, name.0, refcon) == 0;
+    }
+    if !added {
+        return;
+    }
+    let source = AXObserverGetRunLoopSource(observer.0) as MutRef;
+    let runloop = CFRunLoopGetCurrent();
+    CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
+    CFRetain(runloop);
+    wake.store(runloop as usize, Ordering::Release);
+    loop {
+        if stop.load(Ordering::Acquire) || CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, true) == 1
+        {
+            break;
+        }
+    }
+    let retained = wake.swap(0, Ordering::AcqRel) as MutRef;
+    if !retained.is_null() {
+        CFRelease(retained as Ref);
+    }
+    CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
+}
+struct LeaveCtx {
+    events: mpsc::Sender<()>,
+    window: Shared,
+    app: Shared,
+    sent: Cell<bool>,
+}
+unsafe extern "C" fn leave_callback(_: Ref, _: Ref, notification: Ref, context: *mut c_void) {
+    let context = &*(context as *const LeaveCtx);
+    if context.sent.get() {
+        return;
+    }
+    let leave = match cf_text(notification).as_deref() {
+        Some("AXApplicationDeactivated") => true,
+        // A failed read is not a window change. A different window is.
+        Some("AXFocusedWindowChanged") => context
+            .app
+            .0
+            .attribute("AXFocusedWindow")
+            .is_some_and(|w| !CFEqual(w.0, (context.window.0).0)),
+        _ => false,
+    };
+    if leave && context.events.try_send(()).is_ok() {
+        context.sent.set(true);
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visible_bounds_reject_scrollback_and_unknown_geometry() {
+        let frame = Rect {
+            origin: Point { x: 20.0, y: 30.0 },
+            size: Size {
+                width: 800.0,
+                height: 600.0,
+            },
+        };
+        let visible = Rect {
+            origin: Point { x: 20.0, y: 30.0 },
+            size: Size {
+                width: 800.0,
+                height: 500.0,
+            },
+        };
+        assert!(frame.contains(&visible));
+        let scrollback = Rect {
+            origin: Point {
+                x: 20.0,
+                y: -1000.0,
+            },
+            size: Size {
+                width: 800.0,
+                height: 1500.0,
+            },
+        };
+        assert!(!frame.contains(&scrollback));
+        assert!(!frame.contains(&Rect::default()));
+        assert!(!frame.contains(&Rect {
+            origin: Point {
+                x: f64::NAN,
+                y: 30.0
+            },
+            size: Size {
+                width: 10.0,
+                height: 10.0
+            }
+        }));
+    }
     use xflow_core::AppContext;
 
     #[test]
