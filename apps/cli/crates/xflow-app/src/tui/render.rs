@@ -216,6 +216,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         Page::Dictionary => dictionary(frame, body[1], app, &mut hits),
         Page::Stats => stats(frame, body[1], app),
         Page::Styles => styles(frame, body[1], app, &mut hits),
+        Page::Snippets => snippets(frame, body[1], app, &mut hits),
         Page::AiApps => {
             // The two privacy lines stay visible under the list.
             let notes =
@@ -296,6 +297,26 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
 }
 /// The keys that work right now, in plain words.
 pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
+    if app.page == Page::Snippets && app.modal.is_none() {
+        let mut keys = vec![(
+            if app.selected() == 0 {
+                "Enter add"
+            } else {
+                "Enter options"
+            },
+            Some(Action::Choose),
+        )];
+        if app.selected() > 0 {
+            keys.push(("Del delete", Some(Action::Delete)));
+        }
+        keys.extend([
+            ("q quit", Some(Action::Quit)),
+            ("? help", Some(Action::Help)),
+            ("Tab next page", None),
+            ("Esc back", Some(Action::Back)),
+        ]);
+        return keys;
+    }
     let pick = vec![
         ("↑↓ move", None),
         ("Enter choose", None),
@@ -769,6 +790,69 @@ fn styles(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     );
     frame.render_widget(
         Paragraph::new("PgUp/PgDn details").style(muted(app)),
+        parts[1],
+    );
+}
+
+// Snippets own their compact layout; other list pages retain their spacing.
+fn snippets(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
+    let (list, detail) = if area.width >= 90 {
+        let parts = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        (parts[0], parts[1])
+    } else {
+        let parts = Layout::vertical([
+            Constraint::Min(5),
+            Constraint::Length((area.height / 2).clamp(5, 12)),
+        ])
+        .split(area);
+        (parts[0], parts[1])
+    };
+    let rows = app.rows();
+    let list_block = block(app, format!("Snippets ({})", app.config.snippets.len()));
+    let inner = list_block.inner(list);
+    frame.render_widget(list_block, list);
+    let parts = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+    frame.render_widget(Paragraph::new("↑↓ move").style(muted(app)), parts[0]);
+    let items = rows
+        .iter()
+        .enumerate()
+        .map(|(index, (trigger, _))| {
+            ListItem::new(Span::styled(
+                trigger.clone(),
+                if index == 0 {
+                    accent(app).add_modifier(Modifier::BOLD)
+                } else {
+                    app.theme.base()
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut state = ListState::default().with_selected(Some(app.selected()));
+    frame.render_stateful_widget(
+        List::new(items)
+            .highlight_style(app.theme.selected())
+            .highlight_symbol("> "),
+        parts[1],
+        &mut state,
+    );
+    for index in state.offset()..rows.len() {
+        let y = parts[1].y + (index - state.offset()) as u16;
+        if y >= parts[1].bottom() {
+            break;
+        }
+        hits.rows
+            .push((Rect::new(parts[1].x, y, parts[1].width, 1), index));
+    }
+    let (title, text) = match app.selected().checked_sub(1).and_then(|i| app.config.snippets.get(i)) {
+        Some(snippet) => ("Inserted text", format!("{}\n\nWhen you say:\n{}", snippet.text, snippet.trigger)),
+        None if app.config.snippets.is_empty() => ("Start here", "No snippets yet.\nEnter adds a phrase and the text to insert.".into()),
+        None => ("Add a snippet", "Say a short phrase while dictating to insert longer text.\nEnter to add a phrase and its text.".into()),
+    };
+    let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(detail);
+    panel(frame, parts[0], title, text, app);
+    frame.render_widget(
+        Paragraph::new("PgUp/PgDn preview").style(muted(app)),
         parts[1],
     );
 }
