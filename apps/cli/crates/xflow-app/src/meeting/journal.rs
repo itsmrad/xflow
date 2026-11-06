@@ -181,7 +181,7 @@ fn open_nofollow(path: &Path) -> std::io::Result<File> {
     options.open(path)
 }
 /// Owner-only lock file; never follows a symlink.
-pub(crate) fn lock_file(path: &Path) -> std::io::Result<File> {
+pub fn lock_file(path: &Path) -> std::io::Result<File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -493,6 +493,34 @@ impl Capture {
             }
         }
         Ok(())
+    }
+    /// Live audio a source never delivered: what is buffered becomes durable,
+    /// the missing range is recorded as a gap, and the source continues after
+    /// it. No samples are invented.
+    pub fn gap(&mut self, source: usize, samples: i64, reason: &str) -> Result<()> {
+        ensure!(!self.stopped, "capture already stopped");
+        ensure!(source < self.sources.len(), "unknown source");
+        if samples <= 0 {
+            return Ok(());
+        }
+        self.flush(source)?;
+        let s = &mut self.sources[source];
+        let start = s.next_sample;
+        add_gap(
+            &self.db,
+            self.meeting,
+            &s.id,
+            start * 1000 / RATE,
+            (start + samples) * 1000 / RATE,
+            reason,
+        )?;
+        s.next_sample += samples;
+        Ok(())
+    }
+    /// Samples written or skipped so far for one source.
+    pub fn position(&self, source: usize) -> i64 {
+        let s = &self.sources[source];
+        s.next_sample + s.buf.len() as i64
     }
     fn flush(&mut self, source: usize) -> Result<()> {
         if self.sources[source].buf.is_empty() {

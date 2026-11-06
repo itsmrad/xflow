@@ -112,6 +112,17 @@ pub enum Command {
     /// Internal: automatic meeting prompts, owned by the daemon control pipe.
     #[command(hide = true, name = "meeting-watch")]
     MeetingWatch,
+    /// Internal: consent, Stop indicator and app audio for `meeting record`.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true, name = "meeting-native")]
+    MeetingNative {
+        #[arg(long)]
+        app: Option<String>,
+        #[arg(long)]
+        no_mic: bool,
+        #[arg(long)]
+        yes: bool,
+    },
     /// Clear all history (legacy alias for history clear).
     #[command(hide = true)]
     ClearHistory {
@@ -393,6 +404,30 @@ pub enum MeetingCmd {
         #[arg(long)]
         force: bool,
     },
+    /// Record a live meeting: your microphone (shared with dictation) and one
+    /// app's audio, such as Zoom, Teams, Chime or the browser running Meet.
+    ///
+    /// macOS 14.2 or newer. Asks first, then shows an Xflow indicator with a
+    /// Stop button while it records. Runs until stopped (Stop, Ctrl-C or
+    /// `xflow meeting stop`), then transcribes in the background. Audio stays
+    /// private on this Mac until it is sent to your transcription provider.
+    Record {
+        /// The app to record: bundle ID (us.zoom.xos), name (Zoom) or PID.
+        /// Omit to choose in the dialog.
+        #[arg(long)]
+        app: Option<String>,
+        /// A title for the meeting, 1 to 256 bytes.
+        #[arg(long)]
+        title: Option<String>,
+        /// Record only the app's audio, not your microphone.
+        #[arg(long)]
+        no_mic: bool,
+        /// Stop when stdin closes or reads `q`, for a launching program.
+        #[arg(long, hide = true)]
+        control_stdin: bool,
+    },
+    /// Stop the meeting being recorded and transcribe it.
+    Stop,
     /// Delete one meeting and its audio, cancelling its transcription, or
     /// retry physical cleanup once.
     Delete {

@@ -47,6 +47,33 @@ pub fn run(
         } => export(id, *format, output, *force, out),
         args::MeetingCmd::Delete { id, retry } => delete(id.as_deref(), *retry, out),
         args::MeetingCmd::Detect => super::detect_meetings(out),
+        #[cfg(target_os = "macos")]
+        args::MeetingCmd::Record {
+            app,
+            title,
+            no_mic,
+            control_stdin,
+        } => super::meeting_record::record(
+            &super::meeting_record::Request {
+                app: app.as_deref(),
+                title: title.as_deref(),
+                mic: !no_mic,
+                // Automated tests only; a release build always asks first.
+                yes: cfg!(feature = "test-support")
+                    && std::env::var_os("XFLOW_TEST_MEETING_YES").is_some(),
+                control_stdin: *control_stdin,
+            },
+            &config()?,
+            out,
+        ),
+        #[cfg(target_os = "macos")]
+        args::MeetingCmd::Stop => super::meeting_record::stop(out),
+        #[cfg(not(target_os = "macos"))]
+        args::MeetingCmd::Record { .. } | args::MeetingCmd::Stop => Err(Error::new(
+            1,
+            "Recording a live meeting needs macOS 14.2 or newer for now",
+            "Record with another app, then use xflow meeting process FILE",
+        )),
     }
 }
 
@@ -558,6 +585,19 @@ fn start(meeting: Option<&MeetingId>, config: &Path, wait: bool, out: &Output) -
     wait_for(&db, meeting, config, out)
 }
 
+/// Background transcription for a recorded meeting, printing nothing. True
+/// when the worker runs or nothing is waiting.
+pub(super) fn transcribe_quietly(meeting: Option<&MeetingId>, config: &Path) -> bool {
+    let Ok(db) = db_path() else {
+        return false;
+    };
+    match jobs::queue(&db, meeting.map(|m| m.id)) {
+        Ok(0) => true,
+        Ok(_) => meeting_stt(config).is_ok() && start_worker(&db, config).is_ok(),
+        Err(_) => false,
+    }
+}
+
 /// Starts `xflow meeting-worker` in its own session, ignoring SIGHUP, with
 /// no terminal and no pipe to this process. A running worker makes this a no-op.
 fn start_worker(db: &Path, config: &Path) -> Result<bool> {
@@ -864,7 +904,7 @@ fn reader() -> Result<Option<MeetingReader>> {
     Ok(Some(MeetingReader::at(path)))
 }
 
-fn db_path() -> Result<std::path::PathBuf> {
+pub(super) fn db_path() -> Result<std::path::PathBuf> {
     Ok(paths::data_dir()?.join("meetings.db"))
 }
 
@@ -1002,7 +1042,7 @@ fn meeting_label(meeting: Option<&MeetingId>) -> String {
     }
 }
 
-fn usage(message: &str) -> Error {
+pub(super) fn usage(message: &str) -> Error {
     Error::new(2, message, "Run xflow meeting --help")
 }
 
