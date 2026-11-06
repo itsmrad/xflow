@@ -315,9 +315,13 @@ unsafe extern "C" fn callback(_: Ref, element: Ref, notification: Ref, context: 
                 FieldEvent::Merged
             }
         }
-        // The same element or window announced again: nothing moved (T17).
-        Some("AXFocusedUIElementChanged") if CFEqual(element, r.element.0 .0) => return,
-        Some("AXFocusedWindowChanged") if CFEqual(element, r.window.0 .0) => return,
+        // A prompt to look, not proof of departure: apps repeat these with focus
+        // unmoved (T17), some from another wrapper of the same element (Safari).
+        Some("AXFocusedUIElementChanged" | "AXFocusedWindowChanged")
+            if focused(r.pid, &r.app.0, &r.element.0) =>
+        {
+            return;
+        }
         // A focus journey is terminal even if focus returns before the next read.
         _ => {
             gate.invalid.store(true, Ordering::Release);
