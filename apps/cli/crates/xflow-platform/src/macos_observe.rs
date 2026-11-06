@@ -179,14 +179,27 @@ impl xflow_core::replay::VisibleScreen for Reader {
     }
     fn visible_range(&self) -> Option<(usize, usize)> {
         let r = named_range(&self.element.0, "AXVisibleCharacterRange")?;
-        if r.length == 0
-            || r.length as usize > xflow_core::replay::MAX_VISIBLE_UTF16
-            || r.location.checked_add(r.length).is_none()
-        {
+        Some((r.location as usize, r.length as usize))
+    }
+    fn in_viewport(&self, start: usize, len: usize) -> bool {
+        self.tail_in_viewport(start, len).is_some()
+    }
+    fn range(&self, start: usize, len: usize) -> Option<String> {
+        string_range(&self.element.0, start, len)
+    }
+}
+impl Reader {
+    fn tail_in_viewport(&self, start: usize, len: usize) -> Option<()> {
+        if len == 0 || len > xflow_core::replay::MAX_CONFIRM_UTF16 {
             return None;
         }
-        // iTerm2 advertises all scrollback as visible. Require geometric proof
-        // before requesting any text; unsupported bounds fail closed too.
+        let r = CFRange {
+            location: isize::try_from(start).ok()?,
+            length: isize::try_from(len).ok()?,
+        };
+        r.location.checked_add(r.length)?;
+        // iTerm2 advertises scrollback as visible. Check the proposed tail itself
+        // before requesting text; full-range or clipped bounds cannot widen it.
         let e = &self.element.0;
         let mut bounds = Rect::default();
         ax_value(&parameterized(e, "AXBoundsForRange", &r)?, 3, &mut bounds)?;
@@ -207,10 +220,7 @@ impl xflow_core::replay::VisibleScreen for Reader {
         {
             return None;
         }
-        Some((r.location as usize, r.length as usize))
-    }
-    fn range(&self, start: usize, len: usize) -> Option<String> {
-        string_range(&self.element.0, start, len)
+        Some(())
     }
 }
 fn frame(element: &Owned) -> Option<Rect> {

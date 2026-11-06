@@ -40,10 +40,18 @@ pub trait KeyReplay: Send {
 pub trait VisibleScreen {
     fn safe(&self) -> bool;
     fn visible_range(&self) -> Option<(usize, usize)>;
+    fn in_viewport(&self, start: usize, len: usize) -> bool;
     fn range(&self, start: usize, len: usize) -> Option<String>;
 }
 
 pub const MAX_VISIBLE_UTF16: usize = 16_384;
+pub const MAX_CONFIRM_UTF16: usize = 4_096;
+
+fn placeholder(text: &str) -> bool {
+    ["[Pasted text", "[Pasted Content"]
+        .iter()
+        .any(|s| text.contains(s))
+}
 
 /// Read once, compare in memory, then drop the visible text. Errors are tags only.
 pub fn confirm(
@@ -56,36 +64,45 @@ pub fn confirm(
         || original == corrected
         || original.chars().any(char::is_control)
         || corrected.chars().any(char::is_control)
-        || ["[Pasted text", "[Pasted Content"]
-            .iter()
-            .any(|s| corrected.contains(s))
+        || placeholder(corrected)
     {
         return Err("unconfirmed");
     }
     if !screen.safe() {
         return Err("unsafe-screen");
     }
-    let (start, len) = screen.visible_range().ok_or("visible-range")?;
-    if len == 0 || len > MAX_VISIBLE_UTF16 || start.checked_add(len).is_none() {
+    let visible_range = screen.visible_range().ok_or("visible-range")?;
+    let (start, len) = visible_range;
+    let end = start.checked_add(len).ok_or("visible-bound")?;
+    let proposed_len = corrected.encode_utf16().count();
+    let len = len.min(proposed_len.saturating_mul(4).clamp(512, MAX_CONFIRM_UTF16));
+    if len == 0 || proposed_len > len {
         return Err("visible-bound");
     }
-    if !screen.safe() {
+    let start = end - len;
+    if !screen.safe() || !screen.in_viewport(start, len) {
         return Err("unsafe-screen");
     }
     let visible = screen.range(start, len).ok_or("visible-read")?;
-    if !screen.safe() || screen.visible_range() != Some((start, len)) {
+    if !screen.safe()
+        || screen.visible_range() != Some(visible_range)
+        || !screen.in_viewport(start, len)
+    {
         return Err("unsafe-screen");
     }
     if visible.encode_utf16().count() != len {
         return Err("visible-count");
     }
-    let unique = visible
+    let mut matches = visible
         .char_indices()
-        .filter(|(i, _)| visible[*i..].starts_with(corrected))
-        .take(2)
-        .count()
-        == 1;
-    if unique && !visible.contains(original) {
+        .filter(|(i, _)| visible[*i..].starts_with(corrected));
+    let at = matches.next().map(|(i, _)| i).ok_or("unconfirmed")?;
+    let suffix = visible[at + corrected.len()..].trim_start_matches(' ');
+    if matches.next().is_none()
+        && (suffix.is_empty() || suffix.starts_with('\n'))
+        && !visible.contains(original)
+        && !placeholder(&visible)
+    {
         Ok(())
     } else {
         Err("unconfirmed")
@@ -221,6 +238,7 @@ impl Line {
             Key::WordLeft => self.word_left(),
             Key::WordRight => self.word_right(),
             Key::LineStart => self.place(0),
+            Key::LineEnd if self.cursor == self.text.len() => self.halt(),
             Key::LineEnd => self.place(self.text.len()),
             Key::KillWord => self.kill_word(),
             Key::KillLine => self.kill_line(),
@@ -295,9 +313,10 @@ impl Line {
     }
 
     fn right(&mut self) -> Applied {
-        if let Some((at, _)) = self.next_char() {
-            self.cursor = at;
-        }
+        let Some((at, _)) = self.next_char() else {
+            return self.halt();
+        };
+        self.cursor = at;
         Applied::Edit { changed: false }
     }
 
@@ -310,6 +329,9 @@ impl Line {
     }
 
     fn word_right(&mut self) -> Applied {
+        if self.cursor == self.text.len() {
+            return self.halt();
+        }
         self.cursor = self.word_end();
         Applied::Edit { changed: false }
     }
@@ -472,6 +494,7 @@ fn chord(kind: Kind, text: &str, mods: Mods) -> Action {
     Action::Edit(match letter {
         Some('a') => Key::LineStart,
         Some('e') => Key::LineEnd,
+        Some('f') => Key::Right,
         Some('w') => Key::KillWord,
         Some('u') => Key::KillLine,
         Some('k' | 'y' | 'v') => Key::Abstain,
@@ -543,6 +566,8 @@ mod tests {
         reads: Cell<usize>,
         secure: Cell<bool>,
         secure_during_read: bool,
+        in_viewport: bool,
+        bounds: Cell<Option<(usize, usize)>>,
     }
     impl Screen {
         fn new(text: &str) -> Self {
@@ -552,6 +577,8 @@ mod tests {
                 reads: Cell::new(0),
                 secure: Cell::new(false),
                 secure_during_read: false,
+                in_viewport: true,
+                bounds: Cell::new(None),
             }
         }
     }
@@ -562,17 +589,26 @@ mod tests {
         fn visible_range(&self) -> Option<(usize, usize)> {
             Some((500_000, self.len))
         }
+        fn in_viewport(&self, start: usize, len: usize) -> bool {
+            self.bounds.set(Some((start, len)));
+            self.in_viewport
+        }
         fn range(&self, start: usize, len: usize) -> Option<String> {
             assert_eq!(
-                (start, len),
-                (500_000, self.len),
-                "only the visible range, not scrollback"
+                self.bounds.get(),
+                Some((start, len)),
+                "bounds checked on the tail being read"
             );
+            assert!(start >= 500_000 && len <= MAX_CONFIRM_UTF16);
+            assert_eq!(start + len, 500_000 + self.len, "tail only");
             self.reads.set(self.reads.get() + 1);
             if self.secure_during_read {
                 self.secure.set(true);
             }
-            self.text.clone()
+            let text = self.text.as_ref()?;
+            let units: Vec<_> = text.encode_utf16().collect();
+            let offset = start - 500_000;
+            String::from_utf16(units.get(offset..offset + len).unwrap_or(&units)).ok()
         }
     }
     #[test]
@@ -633,13 +669,13 @@ mod tests {
             assert!(screen.reads.get() <= 1);
         }
         let mut screen = Screen::new("José fixed useEffect");
-        screen.len = MAX_VISIBLE_UTF16 + 1;
+        let oversized = "x".repeat(MAX_CONFIRM_UTF16 + 1);
         assert_eq!(
-            confirm(&screen, "Jose fixed useEffect", "José fixed useEffect"),
+            confirm(&screen, "old phrase", &oversized),
             Err("visible-bound")
         );
         assert_eq!(screen.reads.get(), 0);
-        screen.len = 10;
+        screen.len += 1;
         assert_eq!(
             confirm(&screen, "Jose fixed useEffect", "José fixed useEffect"),
             Err("visible-count")
@@ -649,6 +685,82 @@ mod tests {
             confirm(&screen, "Jose fixed useEffect", "José fixed useEffect"),
             Err("visible-read")
         );
+    }
+    #[test]
+    fn confirmation_requires_a_line_end_and_no_placeholder_elsewhere() {
+        let original = "kubectl rolaut deploym";
+        let corrected = "kubectl rollout deploym";
+        for text in [
+            "$ kubectl rollout deployment-api",
+            "$ kubectl rollout deploym --namespace staging",
+            "[Pasted text #1 +4 lines]\n$ kubectl rollout deploym",
+            "[Pasted Content 900 chars]\n$ kubectl rollout deploym",
+        ] {
+            assert_eq!(
+                confirm(&Screen::new(text), original, corrected),
+                Err("unconfirmed")
+            );
+        }
+        for text in [
+            "$ kubectl rollout deploym   ",
+            "$ kubectl rollout deploym  \nnext prompt",
+        ] {
+            assert_eq!(confirm(&Screen::new(text), original, corrected), Ok(()));
+        }
+    }
+    #[test]
+    fn only_the_proposal_sized_tail_is_read_after_its_own_bounds_check() {
+        let text = format!(
+            "{}\n$ git rebase origin/main",
+            "unrelated screen output\n".repeat(300)
+        );
+        let mut screen = Screen::new(&text);
+        assert_eq!(
+            confirm(&screen, "git rebsae origin/main", "git rebase origin/main"),
+            Ok(())
+        );
+        assert_eq!(screen.bounds.get(), Some((500_000 + screen.len - 512, 512)));
+        assert_eq!(screen.reads.get(), 1);
+        screen.in_viewport = false;
+        screen.reads.set(0);
+        assert_eq!(
+            confirm(&screen, "git rebsae origin/main", "git rebase origin/main"),
+            Err("unsafe-screen")
+        );
+        assert_eq!(screen.reads.get(), 0, "an off-screen tail is never fetched");
+        let long = format!("{} Priyanka", "a".repeat(1_100));
+        let screen = Screen::new(&format!("{}\n{long}", "padding\n".repeat(1_000)));
+        assert_eq!(confirm(&screen, "unrelated original", &long), Ok(()));
+        assert_eq!(screen.bounds.get().unwrap().1, MAX_CONFIRM_UTF16);
+        assert_eq!(
+            confirm(
+                &screen,
+                "unrelated original",
+                &"b".repeat(MAX_CONFIRM_UTF16 + 1)
+            ),
+            Err("visible-bound")
+        );
+    }
+    #[test]
+    fn completion_keys_at_the_known_end_discard_the_model() {
+        let actions = [
+            classify(Right, "", plain()),
+            classify(End, "", plain()),
+            classify(Letter('e'), "\u{5}", hold(true, false, false)),
+            classify(Letter('f'), "\u{6}", hold(true, false, false)),
+            classify(Right, "", hold(false, true, false)),
+        ];
+        for action in actions {
+            let Action::Edit(key) = action else {
+                panic!("edit expected");
+            };
+            let mut line = Line::new("kubectl rollout deploym");
+            assert_eq!(line.apply(key), Applied::Stop);
+            assert!(
+                line.text().is_none(),
+                "an accepted deployment-api suffix cannot leave a proposal"
+            );
+        }
     }
     #[test]
     fn secure_input_before_or_during_confirmation_never_confirms() {
