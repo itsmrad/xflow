@@ -102,6 +102,100 @@ fn assert_plain(text: &str) {
 }
 
 #[test]
+fn snippets_keep_text_actions_selection_and_hits_in_compact_terminals() {
+    let (_dir, mut app) = populated();
+    app.page = Page::Snippets;
+    app.set("snippets", r#"[
+        {trigger="Ada", text="Ship it."},
+        {trigger="Kubernetes PostgreSQL useEffect git rebase OAuth kubectl", text="José and Mei: deploy 42 pods at 14:30.\nThen check error 503 and retry."},
+        {trigger="Priya और Arjun", text="कल API deploy करना है, फिर tests चलाओ।"}
+    ]"#).unwrap();
+    let fixture = app.config.snippets.clone();
+    for (theme, mode) in [
+        ("midnight", ColorMode::TrueColor),
+        ("paper", ColorMode::TrueColor),
+        ("paper", ColorMode::None),
+    ] {
+        app.theme = Theme::resolve(theme, &BTreeMap::new(), mode).unwrap();
+        for (width, height) in [(120, 32), (80, 24), (40, 16)] {
+            for selected in 0..=fixture.len() {
+                app.selected[Page::Snippets.index()] = selected;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut hits = render::HitMap::default();
+                terminal.draw(|f| hits = render::draw(f, &app)).unwrap();
+                let text = screen(&app, width, height);
+                assert!(text.contains("↑↓ move"), "{text}");
+                assert!(text.contains("q quit"), "{text}");
+                assert!(
+                    text.contains(if selected == 0 {
+                        "Enter add"
+                    } else {
+                        "Enter options"
+                    }),
+                    "{text}"
+                );
+                assert!(
+                    text.contains(if selected == 0 {
+                        "Add a snippet"
+                    } else {
+                        "Inserted text"
+                    }),
+                    "{text}"
+                );
+                if selected > 0 {
+                    assert!(text.contains("Del delete"), "{text}");
+                    assert!(
+                        text.contains(if selected == 1 {
+                            "Ship it."
+                        } else if selected == 2 {
+                            "José and Mei:"
+                        } else {
+                            "कल API"
+                        }),
+                        "{text}"
+                    );
+                }
+                let (selected_rect, _) = hits
+                    .rows
+                    .iter()
+                    .find(|(_, i)| *i == selected)
+                    .expect("selected row has a hit region");
+                let cell = &terminal.backend().buffer()[(selected_rect.x, selected_rect.y)];
+                assert_eq!(cell.symbol(), ">");
+                assert!(cell.modifier.contains(Modifier::BOLD | Modifier::REVERSED));
+                for (rect, index) in &hits.rows {
+                    assert!(*index <= fixture.len());
+                    assert_eq!(rect.height, 1);
+                    for x in rect.x..rect.right() {
+                        assert!(!["─", "╰", "╯"]
+                            .contains(&terminal.backend().buffer()[(x, rect.y)].symbol()));
+                    }
+                }
+                key(&mut app, KeyCode::Enter);
+                if selected > 0 {
+                    assert!(matches!(&editor(&app).target, EditTarget::Menu(_)));
+                    key(&mut app, KeyCode::Enter);
+                }
+                assert!(matches!(app.modal, Some(Modal::Editor(_))));
+                key(&mut app, KeyCode::Esc);
+                if selected > 0 {
+                    key(&mut app, KeyCode::Delete);
+                    assert!(matches!(app.modal, Some(Modal::Confirm { .. })));
+                    key(&mut app, KeyCode::Esc);
+                }
+                assert_eq!(app.config.snippets.len(), fixture.len());
+            }
+            app.config.snippets.clear();
+            app.selected[Page::Snippets.index()] = 0;
+            let text = screen(&app, width, height);
+            assert!(text.contains("No snippets yet"), "{text}");
+            assert!(text.contains("Enter add"), "{text}");
+            app.config.snippets = fixture.clone();
+        }
+    }
+}
+
+#[test]
 fn stale_history_responses_never_replace_current_search() {
     let (_dir, mut app) = app();
     app.page = Page::History;
