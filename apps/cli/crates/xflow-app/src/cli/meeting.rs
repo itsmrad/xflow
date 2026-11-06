@@ -1,15 +1,35 @@
-use super::{args, output::Output, Error, Result};
-use std::{io::Read, path::Path};
+use super::{args, ipc, output::Output, Error, Result};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use xflow_app::{
-    meeting::{self, ContractError, ExportFormat, MeetingReader, MeetingStore},
+    meeting::{
+        self, jobs,
+        journal::{self, Capture, CaptureSpec, Limits},
+        transcribe, ContractError, ExportFormat, MeetingReader, MeetingStore,
+    },
     paths,
 };
 use xflow_core::meeting::{
-    DeleteStatus, ListCursor, ListFilter, MeetingId, SearchCursor, MAX_IMPORT_BYTES,
+    DeleteStatus, ListCursor, ListFilter, MeetingId, Provenance, SearchCursor, MAX_IMPORT_BYTES,
 };
 
-pub fn run(action: &args::MeetingCmd, out: &Output) -> Result<()> {
+pub fn run(
+    action: &args::MeetingCmd,
+    config: impl FnOnce() -> Result<PathBuf>,
+    out: &Output,
+) -> Result<()> {
     match action {
+        args::MeetingCmd::Process { files, title } => {
+            process(files, title.as_deref(), &config()?, out)
+        }
+        args::MeetingCmd::Status { id } => status(id.as_deref(), out),
+        args::MeetingCmd::Retry { id } => {
+            let id = id.as_deref().map(parse_id).transpose()?;
+            transcribe(id.as_ref(), &config()?, true, out)
+        }
         args::MeetingCmd::Import { file } => import(file, out),
         args::MeetingCmd::List {
             since,
@@ -158,9 +178,13 @@ fn get(id: &str, out: &Output) -> Result<()> {
         .map(meeting::display_text)
         .unwrap_or_else(|| "Untitled meeting".into());
     out.text(&format!(
-        "{title}\nid: {}:{}\nprovenance: imported_unverified\nnotes: absent\ntimezone: {}\nstarted_ms: {}\nended_ms: {}\nsegments: {}\ngaps: {}",
+        "{title}\nid: {}:{}\nprovenance: {}\nnotes: absent\ntimezone: {}\nstarted_ms: {}\nended_ms: {}\nsegments: {}\ngaps: {}",
         status.summary.meeting.store_id,
         status.summary.meeting.id,
+        match status.summary.provenance {
+            Provenance::ImportedUnverified => "imported_unverified",
+            Provenance::TranscribedAudio => "transcribed_audio",
+        },
         meeting::display_text(&status.summary.timezone),
         status.summary.started_at_ms,
         status.summary.ended_at_ms,
@@ -249,6 +273,416 @@ fn delete(id: Option<&str>, retry: bool, out: &Output) -> Result<()> {
         }))?)?;
     } else {
         out.confirm(message)?;
+    }
+    Ok(())
+}
+
+/// One WAV source, read in 5 s chunks; never loaded whole.
+struct Input {
+    reader: hound::WavReader<std::io::BufReader<std::fs::File>>,
+    spec: hound::WavSpec,
+    label: String,
+    duration_ms: i64,
+}
+fn open_input(path: &Path) -> Result<Input> {
+    let unreadable = |why: &str| {
+        Error::new(
+            1,
+            format!("Could not read {}: {why}", path.display()),
+            "Pass 16-bit or float WAV files; convert others first, e.g. afconvert -f WAVE -d LEI16 in.m4a out.wav",
+        )
+    };
+    let file = std::fs::File::open(path).map_err(|e| unreadable(&e.to_string()))?;
+    if !file.metadata().map(|m| m.is_file()).unwrap_or(false) {
+        return Err(unreadable("not a regular file"));
+    }
+    let reader = hound::WavReader::new(std::io::BufReader::new(file))
+        .map_err(|_| unreadable("not a WAV file"))?;
+    let spec = reader.spec();
+    let supported = (1..=8).contains(&spec.channels)
+        && (8_000..=192_000).contains(&spec.sample_rate)
+        && match spec.sample_format {
+            hound::SampleFormat::Int => (8..=32).contains(&spec.bits_per_sample),
+            hound::SampleFormat::Float => spec.bits_per_sample == 32,
+        };
+    if !supported {
+        return Err(unreadable("unsupported WAV format"));
+    }
+    let duration_ms = i64::from(reader.duration()) * 1000 / i64::from(spec.sample_rate);
+    if duration_ms <= 0 {
+        return Err(unreadable("no audio"));
+    }
+    let mut label = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "audio".into());
+    while label.len() > 128 {
+        label.pop();
+    }
+    Ok(Input {
+        reader,
+        spec,
+        label,
+        duration_ms,
+    })
+}
+impl Input {
+    /// Next 5 s as 16 kHz mono PCM16; `None` at the end.
+    fn chunk(&mut self) -> anyhow::Result<Option<Vec<i16>>> {
+        let channels = usize::from(self.spec.channels);
+        let wanted = self.spec.sample_rate as usize * 5 * channels;
+        let samples: Vec<f32> = match self.spec.sample_format {
+            hound::SampleFormat::Float => self
+                .reader
+                .samples::<f32>()
+                .take(wanted)
+                .collect::<std::result::Result<_, _>>()?,
+            hound::SampleFormat::Int => {
+                let scale = (1u64 << (self.spec.bits_per_sample - 1)) as f32;
+                self.reader
+                    .samples::<i32>()
+                    .take(wanted)
+                    .map(|s| s.map(|s| s as f32 / scale))
+                    .collect::<std::result::Result<_, _>>()?
+            }
+        };
+        if samples.is_empty() {
+            return Ok(None);
+        }
+        let samples = samples
+            .chunks_exact(channels)
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        if samples.is_empty() {
+            return Ok(None);
+        }
+        let mono = if channels == 1 && self.spec.sample_rate == 16_000 {
+            samples
+        } else {
+            xflow_providers::upload_audio(&xflow_core::AudioClip {
+                samples,
+                sample_rate: self.spec.sample_rate,
+                channels: self.spec.channels,
+            })?
+            .samples
+        };
+        Ok(Some(
+            mono.iter()
+                .map(|&s| {
+                    let s = if s.is_finite() {
+                        s.clamp(-1.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    (s * if s < 0.0 { 32768.0 } else { 32767.0 }).round() as i16
+                })
+                .collect(),
+        ))
+    }
+}
+
+fn process(files: &[PathBuf], title: Option<&str>, config: &Path, out: &Output) -> Result<()> {
+    if let Some(title) = title {
+        if title.is_empty() || title.len() > 256 {
+            return Err(usage("Title must be 1 to 256 bytes"));
+        }
+    }
+    let mut inputs = files
+        .iter()
+        .map(|f| open_input(f))
+        .collect::<Result<Vec<_>>>()?;
+    let db = db_path()?;
+    let mut capture = Capture::begin(
+        &db,
+        CaptureSpec {
+            title: title.map(str::to_owned),
+            labels: inputs.iter().map(|i| i.label.clone()).collect(),
+            expected_ms: inputs.iter().map(|i| i.duration_ms).max(),
+        },
+        Limits::from_env(),
+    )
+    .map_err(|e| {
+        Error::new(
+            1,
+            format!("Meeting audio not stored: {e:#}"),
+            "Run xflow meeting status",
+        )
+    })?;
+    let id = capture.id();
+    let mut problem = None;
+    'sources: for (idx, input) in inputs.iter_mut().enumerate() {
+        loop {
+            let chunk = match input.chunk() {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(e) => {
+                    problem = Some((
+                        false,
+                        format!("{} could not be read to the end: {e}", input.label),
+                    ));
+                    break 'sources;
+                }
+            };
+            if let Err(e) = capture.push(idx, &chunk) {
+                problem = Some((true, format!("{e:#}")));
+                break 'sources;
+            }
+        }
+    }
+    for warning in capture.warnings.drain(..) {
+        eprintln!("xflow: warning: {warning}");
+    }
+    let closed = match &problem {
+        None => capture.finish(),
+        Some((_, reason)) => capture.fail(reason),
+    };
+    closed.map_err(|e| {
+        Error::new(
+            1,
+            format!("Meeting audio was only partly stored: {e:#}"),
+            "Run xflow meeting status",
+        )
+    })?;
+    if !out.json && !out.quiet {
+        eprintln!(
+            "xflow: meeting {}:{} stored privately; transcribing",
+            id.store_id, id.id
+        );
+    }
+    let transcribed = transcribe(Some(&id), config, false, out);
+    match problem {
+        Some((_, reason)) if transcribed.is_ok() => Err(Error::new(
+            1,
+            format!(
+                "Capture stopped early: {}. The saved part was transcribed",
+                meeting::display_text(&reason)
+            ),
+            "Run xflow meeting status",
+        )),
+        _ => transcribed,
+    }
+}
+
+/// The meeting STT route: the configured primary only. A backup is a second
+/// destination and a second bill, so meetings never use it implicitly.
+fn meeting_stt(config: &Path) -> Result<std::sync::Arc<dyn xflow_core::SpeechToText>> {
+    let cfg = super::config::load(config)?
+        .config()
+        .map_err(Error::config)?;
+    cfg.validate().map_err(Error::config)?;
+    let mut stt = cfg.stt.clone();
+    stt.fallback.clear();
+    xflow_providers::build_stt(&stt, cfg.privacy.offline).map_err(|e| {
+        Error::new(
+            5,
+            format!("Speech-to-text is unavailable: {e:#}. The audio is kept."),
+            "Fix the provider (xflow providers info, xflow key status), then run xflow meeting retry",
+        )
+    })
+}
+
+async fn dictation_busy() -> bool {
+    use xflow_core::{ipc::Request, State};
+    matches!(
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            xflow_app::transport::request(&Request::Status)
+        )
+        .await,
+        Ok(Ok(response)) if matches!(response.state, State::Listening | State::Processing)
+    )
+}
+
+fn transcribe(
+    meeting: Option<&MeetingId>,
+    config: &Path,
+    reopen: bool,
+    out: &Output,
+) -> Result<()> {
+    let db = db_path()?;
+    if !db.exists() {
+        out.text("Nothing waiting for transcription")?;
+        return Ok(());
+    }
+    if let Some(id) = meeting {
+        // Validates the store id before anything else.
+        MeetingReader::at(db.clone())
+            .status(id)
+            .map_err(store_err)?;
+    }
+    let lock = match transcribe::lock_worker(&db, false).map_err(store_err)? {
+        Some(lock) => lock,
+        None => {
+            eprintln!("xflow: another xflow meeting command is transcribing; waiting for it");
+            transcribe::lock_worker(&db, true)
+                .map_err(store_err)?
+                .ok_or_else(|| Error::new(1, "Could not lock the meeting worker", ""))?
+        }
+    };
+    let recovered = journal::recover(&db).map_err(store_err)?;
+    if recovered != journal::Recovery::default() && !out.quiet {
+        eprintln!(
+            "xflow: recovered meeting audio: {} piece(s) kept, {} torn, {} quarantined, {} missing, {} interrupted capture(s), {} unanswered request(s) counted",
+            recovered.imported, recovered.torn, recovered.quarantined, recovered.missing, recovered.interrupted, recovered.ambiguous
+        );
+    }
+    if reopen {
+        jobs::reopen(&db, meeting.map(|m| m.id)).map_err(store_err)?;
+    }
+    let meetings = jobs::open_meetings(&db, meeting.map(|m| m.id)).map_err(store_err)?;
+    if meetings.is_empty() {
+        out.text("Nothing waiting for transcription")?;
+        return Ok(());
+    }
+    let stt = meeting_stt(config)?;
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let verbose = !out.json && !out.quiet;
+    let report = ipc::block_on(async {
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                let _ = tx.send(true);
+            }
+        });
+        let mut progress = |line: &str| {
+            if verbose {
+                eprintln!("xflow: {}", meeting::display_text(line));
+            }
+        };
+        transcribe::run(
+            &db,
+            &meetings,
+            stt.as_ref(),
+            dictation_busy,
+            rx,
+            &mut progress,
+        )
+        .await
+        .map_err(store_err)
+    })?;
+    drop(lock);
+    if out.json {
+        out.text(&serde_json::to_string(&serde_json::json!({
+            "ok": report.failed == 0 && report.waiting == 0 && report.unavailable.is_none() && !report.cancelled,
+            "report": report,
+            "meetings": meetings,
+        }))?)?;
+    } else {
+        out.text(&format!(
+            "transcribed {} part(s) ({} without speech); {} failed, {} waiting",
+            report.accepted, report.empty, report.failed, report.waiting
+        ))?;
+    }
+    if report.cancelled {
+        return Err(Error::new(
+            130,
+            "Cancelled; untranscribed audio is kept",
+            "Run xflow meeting retry to continue",
+        ));
+    }
+    if let Some(reason) = report.unavailable {
+        return Err(Error::new(
+            5,
+            format!(
+                "Speech-to-text is unavailable: {}. Nothing was sent; the audio is kept.",
+                meeting::display_text(&reason)
+            ),
+            "Start or fix the provider, then run xflow meeting retry",
+        ));
+    }
+    if report.failed > 0 || report.waiting > 0 {
+        return Err(Error::new(
+            1,
+            "Some audio is not transcribed yet; it is kept",
+            "Run xflow meeting status, then xflow meeting retry",
+        ));
+    }
+    Ok(())
+}
+
+fn status(id: Option<&str>, out: &Output) -> Result<()> {
+    let id = id.map(parse_id).transpose()?;
+    let db = db_path()?;
+    if !db.exists() {
+        return empty_status(out);
+    }
+    let status = jobs::status(
+        &db,
+        id.as_ref().map(|m| m.id),
+        Limits::from_env(),
+        transcribe::now_ms(),
+    )
+    .map_err(store_err)?;
+    if let Some(id) = &id {
+        if status.meetings.first().is_none_or(|m| m.meeting != *id) {
+            return Err(store_err(ContractError::NotFound.into()));
+        }
+    }
+    if out.json {
+        return Ok(out.data(&status, "")?);
+    }
+    out.text(&format!(
+        "meeting audio: {} MiB of {} MiB",
+        status.audio_bytes.div_ceil(1 << 20),
+        status.limit_bytes >> 20
+    ))?;
+    for warning in &status.warnings {
+        out.text(&format!("warning: {}", meeting::display_text(warning)))?;
+    }
+    if status.meetings.is_empty() {
+        out.text("No meeting audio")?;
+        return Ok(());
+    }
+    let rows = status
+        .meetings
+        .iter()
+        .map(|m| {
+            vec![
+                format!("{}:{}", m.meeting.store_id, m.meeting.id),
+                m.capture.clone(),
+                format!("{}/{}", m.windows.accepted, m.windows.total),
+                m.windows.failed.to_string(),
+                (m.windows.pending + m.windows.waiting).to_string(),
+                format!("{}s", m.pending_audio.seconds),
+                m.pending_audio
+                    .age_ms
+                    .map(|a| format!("{}h{:02}m", a / 3_600_000, a / 60_000 % 60))
+                    .unwrap_or_else(|| "-".into()),
+                m.gaps.to_string(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    out.table(
+        &[
+            "ID", "CAPTURE", "DONE", "FAILED", "OPEN", "AUDIO", "AGE", "GAPS",
+        ],
+        &rows,
+    )?;
+    for m in &status.meetings {
+        for warning in &m.warnings {
+            out.text(&format!(
+                "{}:{}: warning: {}",
+                m.meeting.store_id,
+                m.meeting.id,
+                meeting::display_text(warning)
+            ))?;
+        }
+        if let Some(error) = &m.last_error {
+            out.text(&format!(
+                "{}:{}: last error: {}",
+                m.meeting.store_id,
+                m.meeting.id,
+                meeting::display_text(error)
+            ))?;
+        }
+    }
+    Ok(())
+}
+fn empty_status(out: &Output) -> Result<()> {
+    if out.json {
+        out.text(r#"{"meetings":[],"audio_bytes":0}"#)?;
+    } else {
+        out.text("No meeting audio")?;
     }
     Ok(())
 }

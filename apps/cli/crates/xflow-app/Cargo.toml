@@ -6,7 +6,7 @@ license.workspace = true
 
 [features]
 # Explicit opt-in for isolated binary integration tests; never enabled in releases.
-test-support = ["dep:hound"]
+test-support = []
 
 [[bin]]
 name = "xflow"
@@ -43,8 +43,8 @@ reqwest = { version = "0.12.28", default-features = false, features = ["rustls-t
 ring = { version = "0.17", default-features = false }
 unicode-segmentation = "1"
 unicode-width = "0.2"
-# Streams WAV fixtures into the daemon in test-support builds only.
-hound = { version = "3.5", optional = true }
+# Streams meeting WAV input (and WAV fixtures in test-support builds); already used by xflow-providers.
+hound = "3.5"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

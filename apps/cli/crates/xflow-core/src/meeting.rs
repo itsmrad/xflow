@@ -29,6 +29,9 @@ pub struct TimeRange {
 pub enum Provenance {
     /// Timing, source labels and attribution supplied by the importer, unverified by xflow.
     ImportedUnverified,
+    /// Audio the user supplied, transcribed by xflow. Times are offsets in that
+    /// audio; the start is when xflow received it, not when it was recorded.
+    TranscribedAudio,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

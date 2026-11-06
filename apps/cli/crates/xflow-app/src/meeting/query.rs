@@ -7,7 +7,7 @@ use xflow_core::meeting::*;
 
 const SEGMENT_COLUMNS: &str =
     "s.meeting_id,s.id,s.source_id,s.sequence,s.start_ms,s.end_ms,s.revision,s.text";
-const SUMMARY_COLUMNS: &str = "m.id,m.title,m.started_at_ms,m.ended_at_ms,m.timezone,m.edit_revision,(SELECT count(*) FROM segments WHERE meeting_id=m.id),(SELECT count(*) FROM gaps WHERE meeting_id=m.id)";
+const SUMMARY_COLUMNS: &str = "m.id,m.title,m.started_at_ms,m.ended_at_ms,m.timezone,m.edit_revision,(SELECT count(*) FROM segments WHERE meeting_id=m.id),(SELECT count(*) FROM gaps WHERE meeting_id=m.id),m.import_id LIKE 'audio:%'";
 
 #[derive(Clone, Debug)]
 pub struct MeetingReader {
@@ -300,7 +300,11 @@ fn summary_row(row: &Row<'_>, store: &str) -> rusqlite::Result<MeetingSummary> {
         edit_revision: row.get(5)?,
         segment_count: row.get(6)?,
         gap_count: row.get(7)?,
-        provenance: Provenance::ImportedUnverified,
+        provenance: if row.get(8)? {
+            Provenance::TranscribedAudio
+        } else {
+            Provenance::ImportedUnverified
+        },
         notes: NotesStatus::Absent,
     })
 }

@@ -8,7 +8,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use xflow_core::meeting::{
-    Gap, MeetingId, MeetingStatus, Segment, Source, TimeRange, TranscriptQuery, MAX_WINDOW_MS,
+    Gap, MeetingId, MeetingStatus, Provenance, Segment, Source, TimeRange, TranscriptQuery,
+    MAX_WINDOW_MS,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +153,13 @@ fn export_inner(
     write_private(parent, dest, force, body.as_bytes())
 }
 
+fn provenance(status: &MeetingStatus) -> &'static str {
+    match status.summary.provenance {
+        Provenance::ImportedUnverified => "imported_unverified",
+        Provenance::TranscribedAudio => "transcribed_audio",
+    }
+}
+
 fn render(format: ExportFormat, status: &MeetingStatus, segments: &[Segment]) -> Result<String> {
     match format {
         ExportFormat::Json => {
@@ -159,7 +167,7 @@ fn render(format: ExportFormat, status: &MeetingStatus, segments: &[Segment]) ->
             let view = JsonExport {
                 meeting: status.summary.meeting.clone(),
                 title: status.summary.title.clone(),
-                provenance: "imported_unverified",
+                provenance: provenance(status),
                 notes: "absent",
                 timezone: status.summary.timezone.clone(),
                 started_at_ms: status.summary.started_at_ms,
@@ -203,7 +211,8 @@ fn markdown(status: &MeetingStatus, segments: &[Segment]) -> String {
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| "Untitled meeting".into());
     let mut out = format!(
-        "# {title}\n\nProvenance: imported_unverified\nNotes: absent\nTimezone: {}\nStarted (Unix ms): {}\nEnded (Unix ms): {}\n\n## Sources\n",
+        "# {title}\n\nProvenance: {}\nNotes: absent\nTimezone: {}\nStarted (Unix ms): {}\nEnded (Unix ms): {}\n\n## Sources\n",
+        provenance(status),
         markdown_text(&status.summary.timezone),
         status.summary.started_at_ms,
         status.summary.ended_at_ms
@@ -236,7 +245,8 @@ fn markdown(status: &MeetingStatus, segments: &[Segment]) -> String {
 
 fn text(status: &MeetingStatus, segments: &[Segment]) -> String {
     let mut out = format!(
-        "provenance: imported_unverified\nnotes: absent\ntimezone: {}\nstarted_ms: {}\nended_ms: {}\n",
+        "provenance: {}\nnotes: absent\ntimezone: {}\nstarted_ms: {}\nended_ms: {}\n",
+        provenance(status),
         display_text(&status.summary.timezone),
         status.summary.started_at_ms,
         status.summary.ended_at_ms

@@ -97,7 +97,8 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<History>,
     },
-    /// Import, list, search, show, export or delete a private meeting transcript.
+    /// Transcribe meeting audio, or import, list, search, show, export or delete
+    /// a private meeting transcript.
     ///
     /// Every meeting command uses the local database in this process. Import and
     /// delete do not use the daemon. The import file is read here, with a cap.
@@ -305,6 +306,33 @@ pub enum Format {
 }
 #[derive(Subcommand, Debug)]
 pub enum MeetingCmd {
+    /// Copy WAV audio into private storage and transcribe it into a meeting.
+    ///
+    /// Each file is one source, such as the microphone and the remote side,
+    /// starting at the same moment. Your files are only read. The private copy
+    /// is deleted as each part's text is stored; audio not yet transcribed is
+    /// kept until `retry` succeeds or you delete the meeting, never expired.
+    /// Uses the configured speech-to-text provider, never its backup.
+    Process {
+        /// One or two WAV files, up to 3 hours each.
+        #[arg(required = true, num_args = 1..=2)]
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        title: Option<String>,
+    },
+    /// Transcription progress, audio waiting and its age, and audio storage use.
+    Status {
+        /// `store_id:id`; omit for every meeting with audio.
+        id: Option<String>,
+    },
+    /// Recover after a crash, then transcribe waiting audio.
+    ///
+    /// Failed parts get three new attempts. Nothing is sent to a provider
+    /// until you run this or `process`.
+    Retry {
+        /// `store_id:id`; omit for every meeting with waiting audio.
+        id: Option<String>,
+    },
     /// Read a versioned JSON transcript into the local meeting database.
     Import { file: PathBuf },
     /// Meetings whose start is in `[since, until)`.
@@ -345,7 +373,8 @@ pub enum MeetingCmd {
         #[arg(long)]
         force: bool,
     },
-    /// Delete one meeting, or retry physical cleanup once.
+    /// Delete one meeting and its audio, cancelling its transcription, or
+    /// retry physical cleanup once.
     Delete {
         /// `store_id:id`. Omit with `--retry` to retry cleanup only.
         id: Option<String>,

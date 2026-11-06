@@ -39,6 +39,20 @@ const SCHEMA: &[&str] = &[
     "CREATE TRIGGER segment_delete AFTER DELETE ON segments BEGIN INSERT INTO segment_fts(segment_fts,rowid,text) VALUES ('delete',old.id,old.text); END",
     "CREATE TRIGGER segment_update AFTER UPDATE OF text ON segments BEGIN INSERT INTO segment_fts(segment_fts,rowid,text) VALUES ('delete',old.id,old.text); INSERT INTO segment_fts(rowid,text) VALUES (new.id,new.text); END",
 ];
+/// v2: audio journal, job ledger and segment provenance. Every row cascades
+/// with its meeting, so a deleted meeting leaves nothing to resurrect.
+const SCHEMA_V2: &[&str] = &[
+    "CREATE TABLE captures (meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE, state TEXT NOT NULL, created_ms INTEGER NOT NULL, ended_ms INTEGER, expected_ms INTEGER, reason TEXT)",
+    "CREATE TABLE capture_sources (meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, idx INTEGER NOT NULL, source_id TEXT NOT NULL, next_seq INTEGER NOT NULL DEFAULT 0, next_sample INTEGER NOT NULL DEFAULT 0, finished INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(meeting_id,idx))",
+    "CREATE TABLE pieces (id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, source_idx INTEGER NOT NULL, seq INTEGER NOT NULL, start_sample INTEGER NOT NULL, samples INTEGER NOT NULL, bytes INTEGER NOT NULL, hash TEXT NOT NULL, state TEXT NOT NULL, created_ms INTEGER NOT NULL, UNIQUE(meeting_id,source_idx,seq))",
+    "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, source_idx INTEGER NOT NULL, win INTEGER NOT NULL, overlap_sample INTEGER NOT NULL, start_sample INTEGER NOT NULL, end_sample INTEGER NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, budget INTEGER NOT NULL DEFAULT 3, not_before_ms INTEGER NOT NULL DEFAULT 0, error TEXT, UNIQUE(meeting_id,source_idx,win))",
+    "CREATE TABLE attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, provider TEXT NOT NULL, state TEXT NOT NULL, started_ms INTEGER NOT NULL, error TEXT)",
+    "CREATE TABLE segment_provenance (segment_id INTEGER PRIMARY KEY REFERENCES segments(id) ON DELETE CASCADE, job_id INTEGER NOT NULL, attempt_id INTEGER NOT NULL, timing TEXT NOT NULL, dedup TEXT NOT NULL, trimmed TEXT, language TEXT)",
+    "CREATE INDEX job_state ON jobs(meeting_id,state,start_sample)",
+    "CREATE INDEX attempt_job ON attempts(job_id)",
+    "CREATE INDEX provenance_job ON segment_provenance(job_id)",
+];
+pub(crate) const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Clone, Debug)]
 pub struct MeetingStore {
@@ -159,13 +173,21 @@ impl MeetingStore {
         let mut db = open_writer(&self.path)?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         check_meeting(&tx, meeting)?;
+        // Jobs, attempts and pieces cascade, so no worker or recovery can
+        // commit text or re-import audio for this meeting afterwards.
         tx.execute("DELETE FROM meetings WHERE id=?1", [meeting.id])?;
         tx.execute(
             "UPDATE metadata SET edit_revision=edit_revision+1,cleanup_pending=1",
             [],
         )?;
         tx.commit()?;
-        checkpoint(&db)
+        let audio = super::journal::remove_deleted_audio(&self.path, &meeting.store_id, &db);
+        let status = checkpoint(&db)?;
+        Ok(if audio.is_err() {
+            DeleteStatus::PhysicalCleanupPending
+        } else {
+            status
+        })
     }
 
     /// One bounded attempt; caller schedules any further retry. No sleeping loop.
@@ -176,7 +198,14 @@ impl MeetingStore {
         if !self.path.exists() {
             return Ok(DeleteStatus::PhysicallyCleaned);
         }
-        checkpoint(&open_writer(&self.path)?)
+        let db = open_writer(&self.path)?;
+        let audio = super::journal::remove_deleted_audio(&self.path, &store_id(&db)?, &db);
+        let status = checkpoint(&db)?;
+        Ok(if audio.is_err() {
+            DeleteStatus::PhysicalCleanupPending
+        } else {
+            status
+        })
     }
 
     /// File modes while a connection is open. Sidecars may disappear after it closes.
@@ -337,7 +366,7 @@ fn explain_busy(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
-fn open_writer(path: &Path) -> Result<Connection> {
+pub(crate) fn open_writer(path: &Path) -> Result<Connection> {
     let path = private_path(path, true)?;
     let mut db = Connection::open_with_flags(
         &path,
@@ -354,7 +383,8 @@ fn open_writer(path: &Path) -> Result<Connection> {
         // One immediate transaction creates the schema or refuses a bad file
         // before any writer PRAGMA can rewrite it.
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if validate_schema(&tx, true)? {
+        let version = validate_schema(&tx, true)?;
+        if version == 0 {
             for ddl in SCHEMA {
                 tx.execute_batch(ddl)?;
             }
@@ -366,7 +396,13 @@ fn open_writer(path: &Path) -> Result<Connection> {
                 "INSERT INTO segment_fts(segment_fts,rank) VALUES ('secure-delete',1)",
                 [],
             )?;
-            tx.execute_batch("PRAGMA user_version=1;")?;
+        }
+        // v1 -> v2 in the same transaction: a crash or error leaves v1 as it was.
+        if version < SCHEMA_VERSION {
+            for ddl in SCHEMA_V2 {
+                tx.execute_batch(ddl)?;
+            }
+            tx.execute_batch("PRAGMA user_version=2;")?;
         }
         tx.commit()?;
     }
@@ -390,16 +426,21 @@ fn open_writer(path: &Path) -> Result<Connection> {
     Ok(db)
 }
 
-fn validate_schema(db: &Connection, allow_empty: bool) -> Result<bool> {
+/// Returns the verified version; 0 is an empty file the writer may initialize.
+fn validate_schema(db: &Connection, allow_empty: bool) -> Result<i64> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    ensure!(version <= 1, ContractError::UnsupportedSchema(version));
+    ensure!(
+        version <= SCHEMA_VERSION,
+        ContractError::UnsupportedSchema(version)
+    );
     if version == 0 && allow_empty {
         let count: i64 = db.query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get(0))?;
         ensure!(count == 0, ContractError::MalformedStore);
-        return Ok(true);
+        return Ok(0);
     }
-    ensure!(version == 1, ContractError::MalformedStore);
-    for ddl in SCHEMA {
+    ensure!(version >= 1, ContractError::MalformedStore);
+    let v2: &[&str] = if version == 2 { SCHEMA_V2 } else { &[] };
+    for ddl in SCHEMA.iter().chain(v2) {
         let actual: Option<String> = db
             .query_row("SELECT sql FROM sqlite_schema WHERE sql=?1", [*ddl], |r| {
                 r.get(0)
@@ -433,7 +474,11 @@ fn validate_schema(db: &Connection, allow_empty: bool) -> Result<bool> {
         )
         .optional()?;
     ensure!(secure == Some(1), ContractError::MalformedStore);
-    Ok(false)
+    Ok(version)
+}
+/// Pipeline tables exist (v2). A v1 file stays readable without them.
+pub(crate) fn has_pipeline(db: &Connection) -> Result<bool> {
+    Ok(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? >= 2)
 }
 
 fn private_path(path: &Path, create: bool) -> Result<PathBuf> {
