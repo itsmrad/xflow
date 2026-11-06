@@ -733,15 +733,16 @@ pub(super) fn run(
         msg!(panel, c"orderFrontRegardless"; ());
 
         let mut wave = Wave::new();
+        // PillEvent is no longer Copy: read the first frame before moving it.
+        let level = first.level;
+        let mut closing = (!first.active()).then(|| (Instant::now(), first.state));
         let mut state = first;
-        wave.set_level(first.level);
+        wave.set_level(level);
         let mut width = if reduce_motion { LISTEN_W } else { PILL_H }; // grow from a stub
         let mut buttons = 0.0;
         let mut clickable = false;
         let shown = Instant::now();
         let mut last = shown;
-        // A first frame that is already final is a failure alert after release.
-        let mut closing = (!first.active()).then(|| (Instant::now(), first.state));
         loop {
             let tick_pool = msg!(class(c"NSAutoreleasePool"), c"new"; Id);
             while let Ok(event) = events.try_recv() {
