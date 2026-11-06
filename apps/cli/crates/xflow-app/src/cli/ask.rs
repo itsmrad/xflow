@@ -1,4 +1,5 @@
-//! `xflow ask`: one question over the model gateway, streamed to stdout.
+use xflow_app::harness::build_provider_with_cleanup;
+// `xflow ask`: one question over the model gateway, streamed to stdout.
 use super::{args::Ask, config, ipc, output::Output, Error, Result};
 use serde_json::json;
 use std::{
@@ -16,7 +17,7 @@ use xflow_app::{
 use xflow_core::config::AiConfig;
 use xflow_providers::{
     find_provider,
-    llm::{build_provider_with_cleanup, Event, LlmError, Stop},
+    llm::{Event, LlmError, Stop},
     ProviderKind,
 };
 
@@ -71,6 +72,7 @@ fn explain(provider: &str, error: &LlmError) -> Error {
             ),
             LlmError::NotLoggedIn if provider == "openai-compatible" =>
                 "No API key: set XFLOW_AI_API_KEY for explicit openai-compatible, or the cleanup.api_key_env variable for cleanup defaults".into(),
+            LlmError::NotLoggedIn if xflow_app::harness::is_harness(provider) => format!("Log in using the installed {provider} CLI, then retry"),
             LlmError::NotLoggedIn => format!(
                 "No API key for {provider}: run xflow key set {provider}{key_url}"
             ),
@@ -88,7 +90,11 @@ fn explain(provider: &str, error: &LlmError) -> Error {
     )
 }
 fn consent(path: &Path, ai: &AiConfig, args: &Ask) -> Result<()> {
-    if args.no_context || args.yes || ai.consented.contains(&ai.provider) {
+    if args.no_context
+        || args.sources == "none"
+        || args.yes
+        || (args.sources == "dictations" && ai.consented.contains(&ai.provider))
+    {
         return Ok(());
     }
     let provider = &ai.provider;
@@ -109,8 +115,10 @@ fn consent(path: &Path, ai: &AiConfig, args: &Ask) -> Result<()> {
         ));
     }
     // The answer holds for this run even if it cannot be remembered.
-    if let Err(error) = save_consent(path, provider) {
-        eprintln!("Warning: could not save your choice: {error}");
+    if args.sources == "dictations" {
+        if let Err(error) = save_consent(path, provider) {
+            eprintln!("Warning: could not save your choice: {error}");
+        }
     }
     Ok(())
 }
@@ -221,7 +229,10 @@ pub fn run(path: &Path, args: &Ask, out: &Output) -> Result<()> {
     let cfg = config::load(path)?.config().map_err(Error::config)?;
     let offline = cfg.privacy.offline;
     let budget = cfg.ai.max_context_tokens;
-    let ai = selection(cfg.ai, args);
+    let mut ai = selection(cfg.ai, args);
+    if matches!(args.sources.as_str(), "meetings" | "both") {
+        ai.fallback.clear();
+    }
     if ai.provider.is_empty() && cfg.cleanup.provider.is_none() && cfg.cleanup.endpoint.is_none() {
         return Err(fail(4, "xflow ask is not set up: run xflow key set groq, then set ai.provider or cleanup.provider"));
     }
@@ -234,6 +245,9 @@ pub fn run(path: &Path, args: &Ask, out: &Output) -> Result<()> {
         build_provider_with_cleanup(&ai, &cfg.cleanup, offline).map_err(|e| explain(label, &e))?;
     let provider = ai.provider.clone();
     consent(path, &ai, args)?;
+    if xflow_app::harness::is_harness(&provider) {
+        eprintln!("note: the installed CLI uses its own login and may retain logs, caches or sessions. xflow stores no CLI output. Context is bounded prefetch only.");
+    }
     if !out.quiet && !out.json {
         for id in &ai.fallback {
             if *id != provider && !ai.consented.contains(id) {
@@ -258,8 +272,8 @@ pub fn run(path: &Path, args: &Ask, out: &Output) -> Result<()> {
         max_output_tokens: MAX_OUTPUT_TOKENS,
     };
     let sources = Sources {
-        dictations: !args.no_context,
-        meetings: false,
+        dictations: !args.no_context && matches!(args.sources.as_str(), "dictations" | "both"),
+        meetings: !args.no_context && matches!(args.sources.as_str(), "meetings" | "both"),
     };
     let terminal = std::io::stdout().is_terminal();
     let started = Instant::now();
@@ -364,6 +378,7 @@ mod tests {
             model: model.map(str::to_owned),
             timing: false,
             no_context: false,
+            sources: "dictations".into(),
             yes: false,
         };
         let same = selection(configured.clone(), &args(Some("custom"), None));

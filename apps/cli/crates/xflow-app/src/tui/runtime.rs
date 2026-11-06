@@ -6,6 +6,7 @@ use super::{
     state::{Action, App, Effect, Modal, Page, Step, Tag},
     theme::ColorMode,
 };
+use crate::harness::build_provider;
 use crate::{
     chat::{run_turn, TurnEnv, TurnEvent, MAX_OUTPUT_TOKENS},
     config_edit::ConfigFile,
@@ -46,7 +47,7 @@ use xflow_core::{
     ipc::{Request, Response},
 };
 use xflow_providers::{
-    llm::{build_provider, ChatProvider, LlmError, Message, Stop},
+    llm::{ChatProvider, LlmError, Message, Stop},
     KeySource,
 };
 
@@ -573,11 +574,17 @@ pub(super) fn dispatch(
                     .await,
                 ),
                 Effect::ChatTurn(_) | Effect::ChatCancel => return,
-                Effect::ChatKeys => {
+                Effect::ChatKeys(offline) => {
                     let mut keys = vec![];
                     for choice in chat::choices().iter().filter(|c| c.needs_key) {
                         let state = xflow_providers::key_status(choice.id, None).await;
                         keys.push((choice.id.to_owned(), state));
+                    }
+                    for id in ["claude-code", "codex", "cursor"] {
+                        keys.push((
+                            id.into(),
+                            KeySource::Unreadable(crate::harness::status(id, offline).await),
+                        ));
                     }
                     Update::ChatKeys(keys)
                 }
@@ -678,6 +685,10 @@ async fn chat_turn(run: chat::ChatRun, tx: mpsc::Sender<Update>) {
         offline,
         path,
     } = run;
+    let mut ai = ai;
+    if turn.meetings {
+        ai.fallback.clear();
+    }
     let budget = ai.max_context_tokens;
     // Building TLS clients takes a moment, and this runtime has one thread.
     let built = tokio::task::spawn_blocking(move || {
@@ -716,10 +727,11 @@ pub(super) async fn drive_turn(
         question,
         mut history,
         dictations,
+        meetings,
     } = turn;
     let sources = Sources {
         dictations,
-        meetings: false,
+        meetings,
     };
     let (events, mut rx) = mpsc::channel(64);
     let run = async {

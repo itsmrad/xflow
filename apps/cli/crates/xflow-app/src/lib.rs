@@ -4,6 +4,8 @@ pub mod context;
 #[cfg(unix)]
 pub mod daemon;
 pub mod gsettings;
+#[cfg(unix)]
+pub mod harness;
 pub mod local_models;
 #[cfg(target_os = "macos")]
 mod macos_settings;

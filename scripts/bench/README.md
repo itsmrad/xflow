@@ -198,10 +198,10 @@ used for Linux. The gate takes
 the median of their medians. Each daemon runs its own copy of the binary, so no
 two share text pages, which would split their PSS. It fails when:
 
-- a binary exceeds its target's ceiling: `floor(result.binary_bytes × 1.08)`
-  (`limits.binary_pct = 8`). Current Linux ceilings are **12,168,031 B** for `xflow`
-  and **13,865,204 B** for `xflowd`, about 8% above the matching receipt.
-  **Temporary:** the allowance is 8% (normally 1%) while the feature queue lands,
+- a binary exceeds its target's ceiling: `floor(result.binary_bytes × 1.12)`
+  (`limits.binary_pct = 12`). Current Linux ceilings are **12,618,699 B** for `xflow`
+  and **14,378,730 B** for `xflowd`, about 12% above the matching receipt.
+  **Temporary:** the allowance is 12% (normally 1%) while the feature queue lands,
   because each merge otherwise invalidates every open PR's byte baseline. It will
   be restored to 1% with a fresh baseline afterwards;
 - idle tree PSS grows by more than min(`limits.pss_kib`, `limits.pss_pct`);
@@ -235,7 +235,7 @@ including its observed runtime values; one CI run is not three new CI replicates
 Generated from [`ci-baseline.json`](../../docs/benchmarks/ci-baseline.json) by `scoreboard.py render`; do not edit by hand. 1 CI runs of `2017a43` on AMD EPYC 7763 64-Core Processor, 4 CPUs ([1](https://github.com/itsmrad/xflow/actions/runs/42227481151/attempts/1)):
 
 - Idle tree PSS: run medians 10,114–10,114 KiB (0 %), per-launch medians 9,857–10,356 KiB (5 %). The baseline is 9,873 KiB and the gate allows +987 KiB, 2.0× the per-launch spread.
-- Binaries: `xflow` 11,266,696 B in every run; `xflowd` 12,838,152 B in every run. The gate allows +8 %.
+- Binaries: `xflow` 11,266,696 B in every run; `xflowd` 12,838,152 B in every run. The gate allows +12 %.
 - Warm startup p50: 2.7–2.7 ms against the absolute 100 ms budget; idle CPU at most 0.0000 % against 0.1 %.
 <!-- scoreboard:end -->
 

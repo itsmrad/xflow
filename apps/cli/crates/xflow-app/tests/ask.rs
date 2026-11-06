@@ -422,3 +422,124 @@ fn gateway_owns_a_single_ask_command() {
         1
     );
 }
+
+#[test]
+fn installed_claude_gets_synthetic_context_on_stdin_and_no_prompt_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let bins = root.join("bin");
+    std::fs::create_dir(&bins).unwrap();
+    let path = bins.join("claude");
+    std::fs::write(&path, r##"#!/bin/sh
+if [ "$1" = '--help' ]; then
+  echo '--safe-mode --tools --strict-mcp-config --no-session-persistence --include-partial-messages'
+  exit 0
+fi
+for arg in "$@"; do
+  case "$arg" in *Kubernetes*|*Priya*|*नमस्ते*) exit 19;; esac
+done
+prompt=$(/bin/cat)
+case "$prompt" in *Kubernetes*Priya*) ;; *) exit 20;; esac
+printf '%s\n' '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"Priya chose Kubernetes. नमस्ते"}}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"Priya chose Kubernetes. नमस्ते"}'
+"##).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    seed(root, &["Priya chose Kubernetes for the prototype."]);
+    write_config(root, "[ai]\nprovider = \"claude-code\"\n");
+    let result = command(root)
+        .env("PATH", &bins)
+        .args(["ask", "What did Priya choose for Kubernetes?", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let out = String::from_utf8(result.stdout).unwrap();
+    assert_eq!(out.matches("Priya chose Kubernetes.").count(), 1);
+    assert!(out.contains("नमस्ते"));
+}
+#[test]
+fn saved_dictation_consent_does_not_authorize_meetings() {
+    let dir = tempfile::tempdir().unwrap();
+    write_config(
+        dir.path(),
+        "[ai]\nprovider = \"claude-code\"\nconsented = [\"claude-code\"]\n",
+    );
+    let out = command(dir.path())
+        .args(["ask", "What did we decide?", "--sources", "meetings"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not allowed to receive"));
+}
+
+#[test]
+fn cli_exit_waits_for_group_cleanup_on_cancel_and_parser_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    for cancel in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let bins = root.join("bin");
+        std::fs::create_dir(&bins).unwrap();
+        let path = bins.join("claude");
+        let end = if cancel {
+            "wait"
+        } else {
+            "echo invalid-json; wait"
+        };
+        std::fs::write(&path, format!(r##"#!/bin/sh
+if [ "$1" = '--help' ]; then
+  echo '--safe-mode --tools --strict-mcp-config --no-session-persistence --include-partial-messages'
+  exit 0
+fi
+/bin/cat >/dev/null
+trap '' TERM
+/bin/sleep 90 &
+printf '{{"type":"stream_event","event":{{"delta":{{"type":"text_delta","text":"%s %s\\n"}}}}}}\n' "$$" "$!"
+{end}
+"##)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        write_config(root, "[ai]\nprovider = \"claude-code\"\n");
+        let mut child = command(root)
+            .env("PATH", &bins)
+            .args(["ask", "Synthetic cancellation canary", "--no-context"])
+            .spawn()
+            .unwrap();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        let pids: Vec<i32> = line
+            .split_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        assert_eq!(pids.len(), 2, "the fixture supplies its group members");
+        if cancel {
+            assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+        }
+        let status = child.wait().unwrap();
+        assert_eq!(status.code(), Some(if cancel { 130 } else { 5 }));
+        // These assertions happen after the xflow process is gone, with no grace sleep.
+        assert_eq!(
+            unsafe { libc::kill(pids[0], 0) },
+            -1,
+            "leader survived CLI exit"
+        );
+        #[cfg(target_os = "linux")]
+        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{}/stat", pids[1])) {
+            assert_eq!(
+                stat.split_whitespace().nth(2),
+                Some("Z"),
+                "live descendant survived CLI exit"
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(
+            unsafe { libc::kill(pids[1], 0) },
+            -1,
+            "descendant survived CLI exit"
+        );
+    }
+}

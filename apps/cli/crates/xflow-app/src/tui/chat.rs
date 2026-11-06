@@ -59,6 +59,20 @@ pub fn choices() -> Vec<Choice> {
             key_url: "",
             needs_key: false,
         }])
+        .chain(
+            [
+                ("claude-code", "Claude Code"),
+                ("codex", "Codex (isolation unverified)"),
+                ("cursor", "Cursor (isolation unverified)"),
+            ]
+            .map(|(id, name)| Choice {
+                id,
+                name,
+                model: "",
+                key_url: "",
+                needs_key: false,
+            }),
+        )
         .collect()
 }
 fn display_name(id: &str) -> String {
@@ -110,6 +124,7 @@ pub struct Turn {
     pub question: String,
     pub history: Vec<Message>,
     pub dictations: bool,
+    pub meetings: bool,
 }
 pub struct ChatRun {
     pub turn: Turn,
@@ -179,6 +194,8 @@ pub struct InputView {
 pub struct Chat {
     pub entries: Vec<Entry>,
     pub input: String,
+    /// 0=dictations, 1=meetings, 2=both, 3=none. In memory only.
+    source: u8,
     cursor: usize,
     revision: u64,
     /// What the model remembers; `run_turn` replaces it when a turn succeeds.
@@ -221,6 +238,13 @@ impl Chat {
                 if let Some(question) = self.retry.clone().filter(|_| !self.running()) {
                     return self.gate(question, false, ctx);
                 }
+            }
+            KeyCode::Char('s') if ctrl && !self.running() => {
+                self.source = (self.source + 1) % 4;
+                self.history.clear();
+                self.retry = None;
+                self.push(Entry::Note(format!("Sources: {}. Previous model context cleared. Meetings require consent for each turn.", self.source_name())));
+                return Out::None;
             }
             KeyCode::Char('n') if ctrl => return self.new_chat(),
             KeyCode::Char('u') if ctrl => {
@@ -291,7 +315,7 @@ impl Chat {
             self.push(Entry::Error(offline_refusal(&ctx.name)));
             return Out::None;
         }
-        if ctx.history && !ctx.consented {
+        if (ctx.history && self.source != 3 && !ctx.consented) || matches!(self.source, 1 | 2) {
             self.pending = Some((question, from_input));
             return Out::Consent;
         }
@@ -340,7 +364,8 @@ impl Chat {
             id: self.turn,
             question,
             history: self.history.clone(),
-            dictations: ctx.history,
+            dictations: ctx.history && matches!(self.source, 0 | 2),
+            meetings: matches!(self.source, 1 | 2),
         })
     }
     fn cancel(&mut self) -> Out {
@@ -515,8 +540,16 @@ impl Chat {
             cursor: (row - first, column),
         }
     }
+    fn source_name(&self) -> &'static str {
+        match self.source {
+            0 => "dictations",
+            1 => "meetings",
+            2 => "dictations + meetings",
+            _ => "none",
+        }
+    }
     pub fn title(&self, ctx: &Ctx) -> String {
-        let mut title = format!("Chat · {}", ctx.name);
+        let mut title = format!("Chat · {} · {} (Ctrl+S)", ctx.name, self.source_name());
         if !ctx.model.is_empty() {
             title.push_str(&format!(" · {}", ctx.model));
         }
@@ -567,6 +600,7 @@ fn explain(ctx: &Ctx, error: &LlmError) -> String {
         LlmError::Auth => {
             format!("{name} rejected the API key: run xflow key set {id}{key_url}.")
         }
+        LlmError::NotLoggedIn if crate::harness::is_harness(id) => { format!("Log in using the installed {name} CLI, then retry.") }
         LlmError::NotLoggedIn => {
             format!("No API key for {name}: run xflow key set {id}{key_url}.")
         }
@@ -758,7 +792,7 @@ impl App {
     }
     /// Yes stages `ai.consented`, which the runtime saves like any other choice.
     pub fn chat_consent(&mut self, yes: bool) -> Vec<Effect> {
-        if yes {
+        if yes && self.chat.source == 0 {
             let mut consented = self.config.ai.consented.clone();
             consented.push(self.config.ai.provider.clone());
             let staged = self
@@ -778,12 +812,22 @@ impl App {
         choices()
             .into_iter()
             .map(|choice| {
-                let state = if choice.needs_key {
+                let state = if choice.needs_key || crate::harness::is_harness(choice.id) {
                     self.chat.key_state(choice.id)
                 } else {
                     Some(&KeySource::NotRequired)
                 };
-                (choice.name.to_owned(), key_label(state))
+                (
+                    choice.name.to_owned(),
+                    if crate::harness::is_harness(choice.id) {
+                        match state {
+                            Some(KeySource::Unreadable(s)) => s.clone(),
+                            _ => "Checking installed CLI…".into(),
+                        }
+                    } else {
+                        key_label(state)
+                    },
+                )
             })
             .collect()
     }
@@ -791,6 +835,9 @@ impl App {
         let Some(choice) = choices().into_iter().nth(pos) else {
             return String::new();
         };
+        if crate::harness::is_harness(choice.id) {
+            return "Opt-in installed CLI. Uses its own login; xflow never reads authentication files. The CLI may persist logs, caches or sessions. Codex/Cursor isolation is unverified and launches are refused. Claude is prefetch only.".into();
+        }
         let mut text = format!("Choose where your questions go. Press Enter to set up {}.\n\nThe key stays encrypted on this computer. Your dictations are shared only after you allow it.", choice.name);
         if let Some(issue) = self.chat.key_state(choice.id).and_then(key_issue) {
             text.push_str(&format!("\n\n{issue}"));
@@ -801,7 +848,9 @@ impl App {
         let Some(choice) = choices().into_iter().nth(pos) else {
             return;
         };
-        let (intro, first) = if choice.needs_key {
+        let (intro, first) = if crate::harness::is_harness(choice.id) {
+            ("Uses your installed CLI and its own login. No key is requested. Transcript excerpts leave this computer after consent. The CLI may retain logs, caches or sessions. Codex and Cursor are unavailable until their isolation is verified. Claude uses tools-off safe mode with bounded prefetch; no MCP tools.".into(), Field::new("Authentication", "Managed by installed CLI"))
+        } else if choice.needs_key {
             let mut field = Field::new("API key", "");
             field.secret = true;
             let intro = format!(
@@ -815,7 +864,7 @@ impl App {
                     .to_owned();
             (intro, Field::new("Address", LOCAL_ENDPOINT))
         };
-        let title = if choice.needs_key {
+        let title = if choice.needs_key || crate::harness::is_harness(choice.id) {
             choice.name
         } else {
             "Local server"
@@ -842,8 +891,13 @@ impl App {
         if local && build_provider(&ai, false).is_err() {
             bail!("Enter a model, and an address on this computer such as {LOCAL_ENDPOINT}");
         }
-        let typed = !local && !editor.fields[0].value.trim().is_empty();
-        if !local && !typed && self.chat.key_state(id) == Some(&KeySource::Missing) {
+        let typed =
+            !local && !crate::harness::is_harness(id) && !editor.fields[0].value.trim().is_empty();
+        if !local
+            && !crate::harness::is_harness(id)
+            && !typed
+            && self.chat.key_state(id) == Some(&KeySource::Missing)
+        {
             bail!("Paste your API key first");
         }
         if self.saving {
@@ -878,7 +932,7 @@ impl App {
     /// The consent modal's text, the same words as `xflow ask`.
     pub fn chat_consent_text(name: &str) -> String {
         format!(
-            "{}\n\nAllow it?   y = yes   ·   n or Esc = no",
+            "{}\nIncludes the selected dictation and/or meeting sources. Installed CLIs may retain logs, caches or sessions.\n\nAllow it?   y = yes   ·   n or Esc = no",
             consent_text(name)
         )
     }

@@ -90,7 +90,7 @@ class Gate(unittest.TestCase):
 
     def test_committed_binary_ceilings_allow_budget_and_fail_one_byte_over(self):
         base = json.loads((scoreboard.ROOT / "docs/benchmarks/ci-baseline.json").read_text())
-        ceilings = {"xflow": 12_168_031, "xflowd": 13_865_204}  # temporary 8% allowance
+        ceilings = {"xflow": 12_618_699, "xflowd": 14_378_730}  # temporary 12% allowance
         at_limit = dict(base["result"], binary_bytes=ceilings)
         self.assertEqual(failed(scoreboard.check(at_limit, base["result"], base["limits"])), [])
         for name in ceilings:

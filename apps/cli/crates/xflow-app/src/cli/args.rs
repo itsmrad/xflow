@@ -216,6 +216,9 @@ pub struct Ask {
     /// Send only the question: no transcript search or read tools.
     #[arg(long)]
     pub no_context: bool,
+    /// Transcript sources; meetings always require affirmative consent.
+    #[arg(long, default_value = "dictations", value_parser = ["none", "dictations", "meetings", "both"])]
+    pub sources: String,
     /// Allow this provider to receive transcript excerpts for this run; not saved.
     #[arg(long)]
     pub yes: bool,
