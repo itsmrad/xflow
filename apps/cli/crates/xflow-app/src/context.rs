@@ -266,8 +266,13 @@ fn safe(value: Option<String>) -> Value {
         .map(|s| Value::String(neutralize(&s).chars().take(300).collect()))
         .unwrap_or(Value::Null)
 }
+/// The MCP `tools/call` result for `structured`. The result budget measures
+/// this same envelope.
+pub fn tool_result(structured: &Value, is_error: bool) -> Value {
+    json!({"structuredContent":structured,"content":[{"type":"text","text":structured.to_string()}],"isError":is_error})
+}
 fn output_size(value: &Value) -> usize {
-    json!({"structuredContent":value,"content":[{"type":"text","text":value.to_string()}],"isError":false}).to_string().len()
+    tool_result(value, false).to_string().len()
 }
 fn cap_text(value: &mut Value) {
     while output_size(value) > RESULT_BYTES - 1024 {

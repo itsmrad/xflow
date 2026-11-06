@@ -128,10 +128,7 @@ fn reply(
                 out.structured["notice"] = json!(CONSENT_UNREADABLE);
             }
             let (v, kind) = match result {
-                Ok(out) => (
-                    json!({"structuredContent":out.structured,"content":[{"type":"text","text":out.structured.to_string()}],"isError":false}),
-                    "none",
-                ),
+                Ok(out) => (context::tool_result(&out.structured, false), "none"),
                 Err(ToolError::InvalidParams(message)) => {
                     // Never log a caller-supplied tool name or arguments.
                     eprintln!(
@@ -140,13 +137,10 @@ fn reply(
                     );
                     return Some(error(id, -32602, message));
                 }
-                Err(e) => {
-                    let structured = json!({"error":e.to_string()});
-                    (
-                        json!({"structuredContent":structured,"content":[{"type":"text","text":structured.to_string()}],"isError":true}),
-                        "storage",
-                    )
-                }
+                Err(e) => (
+                    context::tool_result(&json!({"error":e.to_string()}), true),
+                    "storage",
+                ),
             };
             eprintln!(
                 "mcp tool={} bytes={} duration_us={} error={kind}",
