@@ -245,14 +245,14 @@ fn get(id: &str, out: &Output) -> Result<()> {
         .map(meeting::display_text)
         .unwrap_or_else(|| "Untitled meeting".into());
     out.text(&format!(
-        "{title}\nid: {}:{}\nprovenance: {}\nnotes: {:?}\ntimezone: {}\nstarted_ms: {}\nended_ms: {}\nsegments: {}\ngaps: {}",
+        "{title}\nid: {}:{}\nprovenance: {}\nnotes: {}\ntimezone: {}\nstarted_ms: {}\nended_ms: {}\nsegments: {}\ngaps: {}",
         status.summary.meeting.store_id,
         status.summary.meeting.id,
         match status.summary.provenance {
             Provenance::ImportedUnverified => "imported_unverified",
             Provenance::TranscribedAudio => "transcribed_audio",
         },
-        status.summary.notes,
+        format!("{:?}",status.summary.notes).to_lowercase(),
         meeting::display_text(&status.summary.timezone),
         status.summary.started_at_ms,
         status.summary.ended_at_ms,
