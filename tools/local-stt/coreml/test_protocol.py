@@ -565,7 +565,7 @@ def main(argv):
         print("usage: test_protocol.py <helper> <model_dir> <wav>...", file=sys.stderr)
         print("       test_protocol.py --self-test", file=sys.stderr)
         return 2
-    return run_suite([argv[1]], argv[2], argv[3:])
+    return run_suite([argv[0]], argv[1], argv[2:])
 
 
 if __name__ == "__main__":
