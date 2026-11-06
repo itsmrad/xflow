@@ -524,14 +524,27 @@ fn select_device(config: &RecordingConfig) -> Result<(cpal::Device, DeviceChoice
     Ok(selected)
 }
 
+/// ALSA still offers a PCM named "default" when the machine has no card.
+/// Opening it fails later with "unplugged". An empty device list is the signal.
+#[cfg(not(target_os = "macos"))]
+fn ensure_inputs(count: usize) -> Result<()> {
+    if count == 0 {
+        bail!(
+            "No microphone on this machine. Live dictation needs an audio input; xflow transcribe <file> works without one"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(not(target_os = "macos"))]
 fn select_device(config: &RecordingConfig) -> Result<(cpal::Device, DeviceChoice)> {
     let host = cpal::default_host();
+    let devices: Vec<_> = host
+        .input_devices()
+        .context("cannot enumerate microphones")?
+        .collect();
+    ensure_inputs(devices.len())?;
     let device = if let Some(name) = &config.device {
-        let devices: Vec<_> = host
-            .input_devices()
-            .context("cannot enumerate microphones")?
-            .collect();
         let names = devices
             .iter()
             .map(|d| d.name())
@@ -1629,6 +1642,15 @@ mod tests {
             render_failure(&strikes, Ok(-10863)).as_deref(),
             Some("microphone render failed: CoreAudio -10863")
         );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn no_enumerated_input_is_a_plain_error() {
+        let err = super::ensure_inputs(0).unwrap_err().to_string();
+        assert!(err.contains("No microphone"));
+        assert!(err.contains("xflow transcribe"));
+        assert!(super::ensure_inputs(1).is_ok());
     }
 
     #[test]

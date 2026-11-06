@@ -354,6 +354,10 @@ pub fn devices(out: &Output) -> Result<()> {
                 .map(|d| vec![d.name.clone(), if d.default { "*" } else { "" }.into()])
                 .collect::<Vec<_>>(),
         )?;
+        #[cfg(target_os = "linux")]
+        if devices.is_empty() {
+            out.text("No microphone found. Live dictation needs an audio input; xflow transcribe <file> works without one")?;
+        }
     }
     Ok(())
 }

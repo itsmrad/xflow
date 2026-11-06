@@ -234,15 +234,24 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
         super::system::service(&args::Service::Install { enable: true }, &quiet)?;
     }
     let running = service || ipc::request(&Request::Status).is_ok();
+    let label = xflow_app::tui::key_label(&current.hotkey.key);
+    #[cfg(not(target_os = "linux"))]
     let speak = if current.hotkey.enabled {
-        format!(
-            "hold {} and speak",
-            xflow_app::tui::key_label(&current.hotkey.key)
-        )
+        format!("hold {label} and speak")
     } else {
         "run xflow toggle and speak".into()
     };
-    let tip = if running {
+    #[cfg(target_os = "linux")]
+    let speak = linux_setup_tip(current.hotkey.enabled, &label);
+    #[cfg(target_os = "linux")]
+    let headless = linux_headless_tip(
+        std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none(),
+    );
+    #[cfg(not(target_os = "linux"))]
+    let headless: Option<String> = None;
+    let tip = if let Some(headless) = headless {
+        headless
+    } else if running {
         format!("All set — {speak}.")
     } else {
         format!("Almost there: run xflow service install --enable, then {speak}.")
@@ -262,6 +271,25 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Full sentence for a Linux machine with no display. `None` keeps the desktop tip.
+/// macOS release builds do not compile this.
+#[cfg(any(target_os = "linux", test))]
+fn linux_headless_tip(no_display: bool) -> Option<String> {
+    no_display.then(|| {
+        "This machine has no display. Live dictation needs a microphone and a graphical login; xflow transcribe <file> works without either".into()
+    })
+}
+
+/// Desktop Linux keeps the same hotkey sentence macOS uses.
+#[cfg(any(target_os = "linux", test))]
+fn linux_setup_tip(hotkey_enabled: bool, key: &str) -> String {
+    if hotkey_enabled {
+        format!("hold {key} and speak")
+    } else {
+        "run xflow toggle and speak".into()
+    }
 }
 
 fn setup_conflict(
@@ -307,6 +335,19 @@ mod tests {
         latest.cleanup.mode = xflow_core::CleanupMode::Light;
         assert!(!setup_conflict(&before, &latest, false));
         assert!(setup_conflict(&before, &latest, true));
+    }
+
+    #[test]
+    fn headless_linux_setup_does_not_mention_the_globe_key() {
+        let tip = linux_headless_tip(true).unwrap();
+        assert!(tip.starts_with("This machine has no display"));
+        assert!(tip.contains("xflow transcribe"));
+        assert!(!tip.contains("Fn"));
+        assert!(linux_headless_tip(false).is_none());
+        assert_eq!(
+            linux_setup_tip(true, "Fn (Globe)"),
+            "hold Fn (Globe) and speak"
+        );
     }
 
     #[test]
