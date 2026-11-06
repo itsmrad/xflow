@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, Once,
+        Arc, Mutex,
     },
 };
 use xflow_core::{
@@ -18,6 +18,21 @@ pub const MAX_PAGE: usize = 200;
 const COLUMNS: &str =
     "id, created_at, text, provider, model, raw_text, app_id, language, duration_ms, latency_ms, mode, cleanup";
 
+/// Skips SQLite's initial bulk page-cache allocation, idle memory a small history
+/// doesn't need. Returns whether SQLite accepted it; it refuses once initialized.
+///
+/// # Safety
+/// SQLite requires that no other thread uses it during this call, so call it at
+/// process start, before any connection exists.
+pub unsafe fn skip_bulk_page_cache() -> bool {
+    ffi::sqlite3_config(
+        ffi::SQLITE_CONFIG_PAGECACHE,
+        std::ptr::null_mut::<std::ffi::c_void>(),
+        0,
+        0,
+    ) == ffi::SQLITE_OK
+}
+
 #[derive(Clone)]
 pub struct Store {
     connection: Arc<Mutex<Connection>>,
@@ -30,21 +45,6 @@ impl Store {
         if enabled && limit == 0 {
             bail!("history_limit must be positive when history is enabled");
         }
-        static PAGECACHE: Once = Once::new();
-        PAGECACHE.call_once(|| {
-            // Avoid SQLite's initial bulk page-cache allocation for small history databases.
-            // SAFETY: Once serializes this configuration before Store opens any connections;
-            // a library initialized by another caller returns SQLITE_MISUSE without changes.
-            let result = unsafe {
-                ffi::sqlite3_config(
-                    ffi::SQLITE_CONFIG_PAGECACHE,
-                    std::ptr::null_mut::<std::ffi::c_void>(),
-                    0,
-                    0,
-                )
-            };
-            debug_assert!(matches!(result, ffi::SQLITE_OK | ffi::SQLITE_MISUSE));
-        });
         let mut connection = if enabled {
             let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
                 bail!("history path needs a parent directory and file name");
@@ -495,30 +495,23 @@ mod tests {
     }
 
     #[test]
-    fn opens_when_sqlite_is_already_initialized() {
-        const CHILD: &str = "XFLOW_STORE_INITIALIZED_CHILD";
+    fn page_cache_setting_applies_before_sqlite_starts_and_is_refused_after() {
+        const CHILD: &str = "XFLOW_STORE_PAGE_CACHE_CHILD";
         if std::env::var_os(CHILD).is_some() {
-            let _connection = Connection::open_in_memory().unwrap();
-            // SAFETY: This isolated process has no other SQLite callers running.
-            let result = unsafe {
-                ffi::sqlite3_config(
-                    ffi::SQLITE_CONFIG_PAGECACHE,
-                    std::ptr::null_mut::<std::ffi::c_void>(),
-                    0,
-                    0,
-                )
-            };
-            assert_eq!(result, ffi::SQLITE_MISUSE);
+            // SAFETY: this child process runs only this test, so nothing else uses SQLite.
+            assert!(unsafe { skip_bulk_page_cache() });
             let dir = tempfile::tempdir().unwrap();
             let store = Store::open(&dir.path().join("history.db"), true, 10).unwrap();
             store.reopen(true, 10).unwrap();
             Store::open(&dir.path().join("disabled.db"), false, 10).unwrap();
+            // SAFETY: as above; a late call is refused and changes nothing.
+            assert!(!unsafe { skip_bulk_page_cache() });
             return;
         }
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "store::tests::opens_when_sqlite_is_already_initialized",
+                "store::tests::page_cache_setting_applies_before_sqlite_starts_and_is_refused_after",
             ])
             .env(CHILD, "1")
             .status()

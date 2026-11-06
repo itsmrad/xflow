@@ -31,6 +31,8 @@ struct Args {
 }
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    // SAFETY: first statement of the process; no thread has used SQLite yet.
+    unsafe { xflow_app::store::skip_bulk_page_cache() };
     let args = Args::parse();
     #[cfg(target_os = "macos")]
     if let Some(mode) = args.microphone {
