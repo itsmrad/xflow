@@ -274,8 +274,12 @@ pub fn tool_result(structured: &Value, is_error: bool) -> Value {
 fn output_size(value: &Value) -> usize {
     tool_result(value, false).to_string().len()
 }
+#[inline]
+fn over_budget(value: &Value) -> bool {
+    output_size(value) > RESULT_BYTES - 1024
+}
 fn cap_text(value: &mut Value) {
-    while output_size(value) > RESULT_BYTES - 1024 {
+    while over_budget(value) {
         let text = value["text"].as_str().unwrap_or_default();
         let n = text.chars().count() * 3 / 4;
         value["text"] = Value::String(text.chars().take(n).collect());
@@ -454,7 +458,7 @@ fn search(
     items.truncate(limit);
     let mut result = json!({"items":items});
     let mut trimmed = false;
-    while output_size(&result) > RESULT_BYTES - 1024 {
+    while over_budget(&result) {
         result["items"].as_array_mut().expect("items array").pop();
         trimmed = true;
     }
