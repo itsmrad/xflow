@@ -1129,15 +1129,16 @@ pub fn pending(original: &str, span: &str) -> Vec<Replacement> {
         Err(_) => vec![],
     }
 }
+/// Letters, digits and combining marks (a virama, an accent): one word's characters.
+fn in_word(c: char) -> bool {
+    c.is_alphanumeric() || unicode_normalization::char::canonical_combining_class(c) != 0
+}
 /// The word the caret touches in `field`, lowercase; None off any word.
 pub fn word_at(field: &str, caret: usize) -> Option<String> {
     let at = utf16_to_byte(field, caret)?;
     let (before, after) = field.split_at(at);
-    let inside = |c: &char| {
-        c.is_alphanumeric() || unicode_normalization::char::canonical_combining_class(*c) != 0
-    };
-    let head: String = before.chars().rev().take_while(inside).collect();
-    let tail: String = after.chars().take_while(inside).collect();
+    let head: String = before.chars().rev().take_while(|c| in_word(*c)).collect();
+    let tail: String = after.chars().take_while(|c| in_word(*c)).collect();
     let word: String = head
         .chars()
         .rev()
@@ -1151,7 +1152,7 @@ pub fn caret_on(found: &[Replacement], caret: Option<&str>) -> bool {
     caret.is_some_and(|word| {
         found.iter().any(|c| {
             c.to.to_lowercase()
-                .split(|c: char| !c.is_alphanumeric())
+                .split(|c: char| !in_word(c))
                 .any(|w| w == word)
         })
     })
@@ -1662,6 +1663,20 @@ mod tests {
             "ask Priyank today"
         )));
         assert!(!pending("ask Priyanca today", "ask Priyank today").is_empty());
+    }
+    #[test]
+    fn a_combining_mark_does_not_end_the_word_under_the_caret() {
+        // Devanagari: the virama in the middle of the word has a combining class.
+        let cut = [rule("कृष्णन", "कृष्ण")];
+        assert!(caret_on(&cut, word_at("कृष्ण", 5).as_deref()), "at its end");
+        assert!(
+            caret_on(&cut, word_at("कृष्ण", 3).as_deref()),
+            "by the virama"
+        );
+        assert!(!complete_on_caret(&cut), "half typed, so it waits");
+        // A decomposed accent.
+        let accent = [rule("Sioban", "Siobhe\u{301}")];
+        assert!(caret_on(&accent, word_at("Siobhe\u{301}", 7).as_deref()));
     }
 
     #[test]
