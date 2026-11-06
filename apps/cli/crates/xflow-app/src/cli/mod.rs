@@ -6,6 +6,7 @@ mod ipc;
 #[cfg(target_os = "macos")]
 mod launchd;
 mod local_models;
+mod login;
 mod meeting;
 mod output;
 mod provider;
@@ -178,6 +179,7 @@ fn path(cli: &Cli) -> Result<PathBuf> {
 fn run(cli: &Cli, out: &Output) -> Result<()> {
     match &cli.command {
         Command::Mcp(args) => xflow_app::mcp::run(args, &path(cli)?).map_err(Into::into),
+        Command::Login => login::run(&path(cli)?, out),
         Command::Ask(args) => ask::run(&path(cli)?, args, out),
         Command::Completions { shell } => {
             let mut bytes = Vec::new();

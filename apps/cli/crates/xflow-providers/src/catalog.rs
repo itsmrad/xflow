@@ -258,6 +258,22 @@ static CLEANUP: &[ProviderInfo] = &[
 static CHAT: &[ProviderInfo] = &[
     row!(
         Chat,
+        "hosted",
+        "Xflow Pro",
+        "https://xflowcli.vercel.app/api/v1/chat",
+        None,
+        "https://xflowcli.vercel.app/dashboard",
+        "https://xflowcli.vercel.app/docs",
+        false,
+        false,
+        [(
+            "openai/gpt-oss-120b",
+            "Hosted chat",
+            "Pro required; server-selected model"
+        )]
+    ),
+    row!(
+        Chat,
         "groq",
         "Groq",
         "https://api.groq.com/openai/v1/chat/completions",
