@@ -199,8 +199,9 @@ the median of their medians. Each daemon runs its own copy of the binary, so no
 two share text pages, which would split their PSS. It fails when:
 
 - a binary exceeds its target's ceiling: `floor(result.binary_bytes × 1.01)`
-  (`limits.binary_pct = 1`). Current Linux ceilings are **8,308,777 B** for `xflow`
-  and **12,597,471 B** for `xflowd`, about 1% above the matching receipt;
+  (`limits.binary_pct = 1`). Current Linux ceilings are **8,431,778 B** for `xflow`
+  and **12,630,696 B** for `xflowd`, about 1% above the matching receipt plus the
+  on-device speech allowance below;
 - idle tree PSS grows by more than min(`limits.pss_kib`, `limits.pss_pct`);
 - idle tree CPU exceeds `limits.cpu_percent` of one core;
 - warm startup p50 exceeds the absolute `limits.startup_ms` budget. No relative
@@ -212,6 +213,12 @@ at merge commit `100a18c9e09b7e02c261a1e40aa6536599d1ffd3` (PR head `8ba3db8`).
 Since `71e4aa6`, the daemon grew 2.68% and the CLI 1.58%, exceeding the new 1%
 guard; the old 5% allowance hid that growth. This reviewed update moves only the
 binary baseline and keeps 1% headroom; it includes no MCP/chat allowance.
+
+**On-device speech allowance (provisional):** `result.binary_bytes` adds the growth
+measured for the on-device provider and model installer, built with the pinned
+1.99.1 compiler and target against its base commit: `xflow` +121,784 B and
+`xflowd` +32,896 B. No CI receipt exists for it yet; replace it with matching CI
+receipts as described below when they are available.
 
 Runtime baseline values and budgets are unchanged. The three original receipts
 remain intact in `runtime_runs` in the JSON: run 41375047607, attempts 1–3 at

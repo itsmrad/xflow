@@ -9,8 +9,8 @@
   },
   "result": {
     "binary_bytes": {
-      "xflow": 8226512,
-      "xflowd": 12472744
+      "xflow": 8348296,
+      "xflowd": 12505640
     },
     "idle_cpu_percent": 0.0,
     "idle_processes": 1,
