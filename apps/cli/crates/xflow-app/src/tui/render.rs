@@ -209,6 +209,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         Page::Home => home(frame, body[1], app, &mut hits),
         Page::Dictionary => dictionary(frame, body[1], app, &mut hits),
         Page::Stats => stats(frame, body[1], app),
+        Page::Styles => styles(frame, body[1], app, &mut hits),
         Page::AiApps => {
             // The two privacy lines stay visible under the list.
             let notes =
@@ -364,6 +365,22 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ("Enter options", Some(Action::Choose)),
                     ("↑↓ move", None),
                 ],
+                Page::Styles => {
+                    let choose = if app.selected() == 0 {
+                        "Enter add"
+                    } else {
+                        "Enter options"
+                    };
+                    return vec![
+                        (choose, Some(Action::Choose)),
+                        ("↑↓ move", None),
+                        ("q quit", Some(Action::Quit)),
+                        ("Del delete", Some(Action::Delete)),
+                        ("? help", Some(Action::Help)),
+                        ("Esc back", Some(Action::Back)),
+                        ("Tab next page", None),
+                    ];
+                }
                 // No "↑↓ move" here: the footer must fit "q quit" at 80 columns.
                 Page::Dictionary => vec![
                     ("Enter options", Some(Action::Choose)),
@@ -372,7 +389,7 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ("Tab next page", None),
                     ("? help", Some(Action::Help)),
                 ],
-                Page::Snippets | Page::Styles => {
+                Page::Snippets => {
                     vec![
                         ("Enter choose", Some(Action::Choose)),
                         ("Del delete", Some(Action::Delete)),
@@ -660,6 +677,86 @@ fn dictionary(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     panel(frame, detail, title, text, app);
 }
 
+fn styles(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
+    let (list, detail) = if area.width >= 90 {
+        let parts = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .split(area);
+        (parts[0], parts[1])
+    } else {
+        let parts = Layout::vertical([
+            Constraint::Min(4),
+            Constraint::Length((area.height / 2).clamp(4, 12)),
+        ])
+        .split(area);
+        (parts[0], parts[1])
+    };
+    let rows = app.rows();
+    let items = rows
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| {
+            ListItem::new(Span::styled(
+                name.clone(),
+                if i == 0 {
+                    accent(app).add_modifier(Modifier::BOLD)
+                } else {
+                    app.theme.base()
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut state = ListState::default().with_selected(Some(app.selected()));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(block(app, format!("Styles ({})", app.config.styles.len())))
+            .highlight_style(app.theme.selected())
+            .highlight_symbol("> "),
+        list,
+        &mut state,
+    );
+    for index in state.offset()..rows.len() {
+        let y = list.y + 1 + (index - state.offset()) as u16;
+        if y >= list.bottom().saturating_sub(1) {
+            break;
+        }
+        hits.rows.push((
+            Rect::new(list.x + 1, y, list.width.saturating_sub(2), 1),
+            index,
+        ));
+    }
+    let selected = app
+        .selected()
+        .checked_sub(1)
+        .and_then(|i| app.config.styles.get(i));
+    let (title, text) = match selected {
+        Some(s) => ("Selected style", format!(
+            "{}\nApps: {}\nCleanup: {}\nTone: {}",
+            s.name,
+            s.apps.iter().map(|a| options::app_name(a)).collect::<Vec<_>>().join(", "),
+            s.mode.map(|m| value_text("cleanup.mode", super::state::mode_label(m)))
+                .unwrap_or_else(|| "Same as Settings".into()),
+            s.prompt.as_deref().filter(|p| !p.is_empty()).unwrap_or("Default for cleanup mode"),
+        )),
+        None if app.config.styles.is_empty() => ("Start here", "No styles yet.\nEnter adds a writing tone for specific apps.".into()),
+        None => ("Add a style", "Choose a name, matching apps, cleanup and tone.\nThe first matching style is used. Enter to add.".into()),
+    };
+    let parts = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(detail);
+    let detail_block = block(app, title).padding(ratatui::widgets::Padding::horizontal(1));
+    let page_height = detail_block.inner(parts[0]).height.clamp(1, 8);
+    frame.render_widget(
+        Paragraph::new(text)
+            .style(app.theme.base())
+            .block(detail_block)
+            .wrap(Wrap { trim: false })
+            .scroll(((app.scroll / 8).saturating_mul(page_height), 0)),
+        parts[0],
+    );
+    frame.render_widget(
+        Paragraph::new("PgUp/PgDn details").style(muted(app)),
+        parts[1],
+    );
+}
+
 fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     let rows = app.rows();
     if app.page == Page::History && rows.is_empty() {
@@ -864,16 +961,6 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
         Page::Snippets => ("About", match pos.checked_sub(adds).and_then(|i| app.config.snippets.get(i)) {
             Some(s) => format!("When you say “{}”, xflow inserts:\n\n{}", s.trigger, s.text),
             None => "Snippets save typing: say a short phrase like “my email” and xflow inserts the full text.".into(),
-        }),
-        Page::Styles => ("About", match pos.checked_sub(adds).and_then(|i| app.config.styles.get(i)) {
-            Some(s) => format!(
-                "{}\n\nApps: {}\nCleanup: {}\n{}",
-                s.name,
-                s.apps.iter().map(|a| options::app_name(a)).collect::<Vec<_>>().join(", "),
-                s.mode.map(|m| value_text("cleanup.mode", super::state::mode_label(m))).unwrap_or_else(|| "Same as Settings".into()),
-                s.prompt.as_deref().unwrap_or("")
-            ),
-            None => "Styles change how your text sounds in specific apps — casual in chat, polished in email.".into(),
         }),
         Page::Settings => ("About", rows.get(pos).map(|(key, value)| {
             let (_, group, label, help) = options::row(key).copied().unwrap_or(("", "", "", ""));
