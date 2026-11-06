@@ -198,6 +198,88 @@ impl AudioCapture for WavAudio {
     fn finished(&self) -> bool {
         self.finished.load(Ordering::SeqCst)
     }
+    /// A meeting lease plays `input.wav` from its own start, independent of
+    /// dictation, as a second consumer of the same "microphone".
+    async fn meeting_lease(
+        &self,
+        _device: Option<String>,
+    ) -> Result<Box<dyn xflow_core::MeetingSubscription>> {
+        Ok(Box::new(WavLease {
+            playback: Mutex::new(Playback {
+                reader: hound::WavReader::open(&self.path).context("invalid input.wav")?,
+                started: Instant::now(),
+                sent: 0,
+            }),
+            speed: self.speed,
+            sequence: Mutex::new(0),
+        }))
+    }
+}
+
+struct WavLease {
+    playback: Mutex<Playback>,
+    speed: f64,
+    sequence: Mutex<u64>,
+}
+
+#[async_trait]
+impl xflow_core::MeetingSubscription for WavLease {
+    fn generation(&self) -> u64 {
+        1
+    }
+    fn pull(&self) -> xflow_core::MeetingPull {
+        let mut playback = self.playback.lock().unwrap();
+        let spec = playback.reader.spec();
+        let elapsed = playback.started.elapsed().as_secs_f64() * self.speed;
+        let due = ((elapsed * f64::from(spec.sample_rate)) as u32).min(playback.reader.duration());
+        let frames = due - playback.sent;
+        let count = frames as usize * usize::from(spec.channels);
+        let samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => playback
+                .reader
+                .samples::<f32>()
+                .take(count)
+                .filter_map(|s| s.ok())
+                .collect(),
+            hound::SampleFormat::Int => {
+                let scale = (1_i64 << (spec.bits_per_sample - 1)) as f32;
+                playback
+                    .reader
+                    .samples::<i32>()
+                    .take(count)
+                    .filter_map(|s| s.ok().map(|s| s as f32 / scale))
+                    .collect()
+            }
+        };
+        let offset = u64::from(playback.sent);
+        playback.sent = due;
+        let mut pull = xflow_core::MeetingPull {
+            stale: false,
+            envelopes: Vec::new(),
+            fault: None,
+        };
+        if frames > 0 {
+            let mut sequence = self.sequence.lock().unwrap();
+            *sequence += 1;
+            pull.envelopes.push(xflow_core::CaptureEnvelope {
+                generation: 1,
+                source_id: 1,
+                sample_rate: spec.sample_rate,
+                channels: spec.channels,
+                epoch: 1,
+                host_us: 0,
+                frame_offset: offset,
+                frame_count: frames,
+                sequence: *sequence,
+                gap: None,
+                samples,
+            });
+        }
+        pull
+    }
+    async fn release(self: Box<Self>) -> Result<xflow_core::MeetingPull> {
+        Ok(self.pull())
+    }
 }
 
 struct SyntheticAudio {
@@ -235,6 +317,63 @@ impl AudioCapture for SyntheticAudio {
         } else {
             0.0
         }
+    }
+    /// A meeting lease that delivers 16 kHz audio in real time, independent of
+    /// dictation, so tests can run both through one daemon.
+    async fn meeting_lease(
+        &self,
+        _device: Option<String>,
+    ) -> Result<Box<dyn xflow_core::MeetingSubscription>> {
+        Ok(Box::new(SyntheticLease {
+            started: Instant::now(),
+            sent: Mutex::new((0, 0)),
+            level: if self.voiced { 0.2 } else { 0.0 },
+        }))
+    }
+}
+
+struct SyntheticLease {
+    started: Instant,
+    /// Frames delivered and envelopes sent.
+    sent: Mutex<(u64, u64)>,
+    level: f32,
+}
+
+#[async_trait]
+impl xflow_core::MeetingSubscription for SyntheticLease {
+    fn generation(&self) -> u64 {
+        1
+    }
+    fn pull(&self) -> xflow_core::MeetingPull {
+        let mut sent = self.sent.lock().unwrap();
+        let due = self.started.elapsed().as_micros() as u64 * 16 / 1000;
+        let frames = due - sent.0;
+        let mut pull = xflow_core::MeetingPull {
+            stale: false,
+            envelopes: Vec::new(),
+            fault: None,
+        };
+        if frames > 0 {
+            sent.1 += 1;
+            pull.envelopes.push(xflow_core::CaptureEnvelope {
+                generation: 1,
+                source_id: 1,
+                sample_rate: 16_000,
+                channels: 1,
+                epoch: 1,
+                host_us: 0,
+                frame_offset: sent.0,
+                frame_count: frames as u32,
+                sequence: sent.1,
+                gap: None,
+                samples: vec![self.level; frames as usize],
+            });
+            sent.0 = due;
+        }
+        pull
+    }
+    async fn release(self: Box<Self>) -> Result<xflow_core::MeetingPull> {
+        Ok(self.pull())
     }
 }
 

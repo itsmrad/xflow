@@ -8,6 +8,8 @@ mod launchd;
 mod local_models;
 mod meeting;
 mod meeting_detect;
+#[cfg(target_os = "macos")]
+mod meeting_record;
 mod output;
 mod provider;
 mod setup;
@@ -256,6 +258,10 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
         Command::Meeting { action } => meeting::run(action, || path(cli), out),
         Command::MeetingWatch => meeting_detect::run(&path(cli)?),
         Command::MeetingWorker => meeting::worker(&path(cli)?),
+        #[cfg(target_os = "macos")]
+        Command::MeetingNative { app, no_mic, yes } => {
+            meeting_record::native(app.as_deref(), !no_mic, *yes)
+        }
         Command::ClearHistory { yes } => {
             config::confirm(*yes, "Delete all dictation history?")?;
             out.response(&ipc::request(&Request::ClearHistory)?)?;

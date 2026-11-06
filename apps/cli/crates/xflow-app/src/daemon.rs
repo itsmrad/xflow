@@ -258,6 +258,8 @@ pub struct Engine {
     notice: watch::Sender<Option<LearnNotice>>,
     /// Reload requests that arrived while one was in flight.
     reload_waiters: Vec<oneshot::Sender<Response>>,
+    /// The microphone owner the meeting bridge leases from; follows reloads.
+    meeting_audio: Option<watch::Sender<Arc<dyn AudioCapture>>>,
     /// Counts for status and doctor.
     learning: Arc<std::sync::Mutex<Learning>>,
     notifications: tokio::task::JoinSet<()>,
@@ -362,6 +364,7 @@ impl Engine {
             change: None,
             notice: watch::Sender::new(None),
             reload_waiters: Vec::new(),
+            meeting_audio: None,
             learning: Default::default(),
             notifications: tokio::task::JoinSet::new(),
             started: None,
@@ -764,6 +767,9 @@ impl Engine {
                 self.config = config;
                 self.install(dictionary, seq);
                 self.services = services;
+                if let Some(tx) = &self.meeting_audio {
+                    tx.send_replace(self.services.audio.clone());
+                }
                 self.store = store;
                 match hotkeys {
                     Some(Ok(hotkeys)) => {
@@ -3918,6 +3924,19 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
         }
     });
     let chat = build_chat(&config);
+    #[cfg(target_os = "macos")]
+    let (meeting_audio, _meeting_mic) = {
+        let (tx, rx) = watch::channel(audio.clone());
+        let server = crate::meeting_mic::serve(rx)
+            .inspect_err(|e| {
+                log(
+                    "warn",
+                    &format!("meeting microphone sharing unavailable: {e:#}"),
+                )
+            })
+            .ok();
+        (tx, server)
+    };
     let mut engine = Engine::new(
         config,
         Services {
@@ -3938,6 +3957,10 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
         tokio::spawn(crate::meeting_detection::run(config_path.clone(), changes));
     }
     engine.config_path = Some(config_path);
+    #[cfg(target_os = "macos")]
+    {
+        engine.meeting_audio = Some(meeting_audio);
+    }
     engine.notice = notice_tx;
     engine.persistence_warning = persistence_warning;
     engine.kept_dir = Some(crate::paths::data_dir()?.join("failed"));

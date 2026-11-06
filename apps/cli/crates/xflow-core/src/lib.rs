@@ -385,6 +385,20 @@ pub trait AudioCapture: Send + Sync {
     fn end_meeting(&self, reason: &str) {
         let _ = reason;
     }
+    /// A meeting subscription on the same physical microphone. Adapters without
+    /// one refuse; none opens a second microphone.
+    async fn meeting_lease(&self, device: Option<String>) -> Result<Box<dyn MeetingSubscription>> {
+        let _ = device;
+        anyhow::bail!("this microphone cannot be shared with a meeting")
+    }
+}
+
+/// A held meeting lease. Pull often: the shared ring holds well under a second.
+#[async_trait]
+pub trait MeetingSubscription: Send + Sync {
+    fn generation(&self) -> u64;
+    fn pull(&self) -> MeetingPull;
+    async fn release(self: Box<Self>) -> Result<MeetingPull>;
 }
 
 #[async_trait]

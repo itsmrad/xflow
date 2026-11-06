@@ -181,7 +181,7 @@ fn open_nofollow(path: &Path) -> std::io::Result<File> {
     options.open(path)
 }
 /// Owner-only lock file; never follows a symlink.
-pub(crate) fn lock_file(path: &Path) -> std::io::Result<File> {
+pub fn lock_file(path: &Path) -> std::io::Result<File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -330,6 +330,8 @@ struct SourceBuf {
     buf: Vec<i16>,
     next_seq: i64,
     next_sample: i64,
+    /// The live gap this source is still in: (gap row, start sample, reason).
+    gap: Option<(i64, i64, String)>,
 }
 
 /// One meeting being written. The later live recorder drives this same type.
@@ -442,6 +444,7 @@ impl Capture {
                 buf: Vec::with_capacity(PIECE_SAMPLES),
                 next_seq: 0,
                 next_sample: 0,
+                gap: None,
             });
         }
         tx.execute(
@@ -482,6 +485,9 @@ impl Capture {
     pub fn push(&mut self, source: usize, samples: &[i16]) -> Result<()> {
         ensure!(!self.stopped, "capture already stopped");
         ensure!(source < self.sources.len(), "unknown source");
+        if !samples.is_empty() {
+            self.sources[source].gap = None;
+        }
         let mut rest = samples;
         while !rest.is_empty() {
             let buf = &mut self.sources[source].buf;
@@ -493,6 +499,54 @@ impl Capture {
             }
         }
         Ok(())
+    }
+    /// Live audio a source never delivered: what is buffered becomes durable,
+    /// the missing range is recorded as a gap, and the source continues after
+    /// it. No samples are invented.
+    pub fn gap(&mut self, source: usize, samples: i64, reason: &str) -> Result<()> {
+        ensure!(!self.stopped, "capture already stopped");
+        ensure!(source < self.sources.len(), "unknown source");
+        if samples <= 0 {
+            return Ok(());
+        }
+        self.flush(source)?;
+        let s = &mut self.sources[source];
+        let start = s.next_sample;
+        // A source that is still silent extends its gap instead of adding rows.
+        match &s.gap {
+            Some((row, from, why)) if why == reason => {
+                let gap = Gap {
+                    source_id: s.id.clone(),
+                    range: TimeRange {
+                        start_ms: from * 1000 / RATE,
+                        end_ms: (start + samples) * 1000 / RATE,
+                    },
+                    reason: reason.into(),
+                };
+                self.db.execute(
+                    "UPDATE gaps SET json=?2 WHERE rowid=?1",
+                    params![row, serde_json::to_string(&gap)?],
+                )?;
+            }
+            _ => {
+                add_gap(
+                    &self.db,
+                    self.meeting,
+                    &s.id,
+                    start * 1000 / RATE,
+                    (start + samples) * 1000 / RATE,
+                    reason,
+                )?;
+                s.gap = Some((self.db.last_insert_rowid(), start, reason.into()));
+            }
+        }
+        s.next_sample += samples;
+        Ok(())
+    }
+    /// Samples written or skipped so far for one source.
+    pub fn position(&self, source: usize) -> i64 {
+        let s = &self.sources[source];
+        s.next_sample + s.buf.len() as i64
     }
     fn flush(&mut self, source: usize) -> Result<()> {
         if self.sources[source].buf.is_empty() {

@@ -984,3 +984,67 @@ fn legacy_abandoned_tail_with_unlink_intent_is_retained() {
 fn legacy_already_upgraded_tail_with_unlink_intent_is_retained() {
     assert_legacy_unlink_intent_retained("retained");
 }
+
+/// A live source that stops delivering keeps its later audio at the right
+/// time: the missing range is a gap, never compressed or invented audio.
+#[tokio::test]
+async fn live_gap_keeps_later_audio_in_place_and_is_reported() {
+    let s = scratch();
+    let stub = stub(|n, _| ok(&format!("live part {n}")));
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: Some("Live".into()),
+            labels: vec!["Microphone".into()],
+            expected_ms: None,
+            queued: true,
+        },
+        limits(),
+    )
+    .unwrap();
+    let meeting = capture.id();
+    capture.push(0, &samples(0, 0, 10 * 16_000)).unwrap();
+    // Still silent at the next check: the same gap grows, no second row.
+    for _ in 0..2 {
+        capture
+            .gap(0, 10 * 16_000, "no audio arrived from this source")
+            .unwrap();
+    }
+    assert_eq!(capture.position(0), 30 * 16_000);
+    capture
+        .push(0, &samples(0, 30 * 16_000, 25 * 16_000))
+        .unwrap();
+    capture.finish().unwrap();
+    let gaps: Vec<String> = open_ro(&s.db)
+        .unwrap()
+        .prepare("SELECT json FROM gaps")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(gaps.len(), 1, "{gaps:?}");
+    let gap: Value = serde_json::from_str(&gaps[0]).unwrap();
+    assert_eq!(gap["range"], json!({"start_ms": 10_000, "end_ms": 30_000}));
+    let starts: Vec<i64> = open_ro(&s.db)
+        .unwrap()
+        .prepare("SELECT start_sample FROM pieces ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        starts[2],
+        30 * 16_000,
+        "audio after the gap keeps its time: {starts:?}"
+    );
+    let report = process(&s.db, &meeting, provider(&stub.url, 5).as_ref()).await;
+    assert_eq!(report.failed, 0);
+    let stored = texts(&s.db, &meeting);
+    assert_eq!(stored.last().unwrap().2, 55_000, "{stored:?}");
+    assert!(
+        audio_files(&s.db).is_empty(),
+        "audio goes only after its text is stored"
+    );
+}

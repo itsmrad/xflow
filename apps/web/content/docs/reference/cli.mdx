@@ -641,6 +641,8 @@ Commands:
   search   Literal text search. Letter case is ignored, accents are not
   get      One meeting: provenance, sources, gaps and notes
   export   Write JSON, Markdown or timestamped text for one frozen snapshot
+  record   Record a live meeting: your microphone (shared with dictation) and one app's audio, such as Zoom, Teams, Chime or the browser running Meet
+  stop     Stop the meeting being recorded and transcribe it
   delete   Delete one meeting and its audio, cancelling its transcription, or retry physical cleanup once
   detect   Watch for a Zoom, Google Meet, Microsoft Teams or Amazon Chime call and print each decision (app name and decision only) until interrupted
   help     Print this message or the help of the given subcommand(s)
@@ -882,6 +884,63 @@ Options:
       --force            Replace an existing regular file. Symlinks are never followed
       --config <PATH>    Read/write an alternate configuration file
   -h, --help             Print help
+```
+
+### xflow meeting record
+
+Record a live meeting: your microphone (shared with dictation) and one app's audio, such as Zoom, Teams, Chime or the browser running Meet.
+
+```text
+Record a live meeting: your microphone (shared with dictation) and one app's audio, such as Zoom, Teams, Chime or the browser running Meet.
+
+macOS 14.2 or newer. Asks first, then shows an Xflow indicator with a Stop button while it records. Runs until stopped (Stop, Ctrl-C or `xflow meeting stop`), then transcribes in the background. Audio stays private on this Mac until it is sent to your transcription provider.
+
+Usage: xflow meeting record [OPTIONS]
+
+Options:
+      --app <APP>
+          The app to record: bundle ID (us.zoom.xos), name (Zoom) or PID. Omit to choose in the dialog
+
+      --json
+          Emit machine-readable JSON (watch emits one object per event)
+
+  -q, --quiet
+          Suppress confirmations; requested data and errors remain visible
+
+      --title <TITLE>
+          A title for the meeting, 1 to 256 bytes
+
+      --color <COLOR>
+          Control colour in human output
+
+          [default: auto]
+          [possible values: auto, always, never]
+
+      --no-mic
+          Record only the app's audio, not your microphone
+
+      --config <PATH>
+          Read/write an alternate configuration file
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### xflow meeting stop
+
+Stop the meeting being recorded and transcribe it
+
+```text
+Stop the meeting being recorded and transcribe it
+
+Usage: xflow meeting stop [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
 ```
 
 ### xflow meeting delete

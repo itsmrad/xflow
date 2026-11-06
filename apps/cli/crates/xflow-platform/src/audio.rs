@@ -1147,7 +1147,17 @@ impl CpalCapture {
                                 &thread_finished,
                                 &thread_microphone,
                             );
-                            let _ = reply.send(result);
+                            // The requester gave up while the mic opened: release
+                            // the orphan lease instead of holding the device open.
+                            if let Err(Ok(orphan)) = reply.send(result) {
+                                meeting.release(orphan);
+                                let dictation = dictation_active(&stream, &completed);
+                                if !fanout::stream_after_meeting_end(dictation, deadline, Instant::now())
+                                {
+                                    stream = None;
+                                    deadline = None;
+                                }
+                            }
                         }
                         Command::MeetingRelease { generation: lease, reply } => {
                             let pull = meeting.release(lease);
@@ -1847,7 +1857,26 @@ fn open_voice_unit(
 }
 
 #[async_trait]
+impl xflow_core::MeetingSubscription for MeetingLease {
+    fn generation(&self) -> u64 {
+        MeetingLease::generation(self)
+    }
+    fn pull(&self) -> MeetingPull {
+        self.drain()
+    }
+    async fn release(self: Box<Self>) -> Result<MeetingPull> {
+        self.stop().await
+    }
+}
+
+#[async_trait]
 impl AudioCapture for CpalCapture {
+    async fn meeting_lease(
+        &self,
+        device: Option<String>,
+    ) -> Result<Box<dyn xflow_core::MeetingSubscription>> {
+        Ok(Box::new(self.acquire_meeting(device).await?))
+    }
     async fn start(&self) -> Result<()> {
         let (reply, receive) = oneshot::channel();
         self.sender
