@@ -62,3 +62,7 @@ Same release build, before → after:
 | xflowd | 13,148,288 | 12,862,624 | **285,664 (2.17%)** |
 
 Retain the change: both production binaries shrink without removing any SQL used by Xflow. The exact file savings include module data, initialization and code, not only the named FTS3/R-tree text above. No daemon architecture or meeting/gateway file was changed. limits.binary_pct remains 8%.
+
+After runtime: PSS **9,896 KiB** (5 KiB higher), RSS **12,076 KiB** (68 KiB lower), CPU **0.0%**, voluntary context switches **0/s**. Cold/warm p50 **20.40/2.98 ms** versus **26.49/5.02 ms** before. Do not claim an idle-memory, CPU or startup win: PSS is flat and shared-host timing is uncontrolled. Only the binary reduction is a demonstrated improvement.
+
+Validation: XFLOW_NO_KEYCHAIN=1 cargo +1.99.1 test --manifest-path apps/cli/Cargo.toml --workspace --locked --features xflow-app/test-support. Application/storage/integration suites passed, including meeting journal crash/recovery tests. The command stopped at an unrelated core wall-clock assertion: lists::tests::under_a_millisecond_on_two_thousand_chars observed 47.904859 ms under simultaneous shared-host builds; 137 other core tests passed, two ignored. No timing threshold or test was weakened. Remaining workspace suites were not reached by this command; CI is authoritative for the complete pass.
