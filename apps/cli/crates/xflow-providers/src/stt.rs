@@ -1,6 +1,7 @@
 use super::*;
 use bytes::Bytes;
 use std::{collections::HashMap, path::Path, sync::OnceLock};
+use xflow_core::{DispatchHook, TimedSpan, TimedTranscript, Timing};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Protocol {
@@ -527,17 +528,20 @@ impl HttpProvider {
             && matches!(self.name.as_str(), "openai" | "together"))
     }
     /// Uploads encoded audio; `options` are already merged (`options`).
+    /// `hook` runs before each send; `timed` keeps provider timings (meetings only).
     async fn encoded(
         &self,
         data: Vec<u8>,
         format: &str,
         options: TranscriptionOptions,
-    ) -> Result<Transcript> {
+        hook: DispatchHook<'_>,
+        timed: bool,
+    ) -> Result<TimedTranscript> {
         if data.is_empty() || data.len() > xflow_core::MAX_UPLOAD_WAV_BYTES {
             bail!("audio exceeds provider upload limit or is empty");
         }
         if self.protocol == Protocol::Assembly {
-            return self.assembly(data, options).await;
+            return self.assembly(data, options, hook, timed).await;
         }
         if self.protocol == Protocol::AssemblySync
             && (format != "wav" || data.len() < 44 + 2560 || data.len() > 44 + 120 * 32000)
@@ -549,9 +553,9 @@ impl HttpProvider {
         let data = Bytes::from(data);
         let (mut options, mut prompt, mut retried) = (options, true, false);
         let response = loop {
-            let sent = self
-                .send(self.request(data.clone(), format, &options, prompt)?)
-                .await;
+            let request = self.request(data.clone(), format, &options, prompt)?;
+            hook(&self.name)?;
+            let sent = self.send(request).await;
             if retried {
                 break sent.map_err(|e| {
                     e.context("provider request failed on the retry without dictionary hints")
@@ -579,7 +583,7 @@ impl HttpProvider {
             retried = true;
         };
         let result: Value = self.credential.read(response).await?;
-        self.parse(result, options.language)
+        self.parse(result, options.language, timed)
     }
     /// The upload request; `prompt` is false only for the Whisper prompt-free retry.
     fn request(
@@ -761,7 +765,12 @@ impl HttpProvider {
         }
         Ok(form)
     }
-    fn parse(&self, result: Value, requested: Option<String>) -> Result<Transcript> {
+    fn parse(
+        &self,
+        result: Value,
+        requested: Option<String>,
+        timed: bool,
+    ) -> Result<TimedTranscript> {
         let (text, detected) = match self.protocol {
             Protocol::Deepgram => (
                 result
@@ -808,13 +817,29 @@ impl HttpProvider {
             bail!("transcript exceeds text limit");
         }
         let language = detected.map(str::to_owned).or(requested);
-        Ok(Transcript {
-            text: text.trim().to_owned(),
-            language,
-            provider: Some(self.name.clone()),
+        let timing = if timed {
+            timing(&result, self.protocol)
+        } else {
+            Timing::TextOnly
+        };
+        Ok(TimedTranscript {
+            transcript: Transcript {
+                text: text.trim().to_owned(),
+                language,
+                provider: Some(self.name.clone()),
+            },
+            timing,
         })
     }
-    async fn assembly(&self, data: Vec<u8>, options: TranscriptionOptions) -> Result<Transcript> {
+    async fn assembly(
+        &self,
+        data: Vec<u8>,
+        options: TranscriptionOptions,
+        hook: DispatchHook<'_>,
+        timed: bool,
+    ) -> Result<TimedTranscript> {
+        // Upload, submit and polls are one billable job.
+        hook(&self.name)?;
         let mut upload = self.endpoint.clone();
         upload.set_path(&self.endpoint.path().replace("/transcript", "/upload"));
         let response = self
@@ -876,7 +901,7 @@ impl HttpProvider {
         let mut delay = Duration::from_millis(100);
         loop {
             match result["status"].as_str() {
-                Some("completed") => return self.parse(result, options.language),
+                Some("completed") => return self.parse(result, options.language, timed),
                 Some("error") => bail!("AssemblyAI transcription failed; provider details omitted"),
                 Some("queued" | "processing") => {}
                 _ => bail!("AssemblyAI returned an unexpected job status"),
@@ -943,6 +968,28 @@ impl SpeechToText for HttpProvider {
         audio: AudioClip,
         options: TranscriptionOptions,
     ) -> Result<Transcript> {
+        Ok(self.run(audio, options, &no_hook, false).await?.transcript)
+    }
+    async fn transcribe_timed(
+        &self,
+        audio: AudioClip,
+        options: TranscriptionOptions,
+        hook: DispatchHook<'_>,
+    ) -> Result<TimedTranscript> {
+        self.run(audio, options, hook, true).await
+    }
+}
+fn no_hook(_: &str) -> Result<()> {
+    Ok(())
+}
+impl HttpProvider {
+    async fn run(
+        &self,
+        audio: AudioClip,
+        options: TranscriptionOptions,
+        hook: DispatchHook<'_>,
+        timed: bool,
+    ) -> Result<TimedTranscript> {
         tokio::time::timeout(self.timeout, async {
             let options = self.options(options)?;
             let flac = self.accepts_flac();
@@ -950,11 +997,75 @@ impl SpeechToText for HttpProvider {
                 tokio::task::spawn_blocking(move || audio::encode_upload(&audio, flac))
                     .await
                     .map_err(|_| anyhow!("audio encoding task failed"))??;
-            self.encoded(data, format, options).await
+            self.encoded(data, format, options, hook, timed).await
         })
         .await
         .map_err(|_| anyhow::Error::new(ProviderFailure::Timeout))?
     }
+}
+/// Provider-reported ranges only; a malformed or out-of-order list is dropped
+/// (text-only) rather than repaired.
+fn timing(result: &Value, protocol: Protocol) -> Timing {
+    const MAX_SPANS: usize = 4096;
+    // AssemblyAI reports milliseconds; every other shape reports seconds.
+    let scale = if matches!(protocol, Protocol::Assembly | Protocol::AssemblySync) {
+        1.0
+    } else {
+        1000.0
+    };
+    let spans = |items: &Value, text_keys: &[&str]| -> Option<Vec<TimedSpan>> {
+        let items = items.as_array()?;
+        if items.is_empty() || items.len() > MAX_SPANS {
+            return None;
+        }
+        let mut spans = Vec::with_capacity(items.len());
+        let mut last_start = 0u32;
+        for item in items {
+            if item
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t != "word")
+            {
+                continue;
+            }
+            let start = item.get("start")?.as_f64()? * scale;
+            let end = item.get("end")?.as_f64()? * scale;
+            if !(start.is_finite() && end.is_finite())
+                || start < 0.0
+                || end < start
+                || end > f64::from(u32::MAX)
+            {
+                return None;
+            }
+            let text = text_keys
+                .iter()
+                .find_map(|k| item.get(*k).and_then(Value::as_str))?;
+            let (start_ms, end_ms) = (start.round() as u32, end.round() as u32);
+            if start_ms < last_start {
+                return None;
+            }
+            last_start = start_ms;
+            spans.push(TimedSpan {
+                start_ms,
+                end_ms,
+                text: text.trim().to_owned(),
+            });
+        }
+        (!spans.is_empty()).then_some(spans)
+    };
+    if protocol == Protocol::Deepgram {
+        return result
+            .pointer("/results/channels/0/alternatives/0/words")
+            .and_then(|w| spans(w, &["punctuated_word", "word"]))
+            .map_or(Timing::TextOnly, Timing::Words);
+    }
+    if let Some(segments) = result.get("segments").and_then(|s| spans(s, &["text"])) {
+        return Timing::Segments(segments);
+    }
+    result
+        .get("words")
+        .and_then(|w| spans(w, &["word", "text"]))
+        .map_or(Timing::TextOnly, Timing::Words)
 }
 /// The backup uses its catalog endpoint/model and a separate keystore entry.
 fn backup_config(config: &SttConfig, id: &str) -> SttConfig {
@@ -1061,6 +1172,7 @@ fn can_fail_over(error: &anyhow::Error) -> bool {
                 | ProviderFailure::Connect
                 | ProviderFailure::Interrupted
                 | ProviderFailure::Status(408 | 429 | 500..=599)
+                | ProviderFailure::RateLimited(_)
         )
     )
 }
@@ -1084,7 +1196,9 @@ impl Failover {
         audio: AudioClip,
         options: TranscriptionOptions,
         deadline: tokio::time::Instant,
-    ) -> Result<Transcript> {
+        hook: DispatchHook<'_>,
+        timed: bool,
+    ) -> Result<TimedTranscript> {
         let name = if backup {
             &self.backup_config.provider
         } else {
@@ -1100,7 +1214,7 @@ impl Failover {
             } else {
                 &self.primary
             };
-            provider.transcribe(audio, options).await
+            provider.run(audio, options, hook, timed).await
         })
         .await
         .unwrap_or_else(|_| Err(ProviderFailure::Timeout.into()));
@@ -1133,6 +1247,28 @@ impl SpeechToText for Failover {
         audio: AudioClip,
         options: TranscriptionOptions,
     ) -> Result<Transcript> {
+        Ok(self
+            .chain(audio, options, &no_hook, false)
+            .await?
+            .transcript)
+    }
+    async fn transcribe_timed(
+        &self,
+        audio: AudioClip,
+        options: TranscriptionOptions,
+        hook: DispatchHook<'_>,
+    ) -> Result<TimedTranscript> {
+        self.chain(audio, options, hook, true).await
+    }
+}
+impl Failover {
+    async fn chain(
+        &self,
+        audio: AudioClip,
+        options: TranscriptionOptions,
+        hook: DispatchHook<'_>,
+        timed: bool,
+    ) -> Result<TimedTranscript> {
         let now = tokio::time::Instant::now();
         let primary_budget = attempt_deadline(self.primary.timeout, &audio, self.primary.protocol);
         let backup_budget = attempt_deadline(
@@ -1153,6 +1289,8 @@ impl SpeechToText for Failover {
                 audio.clone(),
                 options.clone(),
                 now + first_budget,
+                hook,
+                timed,
             )
             .await;
         match result {
@@ -1163,6 +1301,8 @@ impl SpeechToText for Failover {
                     audio,
                     options,
                     total.min(tokio::time::Instant::now() + second_budget),
+                    hook,
+                    timed,
                 )
                 .await
                 .map_err(|second| {
@@ -1276,8 +1416,15 @@ pub async fn transcribe_file(config: &SttConfig, offline: bool, path: &Path) -> 
                 bail!("DeepInfra documents WAV and MP3; decode this container to WAV first");
             }
             provider
-                .encoded(bytes, &format, provider.options(Default::default())?)
+                .encoded(
+                    bytes,
+                    &format,
+                    provider.options(Default::default())?,
+                    &no_hook,
+                    false,
+                )
                 .await
+                .map(|t| t.transcript)
         }
     })
     .await
@@ -1560,10 +1707,16 @@ mod prompt_tests {
         let audio = vec![7u8; PROBE];
         let before = COPIES.load(std::sync::atomic::Ordering::SeqCst);
         let result = provider
-            .encoded(audio, "wav", provider.options(Default::default()).unwrap())
+            .encoded(
+                audio,
+                "wav",
+                provider.options(Default::default()).unwrap(),
+                &no_hook,
+                false,
+            )
             .await
             .unwrap();
-        assert_eq!(result.text, "ok");
+        assert_eq!(result.transcript.text, "ok");
         assert_eq!(COPIES.load(std::sync::atomic::Ordering::SeqCst), before);
         let requests = task.await.unwrap();
         assert_eq!(requests.len(), 2, "the prompt-free retry ran");
@@ -2226,5 +2379,48 @@ mod preferred_language_tests {
         )
         .vocabulary
         .is_empty());
+    }
+}
+
+#[cfg(test)]
+mod meeting_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn meeting_hook_covers_failover_to_the_backup() {
+        let (primary, primary_task) = crate::protocol_tests::scripted(
+            vec![("503 Service Unavailable", serde_json::json!({}))],
+            "/transcribe",
+        )
+        .await;
+        let (backup, backup_task) = crate::protocol_tests::scripted(
+            vec![("200 OK", serde_json::json!({"text":"from the backup"}))],
+            "/transcribe",
+        )
+        .await;
+        let mut cfg = crate::tests::config("custom", primary);
+        cfg.model = Some("one".into());
+        let mut backup_cfg = crate::tests::config("custom", backup);
+        backup_cfg.model = Some("two".into());
+        let failover = Failover {
+            primary: HttpProvider::new(&cfg, true).unwrap(),
+            backup_config: backup_cfg,
+            backup: tokio::sync::OnceCell::new(),
+            offline: true,
+            failed_at: std::sync::Mutex::new(None),
+        };
+        let (seen, hook) = crate::protocol_tests::recorder();
+        let result = failover
+            .transcribe_timed(crate::tests::clip(), Default::default(), &hook)
+            .await
+            .unwrap();
+        assert_eq!(result.transcript.text, "from the backup");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            2,
+            "primary and backup dispatches"
+        );
+        assert_eq!(primary_task.await.unwrap().len(), 1);
+        assert_eq!(backup_task.await.unwrap().len(), 1);
     }
 }

@@ -4,6 +4,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
+use xflow_core::{TimedSpan, Timing};
 
 pub(super) async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -1140,4 +1141,219 @@ async fn preferred_languages_assembly_async_constrains_set() {
     assert!(body.get("language_detection").is_none());
     assert!(body.get("language_code").is_none());
     std::env::remove_var(env);
+}
+
+pub(super) fn recorder() -> (
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    impl Fn(&str) -> Result<()> + Send + Sync,
+) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    (seen, move |provider: &str| {
+        log.lock().unwrap().push(provider.to_owned());
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn meeting_hook_sees_every_dispatch_including_the_hint_free_retry() {
+    let (url, task) = scripted(
+        vec![
+            ("400 Bad Request", json!({"error":"prompt"})),
+            ("200 OK", json!({"text":"kubectl rollout"})),
+        ],
+        "/transcribe",
+    )
+    .await;
+    let mut cfg = config("groq", url);
+    cfg.vocabulary = vec!["kubectl".into()];
+    let env = set_test_key(&mut cfg);
+    let (seen, hook) = recorder();
+    let result = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe_timed(clip(), Default::default(), &hook)
+        .await
+        .unwrap();
+    assert_eq!(result.transcript.text, "kubectl rollout");
+    assert_eq!(result.timing, Timing::TextOnly);
+    assert_eq!(*seen.lock().unwrap(), ["groq", "groq"]);
+    assert_eq!(task.await.unwrap().len(), 2);
+    std::env::remove_var(env);
+}
+
+#[tokio::test]
+async fn refused_hook_sends_nothing() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/transcribe", listener.local_addr().unwrap());
+    let mut cfg = config("groq", url);
+    let env = set_test_key(&mut cfg);
+    let refuse = |_: &str| -> Result<()> { bail!("attempt ceiling reached") };
+    let error = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe_timed(clip(), Default::default(), &refuse)
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("attempt ceiling"));
+    let accepted = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+    assert!(accepted.is_err(), "no connection was opened");
+    std::env::remove_var(env);
+}
+
+#[tokio::test]
+async fn timing_shapes_are_reported_only_as_the_provider_gave_them() {
+    let segments = json!({"text":"Hola José. Adiós","segments":[{"start":0.0,"end":1.25,"text":" Hola José."},{"start":2.0,"end":3.5,"text":" Adiós"}]});
+    let words = json!({"text":"नमस्ते दुनिया","words":[{"start":0.1,"end":0.6,"word":"नमस्ते"},{"start":0.7,"end":1.2,"word":"दुनिया"}]});
+    let backwards = json!({"text":"a b","segments":[{"start":2.0,"end":3.0,"text":"a"},{"start":1.0,"end":1.5,"text":"b"}]});
+    let negative = json!({"text":"a","words":[{"start":-1.0,"end":0.5,"word":"a"}]});
+    for (reply, expected) in [
+        (
+            segments.clone(),
+            Timing::Segments(vec![
+                TimedSpan {
+                    start_ms: 0,
+                    end_ms: 1250,
+                    text: "Hola José.".into(),
+                },
+                TimedSpan {
+                    start_ms: 2000,
+                    end_ms: 3500,
+                    text: "Adiós".into(),
+                },
+            ]),
+        ),
+        (
+            words,
+            Timing::Words(vec![
+                TimedSpan {
+                    start_ms: 100,
+                    end_ms: 600,
+                    text: "नमस्ते".into(),
+                },
+                TimedSpan {
+                    start_ms: 700,
+                    end_ms: 1200,
+                    text: "दुनिया".into(),
+                },
+            ]),
+        ),
+        (json!({"text":"just text"}), Timing::TextOnly),
+        (backwards, Timing::TextOnly),
+        (negative, Timing::TextOnly),
+    ] {
+        let (url, task) = scripted(vec![("200 OK", reply)], "/transcribe").await;
+        let mut cfg = config("custom", url);
+        cfg.model = Some("m".into());
+        let result = build_stt(&cfg, true)
+            .unwrap()
+            .transcribe_timed(clip(), Default::default(), &|_| Ok(()))
+            .await
+            .unwrap();
+        assert_eq!(result.timing, expected);
+        task.await.unwrap();
+    }
+    // Deepgram reports words in its own envelope.
+    let reply = json!({"results":{"channels":[{"alternatives":[{"transcript":"useEffect runs","words":[{"word":"useeffect","punctuated_word":"useEffect","start":0.5,"end":0.9},{"word":"runs","punctuated_word":"runs.","start":1.0,"end":1.4}]}]}]}});
+    let (url, task) = scripted(vec![("200 OK", reply)], "/listen").await;
+    let mut cfg = config("deepgram", url);
+    let env = set_test_key(&mut cfg);
+    let result = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe_timed(clip(), Default::default(), &|_| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(
+        result.timing,
+        Timing::Words(vec![
+            TimedSpan {
+                start_ms: 500,
+                end_ms: 900,
+                text: "useEffect".into()
+            },
+            TimedSpan {
+                start_ms: 1000,
+                end_ms: 1400,
+                text: "runs.".into()
+            },
+        ])
+    );
+    task.await.unwrap();
+    std::env::remove_var(env);
+    // Dictation keeps its text-only result from the same response.
+    let (url, task) = scripted(vec![("200 OK", segments)], "/transcribe").await;
+    let mut cfg = config("custom", url);
+    cfg.model = Some("m".into());
+    let text = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe(clip(), Default::default())
+        .await
+        .unwrap();
+    assert_eq!(text.text, "Hola José. Adiós");
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn failures_are_classified_for_the_meeting_ledger() {
+    // 429 keeps Retry-After; the message dictation shows is unchanged.
+    let (url, _rx) = server(
+        "429 Too Many Requests",
+        b"{}",
+        Duration::ZERO,
+        "Retry-After: 7\r\n",
+    )
+    .await;
+    let mut cfg = config("custom", url);
+    cfg.model = Some("m".into());
+    let error = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe(clip(), Default::default())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        crate::classify_stt_failure(&error),
+        crate::SttFailure::RateLimited(Some(Duration::from_secs(7)))
+    );
+    assert!(format!("{error:#}").contains("provider returned HTTP 429; response body omitted"));
+    // The provider got the whole upload, then the reply came too late.
+    let (url, rx) = server("200 OK", br#"{"text":"late"}"#, Duration::from_secs(3), "").await;
+    let mut cfg = config("custom", url);
+    cfg.model = Some("m".into());
+    cfg.timeout_secs = 1;
+    let error = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe_timed(clip(), Default::default(), &|_| Ok(()))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        crate::classify_stt_failure(&error),
+        crate::SttFailure::Ambiguous
+    );
+    assert!(!rx.await.unwrap().is_empty(), "upload reached the provider");
+    // Nothing listening: never sent.
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let mut cfg = config("custom", format!("http://127.0.0.1:{port}/transcribe"));
+    cfg.model = Some("m".into());
+    let error = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe_timed(clip(), Default::default(), &|_| Ok(()))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        crate::classify_stt_failure(&error),
+        crate::SttFailure::NotSent
+    );
+    let (url, _rx) = server("401 Unauthorized", b"{}", Duration::ZERO, "").await;
+    let mut cfg = config("custom", url);
+    cfg.model = Some("m".into());
+    let error = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe(clip(), Default::default())
+        .await
+        .unwrap_err();
+    assert_ne!(
+        crate::classify_stt_failure(&error),
+        crate::SttFailure::NotSent
+    );
 }

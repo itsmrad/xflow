@@ -714,6 +714,8 @@ enum ProviderFailure {
     Connect,
     Interrupted,
     Status(u16),
+    /// HTTP 429 with the provider's `Retry-After` seconds, when given.
+    RateLimited(Option<u64>),
 }
 impl std::fmt::Display for ProviderFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -723,6 +725,9 @@ impl std::fmt::Display for ProviderFailure {
             Self::Interrupted => f.write_str("provider connection interrupted; it was not retried"),
             Self::Status(status) => {
                 write!(f, "provider returned HTTP {status}; response body omitted")
+            }
+            Self::RateLimited(_) => {
+                f.write_str("provider returned HTTP 429; response body omitted")
             }
         }
     }
@@ -740,9 +745,45 @@ fn http_error(error: reqwest::Error) -> anyhow::Error {
         anyhow!("provider HTTP request failed; it was not retried")
     }
 }
+/// How a failed STT request ended, for a caller that keeps its own attempt ledger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SttFailure {
+    /// The connection was never made, so no audio left this machine.
+    NotSent,
+    /// Sent, outcome unknown: a timeout or broken connection. It may be billed.
+    Ambiguous,
+    /// HTTP 429, with `Retry-After` when the provider gave one.
+    RateLimited(Option<Duration>),
+    /// HTTP 408 or 5xx: a later retry may succeed.
+    Transient(u16),
+    /// Any other HTTP status: a retry will not help.
+    Rejected(u16),
+    Other,
+}
+pub fn classify_stt_failure(error: &anyhow::Error) -> SttFailure {
+    match error.downcast_ref::<ProviderFailure>() {
+        Some(ProviderFailure::Connect) => SttFailure::NotSent,
+        Some(ProviderFailure::Timeout | ProviderFailure::Interrupted) => SttFailure::Ambiguous,
+        Some(ProviderFailure::RateLimited(after)) => {
+            SttFailure::RateLimited(after.map(Duration::from_secs))
+        }
+        Some(ProviderFailure::Status(status @ (408 | 500..=599))) => SttFailure::Transient(*status),
+        Some(ProviderFailure::Status(status)) => SttFailure::Rejected(*status),
+        None => SttFailure::Other,
+    }
+}
 async fn read_bytes(mut response: Response, strict: bool) -> Result<Vec<u8>> {
     if strict && !response.status().is_success() {
-        return Err(ProviderFailure::Status(response.status().as_u16()).into());
+        let status = response.status().as_u16();
+        if status == 429 {
+            let after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
+            return Err(ProviderFailure::RateLimited(after).into());
+        }
+        return Err(ProviderFailure::Status(status).into());
     }
     if response
         .content_length()
