@@ -49,7 +49,10 @@ pub fn fit(host: &Host, requirements: &Requirements) -> Fit {
         };
         (Unsupported, reason)
     } else if os_major.is_some_and(|v| v < requirements.minimum_os_major) {
-        (Incompatible, "Needs macOS 14 or newer. Update macOS to use it.")
+        (
+            Incompatible,
+            "Needs macOS 14 or newer. Update macOS to use it.",
+        )
     } else {
         match host.native_isa.as_deref() {
             Some("x86_64") => (NotReady, "Not supported yet on Intel Macs. It needs Apple Silicon and macOS 14 or newer."),
@@ -359,16 +362,29 @@ mod tests {
         assert_eq!(facts.languages.len(), 25);
         assert!(facts.warning.contains("Hindi") && facts.warning.contains("Japanese"));
         assert_eq!(size(facts.download_bytes), "484 MB");
-        assert!(facts.license.starts_with("CC BY 4.0 · NVIDIA"), "{}", facts.license);
+        assert!(
+            facts.license.starts_with("CC BY 4.0 · NVIDIA"),
+            "{}",
+            facts.license
+        );
         assert!(facts.license.contains("FluidInference"));
         assert_eq!(facts.supported, on_device::SUPPORTED);
-        let linux = facts_for(&Host { platform: "linux", ..Host::default() }, false);
+        let linux = facts_for(
+            &Host {
+                platform: "linux",
+                ..Host::default()
+            },
+            false,
+        );
         assert!(!linux.supported);
         assert!(linux.fit.starts_with("Not supported yet on Linux"));
         let mut intel = apple();
         intel.native_isa = Some("x86_64".into());
         let intel = facts_for(&intel, false);
         assert!(!intel.supported && intel.fit.contains("Intel"));
-        assert!(facts.lines().iter().any(|l| l.starts_with("Languages (25): Bulgarian")));
+        assert!(facts
+            .lines()
+            .iter()
+            .any(|l| l.starts_with("Languages (25): Bulgarian")));
     }
 }

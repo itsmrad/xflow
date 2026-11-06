@@ -155,7 +155,8 @@ impl App {
                 if let Some(facts) = &mut self.facts {
                     facts.installed = false;
                 }
-                self.toast = Some("On-device model removed. Keys and settings are unchanged.".into());
+                self.toast =
+                    Some("On-device model removed. Keys and settings are unchanged.".into());
             }
             Err(e) => self.toast = Some(format!("Couldn't remove the model: {e:#}")),
         }
@@ -221,9 +222,7 @@ impl App {
 fn status(facts: &Facts, job: &Job, provider: &str) -> String {
     use crate::local_models::size;
     match job {
-        _ if !facts.supported => {
-            "Not available on this machine. Keep an API service.".into()
-        }
+        _ if !facts.supported => "Not available on this machine. Keep an API service.".into(),
         Job::Running {
             done,
             total,
