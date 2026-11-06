@@ -236,6 +236,63 @@ impl AudioCapture for SyntheticAudio {
             0.0
         }
     }
+    /// A meeting lease that delivers 16 kHz audio in real time, independent of
+    /// dictation, so tests can run both through one daemon.
+    async fn meeting_lease(
+        &self,
+        _device: Option<String>,
+    ) -> Result<Box<dyn xflow_core::MeetingSubscription>> {
+        Ok(Box::new(SyntheticLease {
+            started: Instant::now(),
+            sent: Mutex::new((0, 0)),
+            level: if self.voiced { 0.2 } else { 0.0 },
+        }))
+    }
+}
+
+struct SyntheticLease {
+    started: Instant,
+    /// Frames delivered and envelopes sent.
+    sent: Mutex<(u64, u64)>,
+    level: f32,
+}
+
+#[async_trait]
+impl xflow_core::MeetingSubscription for SyntheticLease {
+    fn generation(&self) -> u64 {
+        1
+    }
+    fn pull(&self) -> xflow_core::MeetingPull {
+        let mut sent = self.sent.lock().unwrap();
+        let due = self.started.elapsed().as_micros() as u64 * 16 / 1000;
+        let frames = due - sent.0;
+        let mut pull = xflow_core::MeetingPull {
+            stale: false,
+            envelopes: Vec::new(),
+            fault: None,
+        };
+        if frames > 0 {
+            sent.1 += 1;
+            pull.envelopes.push(xflow_core::CaptureEnvelope {
+                generation: 1,
+                source_id: 1,
+                sample_rate: 16_000,
+                channels: 1,
+                epoch: 1,
+                host_us: 0,
+                frame_offset: sent.0,
+                frame_count: frames as u32,
+                sequence: sent.1,
+                gap: None,
+                samples: vec![self.level; frames as usize],
+            });
+            sent.0 = due;
+        }
+        pull
+    }
+    async fn release(self: Box<Self>) -> Result<xflow_core::MeetingPull> {
+        Ok(self.pull())
+    }
 }
 
 struct FileDesktop(PathBuf);

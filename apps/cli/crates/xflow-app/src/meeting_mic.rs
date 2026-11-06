@@ -113,7 +113,10 @@ async fn connection(mut stream: UnixStream, audio: Arc<dyn AudioCapture>) -> Res
     // EOF while the device opens cancels; the audio thread drops an orphan lease.
     let (mut read, mut write) = stream.into_split();
     let opened = tokio::select! {
-        v = tokio::time::timeout(OPEN, audio.meeting_lease(None)) => v.context("the microphone did not open in time")?,
+        // A timeout is reported like a refusal: the recorder shows the reason.
+        v = tokio::time::timeout(OPEN, audio.meeting_lease(None)) => v.unwrap_or_else(|_| {
+            Err(anyhow::anyhow!("the microphone did not open in time; check that xflowd may use the microphone"))
+        }),
         _ = read.read_u8() => bail!("recorder left while the microphone opened"),
     };
     let lease = match opened {

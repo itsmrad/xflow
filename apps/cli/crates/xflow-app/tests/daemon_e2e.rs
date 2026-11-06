@@ -1718,3 +1718,49 @@ fn json_ok(output: &std::process::Output) -> Value {
     );
     serde_json::from_slice(&output.stdout).unwrap()
 }
+
+/// The meeting bridge pumps a held lease while dictation runs through the same
+/// daemon: dictation delivers, and the meeting keeps receiving real-time audio.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn dictation_works_while_a_meeting_holds_the_microphone() {
+    use xflow_app::meeting_mic::{Client, Frame};
+    let mut mock = MockStt::start(vec![Plan::success("dictated during the meeting")]).await;
+    let mut daemon = Daemon::spawn(&mock.endpoint, "voice", true);
+    daemon.ready().await;
+    let mut events = daemon.events().await;
+    let path = daemon.root.path().join("run/xflow/meeting-mic.sock");
+    let meeting = tokio::task::spawn_blocking(move || {
+        let mut client = Client::acquire_at(&path).unwrap();
+        let started = std::time::Instant::now();
+        let mut samples = 0usize;
+        while started.elapsed() < std::time::Duration::from_secs(3) {
+            if let Frame::Audio {
+                rate, samples: pcm, ..
+            } = client.recv().unwrap()
+            {
+                assert_eq!(rate, 16_000);
+                samples += pcm.len();
+            }
+        }
+        client.release().unwrap();
+        loop {
+            match client.recv().unwrap() {
+                Frame::Audio { samples: pcm, .. } => samples += pcm.len(),
+                Frame::End(reason) => break (samples, reason),
+            }
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    dictate(&daemon, &mut events).await;
+    assert_eq!(
+        fs::read_to_string(daemon.sink()).unwrap(),
+        "dictated during the meeting"
+    );
+    let _ = mock.upload().await;
+    let (samples, reason) = meeting.await.unwrap();
+    assert_eq!(reason, "released");
+    // About three seconds of meeting audio, with no hole while dictation ran.
+    assert!(samples >= 2 * 16_000, "{samples}");
+    daemon.stop_process().await;
+}
