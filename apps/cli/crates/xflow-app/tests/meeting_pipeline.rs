@@ -1004,9 +1004,12 @@ async fn live_gap_keeps_later_audio_in_place_and_is_reported() {
     .unwrap();
     let meeting = capture.id();
     capture.push(0, &samples(0, 0, 10 * 16_000)).unwrap();
-    capture
-        .gap(0, 20 * 16_000, "no audio arrived from this source")
-        .unwrap();
+    // Still silent at the next check: the same gap grows, no second row.
+    for _ in 0..2 {
+        capture
+            .gap(0, 10 * 16_000, "no audio arrived from this source")
+            .unwrap();
+    }
     assert_eq!(capture.position(0), 30 * 16_000);
     capture
         .push(0, &samples(0, 30 * 16_000, 25 * 16_000))

@@ -28,6 +28,10 @@ const MAX_FRAME: usize = 1 << 20;
 const ACQUIRED: u8 = 1;
 const AUDIO: u8 = 2;
 const END: u8 = 3;
+/// Sent when a second passes with no audio, so the recorder can tell a quiet
+/// device from a daemon that went away.
+const ALIVE: u8 = 4;
+const ALIVE_EVERY: Duration = Duration::from_secs(1);
 const RELEASE: u8 = b'r';
 
 pub fn socket_path() -> Result<PathBuf> {
@@ -130,13 +134,23 @@ async fn connection(mut stream: UnixStream, audio: Arc<dyn AudioCapture>) -> Res
     let mut tick = tokio::time::interval(PUMP);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut byte = [0u8; 1];
+    let mut sent = tokio::time::Instant::now();
     loop {
         tokio::select! {
             _ = tick.tick() => {
                 let pull = lease.pull();
-                if let Err(e) = forward(&mut write, &pull).await {
+                let quiet = pull.envelopes.is_empty() && sent.elapsed() >= ALIVE_EVERY;
+                let result = if quiet {
+                    send(&mut write, ALIVE, &[]).await
+                } else {
+                    forward(&mut write, &pull).await
+                };
+                if let Err(e) = result {
                     let _ = lease.release().await;
                     return Err(e);
+                }
+                if quiet || !pull.envelopes.is_empty() {
+                    sent = tokio::time::Instant::now();
                 }
                 if pull.stale || pull.fault.is_some() {
                     let reason = pull.fault.unwrap_or_else(|| "the meeting microphone lease ended".into());
@@ -244,7 +258,11 @@ impl Client {
     }
     /// The next frame; a read error means the daemon went away.
     pub fn recv(&mut self) -> Result<Frame> {
-        match self.read_raw()? {
+        let mut frame = self.read_raw()?;
+        while frame.0 == ALIVE {
+            frame = self.read_raw()?;
+        }
+        match frame {
             (AUDIO, body) if body.len() >= 12 && (body.len() - 12) % 4 == 0 => Ok(Frame::Audio {
                 rate: u32::from_le_bytes(body[0..4].try_into().unwrap()),
                 lost: u64::from_le_bytes(body[4..12].try_into().unwrap()),
@@ -282,6 +300,7 @@ mod tests {
         leases: Mutex<u32>,
         released: Mutex<u32>,
         fault: Mutex<Option<String>>,
+        quiet: Mutex<bool>,
     }
     struct FakeMic(Arc<Shared>);
     struct FakeLease(Arc<Shared>, Mutex<u64>);
@@ -295,6 +314,13 @@ mod tests {
             let mut n = self.1.lock().unwrap();
             *n += 1;
             let fault = self.0.fault.lock().unwrap().clone();
+            if *self.0.quiet.lock().unwrap() {
+                return MeetingPull {
+                    stale: false,
+                    fault,
+                    envelopes: Vec::new(),
+                };
+            }
             MeetingPull {
                 stale: false,
                 fault,
@@ -419,6 +445,28 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(*s.leases.lock().unwrap(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_quiet_microphone_sends_keepalives() {
+        let shared = Arc::new(Shared::default());
+        *shared.quiet.lock().unwrap() = true;
+        let (_dir, path, _server) = server(&shared);
+        let kinds = tokio::task::spawn_blocking(move || {
+            let mut client = Client::acquire_at(&path).unwrap();
+            let started = std::time::Instant::now();
+            let mut kinds = Vec::new();
+            while started.elapsed() < Duration::from_millis(2_500) {
+                kinds.push(client.read_raw().unwrap().0);
+            }
+            kinds
+        })
+        .await
+        .unwrap();
+        assert!(
+            kinds.len() >= 2 && kinds.iter().all(|k| *k == ALIVE),
+            "{kinds:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

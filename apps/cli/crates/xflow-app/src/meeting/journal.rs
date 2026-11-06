@@ -330,6 +330,8 @@ struct SourceBuf {
     buf: Vec<i16>,
     next_seq: i64,
     next_sample: i64,
+    /// The live gap this source is still in: (gap row, start sample, reason).
+    gap: Option<(i64, i64, String)>,
 }
 
 /// One meeting being written. The later live recorder drives this same type.
@@ -442,6 +444,7 @@ impl Capture {
                 buf: Vec::with_capacity(PIECE_SAMPLES),
                 next_seq: 0,
                 next_sample: 0,
+                gap: None,
             });
         }
         tx.execute(
@@ -482,6 +485,9 @@ impl Capture {
     pub fn push(&mut self, source: usize, samples: &[i16]) -> Result<()> {
         ensure!(!self.stopped, "capture already stopped");
         ensure!(source < self.sources.len(), "unknown source");
+        if !samples.is_empty() {
+            self.sources[source].gap = None;
+        }
         let mut rest = samples;
         while !rest.is_empty() {
             let buf = &mut self.sources[source].buf;
@@ -506,14 +512,34 @@ impl Capture {
         self.flush(source)?;
         let s = &mut self.sources[source];
         let start = s.next_sample;
-        add_gap(
-            &self.db,
-            self.meeting,
-            &s.id,
-            start * 1000 / RATE,
-            (start + samples) * 1000 / RATE,
-            reason,
-        )?;
+        // A source that is still silent extends its gap instead of adding rows.
+        match &s.gap {
+            Some((row, from, why)) if why == reason => {
+                let gap = Gap {
+                    source_id: s.id.clone(),
+                    range: TimeRange {
+                        start_ms: from * 1000 / RATE,
+                        end_ms: (start + samples) * 1000 / RATE,
+                    },
+                    reason: reason.into(),
+                };
+                self.db.execute(
+                    "UPDATE gaps SET json=?2 WHERE rowid=?1",
+                    params![row, serde_json::to_string(&gap)?],
+                )?;
+            }
+            _ => {
+                add_gap(
+                    &self.db,
+                    self.meeting,
+                    &s.id,
+                    start * 1000 / RATE,
+                    (start + samples) * 1000 / RATE,
+                    reason,
+                )?;
+                s.gap = Some((self.db.last_insert_rowid(), start, reason.into()));
+            }
+        }
         s.next_sample += samples;
         Ok(())
     }
