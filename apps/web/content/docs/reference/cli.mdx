@@ -30,6 +30,7 @@ Commands:
   paste        Insert the last transcript into the focused app [alias: paste-last]
   retry        Transcribe the failed dictation kept by privacy.keep_failed_audio again and print it
   history      Browse, search and export local dictation history
+  meeting      Import, list, search, show, export or delete a private meeting transcript
   config       Inspect or edit validated, comment-preserving TOML configuration
   providers    List providers, inspect capabilities and select a default
   models       List provider models, or inspect the offline on-device model catalog and hardware
@@ -585,6 +586,172 @@ Usage: xflow history clear [OPTIONS]
 Options:
       --json           Emit machine-readable JSON (watch emits one object per event)
       --yes
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+## xflow meeting
+
+Import, list, search, show, export or delete a private meeting transcript.
+
+```text
+Import, list, search, show, export or delete a private meeting transcript.
+
+Every meeting command uses the local database in this process. Import and delete do not use the daemon. The import file is read here, with a cap.
+
+Usage: xflow meeting [OPTIONS] <COMMAND>
+
+Commands:
+  import  Read a versioned JSON transcript into the local meeting database
+  list    Meetings whose start is in `[since, until)`
+  search  Case-sensitive literal text search
+  get     One meeting: provenance, sources, gaps and notes
+  export  Write JSON, Markdown or timestamped text for one frozen snapshot
+  delete  Delete one meeting, or retry physical cleanup once
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Emit machine-readable JSON (watch emits one object per event)
+
+  -q, --quiet
+          Suppress confirmations; requested data and errors remain visible
+
+      --color <COLOR>
+          Control colour in human output
+
+          [default: auto]
+          [possible values: auto, always, never]
+
+      --config <PATH>
+          Read/write an alternate configuration file
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### xflow meeting import
+
+Read a versioned JSON transcript into the local meeting database
+
+```text
+Read a versioned JSON transcript into the local meeting database
+
+Usage: xflow meeting import [OPTIONS] <FILE>
+
+Arguments:
+  <FILE>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow meeting list
+
+Meetings whose start is in `[since, until)`
+
+```text
+Meetings whose start is in `[since, until)`
+
+Usage: xflow meeting list [OPTIONS]
+
+Options:
+      --json                 Emit machine-readable JSON (watch emits one object per event)
+      --since <SINCE>        Unix milliseconds, or YYYY-MM-DD when `--timezone` is set [default: 0]
+  -q, --quiet                Suppress confirmations; requested data and errors remain visible
+      --until <UNTIL>        Exclusive end. Unix milliseconds, or YYYY-MM-DD when `--timezone` is set [default: 4102444800000]
+      --color <COLOR>        Control colour in human output [default: auto] [possible values: auto, always, never]
+      --timezone <TIMEZONE>  Required for a calendar date. `Z` or `±HH:MM`. Never the machine's zone
+      --config <PATH>        Read/write an alternate configuration file
+      --cursor <CURSOR>      JSON `next` cursor from the previous page
+  -h, --help                 Print help
+```
+
+### xflow meeting search
+
+Case-sensitive literal text search
+
+```text
+Case-sensitive literal text search
+
+Usage: xflow meeting search [OPTIONS] <QUERY>
+
+Arguments:
+  <QUERY>
+
+Options:
+      --cursor <CURSOR>  JSON `next` cursor from the previous page
+      --json             Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet            Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>    Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>    Read/write an alternate configuration file
+  -h, --help             Print help
+```
+
+### xflow meeting get
+
+One meeting: provenance, sources, gaps and notes
+
+```text
+One meeting: provenance, sources, gaps and notes
+
+Usage: xflow meeting get [OPTIONS] <ID>
+
+Arguments:
+  <ID>  `store_id:id` from list
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow meeting export
+
+Write JSON, Markdown or timestamped text for one frozen snapshot
+
+```text
+Write JSON, Markdown or timestamped text for one frozen snapshot
+
+Usage: xflow meeting export [OPTIONS] --output <OUTPUT> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --format <FORMAT>  [default: json] [possible values: json, md, text]
+      --json             Emit machine-readable JSON (watch emits one object per event)
+      --output <OUTPUT>
+  -q, --quiet            Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>    Control colour in human output [default: auto] [possible values: auto, always, never]
+      --force            Replace an existing regular file. Symlinks are never followed
+      --config <PATH>    Read/write an alternate configuration file
+  -h, --help             Print help
+```
+
+### xflow meeting delete
+
+Delete one meeting, or retry physical cleanup once
+
+```text
+Delete one meeting, or retry physical cleanup once
+
+Usage: xflow meeting delete [OPTIONS] [ID]
+
+Arguments:
+  [ID]  `store_id:id`. Omit with `--retry` to retry cleanup only
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+      --retry          Try cleanup once more when a delete is still pending
   -q, --quiet          Suppress confirmations; requested data and errors remain visible
       --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
       --config <PATH>  Read/write an alternate configuration file

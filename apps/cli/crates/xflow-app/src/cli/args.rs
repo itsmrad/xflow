@@ -95,6 +95,14 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<History>,
     },
+    /// Import, list, search, show, export or delete a private meeting transcript.
+    ///
+    /// Every meeting command uses the local database in this process. Import and
+    /// delete do not use the daemon. The import file is read here, with a cap.
+    Meeting {
+        #[command(subcommand)]
+        action: MeetingCmd,
+    },
     /// Clear all history (legacy alias for history clear).
     #[command(hide = true)]
     ClearHistory {
@@ -269,6 +277,63 @@ pub enum Format {
     Json,
     Csv,
     Md,
+}
+#[derive(Subcommand, Debug)]
+pub enum MeetingCmd {
+    /// Read a versioned JSON transcript into the local meeting database.
+    Import { file: PathBuf },
+    /// Meetings whose start is in `[since, until)`.
+    List {
+        /// Unix milliseconds, or YYYY-MM-DD when `--timezone` is set.
+        #[arg(long, default_value = "0")]
+        since: String,
+        /// Exclusive end. Unix milliseconds, or YYYY-MM-DD when `--timezone` is set.
+        #[arg(long, default_value = "4102444800000")]
+        until: String,
+        /// Required for a calendar date. `Z` or `±HH:MM`. Never the machine's zone.
+        #[arg(long)]
+        timezone: Option<String>,
+        /// JSON `next` cursor from the previous page.
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Case-sensitive literal text search.
+    Search {
+        query: String,
+        /// JSON `next` cursor from the previous page.
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// One meeting: provenance, sources, gaps and notes.
+    Get {
+        /// `store_id:id` from list.
+        id: String,
+    },
+    /// Write JSON, Markdown or timestamped text for one frozen snapshot.
+    Export {
+        id: String,
+        #[arg(long, value_enum, default_value = "json")]
+        format: MeetingFormat,
+        #[arg(long)]
+        output: PathBuf,
+        /// Replace an existing regular file. Symlinks are never followed.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Delete one meeting, or retry physical cleanup once.
+    Delete {
+        /// `store_id:id`. Omit with `--retry` to retry cleanup only.
+        id: Option<String>,
+        /// Try cleanup once more when a delete is still pending.
+        #[arg(long)]
+        retry: bool,
+    },
+}
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum MeetingFormat {
+    Json,
+    Md,
+    Text,
 }
 #[derive(Subcommand, Debug)]
 pub enum Config {

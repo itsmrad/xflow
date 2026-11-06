@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "import_id": "fixture-mixed-script",
+  "provenance": "imported_unverified",
+  "title": "Standup with José",
+  "started_at_ms": 1700000000000,
+  "ended_at_ms": 1700000012000,
+  "timezone": "America/Sao_Paulo",
+  "sources": [
+    {
+      "id": "room",
+      "label": "Conference room",
+      "epoch": 1,
+      "provider": "external",
+      "model": "unverified"
+    }
+  ],
+  "segments": [
+    {
+      "source_id": "room",
+      "sequence": 10,
+      "range": { "start_ms": 10000, "end_ms": 11000 },
+      "text": "he said \"NEAR\" AND * today"
+    },
+    {
+      "source_id": "room",
+      "sequence": 0,
+      "range": { "start_ms": 0, "end_ms": 1000 },
+      "text": "明日は東京で会いましょう"
+    },
+    {
+      "source_id": "room",
+      "sequence": 1,
+      "range": { "start_ms": 1000, "end_ms": 2000 },
+      "text": "हिंदी और English मिलाकर"
+    },
+    {
+      "source_id": "room",
+      "sequence": 2,
+      "range": { "start_ms": 2000, "end_ms": 3000 },
+      "text": "कि"
+    },
+    {
+      "source_id": "room",
+      "sequence": 3,
+      "range": { "start_ms": 3000, "end_ms": 4000 },
+      "text": "el niño cumplió años"
+    },
+    {
+      "source_id": "room",
+      "sequence": 4,
+      "range": { "start_ms": 4000, "end_ms": 5000 },
+      "text": "uma ação não esperada"
+    },
+    {
+      "source_id": "room",
+      "sequence": 5,
+      "range": { "start_ms": 5000, "end_ms": 6000 },
+      "text": "call useEffect after git rebase"
+    },
+    {
+      "source_id": "room",
+      "sequence": 6,
+      "range": { "start_ms": 6000, "end_ms": 7000 },
+      "text": "kubectl rollout and OAuth"
+    },
+    {
+      "source_id": "room",
+      "sequence": 7,
+      "range": { "start_ms": 7000, "end_ms": 8000 },
+      "text": "room 42 and port 1024"
+    },
+    {
+      "source_id": "room",
+      "sequence": 8,
+      "range": { "start_ms": 8000, "end_ms": 9000 },
+      "text": "José Muñoz met 李明 and Søren"
+    },
+    {
+      "source_id": "room",
+      "sequence": 9,
+      "range": { "start_ms": 9000, "end_ms": 10000 },
+      "text": "Müller, Алексей, and محمد"
+    },
+    {
+      "source_id": "room",
+      "sequence": 11,
+      "range": { "start_ms": 11000, "end_ms": 11500 },
+      "text": "\u001b[2J![boom](http://evil.example/x.png)"
+    }
+  ],
+  "gaps": [
+    {
+      "source_id": "room",
+      "range": { "start_ms": 11500, "end_ms": 12000 },
+      "reason": "source silent"
+    }
+  ]
+}
