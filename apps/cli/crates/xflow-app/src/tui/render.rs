@@ -217,6 +217,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         Page::Stats => stats(frame, body[1], app),
         Page::Styles => styles(frame, body[1], app, &mut hits),
         Page::Snippets => snippets(frame, body[1], app, &mut hits),
+        Page::Settings => settings(frame, body[1], app, &mut hits),
         Page::AiApps => {
             // The two privacy lines stay visible under the list.
             let notes =
@@ -422,7 +423,17 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                         ("Del delete", Some(Action::Delete)),
                     ]
                 }
-                Page::Settings | Page::Overlay => {
+                Page::Settings => {
+                    return vec![
+                        ("Enter change", Some(Action::Choose)),
+                        ("↑↓ move", None),
+                        ("q quit", Some(Action::Quit)),
+                        ("Esc back", Some(Action::Back)),
+                        ("Tab next page", None),
+                        ("? help", Some(Action::Help)),
+                    ];
+                }
+                Page::Overlay => {
                     vec![("↑↓ move", None), ("Enter change", Some(Action::Choose))]
                 }
                 Page::Meetings => vec![
@@ -857,6 +868,115 @@ fn snippets(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     );
 }
 
+// Settings keeps its own layout so compact rows never affect other lists.
+fn settings(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
+    let rows = app.settings();
+    let selected = app.selected();
+    let (list, detail) = if area.width >= 90 {
+        let parts = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .split(area);
+        (parts[0], parts[1])
+    } else {
+        let parts = Layout::vertical([
+            Constraint::Min(3),
+            Constraint::Length((area.height / 2).clamp(3, 8)),
+        ])
+        .split(area);
+        (parts[0], parts[1])
+    };
+    let compact = list.width < 48;
+    let items = rows
+        .iter()
+        .map(|(key, value)| {
+            let (_, group, label, _) = options::row(key).copied().unwrap_or(("", "", key, ""));
+            if compact {
+                ListItem::new(label.to_string())
+            } else {
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{group:<10}"), muted(app)),
+                    Span::raw(format!("{label}: ")),
+                    Span::styled(value.to_string(), muted(app)),
+                ]))
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut state = ListState::default().with_selected(Some(selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(block(
+                app,
+                format!("Settings {}/{}", selected + 1, rows.len()),
+            ))
+            .highlight_style(app.theme.selected())
+            .highlight_symbol("> "),
+        list,
+        &mut state,
+    );
+    for index in state.offset()..rows.len() {
+        let y = list.y + 1 + (index - state.offset()) as u16;
+        if y + 1 >= list.bottom() {
+            break;
+        }
+        hits.rows.push((
+            Rect::new(list.x + 1, y, list.width.saturating_sub(2), 1),
+            index,
+        ));
+    }
+    if let Some((key, value)) = rows.get(selected) {
+        let (_, group, label, help) = options::row(key).copied().unwrap_or(("", "", "", ""));
+        let verb = if key.starts_with("action.") {
+            "Enter open"
+        } else {
+            "Enter change"
+        };
+        let text = if detail.height <= 4 {
+            value.to_string()
+        } else {
+            format!("{label}\n{value}\n\n{help}")
+        };
+        panel(frame, detail, &format!("{group}: {verb}"), text, app);
+    }
+}
+
+fn on_device(
+    frame: &mut Frame,
+    rect: Rect,
+    app: &App,
+    setup: bool,
+    removing: bool,
+    error: Option<&str>,
+) {
+    let title = if setup {
+        "Step 2 of 4: On this Mac (offline)"
+    } else {
+        "On this Mac (offline)"
+    };
+    let outer = block(app, title).padding(ratatui::widgets::Padding::horizontal(1));
+    let inner = outer.inner(rect);
+    frame.render_widget(outer, rect);
+    // Put the current state first: facts may extend below a short terminal.
+    let text = app.on_device_text(removing, error);
+    let (status, facts) = text.split_once("\n\n").unwrap_or((&text, ""));
+    let height = status
+        .lines()
+        .map(|line| wrapped(line, inner.width))
+        .sum::<u16>()
+        .min(inner.height.saturating_sub(1));
+    let parts = Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).split(inner);
+    frame.render_widget(
+        Paragraph::new(status)
+            .wrap(Wrap { trim: false })
+            .style(app.theme.base().add_modifier(Modifier::BOLD)),
+        parts[0],
+    );
+    frame.render_widget(
+        Paragraph::new(facts)
+            .wrap(Wrap { trim: false })
+            .style(app.theme.base()),
+        parts[1],
+    );
+}
+
 fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     let rows = app.rows();
     if app.page == Page::History && rows.is_empty() {
@@ -1269,22 +1389,7 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
             setup,
             removing,
             error,
-        } => frame.render_widget(
-            Paragraph::new(app.on_device_text(*removing, error.as_deref()))
-                .wrap(Wrap { trim: false })
-                .block(
-                    block(
-                        app,
-                        if *setup {
-                            "Step 2 of 4 · On this Mac (offline)"
-                        } else {
-                            "Speech · On this Mac (offline)"
-                        },
-                    )
-                    .padding(pad),
-                ),
-            rect,
-        ),
+        } => on_device(frame, rect, app, *setup, *removing, error.as_deref()),
     }
 }
 fn on_device_keys(app: &App) -> Vec<(&'static str, Option<Action>)> {

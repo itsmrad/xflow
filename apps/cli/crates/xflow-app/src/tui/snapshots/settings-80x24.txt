@@ -1,19 +1,19 @@
  xflow  ·  Settings                                                      ✓ Done
-╭────────────────╮╭ Settings ──────────────────────────────────────────────────╮
-│ 1  Home        ││› Start     Guided setup          Run again                 │
-│ 2  History     ││  Speech    Service               Groq — fast, with a free t│
-│ 3  Dictionary  ││            Backup provider       None                      │
-│ 4  Snippets    ││            Model                 Recommended               │
-│ 5  Styles      ││            API key               Added                     │
-│>6  Settings    ││            Preferred languages   Automatic                 │
-│ 7  Pill        ││            Fixed language        Automatic                 │
-│ 8  Your stats  ││            Microphone            Automatic                 │
-│ 9  Check-up    ││            Ignore speaker sound  Off                       │
-│ 0  AI apps     ││            Check connection      Run check                 │
-│ -  Chat        ││  Shortcut  Key                   Fn (Globe)                │
+╭────────────────╮╭ Settings 1/44 ─────────────────────────────────────────────╮
+│ 1  Home        ││> Start     Guided setup: Run again                         │
+│ 2  History     ││  Speech    Service: Groq — fast, with a free tier          │
+│ 3  Dictionary  ││  Speech    Backup provider: None                           │
+│ 4  Snippets    ││  Speech    Model: Recommended                              │
+│ 5  Styles      ││  Speech    API key: Added                                  │
+│>6  Settings    ││  Speech    Preferred languages: Automatic                  │
+│ 7  Pill        ││  Speech    Fixed language: Automatic                       │
+│ 8  Your stats  ││  Speech    Microphone: Automatic                           │
+│ 9  Check-up    ││  Speech    Ignore speaker sound: Off                       │
+│ 0  AI apps     ││  Speech    Check connection: Run check                     │
+│ -  Chat        ││  Shortcut  Key: Fn (Globe)                                 │
 │ =  Meetings    │╰────────────────────────────────────────────────────────────╯
-│                │╭ About ─────────────────────────────────────────────────────╮
-│                ││ Start · Guided setup                                       │
+│                │╭ Start: Enter open ─────────────────────────────────────────╮
+│                ││ Guided setup                                               │
 │                ││ Run again                                                  │
 │                ││                                                            │
 │                ││ Walk through the speech service, key, microphone and       │
@@ -21,4 +21,4 @@
 │                ││                                                            │
 ╰────────────────╯╰────────────────────────────────────────────────────────────╯
 
- ↑↓ move · Enter change · Esc back · Tab next page · ? help · q quit
+ Enter change · ↑↓ move · q quit · Esc back · Tab next page · ? help

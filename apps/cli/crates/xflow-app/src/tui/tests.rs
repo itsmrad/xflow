@@ -1905,3 +1905,129 @@ fn meeting_notes_and_ask_are_keyboard_accessible_without_colour() {
     assert_eq!(app.ask_meeting, Some(id));
     assert!(app.chat.input.contains("Summarize this meeting"));
 }
+
+#[test]
+fn settings_selection_and_model_status_fit_small_terminals() {
+    use super::on_device::Job;
+    let (_dir, mut app) = populated();
+    app.page = Page::Settings;
+    app.advanced = true;
+    app.set(
+        "recording.device",
+        "\"Priya और José — Kubernetes PostgreSQL useEffect git rebase OAuth kubectl 14:30\"",
+    )
+    .unwrap();
+    let settings = app.settings();
+    let capture = std::env::var_os("XFLOW_SETTINGS_CAPTURES").map(PathBuf::from);
+    for (name, mode) in [
+        ("midnight", ColorMode::TrueColor),
+        ("paper", ColorMode::TrueColor),
+        ("none", ColorMode::None),
+    ] {
+        app.theme = Theme::resolve(
+            if name == "none" { "paper" } else { name },
+            &BTreeMap::new(),
+            mode,
+        )
+        .unwrap();
+        for (width, height) in [(120, 32), (80, 24), (40, 16), (40, 12)] {
+            for pos in [0, 3, 7, settings.len() - 1] {
+                app.selected[Page::Settings.index()] = pos;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut hits = render::HitMap::default();
+                terminal
+                    .draw(|frame| hits = render::draw(frame, &app))
+                    .unwrap();
+                assert!(
+                    hits.rows.iter().any(|(_, i)| *i == pos),
+                    "selected row must have a hit region at {width}x{height}"
+                );
+                for (rect, index) in &hits.rows {
+                    assert!(rect.height == 1 && rect.right() <= width && rect.bottom() <= height);
+                    let row = (rect.x..rect.right())
+                        .map(|x| terminal.backend().buffer()[(x, rect.y)].symbol())
+                        .collect::<String>();
+                    assert!(
+                        row.contains(
+                            &options::row(&settings[*index].0)
+                                .unwrap()
+                                .2
+                                .chars()
+                                .take(10)
+                                .collect::<String>()
+                        ),
+                        "hit region must match row: {row}"
+                    );
+                }
+                let text = screen(&app, width, height);
+                assert!(text.contains("Enter") && text.contains("q quit"));
+                if let Some(root) = &capture {
+                    std::fs::create_dir_all(root).unwrap();
+                    std::fs::write(
+                        root.join(format!("settings-{width}x{height}-{name}-{pos}.txt")),
+                        text,
+                    )
+                    .unwrap();
+                }
+            }
+            app.facts = Some(mac());
+            for (state, job, removing, error, expected) in [
+                ("empty", Job::Idle, false, None, "Not installed"),
+                (
+                    "download",
+                    Job::Running {
+                        done: 123_000_000,
+                        total: 484_000_000,
+                        started: std::time::Instant::now(),
+                        cancel: std::sync::Arc::new(tokio::sync::Notify::new()),
+                    },
+                    false,
+                    None,
+                    "Downloading",
+                ),
+                (
+                    "failed",
+                    Job::Failed("Kubernetes OAuth: Priya और José 503".into()),
+                    false,
+                    None,
+                    "Download stopped",
+                ),
+                ("cancelling", Job::Cancelling, false, None, "Stopping"),
+                ("remove", Job::Idle, true, None, "Remove the model"),
+                (
+                    "error",
+                    Job::Idle,
+                    false,
+                    Some("Helper unavailable: retry after setup".into()),
+                    "Error:",
+                ),
+            ] {
+                app.install = job;
+                app.modal = Some(Modal::OnDevice {
+                    setup: false,
+                    removing,
+                    error,
+                });
+                let text = screen(&app, width, height);
+                assert!(text.contains(expected), "{state} {width}x{height}:\n{text}");
+                assert!(text.contains("Esc"));
+                if let Some(root) = &capture {
+                    std::fs::write(
+                        root.join(format!("model-{width}x{height}-{name}-{state}.txt")),
+                        text,
+                    )
+                    .unwrap();
+                }
+            }
+            app.modal = None;
+        }
+    }
+    let start = std::time::Instant::now();
+    for _ in 0..100 {
+        std::hint::black_box(screen(&app, 80, 24));
+    }
+    eprintln!(
+        "settings: 100 TestBackend draws in {:?} (includes allocation)",
+        start.elapsed()
+    );
+}
