@@ -39,8 +39,9 @@ pub enum Page {
     Doctor,
     AiApps,
     Chat,
+    Meetings,
 }
-pub const PAGES: [Page; 11] = [
+pub const PAGES: [Page; 12] = [
     Page::Home,
     Page::History,
     Page::Dictionary,
@@ -52,6 +53,7 @@ pub const PAGES: [Page; 11] = [
     Page::Doctor,
     Page::AiApps,
     Page::Chat,
+    Page::Meetings,
 ];
 impl Page {
     pub fn title(self) -> &'static str {
@@ -67,6 +69,7 @@ impl Page {
             Self::Doctor => "Check-up",
             Self::AiApps => "AI apps",
             Self::Chat => "Chat",
+            Self::Meetings => "Meetings",
         }
     }
     pub fn index(self) -> usize {
@@ -120,7 +123,7 @@ pub fn commands() -> Vec<Command> {
         .map(|(i, p)| Command {
             action: Action::Go(*p),
             title: format!("Go to {}", p.title()),
-            key: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-"][i],
+            key: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "="][i],
         })
         .collect();
     for (action, title, key) in [
@@ -201,6 +204,7 @@ pub enum Effect {
     ChatTurn(Box<chat::ChatRun>),
     ChatCancel,
     ChatKeys(bool),
+    Meetings(super::meetings::Job),
 }
 /// A step still waiting this long likely faces an old, switched-on xflowd row.
 const STALE_AFTER: Duration = Duration::from_secs(10);
@@ -449,6 +453,8 @@ pub struct App {
     pub facts: Option<crate::local_models::Facts>,
     pub probe: fn() -> crate::local_models::Facts,
     pub chat: chat::Chat,
+    pub meetings: super::meetings::View,
+    pub ask_meeting: Option<xflow_core::meeting::MeetingId>,
 }
 impl App {
     pub fn new(path: PathBuf, colors: ColorMode) -> Self {
@@ -519,6 +525,8 @@ impl App {
             facts: None,
             probe: crate::local_models::facts,
             chat: chat::Chat::default(),
+            meetings: Default::default(),
+            ask_meeting: None,
         }
     }
     pub fn load(&mut self, file: ConfigFile, disk: Option<String>) -> Result<()> {
@@ -644,6 +652,7 @@ impl App {
                 .collect(),
             Page::Settings => self.settings(),
             Page::Chat => self.chat_rows(),
+            Page::Meetings => self.meetings.rows(),
             Page::Overlay => self
                 .overlay
                 .iter()
@@ -1054,6 +1063,7 @@ impl App {
             Page::Settings => vec![Effect::KeyStatus(self.config.clone())],
             Page::Chat if !self.chat_ready() => vec![Effect::ChatKeys(self.config.privacy.offline)],
             Page::Chat => vec![],
+            Page::Meetings => vec![Effect::Meetings(self.meetings.refresh())],
             Page::Overlay => vec![Effect::Overlay],
             Page::Doctor => vec![
                 Effect::Doctor,
@@ -1238,6 +1248,7 @@ impl App {
             KeyCode::Char(c @ '1'..='9') => Action::Go(PAGES[(c as u8 - b'1') as usize]),
             KeyCode::Char('0') => Action::Go(Page::AiApps),
             KeyCode::Char('-') => Action::Go(Page::Chat),
+            KeyCode::Char('=') => Action::Go(Page::Meetings),
             KeyCode::Tab => Action::Go(PAGES[(self.page.index() + 1) % PAGES.len()]),
             KeyCode::BackTab => {
                 Action::Go(PAGES[(self.page.index() + PAGES.len() - 1) % PAGES.len()])
@@ -1552,6 +1563,9 @@ impl App {
         self.toast = None;
         match action {
             Action::Go(page) => {
+                if page == Page::Chat && self.page != Page::Meetings {
+                    self.ask_meeting = None;
+                }
                 self.page = page;
                 self.scroll = 0;
                 return self.refresh();
@@ -1601,6 +1615,11 @@ impl App {
                     },
                     Tag::Done("Retrying — the text will be copied."),
                 )]
+            }
+            Action::Back if self.page == Page::Meetings && self.meetings.id.is_some() => {
+                self.meetings.id = None;
+                self.selected[Page::Meetings.index()] = 0;
+                return self.refresh();
             }
             Action::Back => {
                 if self.active() && self.page == Page::Home {
@@ -1753,6 +1772,7 @@ impl App {
             Page::Settings => return self.open_setting(pos),
             Page::AiApps => return ai_apps::choose(self),
             Page::Chat => self.chat_choose(pos),
+            Page::Meetings => return super::meetings::choose(self, pos),
             Page::Doctor => {
                 if let Some(grant) = self.doctor_grant(pos) {
                     return self.fix(grant, true);

@@ -11,7 +11,7 @@
 │ 9  Check-up    ││                                                                                                    │
 │ 0  AI apps     ││                                                                                                    │
 │>-  Chat        ││                                                                                                    │
-│                ││                                                                                                    │
+│ =  Meetings    ││                                                                                                    │
 │                ││                                                                                                    │
 │                ││                                                                                                    │
 │                ││                                                                                                    │

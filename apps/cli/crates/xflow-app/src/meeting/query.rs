@@ -1,6 +1,6 @@
 use super::store::{check_meeting, highwater, open_reader, store_id, ContractError};
 use anyhow::{ensure, Result};
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::path::PathBuf;
 use xflow_core::meeting::*;
@@ -11,7 +11,7 @@ const SUMMARY_COLUMNS: &str = "m.id,m.title,m.started_at_ms,m.ended_at_ms,m.time
 
 #[derive(Clone, Debug)]
 pub struct MeetingReader {
-    path: PathBuf,
+    pub(crate) path: PathBuf,
 }
 impl MeetingReader {
     /// No I/O; every operation opens READ_ONLY|NOFOLLOW and sets query_only=ON.
@@ -138,7 +138,8 @@ impl MeetingReader {
             let mut page=MeetingPage {meetings:Vec::new(),next:None};
             for row in rows {
                 if page.meetings.len()==limit {break;}
-                let item=row?;
+                let mut item=row?;
+                notes_status(db,&mut item)?;
                 let next=ListCursor {store_id:identity.clone(),filter:filter.clone(),snapshot:snap,last_id:item.meeting.id};
                 page.meetings.push(item);
                 let old=page.next.replace(next);
@@ -330,9 +331,33 @@ fn summary_row(row: &Row<'_>, store: &str) -> rusqlite::Result<MeetingSummary> {
     })
 }
 fn summary(db: &Connection, meeting: &MeetingId) -> Result<MeetingSummary> {
-    Ok(db.query_row(
+    let mut item = db.query_row(
         &format!("SELECT {SUMMARY_COLUMNS} FROM meetings m WHERE m.id=?1"),
         [meeting.id],
         |r| summary_row(r, &meeting.store_id),
-    )?)
+    )?;
+    notes_status(db, &mut item)?;
+    Ok(item)
+}
+
+fn notes_status(db: &Connection, item: &mut MeetingSummary) -> Result<()> {
+    let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= 3 {
+        let snapshot: Option<String> = db
+            .query_row(
+                "SELECT snapshot FROM notes WHERE meeting_id=?1",
+                [item.meeting.id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(snapshot) = snapshot {
+            let snapshot: Snapshot = serde_json::from_str(&snapshot)?;
+            if snapshot.edit_revision == global_revision(db)?
+                && snapshot.highwater == highwater(db, "segments")?
+            {
+                item.notes = NotesStatus::Generated;
+            }
+        }
+    }
+    Ok(())
 }

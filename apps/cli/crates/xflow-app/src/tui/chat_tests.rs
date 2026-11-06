@@ -604,7 +604,7 @@ fn command_letters_are_typing_on_a_ready_chat_page() {
     assert_eq!(app.page, Page::Chat);
     // Getting away and quitting still work.
     press(&mut app, KeyCode::Tab);
-    assert_eq!(app.page, Page::Home);
+    assert_eq!(app.page, Page::Meetings);
     press(&mut app, KeyCode::BackTab);
     assert_eq!(app.page, Page::Chat);
     ctrl(&mut app, 'p');

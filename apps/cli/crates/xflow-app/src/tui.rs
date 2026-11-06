@@ -3,6 +3,7 @@ mod ai_apps;
 mod chat;
 mod chat_view;
 mod integrations;
+mod meetings;
 mod on_device;
 mod options;
 mod render;

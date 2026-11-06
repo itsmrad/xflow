@@ -1788,3 +1788,26 @@ fn styles_keep_selection_actions_and_details_in_short_terminals() {
     }
     eprintln!("Styles: 30 synthetic redraws: {:?}", start.elapsed());
 }
+
+#[test]
+fn meeting_notes_and_ask_are_keyboard_accessible_without_colour() {
+    let (_dir, mut app) = app();
+    app.colors = ColorMode::None;
+    app.theme = Theme::resolve("paper", &app.config.ui.themes, ColorMode::None).unwrap();
+    let effects = key(&mut app, KeyCode::Char('='));
+    assert!(matches!(effects.as_slice(), [Effect::Meetings(_)]));
+    assert_eq!(app.page, Page::Meetings);
+    let id = xflow_core::meeting::MeetingId {
+        store_id: "a".repeat(32),
+        id: 1,
+    };
+    app.meetings
+        .apply(super::meetings::Done::Notes(id.clone(), None));
+    let shown = screen(&app, 120, 35);
+    assert!(shown.contains("Ask about this meeting"));
+    assert!(shown.contains("Generate cited notes"));
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.page, Page::Chat);
+    assert_eq!(app.ask_meeting, Some(id));
+    assert!(app.chat.input.contains("Summarize this meeting"));
+}

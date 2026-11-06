@@ -125,6 +125,7 @@ pub struct Turn {
     pub history: Vec<Message>,
     pub dictations: bool,
     pub meetings: bool,
+    pub meeting: Option<xflow_core::meeting::MeetingId>,
 }
 pub struct ChatRun {
     pub turn: Turn,
@@ -366,6 +367,7 @@ impl Chat {
             history: self.history.clone(),
             dictations: ctx.history && matches!(self.source, 0 | 2),
             meetings: matches!(self.source, 1 | 2),
+            meeting: None,
         })
     }
     fn cancel(&mut self) -> Out {
@@ -762,7 +764,11 @@ impl App {
         !self.config.ai.provider.is_empty()
     }
     pub fn chat_ctx(&self) -> Ctx {
-        Ctx::new(&self.config)
+        let mut ctx = Ctx::new(&self.config);
+        if self.ask_meeting.is_some() {
+            ctx.history = true;
+        }
+        ctx
     }
     pub fn chat_key(&mut self, key: KeyEvent) -> Vec<Effect> {
         let ctx = self.chat_ctx();
@@ -781,13 +787,19 @@ impl App {
                 });
                 vec![]
             }
-            Out::Send(turn) => vec![Effect::ChatTurn(Box::new(ChatRun {
-                turn,
-                model: ctx.model.clone(),
-                ai: self.config.ai.clone(),
-                offline: self.config.privacy.offline,
-                path: self.path.clone(),
-            }))],
+            Out::Send(mut turn) => {
+                turn.meeting = self.ask_meeting.clone();
+                if turn.meeting.is_some() {
+                    turn.dictations = false;
+                }
+                vec![Effect::ChatTurn(Box::new(ChatRun {
+                    turn,
+                    model: ctx.model.clone(),
+                    ai: self.config.ai.clone(),
+                    offline: self.config.privacy.offline,
+                    path: self.path.clone(),
+                }))]
+            }
         }
     }
     /// Yes stages `ai.consented`, which the runtime saves like any other choice.

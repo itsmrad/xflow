@@ -4,6 +4,7 @@
 pub mod export;
 pub mod jobs;
 pub mod journal;
+pub mod notes;
 pub mod query;
 pub mod store;
 pub mod transcribe;

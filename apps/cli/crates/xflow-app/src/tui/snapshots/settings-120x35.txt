@@ -11,7 +11,7 @@
 │ 9  Check-up    ││            Ignore speaker sound  Off                    ││                                         │
 │ 0  AI apps     ││            Check connection      Run check              ││                                         │
 │ -  Chat        ││  Shortcut  Key                   Fn (Globe)             ││                                         │
-│                ││            Shortcut              On                     ││                                         │
+│ =  Meetings    ││            Shortcut              On                     ││                                         │
 │                ││            Double-tap speed      500 ms                 ││                                         │
 │                ││            Hold delay            500 ms                 ││                                         │
 │                ││  Writing   Smart formatting      Off — exact words      ││                                         │

@@ -11,7 +11,7 @@
 │ 9  Check-up    ││            Ignore speaker sound  Off                       │
 │ 0  AI apps     ││            Check connection      Run check                 │
 │ -  Chat        ││  Shortcut  Key                   Fn (Globe)                │
-│                │╰────────────────────────────────────────────────────────────╯
+│ =  Meetings    │╰────────────────────────────────────────────────────────────╯
 │                │╭ About ─────────────────────────────────────────────────────╮
 │                ││ Start · Guided setup                                       │
 │                ││ Run again                                                  │

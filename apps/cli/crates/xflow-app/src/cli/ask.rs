@@ -89,7 +89,7 @@ fn explain(provider: &str, error: &LlmError) -> Error {
         },
     )
 }
-fn consent(path: &Path, ai: &AiConfig, args: &Ask) -> Result<()> {
+pub(super) fn consent(path: &Path, ai: &AiConfig, args: &Ask) -> Result<()> {
     if args.no_context
         || args.sources == "none"
         || args.yes
@@ -225,6 +225,13 @@ fn stop_name(stop: Stop) -> &'static str {
 }
 
 pub fn run(path: &Path, args: &Ask, out: &Output) -> Result<()> {
+    run_with_sources(path, args, out)
+}
+pub(super) fn run_with_sources(
+    path: &Path,
+    args: &Ask,
+    out: &Output,
+) -> Result<()> {
     let question = question(args)?;
     let cfg = config::load(path)?.config().map_err(Error::config)?;
     let offline = cfg.privacy.offline;

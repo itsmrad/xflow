@@ -185,7 +185,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         .map(|(i, page)| {
             let mut label = format!(
                 " {}  {}",
-                ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-"][i],
+                ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "="][i],
                 page.title()
             );
             if i == selected {
@@ -404,6 +404,11 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                 Page::Settings | Page::Overlay => {
                     vec![("↑↓ move", None), ("Enter change", Some(Action::Choose))]
                 }
+                Page::Meetings => vec![
+                    ("↑↓ move", None),
+                    ("Enter open", Some(Action::Choose)),
+                    ("Esc back", Some(Action::Back)),
+                ],
                 Page::Chat => vec![("↑↓ move", None), ("Enter choose", Some(Action::Choose))],
                 Page::Doctor if app.doctor_grant(app.selected()).is_some() => vec![
                     ("Enter fix", Some(Action::Choose)),
@@ -981,6 +986,7 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
         Page::Overlay => ("About", app.overlay.get(pos).map(|s| format!("{}\n{}\n\nEnter to change. Changes apply right away.", s.summary, super::state::overlay_value(&s.value))).unwrap_or_default()),
         Page::AiApps => ("Details", ai_apps::details(app)),
         Page::Chat => ("Set up chat", app.chat_details(pos)),
+        Page::Meetings => ("Meeting notes", app.meetings.details(pos)),
         Page::Doctor => ("Details", rows.get(pos).map(|(row, more)| if more.is_empty() { row } else { more }.clone()).unwrap_or_else(|| "Checking…".into())),
         _ => ("", String::new()),
     }
