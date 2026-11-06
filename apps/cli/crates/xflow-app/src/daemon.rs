@@ -2364,6 +2364,9 @@ const FIELD_READ_GAP: Duration = Duration::from_millis(20);
 /// apps that coalesce or drop notifications, which no reader can detect; the
 /// notice showing the exact saved word, and its undo, are the backstop.
 const FIELD_SETTLE: Duration = Duration::from_millis(60);
+/// While the user is typing a settle read is wasted: the next key resets it
+/// before anything could settle. Hold it this much longer after a recent change.
+const FIELD_TYPING_SETTLE: Duration = Duration::from_millis(150);
 /// How long a read may wait for the paste to show (Electron and Chromium can be
 /// late) before the watch gives up on this delivery.
 const LANDING: Duration = Duration::from_secs(1);
@@ -2522,6 +2525,8 @@ async fn watch_pinned(
     let mut merged = 0;
     let mut failed = 0;
     let mut generation = None;
+    // Keys arriving close together: no settle read between them.
+    let (mut typing, mut last_change) = (false, None);
     let (mut last_read, mut next_read) = (started, started);
     let mut recheck: Option<Instant> = None;
     // What is waiting to be saved, since when, the save's time, and the caret's word.
@@ -2554,6 +2559,8 @@ async fn watch_pinned(
                     dirty = true;
                     failed = 0;
                     next_read = last_read + FIELD_READ_GAP;
+                    typing = last_change.is_some_and(|at: Instant| at.elapsed() < Duration::from_millis(300));
+                    last_change = Some(Instant::now());
                 }
                 Some(FieldEvent::Merged) => {
                     merged += 1;
@@ -2671,7 +2678,7 @@ async fn watch_pinned(
                         editing = false;
                         retyped = None;
                         dirty = true;
-                        next_read = last_read + FIELD_SETTLE;
+                        next_read = last_read + if typing { FIELD_TYPING_SETTLE } else { FIELD_SETTLE };
                     }
                     // A retype's read unchanged by a further change: the field went
                     // through something unseen, such as a clear.
