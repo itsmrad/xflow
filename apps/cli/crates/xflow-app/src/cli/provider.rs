@@ -1,7 +1,7 @@
 //! All provider/platform API wiring stays here; no independent catalog or credential store.
 use super::{args, config, ipc, output::Output, Error, Result};
 use std::{
-    io::{IsTerminal, Read, Write},
+    io::{IsTerminal, Read},
     path::Path,
 };
 use xflow_app::config_edit;
@@ -365,48 +365,6 @@ pub fn save_key(path: &Path, provider: &str, stdin: bool, out: &Output) -> Resul
     ipc::reload_if_running(path, out)?;
     out.confirm("Key stored, encrypted, in the xflow keystore")?;
     Ok(())
-}
-pub fn ask(path: &Path, question: &[String], out: &Output) -> Result<()> {
-    let cfg = config::load(path)?.config().map_err(Error::config)?;
-    cfg.validate().map_err(Error::config)?;
-    let question = if question.is_empty() {
-        let mut stdin = String::new();
-        std::io::stdin().read_to_string(&mut stdin)?;
-        stdin
-    } else {
-        question.join(" ")
-    };
-    let question = question.trim().to_owned();
-    if question.is_empty() {
-        return Err(Error::new(
-            2,
-            "Ask needs a question",
-            "Pass it as arguments, or pipe it on stdin",
-        ));
-    }
-    if out.json {
-        return Err(Error::new(
-            2,
-            "xflow ask streams text",
-            "Run it without --json",
-        ));
-    }
-    ipc::block_on(async {
-        let chat = xflow_providers::build_chat(&cfg).map_err(Error::provider)?;
-        let target = chat.target();
-        let stt = cfg.stt.provider.clone();
-        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        let task = tokio::spawn(async move { chat.stream(&question, tx).await });
-        while let Some(delta) = rx.recv().await {
-            print!("{delta}");
-            std::io::stdout().flush().ok();
-        }
-        task.await
-            .map_err(Error::provider)?
-            .map_err(Error::provider)?;
-        println!("\n{}", xflow_core::privacy_line(&stt, &target));
-        Ok(())
-    })
 }
 pub fn transcribe(
     path: &Path,

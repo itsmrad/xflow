@@ -63,11 +63,6 @@ pub enum Command {
         #[arg(long)]
         command: bool,
     },
-    /// Ask a question in text and stream the answer. Does not use the microphone.
-    Ask {
-        /// The question. If omitted, read stdin.
-        question: Vec<String>,
-    },
     /// Transcribe an audio file without a running daemon.
     Transcribe {
         file: PathBuf,
