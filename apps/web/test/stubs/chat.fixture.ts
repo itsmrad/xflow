@@ -10,7 +10,7 @@ const { streamChat } = await import("../../lib/server/chat");
 const caller = {userId:"synthetic-user", tokenId:"synthetic-token", pro:true};
 test("stub stream forwards split text/tool frames, strips metadata and releases one slot", async () => {
   const original = globalThis.fetch;
-  globalThis.fetch = (async (_url, init) => {
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     calls.push(JSON.parse(String(init?.body)));
     return new Response(new ReadableStream({start(c) {
       for (const part of ['data: {"choices":[{"delta":{"content":"hel', 'lo"}}],"x_groq":{"secret":"private"}}\r\n\r\ndata: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","type":"function","function":{"name":"search","arguments":"{}"}}]}}]}\n\ndata: [DONE]\n\n']) c.enqueue(new TextEncoder().encode(part));
