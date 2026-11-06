@@ -375,7 +375,16 @@ pub async fn run_turn(
     question: &str,
     tx: &mpsc::Sender<TurnEvent>,
 ) -> Result<Stop, LlmError> {
-    let tools = if sources.dictations { tools() } else { vec![] };
+    let tools: Vec<_> = tools()
+        .into_iter()
+        .filter(|tool| match tool.name.as_str() {
+            "search_dictations" | "get_dictation" => sources.dictations,
+            "list_meetings" | "search_meetings" | "get_transcript" | "get_meeting_notes" => {
+                sources.meetings
+            }
+            _ => false,
+        })
+        .collect();
     let mut request = ChatRequest {
         model: env.model.clone(),
         system: SYSTEM.to_owned(),
@@ -858,6 +867,42 @@ mod tests {
         assert!(!events
             .iter()
             .any(|e| matches!(e, TurnEvent::Read { tool, .. } if tool == "delete_all")));
+    }
+    #[tokio::test]
+    async fn meeting_sources_offer_only_existing_meeting_read_tools() {
+        let d = tempfile::tempdir().unwrap();
+        let env = fixture(d.path(), &["private dictation"]);
+        let fake = Fake::new(vec![]);
+        let (tx, _rx) = mpsc::channel(64);
+        run_turn(
+            &fake,
+            &env,
+            Sources {
+                dictations: false,
+                meetings: true,
+            },
+            &mut vec![],
+            "question",
+            &tx,
+        )
+        .await
+        .unwrap();
+        let requests = fake.requests();
+        let names: Vec<_> = requests[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "list_meetings",
+                "search_meetings",
+                "get_transcript",
+                "get_meeting_notes"
+            ]
+        );
+        assert_eq!(user_text(&requests[0]), ["question"]);
     }
     #[tokio::test]
     async fn no_sources_send_no_transcripts_and_offer_no_tools() {
