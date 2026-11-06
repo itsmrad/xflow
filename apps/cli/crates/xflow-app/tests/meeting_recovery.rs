@@ -593,7 +593,11 @@ fn random_process_kills_lose_and_duplicate_nothing() {
     let mut deleted = Vec::new();
     let (mut kills_cli, mut kills_worker) = (0, 0);
     for trial in 0..30 {
+        // Every 6th trial (a process trial) kills both processes mid-run on purpose.
+        let forced = trial % 6 == 3;
         let args: Vec<&str> = match trial % 3 {
+            // `--wait` keeps the CLI following progress while its worker runs.
+            0 if forced => vec!["meeting", "process", &a, &b, "--wait"],
             0 => vec!["meeting", "process", &a, &b],
             1 => vec!["meeting", "status"],
             _ => vec!["meeting", "retry"],
@@ -605,15 +609,20 @@ fn random_process_kills_lose_and_duplicate_nothing() {
             .spawn()
             .unwrap();
         let mut worker = None;
-        if trial % 6 == 3 {
-            // A process trial that always kills the worker mid-transcription,
-            // so coverage never depends on where the random kills land.
+        if forced {
+            // Kill the waiting CLI and the worker mid-transcription, so both kill
+            // kinds happen however fast the CLI's own work ends on this runner.
             let start = Instant::now();
             while worker.is_none() {
                 assert!(start.elapsed() < Duration::from_secs(30), "no worker");
                 std::thread::sleep(Duration::from_millis(10));
                 worker = sandbox.worker_pid();
             }
+            // The worker's first request takes 300 ms, so `--wait` cannot have finished.
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "trial {trial}: process --wait exited while its worker ran"
+            );
         } else {
             std::thread::sleep(Duration::from_millis(next(1_500)));
         }
