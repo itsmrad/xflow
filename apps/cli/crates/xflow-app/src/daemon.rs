@@ -2028,7 +2028,8 @@ impl Engine {
                 _ = async {}, if pending.is_some() => {
                     let mut processed = pending.take().unwrap();
                     if self.state != State::Processing { continue; }
-                    let generation = self.generation; let delivery = self.delivery; let desktop = self.services.desktop.clone(); let store = self.store.clone(); let tx = completion_tx.clone();
+                    // Ask never writes into the focused app, including IPC and retry requests.
+                    let generation = self.generation; let delivery = if self.mode == Mode::Ask { Delivery::None } else { self.delivery }; let desktop = self.services.desktop.clone(); let store = self.store.clone(); let tx = completion_tx.clone();
                     let recent = (self.config.privacy.history && self.config.stt.domain_hints).then(|| self.recent.clone());
                     // Only a dictation that may be learned from pays for a watch.
                     let observed = self.mode == Mode::Dictation && !processed.rewrite && self.config.dictionary.auto_learn && self.config_path.is_some();
@@ -3621,9 +3622,6 @@ async fn stream_ask(
     };
     let target = chat.target();
     let (tx, mut rx) = mpsc::channel(32);
-    let question = transcript.to_owned();
-    let task = tokio::spawn(async move { chat.stream(&question, tx).await });
-    let mut answer = String::new();
     let publish = |text: &str| {
         let _ = desktop.send(DesktopEvent {
             state: State::Processing,
@@ -3637,11 +3635,19 @@ async fn stream_ask(
         frame.mode = Some(Mode::Ask);
         let _ = events.send(frame);
     };
-    while let Some(delta) = rx.recv().await {
-        answer.push_str(&delta);
-        publish(&answer);
-    }
-    task.await.context("ask stream stopped")??;
+    let receive = async {
+        let mut answer = String::new();
+        while let Some(delta) = rx.recv().await {
+            if answer.len().saturating_add(delta.len()) > 32 * 1024 {
+                bail!("ask answer exceeds 32 KiB safety limit");
+            }
+            answer.push_str(&delta);
+            publish(&answer);
+        }
+        Ok::<_, anyhow::Error>(answer)
+    };
+    // Cancellation drops both futures; no detached provider or harness keeps running.
+    let (_, mut answer) = tokio::try_join!(chat.stream(transcript, tx), receive)?;
     if answer.trim().is_empty() {
         bail!("ask returned no text");
     }
@@ -4334,62 +4340,104 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn ask_completion_streams_the_answer_and_does_not_inject() {
-        let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
-        let (mut engine, tx, rx, mut events, _) = fixture(
-            Config::default(),
-            desktop.clone(),
-            Store::open(std::path::Path::new("unused"), false, 5).unwrap(),
-        );
-        engine.services.chat = Some(Arc::new(WordsChat));
-        let task = tokio::spawn(engine.run(rx));
-        assert!(
-            ask(
-                &tx,
-                Request::Start {
-                    mode: Mode::Ask,
-                    context: None,
-                    t0_us: None,
-                    delivery: Delivery::None,
-                    hold: false,
-                },
+    async fn canceling_an_ask_drops_the_provider_future() {
+        struct WaitingChat(Arc<Notify>, Arc<AtomicBool>);
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        #[async_trait]
+        impl ChatProvider for WaitingChat {
+            fn name(&self) -> &str {
+                "waiting"
+            }
+            async fn stream(&self, _: &str, _tx: mpsc::Sender<String>) -> Result<()> {
+                let _guard = Dropped(self.1.clone());
+                self.0.notify_one();
+                std::future::pending().await
+            }
+        }
+        let started = Arc::new(Notify::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let chat = Arc::new(WaitingChat(started.clone(), dropped.clone()));
+        let (events, _) = broadcast::channel(8);
+        let (desktop, _) = broadcast::channel(8);
+        let task = tokio::spawn(async move {
+            stream_ask(
+                Some(chat),
+                "Explain PostgreSQL indexes",
+                "fixture",
+                &events,
+                &desktop,
             )
             .await
-            .ok
-        );
-        assert!(ask(&tx, Request::Stop).await.ok);
-        let mut saw_partial = false;
-        let done = tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                let event = events.recv().await.unwrap();
-                if event
-                    .text
-                    .as_deref()
-                    .is_some_and(|text| text.contains("Yes.") && !text.contains("Ready"))
-                {
-                    saw_partial = true;
+        });
+        started.notified().await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+    #[tokio::test]
+    async fn ask_completion_streams_the_answer_and_does_not_inject() {
+        for delivery in [Delivery::Inject, Delivery::Clipboard, Delivery::None] {
+            let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
+            let (mut engine, tx, rx, mut events, _) = fixture(
+                Config::default(),
+                desktop.clone(),
+                Store::open(std::path::Path::new("unused"), false, 5).unwrap(),
+            );
+            engine.services.chat = Some(Arc::new(WordsChat));
+            let task = tokio::spawn(engine.run(rx));
+            assert!(
+                ask(
+                    &tx,
+                    Request::Start {
+                        mode: Mode::Ask,
+                        context: None,
+                        t0_us: None,
+                        delivery,
+                        hold: false,
+                    },
+                )
+                .await
+                .ok
+            );
+            assert!(ask(&tx, Request::Stop).await.ok);
+            let mut saw_partial = false;
+            let done = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let event = events.recv().await.unwrap();
+                    if event
+                        .text
+                        .as_deref()
+                        .is_some_and(|text| text.contains("Yes.") && !text.contains("Ready"))
+                    {
+                        saw_partial = true;
+                    }
+                    if event.state == State::Success {
+                        return event;
+                    }
+                    assert_ne!(event.state, State::Error, "{:?}", event.message);
                 }
-                if event.state == State::Success {
-                    return event;
-                }
-                assert_ne!(event.state, State::Error, "{:?}", event.message);
-            }
-        })
-        .await
-        .unwrap();
-        assert!(
-            saw_partial,
-            "the first text delta is published before the rest"
-        );
-        let text = done.text.unwrap();
-        assert!(text.contains("Yes. Ready."));
-        assert!(text.contains(
-            "Heard by fixture. Answered by fixture-chat test-model. Audio is not stored."
-        ));
-        assert_eq!(done.injection, None);
-        assert_eq!(desktop.0.load(Ordering::SeqCst), 0);
-        drop(tx);
-        let _ = task.await;
+            })
+            .await
+            .unwrap();
+            assert!(
+                saw_partial,
+                "the first text delta is published before the rest"
+            );
+            let text = done.text.unwrap();
+            assert!(text.contains("Yes. Ready."));
+            assert!(text.contains(
+                "Heard by fixture. Answered by fixture-chat test-model. Audio is not stored."
+            ));
+            assert_eq!(done.injection, None);
+            assert_eq!(desktop.0.load(Ordering::SeqCst), 0);
+            drop(tx);
+            let _ = task.await;
+        }
     }
     #[tokio::test]
     async fn hotkeys_drive_capture_and_reload_keeps_old_adapter_on_failure() {

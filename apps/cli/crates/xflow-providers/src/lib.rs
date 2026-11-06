@@ -1104,17 +1104,17 @@ impl ChatProvider for HttpChat {
             return Err(ProviderFailure::Status(response.status().as_u16()).into());
         }
         let mut response = response;
-        let mut pending = String::new();
+        let mut pending = Vec::new();
         let mut sent = false;
         while let Some(chunk) = response.chunk().await.map_err(http_error)? {
             if pending.len() + chunk.len() > MAX_RESPONSE_BYTES {
                 bail!("provider response exceeds size limit");
             }
-            pending.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(nl) = pending.find('\n') {
-                let line = pending[..nl].to_owned();
+            pending.extend_from_slice(&chunk);
+            while let Some(nl) = pending.iter().position(|byte| *byte == b'\n') {
+                let delta = sse_delta(std::str::from_utf8(&pending[..nl])?);
                 pending.drain(..=nl);
-                if let Some(delta) = sse_delta(&line) {
+                if let Some(delta) = delta {
                     sent = true;
                     if tx.send(delta).await.is_err() {
                         return Ok(());
@@ -1122,7 +1122,7 @@ impl ChatProvider for HttpChat {
                 }
             }
         }
-        if let Some(delta) = sse_delta(&pending) {
+        if let Some(delta) = sse_delta(std::str::from_utf8(&pending)?) {
             sent = true;
             let _ = tx.send(delta).await;
         }
@@ -1154,18 +1154,57 @@ impl ChatProvider for HarnessChat {
     }
     async fn stream(&self, request: &str, tx: tokio::sync::mpsc::Sender<String>) -> Result<()> {
         let prompt = format!("{ASK_SYSTEM}\n<transcript>{request}</transcript>");
-        let mut child = tokio::process::Command::new(&self.program)
-            .arg(&prompt)
-            .stdin(std::process::Stdio::null())
+        let mut command = tokio::process::Command::new(&self.program);
+        if self.name == "claude-code" {
+            command.args([
+                "--print",
+                "--output-format",
+                "text",
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--mcp-config",
+                "{\"mcpServers\":{}}",
+                "--no-session-persistence",
+                "--setting-sources",
+                "",
+            ]);
+        } else {
+            command.args([
+                "exec",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--ignore-user-config",
+                "--sandbox",
+                "read-only",
+                "--color",
+                "never",
+                "-c",
+                "features.shell_tool=false",
+                "-c",
+                "features.unified_exec=false",
+                "-c",
+                "features.multi_agent=false",
+                "-c",
+                "web_search=\"disabled\"",
+            ]);
+        }
+        let mut child = command
+            .kill_on_drop(true)
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
             .with_context(|| format!("cannot run {} (local harness)", self.name))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            tokio::io::AsyncWriteExt::write_all(&mut stdin, prompt.as_bytes()).await?;
+        }
         let mut stdout = child
             .stdout
             .take()
             .ok_or_else(|| anyhow!("{} produced no output", self.name))?;
         let mut buf = [0u8; 1024];
+        let mut pending = Vec::new();
         let mut sent = false;
         loop {
             let n = tokio::io::AsyncReadExt::read(&mut stdout, &mut buf)
@@ -1174,15 +1213,25 @@ impl ChatProvider for HarnessChat {
             if n == 0 {
                 break;
             }
-            let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
-            if chunk.is_empty() {
+            pending.extend_from_slice(&buf[..n]);
+            let valid = match std::str::from_utf8(&pending) {
+                Ok(_) => pending.len(),
+                Err(error) if error.error_len().is_none() => error.valid_up_to(),
+                Err(_) => bail!("{} returned invalid UTF-8", self.name),
+            };
+            if valid == 0 {
                 continue;
             }
+            let chunk = std::str::from_utf8(&pending[..valid])?.to_owned();
+            pending.drain(..valid);
             sent = true;
             if tx.send(chunk).await.is_err() {
                 let _ = child.kill().await;
                 return Ok(());
             }
+        }
+        if !pending.is_empty() {
+            bail!("{} returned incomplete UTF-8", self.name);
         }
         let status = child.wait().await?;
         if !status.success() {
@@ -1233,7 +1282,15 @@ fn ask_cleanup(config: &Config) -> Result<CleanupConfig> {
 pub fn build_chat(config: &Config) -> Result<Arc<dyn ChatProvider>> {
     let chosen = config.ask.provider.trim();
     if chosen == "claude-code" || chosen == "codex" {
-        let program = on_path(chosen).ok_or_else(|| anyhow!("{chosen} is not on PATH"))?;
+        if config.privacy.offline {
+            bail!("offline mode does not permit hosted harnesses");
+        }
+        let executable = if chosen == "claude-code" {
+            "claude"
+        } else {
+            "codex"
+        };
+        let program = on_path(executable).ok_or_else(|| anyhow!("{executable} is not on PATH"))?;
         return Ok(Arc::new(HarnessChat {
             name: chosen.to_owned(),
             program,
@@ -1248,6 +1305,41 @@ pub fn build_chat(config: &Config) -> Result<Arc<dyn ChatProvider>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offline_ask_refuses_hosted_harnesses_before_launch() {
+        for provider in ["claude-code", "codex"] {
+            let mut config = Config::default();
+            config.privacy.offline = true;
+            config.ask.provider = provider.into();
+            assert!(build_chat(&config)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("offline"));
+        }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn harness_uses_noninteractive_flags_stdin_and_preserves_split_utf8() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("harness");
+        std::fs::write(&program, "#!/bin/sh\ncase \"$1\" in --print|exec) ;; *) exit 2 ;; esac\ninput=$(cat)\ncase \"$input\" in *Kubernetes*) ;; *) exit 3 ;; esac\nprintf '\\303'\nsleep 0.02\nprintf '\\251 answer'\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for name in ["claude-code", "codex"] {
+            let chat = HarnessChat {
+                name: name.into(),
+                program: program.clone(),
+            };
+            let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+            chat.stream("What is Kubernetes?", tx).await.unwrap();
+            let mut answer = String::new();
+            while let Some(delta) = rx.recv().await {
+                answer.push_str(&delta);
+            }
+            assert_eq!(answer, "é answer");
+        }
+    }
     #[test]
     fn a_rewrite_that_replies_is_caught() {
         assert!(!command_answered("Tuesday", "Monday"));
