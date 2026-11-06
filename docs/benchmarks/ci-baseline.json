@@ -1,5 +1,5 @@
 {
-  "about": "Linux CI gate baseline. Regenerate with `scoreboard.py baseline` from scoreboard-gate artifacts in the PR that intentionally changes it.",
+  "about": "Linux CI gate baseline. Binary bytes refreshed from the single CI receipt in runs; its runtime measurements are observations, not a runtime baseline refresh. All other result values retain the median-PSS reference from runtime_runs (41375047607 attempt 2 at 71e4aa6f02420a58d5a89f2d531be9168b8401bf); the three original raw receipts are unchanged. Regenerate full baselines with `scoreboard.py baseline` from scoreboard-gate artifacts in the PR that intentionally changes them.",
   "limits": {
     "binary_pct": 1,
     "cpu_percent": 0.1,
@@ -9,8 +9,8 @@
   },
   "result": {
     "binary_bytes": {
-      "xflow": 8098656,
-      "xflowd": 12147400
+      "xflow": 8226512,
+      "xflowd": 12472744
     },
     "idle_cpu_percent": 0.0,
     "idle_processes": 1,
@@ -19,6 +19,41 @@
     "startup_p50_ms": 2.0291090000057466
   },
   "runs": [
+    {
+      "binaries": {
+        "xflow": {
+          "bytes": 8226512,
+          "sha256": "266b7121a7dc1d0d61ff70f6da939430b47feedf7bd4bd206ade49be71ea45fd"
+        },
+        "xflowd": {
+          "bytes": 12472744,
+          "sha256": "b9f96debf5d5c316d8519dce67749c62684432be9163ae2138444a90d620d641"
+        }
+      },
+      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/42154746953/attempts/1",
+      "commit": "100a18c9e09b7e02c261a1e40aa6536599d1ffd3",
+      "cpu": "AMD EPYC 9V74 80-Core Processor",
+      "launch_pss_kib": [
+        10072,
+        9944,
+        9969
+      ],
+      "logical_cpus": 4,
+      "result": {
+        "binary_bytes": {
+          "xflow": 8226512,
+          "xflowd": 12472744
+        },
+        "idle_cpu_percent": 0.0,
+        "idle_processes": 1,
+        "idle_pss_kib": 9969,
+        "idle_rss_kib": 12356,
+        "startup_p50_ms": 1.7458469999951376
+      },
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    }
+  ],
+  "runtime_runs": [
     {
       "ci_run": "https://github.com/itsmrad/xflow/actions/runs/41375047607/attempts/1",
       "commit": "71e4aa6f02420a58d5a89f2d531be9168b8401bf",
