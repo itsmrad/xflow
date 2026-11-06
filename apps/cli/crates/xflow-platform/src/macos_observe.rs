@@ -290,9 +290,13 @@ unsafe fn observing(
     // bounds a stop that slipped in just before the run loop went to sleep.
     CFRetain(runloop);
     wake.store(runloop as usize, Ordering::Release);
-    while !gate.stop.load(Ordering::Acquire)
-        && CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, true) != 1
-    {}
+    loop {
+        if gate.stop.load(Ordering::Acquire)
+            || CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, true) == 1
+        {
+            break;
+        }
+    }
     let retained = wake.swap(0, Ordering::AcqRel) as MutRef;
     if !retained.is_null() {
         CFRelease(retained as Ref);
