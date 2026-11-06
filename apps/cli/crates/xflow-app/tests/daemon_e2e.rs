@@ -228,6 +228,9 @@ struct Plan {
     status: u16,
     text: &'static str,
     gate: Option<Arc<Semaphore>>,
+    /// Answer with the upload's own peak sample (`p<peak>`), not `text`, so a
+    /// reply names its segment however concurrent uploads arrive.
+    peak: bool,
 }
 impl Plan {
     fn success(text: &'static str) -> Self {
@@ -235,8 +238,36 @@ impl Plan {
             status: 200,
             text,
             gate: None,
+            peak: false,
         }
     }
+    fn peak() -> Self {
+        Self {
+            peak: true,
+            ..Self::success("")
+        }
+    }
+}
+/// The PCM `data` chunk of the WAV inside a multipart upload.
+fn pcm(upload: &[u8]) -> &[u8] {
+    let riff = upload.windows(4).position(|b| b == b"RIFF").unwrap();
+    let data = riff
+        + 12
+        + upload[riff + 12..]
+            .windows(4)
+            .position(|b| b == b"data")
+            .unwrap();
+    let len = u32::from_le_bytes(upload[data + 4..data + 8].try_into().unwrap()) as usize;
+    &upload[data + 8..data + 8 + len]
+}
+fn peak(upload: &[u8]) -> u16 {
+    pcm(upload)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b).unsigned_abs())
+        .max()
+        .unwrap_or(0)
 }
 
 struct MockStt {
@@ -377,7 +408,7 @@ async fn handle_provider_request(
         assert!(length < 2_000_000);
         let mut body = vec![0; length];
         reader.read_exact(&mut body).await.unwrap();
-        sent.send(body).unwrap();
+        sent.send(body.clone()).unwrap();
         let plan = plans
             .lock()
             .unwrap()
@@ -386,7 +417,9 @@ async fn handle_provider_request(
         if let Some(gate) = plan.gate {
             gate.acquire().await.unwrap().forget();
         }
-        let body = if plan.status == 200 {
+        let body = if plan.status == 200 && plan.peak {
+            json!({"text":format!("p{}", peak(&body))}).to_string()
+        } else if plan.status == 200 {
             json!({"text":plan.text}).to_string()
         } else {
             "private provider error details".into()
@@ -594,6 +627,7 @@ async fn processing_cancel_discards_late_result_and_allows_next_session() {
             status: 200,
             text: "cancelled transcript",
             gate: Some(gate.clone()),
+            peak: false,
         },
         Plan::success("next session"),
     ])
@@ -628,6 +662,7 @@ async fn provider_500_is_redacted_and_next_session_recovers() {
         status: 500,
         text: "",
         gate: None,
+        peak: false,
     };
     let mut mock = MockStt::start(vec![failure(), failure(), Plan::success("recovered")]).await;
     let mut daemon = Daemon::spawn(&mock.endpoint, "voice", false);
@@ -1095,11 +1130,11 @@ async fn killing_the_tui_releases_the_microphone() {
 
 #[tokio::test]
 async fn long_dictation_streams_segments_through_the_real_daemon() {
-    const WORDS: [&str; 8] = [
-        "one", "two", "three", "four", "five", "six", "seven", "eight",
-    ];
-    let mut mock = MockStt::start(WORDS.iter().map(|w| Plan::success(w)).collect()).await;
-    // Three minutes of 48 kHz "speech": 2.6 s tone bursts, then 0.4 s pauses.
+    // Segments upload concurrently, so the mock answers each with its own peak:
+    // a fixed reply order would depend on which upload arrives first.
+    let mut mock = MockStt::start((0..8).map(|_| Plan::peak()).collect()).await;
+    // Three minutes of 48 kHz "speech": 2.6 s tone bursts, then 0.4 s pauses,
+    // growing louder throughout, so a later segment always has a higher peak.
     const RATE: u32 = 48_000;
     let mut daemon = Daemon::spawn_with(&mock.endpoint, "wav", true, |command, root| {
         let spec = hound::WavSpec {
@@ -1114,7 +1149,7 @@ async fn long_dictation_streams_segments_through_the_real_daemon() {
             let s = if paused {
                 0.0
             } else {
-                0.3 * (i as f32 * 0.06).sin()
+                (0.1 + 0.3 * i as f32 / (RATE * 180) as f32) * (i as f32 * 0.06).sin()
             };
             wav.write_sample((s * 32767.0) as i16).unwrap();
         }
@@ -1154,24 +1189,15 @@ async fn long_dictation_streams_segments_through_the_real_daemon() {
         "{} segments",
         uploads.len()
     );
-    assert_eq!(
-        fs::read_to_string(daemon.sink()).unwrap(),
-        WORDS[..uploads.len()].join(" ")
-    );
+    // Delivered in recording order: every upload's peak once, quietest first.
+    let mut peaks: Vec<u16> = uploads.iter().map(|upload| peak(upload)).collect();
+    peaks.sort_unstable();
+    assert!(peaks.windows(2).all(|w| w[0] < w[1]), "{peaks:?}");
+    let delivered = fs::read_to_string(daemon.sink()).unwrap();
+    let expected: Vec<String> = peaks.iter().map(|p| format!("p{p}")).collect();
+    assert_eq!(delivered, expected.join(" "));
     // Every input frame reaches the provider exactly once (16 kHz after resampling).
-    let frames: usize = uploads
-        .iter()
-        .map(|upload| {
-            let riff = upload.windows(4).position(|b| b == b"RIFF").unwrap();
-            let data = riff
-                + 12
-                + upload[riff + 12..]
-                    .windows(4)
-                    .position(|b| b == b"data")
-                    .unwrap();
-            u32::from_le_bytes(upload[data + 4..data + 8].try_into().unwrap()) as usize / 2
-        })
-        .sum();
+    let frames: usize = uploads.iter().map(|upload| pcm(upload).len() / 2).sum();
     assert!(
         frames.abs_diff(16_000 * 180) <= uploads.len(),
         "{frames} frames"
