@@ -6643,14 +6643,14 @@ mod tests {
             lock(&self.learning).outcomes.keys().cloned().collect()
         }
     }
-    const DICTATED: &str = "Please ask Veronika about tomorrow plans ";
-    const FIXED: &str = "Please ask Veronica about tomorrow plans ";
+    const DICTATED: &str = "Forward Priyanca the quarterly numbers first ";
+    const FIXED: &str = "Forward Priyanka the quarterly numbers first ";
     /// The approved timing: about 2 s after the word settles, no focus change or
     /// send needed; the watch then goes on, and a second fix saves too (T09).
     #[tokio::test]
     async fn a_settled_correction_saves_in_about_two_seconds_and_the_watch_goes_on() {
-        let mut run = Run::start("", "Please ask Veronika and Zorblax tomorrow ").await;
-        run.edit("Please ask Veronica and Zorblax tomorrow ");
+        let mut run = Run::start("", "Please ask Priyanca and Zorblax tomorrow ").await;
+        run.edit("Please ask Priyanka and Zorblax tomorrow ");
         let started = Instant::now();
         assert!(run.save_within(1500).await.is_none(), "too early");
         let Some(Completion::Learned {
@@ -6665,13 +6665,13 @@ mod tests {
             took >= Duration::from_millis(1900) && took < Duration::from_millis(2800),
             "{took:?}"
         );
-        assert_eq!(change.words, ["Veronica"]);
+        assert_eq!(change.words, ["Priyanka"]);
         assert!(change.notice);
-        run.edit("Please ask Veronica and Zorblex tomorrow ");
+        run.edit("Please ask Priyanka and Zorblex tomorrow ");
         assert!(run.save_within(3000).await.is_some(), "the second fix");
         let run = run.finish().await;
         let dictionary = run.dictionary();
-        assert_eq!(dictionary.words, ["Zorblex", "Veronica"]);
+        assert_eq!(dictionary.words, ["Zorblex", "Priyanka"]);
         assert_eq!(dictionary.replacements.len(), 2);
         assert_eq!(run.outcomes(), ["learned"]);
         assert_eq!(lock(&run.learning).watches, 1);
@@ -6687,38 +6687,38 @@ mod tests {
         }
         assert!(run.save_within(1200).await.is_some());
         let run = run.finish().await;
-        assert_eq!(run.dictionary().words, ["Veronica"]);
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
     }
-    /// `Veronic`, caret on it: not saved however long it sits; finishing it saves
+    /// `Priyank`, caret on it: not saved however long it sits; finishing it saves
     /// the finished word alone.
     #[tokio::test]
     async fn a_partial_word_under_the_caret_is_never_saved() {
         let mut run = Run::start("", DICTATED).await;
-        let partial = "Please ask Veronic about tomorrow plans ";
+        let partial = "Forward Priyank the quarterly numbers first ";
         run.edit(partial);
-        run.caret(Some(18));
+        run.caret(Some(15));
         assert!(
             run.save_within(5500).await.is_none(),
             "saved a partial word"
         );
         run.edit(FIXED);
-        run.caret(Some(21));
+        run.caret(Some(18));
         assert!(run.save_within(3000).await.is_some());
         let run = run.finish().await;
-        assert_eq!(run.dictionary().words, ["Veronica"]);
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
     }
     /// A finished word under the caret goes after the longer wait, not after 60 s.
     #[tokio::test]
     async fn a_complete_word_under_the_caret_saves_after_the_longer_wait() {
         let mut run = Run::start("", DICTATED).await;
-        run.caret(Some(19));
+        run.caret(Some(16));
         run.edit(FIXED);
         assert!(run.save_within(3000).await.is_none(), "caret still on it");
         // Moving off it saves at the next look.
         run.caret(Some(FIXED.len()));
         assert!(run.save_within(1500).await.is_some());
         let mut run = Run::start("", DICTATED).await;
-        run.caret(Some(19));
+        run.caret(Some(16));
         run.edit(FIXED);
         assert!(run.save_within(5500).await.is_some(), "caret never moved");
         run.finish().await;
@@ -6727,8 +6727,8 @@ mod tests {
     #[tokio::test]
     async fn leaving_right_after_a_keystroke_on_the_word_saves_nothing() {
         let mut run = Run::start("", DICTATED).await;
-        run.caret(Some(18));
-        run.edit("Please ask Veronic about tomorrow plans ");
+        run.caret(Some(15));
+        run.edit("Forward Priyank the quarterly numbers first ");
         tokio::time::sleep(Duration::from_millis(150)).await;
         let _ = run.notify.send(FieldEvent::Invalidated);
         (&mut run.task).await.unwrap();
@@ -6736,7 +6736,7 @@ mod tests {
         assert!(run.dictionary().words.is_empty());
         // The same word left alone first: its caret no longer says "typing".
         let mut run = Run::start("", DICTATED).await;
-        run.caret(Some(19));
+        run.caret(Some(16));
         run.edit(FIXED);
         tokio::time::sleep(Duration::from_millis(700)).await;
         let _ = run.notify.send(FieldEvent::Invalidated);
@@ -6748,11 +6748,11 @@ mod tests {
     #[tokio::test]
     async fn a_select_all_retype_learns_unless_the_field_emptied() {
         let keys = [
-            "P",
-            "Ple",
-            "Please ",
-            "Please ask Veron",
-            "Please ask Veronica about ",
+            "F",
+            "For",
+            "Forward ",
+            "Forward Priy",
+            "Forward Priyanka the ",
             FIXED,
         ];
         let mut run = Run::start("", DICTATED).await;
@@ -6762,7 +6762,7 @@ mod tests {
         }
         assert!(run.save_within(3000).await.is_some());
         let run = run.finish().await;
-        assert_eq!(run.dictionary().words, ["Veronica"]);
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
 
         let mut run = Run::start("", DICTATED).await;
         run.edit("");
@@ -6782,14 +6782,14 @@ mod tests {
     /// by a different message.
     #[tokio::test]
     async fn a_short_field_learns_its_fix_but_not_the_next_message() {
-        let mut run = Run::start("", "Hi Veronika ").await;
-        run.edit("Hi Veronica ");
+        let mut run = Run::start("", "Hi Priyanca ").await;
+        run.edit("Hi Priyanka ");
         assert!(run.save_within(3000).await.is_some());
         run.finish().await;
-        let mut run = Run::start("", "Hi Veronika ").await;
+        let mut run = Run::start("", "Hi Priyanca ").await;
         run.edit("");
         tokio::time::sleep(Duration::from_millis(90)).await;
-        run.edit("Hi Veronica ");
+        run.edit("Hi Priyanka ");
         assert!(run.save_within(2500).await.is_none());
         let run = run.finish().await;
         assert!(run.dictionary().words.is_empty());
@@ -6825,7 +6825,7 @@ mod tests {
             .is_ok());
         let _ = finish.send(());
         task.await.unwrap();
-        assert_eq!(Config::load(&path).unwrap().dictionary.words, ["Veronica"]);
+        assert_eq!(Config::load(&path).unwrap().dictionary.words, ["Priyanka"]);
     }
     /// An app's substitutions at delivery are the baseline: no notification, no
     /// edit, so a later fix is compared with what the field really showed.
@@ -6833,11 +6833,11 @@ mod tests {
     async fn what_the_app_made_of_the_delivery_is_not_a_correction() {
         let mut run = Run::start("", DICTATED).await;
         // Chromium's trailing space: no save and no "unsettled" from it.
-        *run.desktop.field.lock().unwrap() = Some(DICTATED.replace(" plans ", " plans\u{a0}"));
-        run.edit(&FIXED.replace(" plans ", " plans\u{a0}"));
+        *run.desktop.field.lock().unwrap() = Some(DICTATED.replace(" first ", " first\u{a0}"));
+        run.edit(&FIXED.replace(" first ", " first\u{a0}"));
         assert!(run.save_within(3000).await.is_some());
         let run = run.finish().await;
-        assert_eq!(run.dictionary().words, ["Veronica"]);
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
     }
     /// A real focus journey is terminal: nothing read after it, returning to the
     /// field resumes nothing, and an edit not yet read is unknown.
@@ -6869,7 +6869,7 @@ mod tests {
         let _ = run.notify.send(FieldEvent::Invalidated);
         (&mut run.task).await.unwrap();
         assert_eq!(run.reads(), reads);
-        assert_eq!(run.dictionary().words, ["Veronica"]);
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
     }
     /// Notifications lost, the observer unable to cover the field: nothing saved.
     #[tokio::test]
@@ -7080,17 +7080,17 @@ mod tests {
         let seed = "# my settings\n";
         let mut run = Run::again(
             "",
-            "Ask Veronika and Zorblax now ",
+            "Ask Priyanca and Zorblax now ",
             Default::default(),
             Some(seed),
         )
         .await;
-        run.edit("Ask Veronica and Zorblax now ");
+        run.edit("Ask Priyanka and Zorblax now ");
         assert!(run.save_within(3000).await.is_some());
-        run.edit("Ask Veronica and Zorblex now ");
+        run.edit("Ask Priyanka and Zorblex now ");
         assert!(run.save_within(3000).await.is_some());
-        assert_eq!(run.dictionary().words, ["Zorblex", "Veronica"]);
-        run.edit("Ask Veronicka and Zorblex now ");
+        assert_eq!(run.dictionary().words, ["Zorblex", "Priyanka"]);
+        run.edit("Ask Priyankka and Zorblex now ");
         let Some(Completion::Learned {
             change: Some(change),
             ..
@@ -7099,10 +7099,10 @@ mod tests {
             panic!("the re-edit was not saved");
         };
         let d = run.dictionary();
-        assert_eq!(d.words, ["Veronicka", "Zorblex"]);
-        assert_eq!(d.learned, ["Zorblex", "Veronicka"]);
+        assert_eq!(d.words, ["Priyankka", "Zorblex"]);
+        assert_eq!(d.learned, ["Zorblex", "Priyankka"]);
         assert_eq!(d.replacements.len(), 2);
-        assert!(!d.replacements.iter().any(|r| r.to == "Veronica"));
+        assert!(!d.replacements.iter().any(|r| r.to == "Priyanka"));
         let run = run.finish().await;
         {
             let _guard = crate::config_edit::lock(&run.path).unwrap();
@@ -7153,10 +7153,10 @@ mod tests {
         // (edited field, caret on the word, the word)
         for (dictated, edited, caret, word) in [
             (
-                "Please ask Veronika about plans ",
-                "Please ask Veronica about plans ",
+                "Please ask Priyanca about plans ",
+                "Please ask Priyanka about plans ",
                 19,
-                "Veronica",
+                "Priyanka",
             ),
             (
                 "Please ask about tomorrow plans ",
@@ -7184,15 +7184,15 @@ mod tests {
             assert_eq!(run.outcomes(), ["learned"]);
         }
     }
-    /// `Veronic`, caret on it, and the user leaves to check the spelling: nothing is
+    /// `Priyank`, caret on it, and the user leaves to check the spelling: nothing is
     /// saved, however long it sat, because a word and a rule would write it into
     /// every later dictation. The same word held back under the caret by the 4 s path.
     #[tokio::test]
     async fn leaving_a_shorter_word_under_the_caret_saves_nothing() {
-        let shorter = "Please ask Veronic about tomorrow plans ";
+        let shorter = "Forward Priyank the quarterly numbers first ";
         for wait in [700, 5000] {
             let mut run = Run::start("", DICTATED).await;
-            run.caret(Some(18));
+            run.caret(Some(15));
             run.edit(shorter);
             assert!(run.save_within(wait).await.is_none());
             let _ = run.notify.send(FieldEvent::Invalidated);
@@ -7201,9 +7201,9 @@ mod tests {
             assert!(!run.path.exists(), "{wait}");
         }
         // The known recall cost: a genuine shortening, left the same way, is missed.
-        let dictated = "Please ask Veronicaa about tomorrow plans ";
+        let dictated = "Forward Priyankaa the quarterly numbers first ";
         let mut run = Run::start("", dictated).await;
-        run.caret(Some(19));
+        run.caret(Some(16));
         run.edit(DICTATED);
         tokio::time::sleep(Duration::from_millis(700)).await;
         let _ = run.notify.send(FieldEvent::Invalidated);
@@ -7214,34 +7214,34 @@ mod tests {
     /// The counterpart: the caret has moved off it, so a focus change saves it.
     #[tokio::test]
     async fn leaving_a_shorter_word_with_the_caret_off_it_saves_it() {
-        let mut run = Run::start("", "Please ask Veronicaa about tomorrow plans ").await;
+        let mut run = Run::start("", "Forward Priyankaa the quarterly numbers first ").await;
         run.caret(Some(FIXED.len()));
         run.edit(FIXED);
         tokio::time::sleep(Duration::from_millis(700)).await;
         let _ = run.notify.send(FieldEvent::Invalidated);
         (&mut run.task).await.unwrap();
-        assert_eq!(run.dictionary().words, ["Veronica"]);
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
         assert_eq!(run.outcomes(), ["learned"]);
     }
     /// Scope of that rule: a send, and the next dictation (the same path as the 60 s
     /// timeout), are not a leave, and still commit a shorter word under the caret.
     #[tokio::test]
     async fn a_send_or_the_next_dictation_still_commits_a_shorter_word() {
-        let shorter = "Please ask Veronic about tomorrow plans ";
+        let shorter = "Forward Priyank the quarterly numbers first ";
         let mut run = Run::start("", DICTATED).await;
-        run.caret(Some(18));
+        run.caret(Some(15));
         run.edit(shorter);
         tokio::time::sleep(Duration::from_millis(300)).await;
         run.edit("");
         (&mut run.task).await.unwrap();
-        assert_eq!(run.dictionary().words, ["Veronic"]);
+        assert_eq!(run.dictionary().words, ["Priyank"]);
 
         let run = Run::start("", DICTATED).await;
-        run.caret(Some(18));
+        run.caret(Some(15));
         run.edit(shorter);
         tokio::time::sleep(Duration::from_millis(300)).await;
         let run = run.finish().await;
-        assert_eq!(run.dictionary().words, ["Veronic"]);
+        assert_eq!(run.dictionary().words, ["Priyank"]);
     }
     /// A hidden clear: a read of a retype unchanged by a further notification.
     #[tokio::test]
@@ -7253,7 +7253,7 @@ mod tests {
             "Postgres is ready for staging",
             2
         ));
-        assert!(!burst("Please ask Veronika", "Hi", 2));
+        assert!(!burst("Please ask Priyanca", "Hi", 2));
     }
     /// Two terms of the full loop, cleanup included: a first correction, then the
     /// recognizer says the same again and the provider hint is ignored.

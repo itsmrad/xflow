@@ -562,7 +562,7 @@ fn hunk(from: &[&str], to: &[&str]) -> Result<Vec<Replacement>, &'static str> {
         .or_else(|e| aligned(&from[n - k..], &to[m - k..]).map_err(|_| e))
 }
 /// As many words on each side are compared word for word, so a fix beside
-/// another edit is learned alone: "Veronika about" -> "Veronica abouts" is one
+/// another edit is learned alone: "Priyanca about" -> "Priyanka abouts" is one
 /// correction and one word with text on it, never a two-word term. Only words
 /// that cannot be paired (a name regrouped, "Rimpas Kar" -> "Rimpa Sarkar") are
 /// a term together.
@@ -593,7 +593,7 @@ fn aligned(from: &[&str], to: &[&str]) -> Result<Vec<Replacement>, &'static str>
 /// A fragment that the rest completes is a spelling ("Postgre" -> "Postgres"):
 /// only a complete everyday word counts, or any word with a real word put on it
 /// ("Zorblax" -> "Zorblaxbefore"), or a capitalized one with text typed in front
-/// of it ("Veronika" -> "kVeronika"). Among several dictated words, an everyday
+/// of it ("Priyanca" -> "kPriyanca"). Among several dictated words, an everyday
 /// one left whole in the new one counts too ("report before" -> "reportbefor").
 fn attached(from: &str, to: &str, x: &[char], y: &[char]) -> bool {
     let everyday = |word: &str| {
@@ -1114,7 +1114,7 @@ enum Conflict {
 pub const COMMIT_QUIET_MS: u64 = 2_000;
 /// With the caret still on the corrected word, nothing says it is finished. A
 /// word at least as long as the one it corrects, left alone this long, is. A
-/// shorter one might be `Veronic` on its way to `Veronica`: it waits for the
+/// shorter one might be `Priyank` on its way to `Priyanka`: it waits for the
 /// caret to move or for the user to leave. Calibration knob.
 pub const COMMIT_ON_WORD_MS: u64 = 4_000;
 /// A word left this recently, caret still on it, may be half typed. One shorter
@@ -1433,7 +1433,7 @@ mod tests {
     fn corrections_earn_by_tier() {
         // Tier 1: uncommon source, close spelling: word and rule at once.
         for (from, to) in [
-            ("Veronika", "Veronica"),
+            ("Priyanca", "Priyanka"),
             ("Zorblax", "Zorblex"),
             ("definately", "definitely"),
             ("Rimpas or Kar", "Rimpa Sarkar"),
@@ -1521,14 +1521,14 @@ mod tests {
             ("meet Rimpa circa soon", "meet Rimpa Sarkar soon"),
             // Case and punctuation only, also canonically equal spellings.
             (
-                "Please ask veronica about tomorrow plans",
-                "Please ask Veronica, about tomorrow plans!",
+                "Forward priyanka the quarterly numbers first",
+                "Forward Priyanka, the quarterly numbers first!",
             ),
             ("send the e-mail", "send the email"),
             ("visit the cafe\u{301} today", "visit the caf\u{e9} today"),
             // Unchanged, or a completion typed after the dictation.
-            ("Please ask Veronika", "Please ask Veronika"),
-            ("Please ask Veronika", "Please ask Veronika about Veronica"),
+            ("Please ask Priyanca", "Please ask Priyanca"),
+            ("Please ask Priyanca", "Please ask Priyanca about Priyanka"),
             ("a very long", "a very long term of Kubernetes"),
         ] {
             let mut d = DictionaryConfig::default();
@@ -1544,8 +1544,8 @@ mod tests {
         let mut d = DictionaryConfig::default();
         let done = adopt(
             &mut d,
-            "Please ask Veronika and Zorblax tomorrow",
-            "Please ask Veronica and Zorblex tomorrow",
+            "Please ask Priyanca and Zorblax tomorrow",
+            "Please ask Priyanka and Zorblex tomorrow",
         );
         assert_eq!(done.added.len(), 2);
         assert_eq!(done.rules.len(), 2);
@@ -1639,9 +1639,9 @@ mod tests {
     }
     #[test]
     fn the_caret_decides_when_a_correction_is_finished() {
-        let found = pending("Please ask Veronika today", "Please ask Veronica today");
-        assert_eq!(found, [rule("Veronika", "Veronica")]);
-        let field = "Please ask Veronica today";
+        let found = pending("Please ask Priyanca today", "Please ask Priyanka today");
+        assert_eq!(found, [rule("Priyanca", "Priyanka")]);
+        let field = "Please ask Priyanka today";
         let on = |caret| caret_on(&found, word_at(field, caret).as_deref());
         assert!(on(19), "at its end");
         assert!(on(11), "at its start");
@@ -1652,16 +1652,16 @@ mod tests {
         assert_eq!(word_at("a  b", 2), None);
         // Typing on after the fix is not on the fixed word.
         assert!(!caret_on(
-            &pending("ask Veronika", "ask Veronica and din"),
-            word_at("ask Veronica and din", 20).as_deref()
+            &pending("ask Priyanca", "ask Priyanka and din"),
+            word_at("ask Priyanka and din", 20).as_deref()
         ));
         // A shorter word may be half typed; one at least as long is not held back.
         assert!(complete_on_caret(&found));
         assert!(!complete_on_caret(&pending(
-            "ask Veronika today",
-            "ask Veronic today"
+            "ask Priyanca today",
+            "ask Priyank today"
         )));
-        assert!(!pending("ask Veronika today", "ask Veronic today").is_empty());
+        assert!(!pending("ask Priyanca today", "ask Priyank today").is_empty());
     }
 
     #[test]
@@ -1968,7 +1968,7 @@ mod tests {
         let mut d = known(&["Base"]);
         let mut seen = vec![];
         let a = d.adopt(
-            &review("ask Veronika", "ask Veronica", &d).unwrap(),
+            &review("ask Priyanca", "ask Priyanka", &d).unwrap(),
             &mut seen,
         );
         let b = d.adopt(
@@ -2138,9 +2138,9 @@ mod accuracy_tests {
         check(&[
             // T14: the fix alone, with no two-word rule.
             (
-                "Please ask Veronika about tomorrow plans",
-                "Please ask Veronica abouts tomorrow plans",
-                &[("Veronika", "Veronica")],
+                "Tell Priyanca about the outage",
+                "Tell Priyanka abouts the outage",
+                &[("Priyanca", "Priyanka")],
             ),
             (
                 "Send Zorblax today please",
@@ -2149,9 +2149,9 @@ mod accuracy_tests {
             ),
             // A fix and a real-word swap beside it.
             (
-                "ask Veronika about plans",
-                "ask Veronica above plans",
-                &[("Veronika", "Veronica")],
+                "ask Priyanca about plans",
+                "ask Priyanka above plans",
+                &[("Priyanca", "Priyanka")],
             ),
             // Text typed straight onto the last dictated word.
             (
@@ -2169,12 +2169,8 @@ mod accuracy_tests {
             ("the plans", "the plansc", &[]),
             ("the plans", "the xplans", &[]),
             // A stray key in front of a word.
-            (
-                "Please ask Veronika about tomorrow plans",
-                "kPlease ask Veronika about tomorrow plans",
-                &[],
-            ),
-            ("Thanks Veronika for this", "Thanks kVeronika for this", &[]),
+            ("Please book the venue", "kPlease book the venue", &[]),
+            ("Thanks Priyanca for this", "Thanks kPriyanca for this", &[]),
             // An uncommon word with a real word on it.
             ("Rimpa Sarkar called", "Rimpa Sarkarbefore called", &[]),
             ("Open Zorblax later", "Open Zorblaxbefore later", &[]),
@@ -2186,8 +2182,8 @@ mod accuracy_tests {
             ),
             ("ask Zorblex before lunch", "ask Zorblexbefore lunch", &[]),
             (
-                "ask Veronica tomorrow morning",
-                "ask Veronicatomorrow morning",
+                "ask Priyanka tomorrow morning",
+                "ask Priyankatomorrow morning",
                 &[],
             ),
             ("we had a lot today", "we had alot today", &[]),
@@ -2408,73 +2404,73 @@ mod delivery_tests {
     use super::*;
     #[test]
     fn prepared_receipt_survives_early_edit_and_uses_selected_utf16_span() {
-        let r = Receipt::delivery("😀 header old tail", (10, 3), "Veronika").unwrap();
-        assert_eq!(r.corrected("😀 header Veronica tail"), Some("Veronica"));
+        let r = Receipt::delivery("😀 header old tail", (10, 3), "Priyanca").unwrap();
+        assert_eq!(r.corrected("😀 header Priyanka tail"), Some("Priyanka"));
         assert!(Receipt::delivery("😀", (1, 0), "x").is_none());
         assert!(Receipt::delivery("x", (usize::MAX, 1), "x").is_none());
     }
-    const DICTATED: &str = "Please ask Veronika about tomorrow plans ";
+    const DICTATED: &str = "Forward Priyanca the quarterly numbers first ";
     /// T14: a change inside the 16-character anchor, plus the spelling fix.
     #[test]
     fn an_edited_anchor_still_finds_the_span_by_what_is_left_of_it() {
         let r = Receipt::delivery("Some context: ", (14, 0), DICTATED).unwrap();
         assert_eq!(r.inserted(), DICTATED);
-        let fixed = "Please ask Veronica about tomorrow plans ";
+        let fixed = "Forward Priyanka the quarterly numbers first ";
         assert_eq!(r.corrected(&format!("Other context: {fixed}")), Some(fixed));
         // Nothing of the anchor left: the dictation's own first word marks the edge.
         assert_eq!(r.corrected(&format!("Rewritten> {fixed}")), Some(fixed));
         // The first word fixed too: no edge at all.
         assert_eq!(
-            r.corrected("Rewritten> Pleese ask Veronica about tomorrow plans "),
+            r.corrected("Rewritten> Forwrd Priyanka the quarterly numbers first "),
             None
         );
         // The end works the same way, also after a fixed last word.
         let r =
-            Receipt::delivery("Before.  After the text", (8, 0), "ask Veronika tomorrow").unwrap();
+            Receipt::delivery("Before.  After the text", (8, 0), "ask Priyanca tomorrow").unwrap();
         assert_eq!(
-            r.corrected("Before. ask Veronica tomorrow  after the text"),
-            Some("ask Veronica tomorrow")
+            r.corrected("Before. ask Priyanka tomorrow  after the text"),
+            Some("ask Priyanka tomorrow")
         );
         assert_eq!(
-            r.corrected("Before. ask Veronica tomorrow  xxxxxxxxxxxxxx"),
-            Some("ask Veronica tomorrow")
+            r.corrected("Before. ask Priyanka tomorrow  xxxxxxxxxxxxxx"),
+            Some("ask Priyanka tomorrow")
         );
     }
     /// T03: a short dictation that filled the field is compared like any other.
     #[test]
     fn a_short_field_is_found_but_a_different_text_is_not_it() {
-        let r = Receipt::delivery("", (0, 0), "Hi Veronika ").unwrap();
+        let r = Receipt::delivery("", (0, 0), "Hi Priyanca ").unwrap();
         assert!(r.whole_field());
-        assert_eq!(r.corrected("Hi Veronica "), Some("Hi Veronica "));
+        assert_eq!(r.corrected("Hi Priyanka "), Some("Hi Priyanka "));
         assert_eq!(r.corrected("lunch at noon anyone"), None);
     }
     /// An empty contenteditable reads as a lone newline; the paste then has no
     /// real neighbour, and a fixed last word must not lose the span.
     #[test]
     fn blank_context_is_the_field_edge() {
-        let r = Receipt::delivery("\n", (0, 0), "Hi Veronika ").unwrap();
+        let r = Receipt::delivery("\n", (0, 0), "Hi Priyanca ").unwrap();
         assert!(r.whole_field());
-        assert!(r.delivered("Hi Veronika\u{a0}"));
-        assert_eq!(r.corrected("Hi Veronica\u{a0}"), Some("Hi Veronica\u{a0}"));
-        assert!(r.editing("Hi Ver", "Hi Veronika "));
+        assert!(r.delivered("Hi Priyanca\u{a0}"));
+        assert_eq!(r.corrected("Hi Priyanka\u{a0}"), Some("Hi Priyanka\u{a0}"));
+        assert!(r.editing("Hi Ver", "Hi Priyanca "));
     }
     /// A repeated anchor only resolves exactly where the span last sat.
     #[test]
     fn repeated_context_needs_the_span_where_it_was() {
         let filler = "synthetic filler ".repeat(4);
-        let mut r = Receipt::delivery(&filler, (filler.len(), 0), "ask Veronika today").unwrap();
-        let field = format!("{filler}ask Veronica today");
-        assert_eq!(r.corrected(&field), Some("ask Veronica today"));
+        let mut r = Receipt::delivery(&filler, (filler.len(), 0), "ask Priyanca today").unwrap();
+        let field = format!("{filler}ask Priyanka today");
+        assert_eq!(r.corrected(&field), Some("ask Priyanka today"));
         r.track(&field);
         // The same anchor text moved: ambiguous, so no span.
-        assert_eq!(r.corrected(&format!("x{filler}ask Veronica today")), None);
+        assert_eq!(r.corrected(&format!("x{filler}ask Priyanka today")), None);
     }
     /// Typography an app applied to the delivered text is the delivery, not an edit.
     #[test]
     fn what_the_app_made_of_the_text_is_the_baseline() {
-        let r = Receipt::delivery("", (0, 0), "don't ask Veronika ").unwrap();
-        assert!(r.delivered("don’t ask Veronika\u{a0}"));
-        assert!(r.delivered("Don't ask Veronika"));
-        assert!(!r.delivered("don't ask Veronica "));
+        let r = Receipt::delivery("", (0, 0), "don't ask Priyanca ").unwrap();
+        assert!(r.delivered("don’t ask Priyanca\u{a0}"));
+        assert!(r.delivered("Don't ask Priyanca"));
+        assert!(!r.delivered("don't ask Priyanka "));
     }
 }

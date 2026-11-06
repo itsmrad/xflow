@@ -1966,13 +1966,13 @@ mod tests {
         let before = (Some(0), Some(String::new()), 0);
         assert!(inserted(
             &before,
-            &(Some(9), Some("Veronika\u{a0}".into()), 0),
-            "Veronika "
+            &(Some(9), Some("Priyanca\u{a0}".into()), 0),
+            "Priyanca "
         ));
         assert!(!inserted(
             &before,
-            &(Some(9), Some("Veronica ".into()), 0),
-            "Veronika "
+            &(Some(9), Some("Priyanka ".into()), 0),
+            "Priyanca "
         ));
     }
     #[test]

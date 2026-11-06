@@ -665,11 +665,11 @@ mod tests {
         config.dictionary.replacements = vec![
             rule("कृष्णन", "कृष्णा"),
             rule("dont’t", "don’t"),
-            rule("veroniká", "Veronica"),
+            rule("veroniká", "Priyanka"),
         ];
         assert_eq!(
             reapply("कृष्णन dont’t VERONIKÁ", &config),
-            "कृष्णा don’t Veronica"
+            "कृष्णा don’t Priyanka"
         );
     }
     use crate::config::{Replacement, Snippet};
