@@ -1,0 +1,35 @@
+ xflow  ·  Chat                                                                                            ○ Not set up
+╭────────────────╮╭ Chat · OpenRouter · openai/gpt-oss-120b ───────────────────────────────────────────────────────────╮
+│ 1  Home        ││ › What did I decide about the kubernetes migration?                                                │
+│ 2  History     ││ · Searched dictations for 'kubernetes': sent to OpenRouter                                         │
+│ 3  Dictionary  ││                                                                                                    │
+│ 4  Snippets    ││ You decided to move the staging cluster first, 日 本 語  क्ष त्रि  य, and then                             │
+│ 5  Styles      ││ ! Interrupted: the text above is incomplete. Ctrl+R retries.                                       │
+│ 6  Settings    ││                                                                                                    │
+│ 7  Pill        ││                                                                                                    │
+│ 8  Your stats  ││                                                                                                    │
+│ 9  Check-up    ││                                                                                                    │
+│ 0  AI apps     ││                                                                                                    │
+│>-  Chat        ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                ││                                                                                                    │
+│                │╰────────────────────────────────────────────────────────────────────────────────────────────────────╯
+│                │╭ Ask · Enter sends ─────────────────────────────────────────────────────────────────────────────────╮
+│                ││ and production?                                                                                    │
+╰────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ Enter send · Ctrl+R retry · Ctrl+N new · Esc back · Tab page · Ctrl+C quit

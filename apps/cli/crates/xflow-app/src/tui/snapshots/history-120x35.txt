@@ -10,7 +10,7 @@
 │ 8  Your stats  ││                                                         ││ um the best ideas start with a          │
 │ 9  Check-up    ││                                                         ││ conversation                            │
 │ 0  AI apps     ││                                                         ││                                         │
-│                ││                                                         ││                                         │
+│ -  Chat        ││                                                         ││                                         │
 │                ││                                                         ││                                         │
 │                ││                                                         ││                                         │
 │                ││                                                         ││                                         │

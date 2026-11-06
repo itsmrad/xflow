@@ -1,5 +1,7 @@
 //! Keyboard-first control center. Blocking desktop/config work lives off the UI task.
 mod ai_apps;
+mod chat;
+mod chat_view;
 mod integrations;
 mod on_device;
 mod options;
@@ -13,5 +15,7 @@ pub use options::key_label;
 pub use runtime::run;
 pub use state::Step;
 
+#[cfg(test)]
+mod chat_tests;
 #[cfg(test)]
 mod tests;

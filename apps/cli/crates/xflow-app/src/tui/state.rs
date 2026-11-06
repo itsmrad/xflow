@@ -1,5 +1,5 @@
 use super::{
-    ai_apps, integrations,
+    ai_apps, chat, integrations,
     options::{self, value_text},
     theme::{ColorMode, Theme, BUILTINS},
 };
@@ -38,8 +38,9 @@ pub enum Page {
     Stats,
     Doctor,
     AiApps,
+    Chat,
 }
-pub const PAGES: [Page; 10] = [
+pub const PAGES: [Page; 11] = [
     Page::Home,
     Page::History,
     Page::Dictionary,
@@ -50,6 +51,7 @@ pub const PAGES: [Page; 10] = [
     Page::Stats,
     Page::Doctor,
     Page::AiApps,
+    Page::Chat,
 ];
 impl Page {
     pub fn title(self) -> &'static str {
@@ -64,6 +66,7 @@ impl Page {
             Self::Stats => "Your stats",
             Self::Doctor => "Check-up",
             Self::AiApps => "AI apps",
+            Self::Chat => "Chat",
         }
     }
     pub fn index(self) -> usize {
@@ -116,7 +119,7 @@ pub fn commands() -> Vec<Command> {
         .map(|(i, p)| Command {
             action: Action::Go(*p),
             title: format!("Go to {}", p.title()),
-            key: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"][i],
+            key: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-"][i],
         })
         .collect();
     for (action, title, key) in [
@@ -193,6 +196,9 @@ pub enum Effect {
     /// Download the on-device model; notified to cancel (staging is kept for a resume).
     InstallModel(std::sync::Arc<tokio::sync::Notify>),
     RemoveModel,
+    ChatTurn(Box<chat::ChatRun>),
+    ChatCancel,
+    ChatKeys,
 }
 /// A step still waiting this long likely faces an old, switched-on xflowd row.
 const STALE_AFTER: Duration = Duration::from_secs(10);
@@ -227,6 +233,7 @@ pub enum EditTarget {
     Menu(Vec<Action>),
     Setup(Step),
     Transcript(i64),
+    ChatProvider(String),
 }
 pub struct Field {
     pub label: String,
@@ -237,7 +244,7 @@ pub struct Field {
     pub cursor: usize,
 }
 impl Field {
-    fn new(label: &str, value: impl Into<String>) -> Self {
+    pub(super) fn new(label: &str, value: impl Into<String>) -> Self {
         let value = value.into();
         let cursor = value.len();
         Self {
@@ -351,6 +358,8 @@ pub enum Modal {
         removing: bool,
         error: Option<String>,
     },
+    /// The provider a first send would share transcripts with.
+    ChatConsent(String),
 }
 pub struct App {
     pub page: Page,
@@ -434,6 +443,7 @@ pub struct App {
     pub install: super::on_device::Job,
     pub facts: Option<crate::local_models::Facts>,
     pub probe: fn() -> crate::local_models::Facts,
+    pub chat: chat::Chat,
 }
 impl App {
     pub fn new(path: PathBuf, colors: ColorMode) -> Self {
@@ -503,6 +513,7 @@ impl App {
             install: Default::default(),
             facts: None,
             probe: crate::local_models::facts,
+            chat: chat::Chat::default(),
         }
     }
     pub fn load(&mut self, file: ConfigFile, disk: Option<String>) -> Result<()> {
@@ -627,6 +638,7 @@ impl App {
                 }))
                 .collect(),
             Page::Settings => self.settings(),
+            Page::Chat => self.chat_rows(),
             Page::Overlay => self
                 .overlay
                 .iter()
@@ -925,6 +937,7 @@ impl App {
     fn retry_here(&self) -> bool {
         self.start_failed
             && !self.connected
+            && self.page != Page::Chat
             && matches!(self.modal, None | Some(Modal::Setup(Step::Permissions)))
     }
     /// Lost (or never had) the helper: start it once per outage through launchd,
@@ -1034,6 +1047,8 @@ impl App {
             // Pick up edits made elsewhere (CLI, editor) before showing values.
             Page::Settings if !self.dirty && !self.saving => vec![Effect::Load(self.path.clone())],
             Page::Settings => vec![Effect::KeyStatus(self.config.clone())],
+            Page::Chat if !self.chat_ready() => vec![Effect::ChatKeys],
+            Page::Chat => vec![],
             Page::Overlay => vec![Effect::Overlay],
             Page::Doctor => vec![
                 Effect::Doctor,
@@ -1204,6 +1219,9 @@ impl App {
         if let Some(modal) = self.modal.take() {
             return self.modal_key(modal, key);
         }
+        if self.page == Page::Chat && self.chat_ready() && chat::captures(key) {
+            return self.chat_key(key);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
                 KeyCode::Char('p') => self.action(Action::Palette),
@@ -1214,6 +1232,7 @@ impl App {
         let action = match key.code {
             KeyCode::Char(c @ '1'..='9') => Action::Go(PAGES[(c as u8 - b'1') as usize]),
             KeyCode::Char('0') => Action::Go(Page::AiApps),
+            KeyCode::Char('-') => Action::Go(Page::Chat),
             KeyCode::Tab => Action::Go(PAGES[(self.page.index() + 1) % PAGES.len()]),
             KeyCode::BackTab => {
                 Action::Go(PAGES[(self.page.index() + PAGES.len() - 1) % PAGES.len()])
@@ -1269,6 +1288,22 @@ impl App {
                     effects = self.confirmed(*action);
                 }
                 KeyCode::Char('n') | KeyCode::Esc => keep = false,
+                _ => (),
+            },
+            // Like `xflow ask`, only an explicit yes shares anything.
+            Modal::ChatConsent(_) if key.modifiers.contains(KeyModifiers::CONTROL) => (),
+            Modal::ChatConsent(_) => match key.code {
+                KeyCode::Char('y' | 'Y') if self.saving || self.file.is_none() => {
+                    self.toast = Some("One moment — saving your last change.".into());
+                }
+                KeyCode::Char('y' | 'Y') => {
+                    keep = false;
+                    effects = self.chat_consent(true);
+                }
+                KeyCode::Char('n' | 'N') | KeyCode::Esc | KeyCode::Enter => {
+                    keep = false;
+                    effects = self.chat_consent(false);
+                }
                 _ => (),
             },
             Modal::Search => match key.code {
@@ -1457,6 +1492,9 @@ impl App {
         vec![]
     }
     pub fn paste(&mut self, text: &str) {
+        if self.modal.is_none() && self.page == Page::Chat && self.chat_ready() {
+            self.chat.paste(text);
+        }
         if let Some(Modal::Editor(editor)) = &mut self.modal {
             let field = &mut editor.fields[editor.focus];
             if !field.choices.is_empty() || editor.capturing {
@@ -1478,7 +1516,7 @@ impl App {
             }
         }
     }
-    fn edit(
+    pub(super) fn edit(
         &mut self,
         target: EditTarget,
         title: &str,
@@ -1689,6 +1727,7 @@ impl App {
             }
             Page::Settings => return self.open_setting(pos),
             Page::AiApps => return ai_apps::choose(self),
+            Page::Chat => self.chat_choose(pos),
             Page::Doctor => {
                 if let Some(grant) = self.doctor_grant(pos) {
                     return self.fix(grant, true);
@@ -2291,6 +2330,7 @@ impl App {
             Zeroizing::new(raw.trim().to_owned())
         };
         match editor.target.clone() {
+            EditTarget::ChatProvider(id) => return self.apply_chat_setup(&id, editor),
             EditTarget::Key { id, cleanup } => {
                 if editor.fields[0].value.trim().is_empty() {
                     bail!("Paste your API key first");
@@ -2385,7 +2425,9 @@ impl App {
                 self.set_optional("recording.device", value)?;
                 return Ok(vec![]);
             }
-            EditTarget::Key { .. } | EditTarget::Transcript(_) => unreachable!(),
+            EditTarget::Key { .. } | EditTarget::Transcript(_) | EditTarget::ChatProvider(_) => {
+                unreachable!()
+            }
             EditTarget::Overlay(key) => {
                 return Ok(vec![Effect::OverlaySet(key.clone(), value.clone())])
             }

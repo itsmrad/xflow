@@ -1,0 +1,24 @@
+ xflow  ·  Chat                                                   ○ Not running
+╭────────────────╮╭ Chat ──────────────────────────────────────────────────────╮
+│ 1  Home        ││› OpenAI                      No key yet                    │
+│ 2  History     ││  Anthropic                   Key saved                     │
+│ 3  Dictionary  ││  OpenRouter                  Key from your environment     │
+│ 4  Snippets    ││  Local (on this computer)    No key needed                 │
+│ 5  Styles      ││                                                            │
+│ 6  Settings    ││                                                            │
+│ 7  Pill        ││                                                            │
+│ 8  Your stats  ││                                                            │
+│ 9  Check-up    ││                                                            │
+│ 0  AI apps     ││                                                            │
+│>-  Chat        ││                                                            │
+│                │╰────────────────────────────────────────────────────────────╯
+│                │╭ Set up chat ───────────────────────────────────────────────╮
+│                ││ Choose where your questions go. Press Enter to set up      │
+│                ││ OpenAI.                                                    │
+│                ││                                                            │
+│                ││ The key stays encrypted on this computer. Your dictations  │
+│                ││ are shared only after you allow it.                        │
+│                ││                                                            │
+╰────────────────╯╰────────────────────────────────────────────────────────────╯
+
+ ↑↓ move · Enter choose · Esc back · Tab next page · ? help · q quit

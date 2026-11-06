@@ -10,7 +10,7 @@
 │ 8  Your stats  ││            Microphone            Automatic                 │
 │ 9  Check-up    ││            Ignore speaker sound  Off                       │
 │ 0  AI apps     ││            Check connection      Run check                 │
-│                ││  Shortcut  Key                   Fn (Globe)                │
+│ -  Chat        ││  Shortcut  Key                   Fn (Globe)                │
 │                │╰────────────────────────────────────────────────────────────╯
 │                │╭ About ─────────────────────────────────────────────────────╮
 │                ││ Start · Guided setup                                       │
