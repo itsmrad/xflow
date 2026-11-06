@@ -212,6 +212,7 @@ struct Input {
 }
 struct TapContext {
     binding: Binding,
+    dictation: bool,
     ask: Option<AskWatch>,
     down: bool,
     tap: Ref,
@@ -543,6 +544,9 @@ unsafe extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, context: Ref) 
             context.send(KeyEvent::Other);
         }
     }
+    if !context.dictation {
+        return event;
+    }
     let binding = &context.binding;
     let down = if binding.flag != 0 {
         if kind != FLAGS_CHANGED || code != binding.code {
@@ -608,14 +612,15 @@ impl MacHotkeys {
         let thread_received = received.clone();
         let binding = Binding::parse(&hotkey.key);
         let gesture = ask.enabled.then(|| AskGesture {
-            overlaps: xflow_core::config::modifier_chord(&ask.key)
-                .is_some_and(|pair| pair.contains(&hotkey.key.as_str())),
+            overlaps: hotkey.enabled
+                && xflow_core::config::modifier_chord(&ask.key)
+                    .is_some_and(|pair| pair.contains(&hotkey.key.as_str())),
         });
         let ask_watch = ask.enabled.then(|| {
             let keys = named_pair(&ask.key).expect("ask.key was validated");
-            let skip = keys
-                .iter()
-                .position(|key| binding.flag != 0 && *key == (binding.code, binding.flag));
+            let skip = keys.iter().position(|key| {
+                hotkey.enabled && binding.flag != 0 && *key == (binding.code, binding.flag)
+            });
             AskWatch {
                 keys,
                 skip,
@@ -623,6 +628,7 @@ impl MacHotkeys {
             }
         });
         let machine = HotkeyMachine::with_ask(hotkey.clone(), gesture);
+        let dictation = hotkey.enabled;
         let thread_overflow = overflow.clone();
         // The context is only touched through this raw pointer, on its run-loop thread.
         let thread = thread::Builder::new()
@@ -631,6 +637,7 @@ impl MacHotkeys {
             .spawn(move || unsafe {
                 let context = Box::into_raw(Box::new(TapContext {
                     binding,
+                    dictation,
                     ask: ask_watch,
                     down: false,
                     tap: ptr::null_mut(),
