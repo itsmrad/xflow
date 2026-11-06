@@ -258,7 +258,7 @@ async fn paired_audio_becomes_timestamped_text_and_audio_is_deleted() {
     );
     assert!(audio_files(&s.db).is_empty(), "accepted audio is deleted");
     assert_eq!(sql(&s.db, "SELECT count(*) FROM pieces"), 0);
-    let status = jobs::status(&s.db, Some(meeting.id), limits(), transcribe::now_ms()).unwrap();
+    let status = jobs::status(&s.db, Some(meeting.id), limits(), journal::now_ms()).unwrap();
     assert_eq!(status.meetings[0].windows.accepted, 5);
     assert_eq!(status.meetings[0].pending_audio.pieces, 0);
     let found = MeetingReader::at(s.db.clone())
@@ -303,7 +303,7 @@ async fn overlap_audio_waits_for_the_next_window_and_failed_audio_survives_resta
     // A restart (recovery) keeps them; status shows the failure.
     journal::recover(&s.db).unwrap();
     assert_eq!(audio_files(&s.db).len(), 7);
-    let status = jobs::status(&s.db, Some(meeting.id), limits(), transcribe::now_ms()).unwrap();
+    let status = jobs::status(&s.db, Some(meeting.id), limits(), journal::now_ms()).unwrap();
     assert_eq!(status.meetings[0].windows.failed, 1);
     assert_eq!(status.meetings[0].pending_audio.seconds, 35);
     // Explicit retry with three fresh attempts: everything completes and goes.
@@ -362,7 +362,7 @@ async fn attempt_ceiling_rate_limits_timeouts_and_empty_results() {
     assert_eq!(stored[0].3, "useEffect runs after render");
     // Window 3 failed: its audio and the shared overlap stay.
     assert!(!audio_files(&s.db).is_empty());
-    let status = jobs::status(&s.db, Some(meeting.id), limits(), transcribe::now_ms()).unwrap();
+    let status = jobs::status(&s.db, Some(meeting.id), limits(), journal::now_ms()).unwrap();
     let m = &status.meetings[0];
     assert_eq!((m.windows.empty, m.windows.failed), (1, 1));
     assert!(m.last_error.as_deref().unwrap_or("").contains("503"));
@@ -514,7 +514,7 @@ async fn corrupt_torn_and_orphan_pieces_are_recovered_or_quarantined() {
         .flatten()
         .collect();
     assert_eq!(quarantine.len(), 3, "damaged pieces are kept, not deleted");
-    let status = jobs::status(&s.db, None, limits(), transcribe::now_ms()).unwrap();
+    let status = jobs::status(&s.db, None, limits(), journal::now_ms()).unwrap();
     assert_eq!(status.spool.quarantined_files, 3);
     assert!(status.warnings.iter().any(|w| w.contains("quarantine")));
 }
@@ -575,7 +575,7 @@ async fn quotas_refuse_or_stop_visibly_and_never_delete() {
         assert!(path.exists(), "quota never evicts older audio");
     }
     assert_eq!(audio_files(&s.db).len(), 2 + 3);
-    let status = jobs::status(&s.db, Some(second.id), limits(), transcribe::now_ms()).unwrap();
+    let status = jobs::status(&s.db, Some(second.id), limits(), journal::now_ms()).unwrap();
     assert_eq!(status.meetings[0].capture, "stopped");
     // The stopped meeting's saved audio is still transcribed.
     let stub = stub(|n, _| ok(&format!("kept {n}")));
@@ -589,12 +589,12 @@ async fn quotas_refuse_or_stop_visibly_and_never_delete() {
 async fn audio_waiting_a_day_warns_and_is_never_expired() {
     let s = scratch();
     let meeting = capture(&s.db, &[12]);
-    let later = transcribe::now_ms() + 25 * 3_600_000;
+    let later = journal::now_ms() + 25 * 3_600_000;
     let status = jobs::status(&s.db, Some(meeting.id), limits(), later).unwrap();
     let m = &status.meetings[0];
     assert!(m.pending_audio.age_ms.unwrap() >= jobs::WARN_AFTER_MS);
     assert!(m.warnings.iter().any(|w| w.contains("24 hours")));
-    let early = jobs::status(&s.db, Some(meeting.id), limits(), transcribe::now_ms()).unwrap();
+    let early = jobs::status(&s.db, Some(meeting.id), limits(), journal::now_ms()).unwrap();
     assert!(early.meetings[0].warnings.is_empty());
     // Status, recovery and repeated restarts never remove it.
     for _ in 0..3 {
@@ -908,7 +908,7 @@ fn assert_tiny_tail_retained(count: usize) {
         1
     );
     assert_eq!(std::fs::read(&wav).unwrap(), original);
-    let status = jobs::status(&s.db, Some(meeting.id), limits(), transcribe::now_ms()).unwrap();
+    let status = jobs::status(&s.db, Some(meeting.id), limits(), journal::now_ms()).unwrap();
     assert!(status.meetings[0].pending_audio.bytes > 0);
     assert_eq!(status.meetings[0].windows.retained, 1);
     assert_eq!(status.meetings[0].windows.abandoned, 0);
