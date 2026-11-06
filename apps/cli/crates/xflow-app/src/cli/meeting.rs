@@ -46,6 +46,7 @@ pub fn run(
             force,
         } => export(id, *format, output, *force, out),
         args::MeetingCmd::Delete { id, retry } => delete(id.as_deref(), *retry, out),
+        args::MeetingCmd::Detect => super::detect_meetings(out),
     }
 }
 

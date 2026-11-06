@@ -11,6 +11,7 @@ mod macos;
 mod macos_hotkey;
 #[cfg(target_os = "macos")]
 pub use macos_hotkey::MacHotkeys;
+pub mod meeting;
 pub mod notifications;
 pub mod sounds;
 
