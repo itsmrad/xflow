@@ -36,6 +36,8 @@ pub enum Color {
 pub enum Command {
     /// Share read-only dictation context with local MCP clients.
     Mcp(xflow_app::mcp::Mcp),
+    /// Ask a question about your dictations; excerpts go to the [ai] provider.
+    Ask(Ask),
     /// Set up a provider, microphone and optional desktop integration.
     Setup(Setup),
     /// Begin recording (bind to shortcut press for push-to-talk).
@@ -193,6 +195,26 @@ pub enum Command {
     /// Shut down the daemon (legacy command).
     #[command(hide = true)]
     Shutdown,
+}
+#[derive(Args, Debug)]
+pub struct Ask {
+    /// The question; read from stdin when omitted.
+    pub question: Option<String>,
+    /// Use this provider instead of ai.provider.
+    #[arg(long)]
+    pub provider: Option<String>,
+    /// Use this model instead of ai.model or the provider's default.
+    #[arg(long)]
+    pub model: Option<String>,
+    /// Print retrieval, overhead, first-token and total times and tokens to stderr.
+    #[arg(long)]
+    pub timing: bool,
+    /// Send only the question: no transcript search or read tools.
+    #[arg(long)]
+    pub no_context: bool,
+    /// Allow this provider to receive transcript excerpts for this run; not saved.
+    #[arg(long)]
+    pub yes: bool,
 }
 #[derive(Args, Debug)]
 pub struct ModeArgs {

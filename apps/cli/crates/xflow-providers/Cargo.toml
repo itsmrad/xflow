@@ -33,3 +33,4 @@ keyring = { version = "3.6", features = ["apple-native"] }
 [dev-dependencies]
 claxon = "0.4"
 tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }

@@ -9,6 +9,7 @@ pub struct ModelInfo {
 pub enum ProviderKind {
     Stt,
     Cleanup,
+    Chat,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct ProviderInfo {
@@ -254,16 +255,78 @@ static CLEANUP: &[ProviderInfo] = &[
         [("", "Server-specific model", "Set endpoint and model")]
     ),
 ];
+static CHAT: &[ProviderInfo] = &[
+    row!(
+        Chat,
+        "groq",
+        "Groq",
+        "https://api.groq.com/openai/v1/chat/completions",
+        Some("GROQ_API_KEY"),
+        "https://console.groq.com/keys",
+        "https://console.groq.com/docs/models",
+        false,
+        false,
+        [("openai/gpt-oss-20b", "GPT-OSS 20B", "Fast Chat Completions")]
+    ),
+    row!(
+        Chat,
+        "openai",
+        "OpenAI",
+        "https://api.openai.com/v1/responses",
+        Some("OPENAI_API_KEY"),
+        "https://platform.openai.com/api-keys",
+        "https://platform.openai.com/docs/api-reference/responses",
+        false,
+        false,
+        [("gpt-6-luna", "GPT-6 Luna", "Low latency; Responses wire")]
+    ),
+    row!(
+        Chat,
+        "anthropic",
+        "Anthropic",
+        "https://api.anthropic.com/v1/messages",
+        Some("ANTHROPIC_API_KEY"),
+        "https://console.anthropic.com/settings/keys",
+        "https://docs.anthropic.com/en/api/messages",
+        false,
+        false,
+        [(
+            "claude-haiku-5-5",
+            "Claude Haiku 5.5",
+            "Low latency; Messages wire"
+        )]
+    ),
+    row!(
+        Chat,
+        "openrouter",
+        "OpenRouter",
+        "https://openrouter.ai/api/v1/chat/completions",
+        Some("OPENROUTER_API_KEY"),
+        "https://openrouter.ai/settings/keys",
+        "https://openrouter.ai/docs/api-reference/overview",
+        false,
+        false,
+        [(
+            "openai/gpt-oss-120b",
+            "GPT-OSS 120B",
+            "Routed; only hosts that do not collect data"
+        )]
+    ),
+];
 pub fn stt_providers() -> &'static [ProviderInfo] {
     STT
 }
 pub fn cleanup_providers() -> &'static [ProviderInfo] {
     CLEANUP
 }
+pub fn chat_providers() -> &'static [ProviderInfo] {
+    CHAT
+}
 pub fn find_provider(kind: ProviderKind, id: &str) -> Option<&'static ProviderInfo> {
     let rows = match kind {
         ProviderKind::Stt => STT,
         ProviderKind::Cleanup => CLEANUP,
+        ProviderKind::Chat => CHAT,
     };
     rows.iter().find(|p| p.id == id)
 }
@@ -272,7 +335,7 @@ mod tests {
     use super::*;
     #[test]
     fn catalog_invariants() {
-        for rows in [STT, CLEANUP] {
+        for rows in [STT, CLEANUP, CHAT] {
             let mut ids = std::collections::HashSet::new();
             for p in rows {
                 assert!(ids.insert(p.id));

@@ -18,7 +18,7 @@ pub(crate) fn probe_url(
         return Ok((reqwest::Method::GET, url));
     }
     let path = match provider {
-        "openai" => "/v1/models",
+        "openai" | "anthropic" => "/v1/models",
         "groq" => "/openai/v1/models",
         "openrouter" => "/api/v1/key",
         "deepgram" => "/v1/auth/token",

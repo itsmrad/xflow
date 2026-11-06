@@ -24,6 +24,7 @@ fn credential_provider(id: &str) -> Result<()> {
     if id == "cleanup"
         || xflow_providers::find_provider(ProviderKind::Stt, id)
             .or_else(|| xflow_providers::find_provider(ProviderKind::Cleanup, id))
+            .or_else(|| xflow_providers::find_provider(ProviderKind::Chat, id))
             .is_some()
     {
         Ok(())

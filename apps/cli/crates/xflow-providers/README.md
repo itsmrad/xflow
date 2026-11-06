@@ -203,3 +203,32 @@ not validated through billable inference. Gemini's prompted fallback may
 hallucinate on silence; the dedicated inline path needs an authorized account
 test before claiming production validation. Custom endpoints can impose smaller
 format/size limits.
+
+
+## Chat gateway and Quick AI default
+
+`llm::build_provider(&AiConfig, offline)` retains its existing interface.
+`llm::build_provider_with_cleanup(&AiConfig, &CleanupConfig, offline)` returns
+`Result<(AiConfig, Gateway), LlmError>`: explicit AI settings win; when AI's
+provider is unset, it reuses cleanup's endpoint, model and credential resolution
+through `HttpTransformer::new`, without cleanup prompts or formatting. The
+returned config identifies the destination/model for consent and requests. Use
+this helper again for later calls: OpenAI cleanup uses Chat Completions while
+explicit AI OpenAI uses Responses. Gemini cleanup is rejected. Cleanup mode may
+remain raw; only the configured connection is reused. Reuse grants no transcript
+consent; callers must enforce consent before running a turn.
+
+Chat `groq` uses its existing `groq` keystore entry / `GROQ_API_KEY`, defaulting
+to `openai/gpt-oss-20b`. `custom` keeps Local setup's literal-loopback-only
+identity. For arbitrary HTTPS OpenAI-compatible services, select
+`ai.provider = "openai-compatible"`, set `ai.endpoint` and `ai.model`, and supply
+`XFLOW_AI_API_KEY` explicitly in the environment. No stored provider key is used
+for this route. A root base URL appends `/v1/chat/completions`; other bases append
+`/chat/completions`; full Chat Completions URLs are retained. Non-loopback HTTP,
+URL credentials, query strings and fragments are rejected. Loopback is anonymous,
+even when cleanup has an API key configured. Offline permits only literal loopback.
+Cleanup endpoint overrides reuse only explicitly selected environment auth for
+remote noncanonical hosts, never stored credentials; cleanup `custom` stays local.
+
+Gateway owns the single `xflow ask` command; Quick AI calls the helper and reusable
+`xflow_app::chat::run_turn`. Harness integrations are separate.
