@@ -587,6 +587,7 @@ fn start(meeting: Option<&MeetingId>, config: &Path, wait: bool, out: &Output) -
 
 /// Background transcription for a recorded meeting, printing nothing. True
 /// when the worker runs or nothing is waiting.
+#[cfg(target_os = "macos")]
 pub(super) fn transcribe_quietly(meeting: Option<&MeetingId>, config: &Path) -> bool {
     let Ok(db) = db_path() else {
         return false;

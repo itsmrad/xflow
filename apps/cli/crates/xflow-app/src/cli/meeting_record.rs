@@ -212,8 +212,10 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
                     let rate = u32::from_le_bytes(body[0..4].try_into().unwrap());
                     let lost = u64::from_le_bytes(body[4..12].try_into().unwrap());
                     let samples: Vec<f32> = body[12..]
-                        .chunks_exact(4)
-                        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|b| f32::from_le_bytes(*b))
                         .collect();
                     tracks[s].push(&mut capture, s, rate, lost, &samples)
                 }
