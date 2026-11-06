@@ -62,7 +62,7 @@ jobs:
         id: binaries
         with:
           path: target/scoreboard-bin
-          key: scoreboard-bin-${{ runner.os }}-${{ env.SCOREBOARD_RUST }}-${{ env.SCOREBOARD_TARGET }}-${{ hashFiles('apps/cli/**','config/**','packaging/**','.github/workflows/ci.yml') }}
+          key: scoreboard-bin-${{ runner.os }}-${{ env.SCOREBOARD_RUST }}-${{ env.SCOREBOARD_TARGET }}-${{ hashFiles('apps/cli/**','config/**','packaging/**','.cargo/**','.github/workflows/ci.yml') }}
       - name: Install system packages
         run: |
           sudo apt-get update
