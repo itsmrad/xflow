@@ -6958,17 +6958,17 @@ mod tests {
         let run = run.finish().await;
         assert!(run.outcomes().contains(&"retracted".to_string()));
     }
-    /// A save that claimed the correction too early: `plans` -> `plansc` -> `plans`.
+    /// A save that claimed the correction too early: `plans` -> `planz` -> `plans`.
     #[tokio::test]
     async fn a_mistaken_save_taken_back_leaves_no_trace_and_no_repeat() {
         let seed = "# my settings\n";
         let dictated = "Please ask about tomorrow plans ";
-        let mistaken = "Please ask about tomorrow plansc ";
+        let mistaken = "Please ask about tomorrow planz ";
         let seen = Arc::<std::sync::Mutex<Vec<Replacement>>>::default();
         let mut run = Run::again("", dictated, seen.clone(), Some(seed)).await;
         run.edit(mistaken);
         assert!(run.save_within(3000).await.is_some());
-        assert_eq!(run.dictionary().words, ["plansc"]);
+        assert_eq!(run.dictionary().words, ["planz"]);
         assert!(
             run.dictionary().replacements.is_empty(),
             "Tier 2: the word only"
@@ -7160,9 +7160,9 @@ mod tests {
             ),
             (
                 "Please ask about tomorrow plans ",
-                "Please ask about tomorrow plansc ",
-                32,
-                "plansc",
+                "Please ask about tomorrow planz ",
+                31,
+                "planz",
             ),
         ] {
             // Caret still on it, left alone: the 4 s path.
