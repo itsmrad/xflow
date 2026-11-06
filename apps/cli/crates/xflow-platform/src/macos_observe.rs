@@ -15,7 +15,7 @@ use std::{
     ffi::c_void,
     ptr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -527,6 +527,130 @@ impl Drop for Watch {
     }
 }
 
+/// App and window changes for a terminal replay. No text is read.
+pub(super) struct Departure {
+    pub(super) events: mpsc::Receiver<()>,
+    stop: Arc<AtomicBool>,
+    runloop: Arc<AtomicUsize>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+impl Departure {
+    pub(super) fn signal(&self) {
+        self.stop.store(true, Ordering::Release);
+        let runloop = self.runloop.swap(0, Ordering::AcqRel) as MutRef;
+        if !runloop.is_null() {
+            unsafe {
+                CFRunLoopStop(runloop);
+                CFRunLoopWakeUp(runloop);
+                CFRelease(runloop as Ref);
+            }
+        }
+    }
+}
+impl Drop for Departure {
+    fn drop(&mut self) {
+        self.signal();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+pub(super) fn departure(pid: i32, window: &Owned) -> Option<Departure> {
+    if pid <= 0 {
+        return None;
+    }
+    let (tx, events) = mpsc::channel(4);
+    let stop = Arc::new(AtomicBool::new(false));
+    let runloop = Arc::new(AtomicUsize::new(0));
+    let (flag, wake, kept) = (stop.clone(), runloop.clone(), Shared(retain(window)));
+    let thread = thread::Builder::new()
+        .name("xflow-replay-focus".into())
+        .stack_size(256 * 1024)
+        .spawn(move || unsafe { watch_departure(pid, kept, tx, &flag, &wake) })
+        .ok()?;
+    Some(Departure {
+        events,
+        stop,
+        runloop,
+        thread: Some(thread),
+    })
+}
+unsafe fn watch_departure(
+    pid: i32,
+    window: Shared,
+    events: mpsc::Sender<()>,
+    stop: &AtomicBool,
+    wake: &AtomicUsize,
+) {
+    let Some(app) = Owned::new(AXUIElementCreateApplication(pid)) else {
+        return;
+    };
+    AXUIElementSetMessagingTimeout(app.0, 0.1);
+    let mut observer = ptr::null();
+    if AXObserverCreate(pid, leave_callback, &mut observer) != 0 {
+        return;
+    }
+    let Some(observer) = Owned::new(observer) else {
+        return;
+    };
+    let mut context = Box::new(LeaveCtx {
+        events,
+        window,
+        app: Shared(app),
+        sent: Cell::new(false),
+    });
+    let app_ref = (context.app.0).0;
+    let refcon: *mut c_void = (&mut *context as *mut LeaveCtx).cast();
+    let mut added = false;
+    for name in ["AXApplicationDeactivated", "AXFocusedWindowChanged"] {
+        let name = Owned::string(name);
+        added |= AXObserverAddNotification(observer.0, app_ref, name.0, refcon) == 0;
+    }
+    if !added {
+        return;
+    }
+    let source = AXObserverGetRunLoopSource(observer.0) as MutRef;
+    let runloop = CFRunLoopGetCurrent();
+    CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
+    CFRetain(runloop);
+    wake.store(runloop as usize, Ordering::Release);
+    loop {
+        if stop.load(Ordering::Acquire) || CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, true) == 1
+        {
+            break;
+        }
+    }
+    let retained = wake.swap(0, Ordering::AcqRel) as MutRef;
+    if !retained.is_null() {
+        CFRelease(retained as Ref);
+    }
+    CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
+}
+struct LeaveCtx {
+    events: mpsc::Sender<()>,
+    window: Shared,
+    app: Shared,
+    sent: Cell<bool>,
+}
+unsafe extern "C" fn leave_callback(_: Ref, _: Ref, notification: Ref, context: *mut c_void) {
+    let context = &*(context as *const LeaveCtx);
+    if context.sent.get() {
+        return;
+    }
+    let leave = match cf_text(notification).as_deref() {
+        Some("AXApplicationDeactivated") => true,
+        // A failed read is not a window change. A different window is.
+        Some("AXFocusedWindowChanged") => context
+            .app
+            .0
+            .attribute("AXFocusedWindow")
+            .is_some_and(|w| !CFEqual(w.0, (context.window.0).0)),
+        _ => false,
+    };
+    if leave && context.events.try_send(()).is_ok() {
+        context.sent.set(true);
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
