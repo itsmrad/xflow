@@ -16,6 +16,7 @@ pub mod ipc;
 pub mod learn;
 pub mod lists;
 pub mod meeting;
+pub mod meeting_detect;
 pub mod replay;
 pub mod snap;
 pub mod text;

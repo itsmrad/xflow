@@ -109,6 +109,9 @@ pub enum Command {
     /// Internal: background meeting transcription started by `meeting process`.
     #[command(hide = true, name = "meeting-worker")]
     MeetingWorker,
+    /// Internal: automatic meeting prompts, owned by the daemon control pipe.
+    #[command(hide = true, name = "meeting-watch")]
+    MeetingWatch,
     /// Clear all history (legacy alias for history clear).
     #[command(hide = true)]
     ClearHistory {
@@ -399,6 +402,12 @@ pub enum MeetingCmd {
         #[arg(long)]
         retry: bool,
     },
+    /// Watch for a Zoom, Google Meet, Microsoft Teams or Amazon Chime call and
+    /// print each decision (app name and decision only) until interrupted.
+    ///
+    /// Runs in this process and opens no microphone. Browser calls need
+    /// Accessibility to read window titles. Nothing is recorded yet.
+    Detect,
 }
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum MeetingFormat {

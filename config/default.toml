@@ -126,3 +126,8 @@ mouse = true
 # apps = ["slack", "discord", "telegram"]
 # mode = "light"
 # prompt = "Casual tone. Lowercase is fine."
+
+# Ask before turning on Xflow for a recognized meeting (macOS 14.2+).
+# Detection opens no microphone. Set false to disable prompts.
+[meetings]
+detect = true

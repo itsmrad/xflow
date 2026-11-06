@@ -15,6 +15,8 @@ use xflow_core::{
 
 const MAX_TEXT: usize = 64 * 1024;
 // A child module so the observer reuses this file's private AX helpers.
+#[path = "macos_meeting.rs"]
+pub(crate) mod meeting;
 #[path = "macos_observe.rs"]
 mod observe;
 type Ref = *const c_void;

@@ -7,6 +7,7 @@ mod ipc;
 mod launchd;
 mod local_models;
 mod meeting;
+mod meeting_detect;
 mod output;
 mod provider;
 mod setup;
@@ -253,6 +254,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
         }
         Command::History { page, action } => ipc::history(page, action.as_ref(), out),
         Command::Meeting { action } => meeting::run(action, || path(cli), out),
+        Command::MeetingWatch => meeting_detect::run(&path(cli)?),
         Command::MeetingWorker => meeting::worker(&path(cli)?),
         Command::ClearHistory { yes } => {
             config::confirm(*yes, "Delete all dictation history?")?;
@@ -343,4 +345,31 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Print the meeting detector's decisions until Ctrl-C; app names only.
+fn detect_meetings(out: &Output) -> Result<()> {
+    let (events, mut decided) = tokio::sync::mpsc::unbounded_channel();
+    let _observer = xflow_platform::meeting::observe(move |event| {
+        let _ = events.send(event);
+    })?;
+    if !out.json && !out.quiet {
+        eprintln!(
+            "Watching for Zoom, Google Meet, Microsoft Teams and Amazon Chime calls. Ctrl-C stops."
+        );
+    }
+    ipc::block_on(async {
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => return Ok(()),
+                Some(event) = decided.recv() => {
+                    let decision = event.decision.as_str();
+                    out.data(
+                        &serde_json::json!({"app": event.app, "decision": decision}),
+                        &format!("{}: {decision}", event.app),
+                    )?;
+                }
+            }
+        }
+    })
 }
