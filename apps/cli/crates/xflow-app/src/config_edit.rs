@@ -423,13 +423,19 @@ pub fn use_on_device(file: &mut ConfigFile) -> Result<()> {
     file.set_typed("stt", &local)
 }
 
-/// Leave on-device speech: restore the saved API section (defaults if none) and
-/// drop the snapshot. Returns it so the caller can apply a newly chosen provider.
+/// Leave on-device speech: restore the saved API section and drop the snapshot.
+/// Without one (a hand-edited file), only the provider changes, to the default;
+/// other `[stt]` edits stay. Returns it so the caller can apply a newly chosen provider.
 pub fn leave_on_device(file: &mut ConfigFile) -> Result<xflow_core::config::SttConfig> {
-    let stt = file.config()?.on_device.previous_api.unwrap_or_default();
-    file.set_typed("stt", &stt)?;
+    match file.config()?.on_device.previous_api {
+        Some(stt) => file.set_typed("stt", &stt)?,
+        None => file.set_typed(
+            "stt.provider",
+            &xflow_core::config::SttConfig::default().provider,
+        )?,
+    }
     file.unset("on_device.previous_api")?;
-    Ok(stt)
+    Ok(file.config()?.stt)
 }
 
 fn parse(doc: &DocumentMut) -> Result<Config> {
@@ -970,6 +976,20 @@ mod on_device_tests {
         assert_eq!(after.on_device.previous_api, None);
         assert_eq!(after.dictionary, before.dictionary);
         assert!(file.to_string().contains("# my settings"));
+    }
+
+    #[test]
+    fn leaving_without_a_snapshot_changes_only_the_provider() {
+        let (_dir, mut file) = file("[stt]\nprovider = \"on-device\" # mine\nendpoint = \"https://stt.example.com/v1\"\nmodel = \"whisper-x\"\napi_key_env = \"MY_KEY\"\n");
+        let stt = leave_on_device(&mut file).unwrap();
+        assert_eq!(
+            stt.provider,
+            xflow_core::config::SttConfig::default().provider
+        );
+        assert_eq!(stt.endpoint.as_deref(), Some("https://stt.example.com/v1"));
+        assert_eq!(stt.model.as_deref(), Some("whisper-x"));
+        assert_eq!(stt.api_key_env.as_deref(), Some("MY_KEY"));
+        assert_eq!(file.config().unwrap().stt, stt);
     }
 
     #[test]
