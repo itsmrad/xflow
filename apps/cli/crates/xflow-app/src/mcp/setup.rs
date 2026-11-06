@@ -535,23 +535,8 @@ pub(crate) fn install(
         return Ok(report);
     }
     if matches!(client, "zed" | "lm-studio" | "windsurf") {
-        let mut sources = read_sources(consent);
-        if dictations || (!sources.dictations && confirm(ask, &format!("Share your dictation history with {client}? When you ask about it, matching text is sent to {}.",vendor(client)))?) {
-            sources.dictations = true;
-            write_sources(consent, sources)?;
-        }
-        meeting_consent(client, meetings, ask, consent, &mut report)?;
+        sharing_consent(client, dictations, meetings, ask, consent, &mut report)?;
         report.manual = Some(serde_json::to_string_pretty(&snippet(client, &exe))?);
-        if !sources.dictations {
-            report.notes.push(
-                "Dictation history stays off. Enable with `xflow mcp sources --dictations on`."
-                    .into(),
-            );
-        }
-        report.notes.push(format!(
-            "Consent is global across all MCP clients; matching text is sent to {}.",
-            vendor(client)
-        ));
         return Ok(report);
     }
     let mut replace = force;
@@ -580,20 +565,7 @@ pub(crate) fn install(
             differs = true;
         }
     }
-    let mut sources = read_sources(consent);
-    if dictations || (!sources.dictations && confirm(ask, &format!("Share your dictation history with {client}? When you ask about it, matching text is sent to {}.",vendor(client)))?) {
-        sources.dictations=true; write_sources(consent,sources)?;
-    }
-    meeting_consent(client, meetings, ask, consent, &mut report)?;
-    if !sources.dictations {
-        report.notes.push(
-            "Dictation history stays off. Enable with `xflow mcp sources --dictations on`.".into(),
-        );
-    }
-    report.notes.push(format!(
-        "Consent is global across all MCP clients; matching text is sent to {}.",
-        vendor(client)
-    ));
+    sharing_consent(client, dictations, meetings, ask, consent, &mut report)?;
     if client == "claude-code" {
         if let Some(old) = previous.as_ref().filter(|_| differs) {
             claude_replace(&args, old)?;
@@ -632,6 +604,32 @@ pub(crate) fn install(
         }
     }
     Ok(report)
+}
+/// Asks for (or records) dictation and meeting sharing, and notes the result.
+fn sharing_consent(
+    client: &str,
+    dictations: bool,
+    meetings: bool,
+    ask: bool,
+    consent: &Path,
+    report: &mut Report,
+) -> Result<()> {
+    let mut sources = read_sources(consent);
+    if dictations || (!sources.dictations && confirm(ask, &format!("Share your dictation history with {client}? When you ask about it, matching text is sent to {}.",vendor(client)))?) {
+        sources.dictations = true;
+        write_sources(consent, sources)?;
+    }
+    meeting_consent(client, meetings, ask, consent, report)?;
+    if !sources.dictations {
+        report.notes.push(
+            "Dictation history stays off. Enable with `xflow mcp sources --dictations on`.".into(),
+        );
+    }
+    report.notes.push(format!(
+        "Consent is global across all MCP clients; matching text is sent to {}.",
+        vendor(client)
+    ));
+    Ok(())
 }
 fn meeting_consent(
     client: &str,
