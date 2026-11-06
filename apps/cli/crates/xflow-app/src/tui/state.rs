@@ -189,6 +189,9 @@ pub enum Effect {
     StartHelper,
     /// AI apps setup work (client CLIs, config files), with config.toml's path.
     Mcp(ai_apps::Job, PathBuf),
+    /// Download the on-device model; notified to cancel (staging is kept for a resume).
+    InstallModel(std::sync::Arc<tokio::sync::Notify>),
+    RemoveModel,
 }
 /// A step still waiting this long likely faces an old, switched-on xflowd row.
 const STALE_AFTER: Duration = Duration::from_secs(10);
@@ -335,6 +338,12 @@ pub enum Modal {
     Editor(Box<Editor>),
     Confirm { action: Action, prompt: String },
     Setup(Step),
+    /// On-device speech facts and install; `removing` asks to confirm Remove.
+    OnDevice {
+        setup: bool,
+        removing: bool,
+        error: Option<String>,
+    },
 }
 pub struct App {
     pub page: Page,
@@ -414,6 +423,10 @@ pub struct App {
     pub scroll: u16,
     /// Fixed clock for tests; `None` reads the system clock.
     pub now: Option<i64>,
+    /// On-device speech: the model download, the facts shown, and how they're read.
+    pub install: super::on_device::Job,
+    pub facts: Option<crate::local_models::Facts>,
+    pub probe: fn() -> crate::local_models::Facts,
 }
 impl App {
     pub fn new(path: PathBuf, colors: ColorMode) -> Self {
@@ -480,6 +493,9 @@ impl App {
             theme,
             scroll: 0,
             now: None,
+            install: Default::default(),
+            facts: None,
+            probe: crate::local_models::facts,
         }
     }
     pub fn load(&mut self, file: ConfigFile, disk: Option<String>) -> Result<()> {
@@ -933,7 +949,10 @@ impl App {
                 }
                 .into(),
                 "action.stt_key" => {
-                    if matches!(self.config.stt.provider.as_str(), "local" | "custom") {
+                    if matches!(
+                        self.config.stt.provider.as_str(),
+                        "local" | "custom" | xflow_providers::ON_DEVICE
+                    ) {
                         "Not needed"
                     } else if self.key_issue.is_some() {
                         "Needs attention — see Home"
@@ -1314,6 +1333,12 @@ impl App {
                 let step = *step;
                 keep = false;
                 effects = self.setup_key(step, key);
+            }
+            Modal::OnDevice {
+                setup, removing, ..
+            } => {
+                keep = false;
+                effects = self.on_device_key(*setup, *removing, key);
             }
             Modal::Editor(editor) => {
                 if editor.capturing {
@@ -1825,15 +1850,17 @@ impl App {
                 return vec![Effect::Open(KEYBOARD_PANE)];
             }
             Step::Provider => {
+                // API services, then this Mac (offline), then a local server you already run.
                 let choices = integrations::catalog(false)
                     .into_iter()
                     .map(|p| p.id)
                     .filter(|id| id != "custom" && id != "local")
+                    .chain([xflow_providers::ON_DEVICE.into(), "local".into()])
                     .collect();
                 self.edit(
                     EditTarget::Setup(step),
                     "Step 1 of 4 · Speech service",
-                    "Choose the service that turns your voice into text. You can change this later.",
+                    "Choose what turns your voice into text: an API service (needs a key), On this Mac (offline), or a local server you already run. You can change this later.",
                     vec![Field::pick("", self.config.stt.provider.clone(), choices, |v| value_text("stt.provider", v))],
                 );
             }
@@ -1928,7 +1955,7 @@ impl App {
         }
         vec![]
     }
-    fn sync_config(&mut self) {
+    pub(super) fn sync_config(&mut self) {
         if let Some(file) = &self.file {
             if let Ok(config) = file.config() {
                 self.dirty = self.disk.as_deref() != Some(file.to_string().as_str());
@@ -1943,6 +1970,13 @@ impl App {
     fn choose_provider(&mut self, id: &str, cleanup: bool, model: Option<&str>) -> Result<()> {
         if self.saving {
             bail!("One moment — saving your last change");
+        }
+        if id == xflow_providers::ON_DEVICE {
+            bail!("On-device speech has one model; choose it from Speech › Service");
+        }
+        // Leaving on-device restores the saved API route first, so it survives.
+        if !cleanup && self.config.stt.provider == xflow_providers::ON_DEVICE {
+            self.leave_on_device()?;
         }
         let config = integrations::selection(&self.config, id, cleanup, model)?;
         let before = toml::Value::try_from(&self.config)?;
@@ -2046,6 +2080,10 @@ impl App {
                     format!("[{value:?}]")
                 },
             ),
+            "stt.provider" if value == xflow_providers::ON_DEVICE => {
+                self.open_on_device(false);
+                Ok(())
+            }
             "stt.provider" | "cleanup.provider" => {
                 self.choose_provider(value, key == "cleanup.provider", None)
             }
@@ -2297,10 +2335,18 @@ impl App {
                 return Ok(self.action(action));
             }
             EditTarget::Setup(Step::Provider) => {
+                // Facts and an explicit Install; choosing the row changes nothing yet.
+                if value == xflow_providers::ON_DEVICE {
+                    self.open_on_device(true);
+                    return Ok(vec![]);
+                }
                 self.choose_provider(value, false, None)?;
                 // Without a cleanup-capable key it stays off, silently.
                 if integrations::smart_formatting(&self.config).is_some() {
                     let _ = self.set_choice("cleanup.mode", "light");
+                }
+                if value == "local" {
+                    return Ok(self.open_setup(Step::Microphone));
                 }
                 return Ok(self.open_setup(Step::Key));
             }
@@ -2519,11 +2565,21 @@ impl App {
                 )
                 .collect(),
             "stt.provider" | "cleanup.provider" => {
-                integrations::catalog(key.starts_with("cleanup."))
+                let cleanup = key.starts_with("cleanup.");
+                // While on-device, the saved API route (even a custom server) is a choice.
+                let saved = (!cleanup)
+                    .then(|| self.config.on_device.previous_api.as_ref())
+                    .flatten()
+                    .map(|stt| stt.provider.clone());
+                let mut choices: Vec<String> = integrations::catalog(cleanup)
                     .into_iter()
                     .map(|p| p.id)
-                    .filter(|id| id != "custom")
-                    .collect()
+                    .filter(|id| id != "custom" || saved.as_deref() == Some("custom"))
+                    .collect();
+                if !cleanup {
+                    choices.push(xflow_providers::ON_DEVICE.into());
+                }
+                choices
             }
             "stt.model" | "cleanup.model" => {
                 let cleanup = key.starts_with("cleanup.");

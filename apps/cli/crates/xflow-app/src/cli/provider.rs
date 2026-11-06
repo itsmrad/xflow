@@ -101,6 +101,27 @@ pub fn run(path: &Path, action: Option<&args::Providers>, out: &Output) -> Resul
                 out.table(&["PROVIDER", "NAME", "DEFAULT MODEL", "CURRENT"], &rows)?;
             }
         }
+        Info { provider } if provider == ON_DEVICE => {
+            let facts = xflow_app::local_models::facts();
+            let model = xflow_providers::on_device::MODEL_ID;
+            let next = if !facts.supported {
+                "Keep an API provider: xflow providers list".to_string()
+            } else if !facts.installed {
+                format!("Install: xflow models install {model}")
+            } else {
+                "Use: xflow providers use on-device".to_string()
+            };
+            out.data(
+                &serde_json::json!({"id":ON_DEVICE,"name":facts.name,"model":model,
+                    "languages":facts.languages,"unsupported_languages":facts.warning,"download_bytes":facts.download_bytes,
+                    "license":facts.license,"fit":facts.fit,"supported":facts.supported,"installed":facts.installed,
+                    "current":cfg.stt.provider == ON_DEVICE}),
+                &format!(
+                    "On this Mac (offline): speech never leaves this computer; no key needed.\n{}\n{next}",
+                    facts.lines().join("\n")
+                ),
+            )?;
+        }
         Info { provider } => {
             let p = info(provider)?;
             if out.json {

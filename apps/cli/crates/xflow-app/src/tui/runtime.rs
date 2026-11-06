@@ -60,6 +60,9 @@ enum Update {
     Globe(Option<bool>),
     Mcp(Result<ai_apps::Done>),
     Started(Result<()>),
+    InstallProgress(u64, u64),
+    Installed(Result<bool>),
+    Removed(Result<bool>),
 }
 
 fn restore() {
@@ -419,6 +422,9 @@ fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Effect> {
             app.globe = globe;
             effects = app.globe_changed();
         }
+        Update::InstallProgress(done, total) => app.install_progress(done, total),
+        Update::Installed(result) => app.install_done(result),
+        Update::Removed(result) => app.model_removed(result),
         Update::Started(result) => {
             if let Err(e) = result {
                 app.start_failed = true;
@@ -552,6 +558,13 @@ fn dispatch(
                 Effect::Mcp(job, config) => {
                     Update::Mcp(blocking(move || ai_apps::run(job, &config)).await)
                 }
+                Effect::InstallModel(cancel) => {
+                    let progress = tx.clone();
+                    Update::Installed(blocking(move || install_model(&cancel, &progress)).await)
+                }
+                Effect::RemoveModel => Update::Removed(blocking(|| {
+                    crate::local_models::install::remove(&xflow_providers::on_device::models_dir()?)
+                }).await),
                 Effect::AskAgain(grant) => {
                     // A fresh xflowd asks no grant by itself: ask it once it answers.
                     let restarted = blocking(restart).await.is_ok();
@@ -577,6 +590,25 @@ fn dispatch(
             }
         });
     }
+}
+/// The same installer as `xflow models install`, on its own thread so hashing
+/// never stalls the screen. Cancel drops it between steps; staged files stay.
+fn install_model(cancel: &tokio::sync::Notify, tx: &mpsc::Sender<Update>) -> Result<bool> {
+    use crate::local_models::{artifact, install};
+    let models = xflow_providers::on_device::models_dir()?;
+    let artifact = artifact();
+    let report = |done, total| {
+        let _ = tx.try_send(Update::InstallProgress(done, total));
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            tokio::select! {
+                result = install::install(&artifact, install::Source::Http(install::BASE_URL), &models, Some(&report)) => result,
+                _ = cancel.notified() => bail!("cancelled"),
+            }
+        })
 }
 /// "Press 🌐 key to" is Do Nothing (AppleFnUsageType 0; absent means Emoji).
 fn globe() -> Option<bool> {

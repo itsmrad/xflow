@@ -1198,3 +1198,213 @@ fn ai_apps_install_confirms_a_replacement_and_remove_runs_the_cli_code() {
         .unwrap()
         .contains("Unsafe client config file"));
 }
+
+// On this Mac (offline): facts pane, install job and the snapshot-keeping switch.
+fn mac() -> crate::local_models::Facts {
+    let host = crate::local_models::Host {
+        platform: "macos",
+        process_isa: "aarch64",
+        native_isa: Some("aarch64".into()),
+        os_version: Some("15.1".into()),
+        ..Default::default()
+    };
+    // This test machine can't run it; the pane is what matters here.
+    crate::local_models::Facts {
+        supported: true,
+        ..crate::local_models::facts_for(&host, false)
+    }
+}
+fn linux() -> crate::local_models::Facts {
+    crate::local_models::facts_for(
+        &crate::local_models::Host {
+            platform: "linux",
+            ..Default::default()
+        },
+        false,
+    )
+}
+fn on_device_pane(app: &App) -> bool {
+    matches!(app.modal, Some(Modal::OnDevice { .. }))
+}
+fn open_provider_setting(app: &mut App) {
+    app.page = Page::Settings;
+    app.selected[Page::Settings.index()] = app
+        .settings()
+        .iter()
+        .position(|(k, _)| k == "stt.provider")
+        .unwrap();
+    key_enter(app);
+}
+fn pick_value(app: &mut App, value: &str) {
+    key(app, KeyCode::Home);
+    while editor(app).fields[0].value.as_str() != value {
+        let before = editor(app).fields[0].value.to_string();
+        key(app, KeyCode::Down);
+        assert_ne!(before, editor(app).fields[0].value.as_str(), "{value} not offered");
+    }
+}
+
+#[test]
+fn setup_on_this_mac_skips_the_key_and_downloads_only_on_install() {
+    let (_dir, mut app) = app();
+    app.probe = mac;
+    app.connected = true;
+    key_enter(&mut app); // Welcome
+    key_enter(&mut app); // Speech service
+    pick_value(&mut app, xflow_providers::ON_DEVICE);
+    // The three kinds are all offered: API services, this Mac, a local server.
+    let labels = editor(&app).fields[0].labels.join("\n");
+    assert!(labels.contains("Groq") && labels.contains("On this Mac (offline)"));
+    assert!(editor(&app).fields[0].choices.contains(&"local".to_string()));
+    let effects = key_enter(&mut app);
+    assert!(effects.is_empty(), "choosing the row never downloads");
+    assert!(on_device_pane(&app));
+    assert_eq!(app.config.stt.provider, "groq");
+    for (width, height) in [(80, 24), (120, 35)] {
+        let text = screen(&app, width, height);
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("src/tui/snapshots/on-device-{width}x{height}.txt"));
+        if std::env::var_os("XFLOW_UPDATE_TUI_SNAPSHOTS").is_some() {
+            std::fs::write(&path, &text).unwrap();
+        }
+        assert_eq!(text, std::fs::read_to_string(&path).unwrap(), "{}", path.display());
+        assert!(!text.contains("Paste your"));
+    }
+    let text = app.on_device_text(false, None);
+    for expected in [
+        "NVIDIA Parakeet TDT 0.6B v3",
+        "Languages (25)",
+        "Hindi",
+        "Japanese",
+        "484 MB",
+        "CC BY 4.0 · NVIDIA",
+        "FluidInference",
+        "This Mac can run it",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // Install, cancel (staging kept), resume, fail, retry, done.
+    assert!(matches!(&key_enter(&mut app)[..], [Effect::InstallModel(_)]));
+    app.install_progress(120_000_000, 483_105_645);
+    assert!(app.on_device_text(false, None).contains("Downloading… 120 MB of 484 MB"));
+    assert!(render::keys(&app).iter().any(|(k, _)| *k == "x cancel"));
+    assert!(key_enter(&mut app).is_empty(), "one download at a time");
+    key(&mut app, KeyCode::Char('x'));
+    assert!(key_enter(&mut app).is_empty(), "no second download while stopping");
+    app.install_done(Err(anyhow::anyhow!("cancelled")));
+    assert!(app.toast.as_deref().unwrap().contains("picks up where it stopped"));
+    assert!(matches!(&key_enter(&mut app)[..], [Effect::InstallModel(_)]));
+    app.install_done(Err(anyhow::anyhow!("network is unreachable")));
+    assert!(app.on_device_text(false, None).contains("network is unreachable"));
+    assert!(render::keys(&app).iter().any(|(k, _)| *k == "Enter retry"));
+    assert_eq!(app.config.stt.provider, "groq", "a failed download changes nothing");
+    assert!(matches!(&key_enter(&mut app)[..], [Effect::InstallModel(_)]));
+    app.install_done(Ok(true));
+    // Use it: no key step, straight to the microphone.
+    let effects = key_enter(&mut app);
+    assert!(matches!(&effects[..], [Effect::Devices]));
+    assert_eq!(app.config.stt.provider, xflow_providers::ON_DEVICE);
+    assert_eq!(app.setup, Some(Step::Microphone));
+    assert_eq!(
+        app.config.on_device.previous_api.as_ref().unwrap().provider,
+        "groq"
+    );
+}
+
+#[test]
+fn unsupported_machine_explains_and_never_installs() {
+    let (_dir, mut app) = app();
+    app.probe = linux;
+    open_provider_setting(&mut app);
+    pick_value(&mut app, xflow_providers::ON_DEVICE);
+    key_enter(&mut app);
+    let text = screen(&app, 80, 24);
+    assert!(text.contains("Not supported yet on Linux"), "{text}");
+    assert!(render::keys(&app).iter().all(|(k, _)| *k != "Enter install"));
+    assert!(key_enter(&mut app).is_empty());
+    assert!(!on_device_pane(&app));
+    assert_eq!(app.config.stt.provider, "groq");
+}
+
+#[test]
+fn api_services_keep_working_while_the_model_is_missing_or_downloading() {
+    let (_dir, mut app) = app();
+    app.probe = mac;
+    open_provider_setting(&mut app);
+    pick_value(&mut app, xflow_providers::ON_DEVICE);
+    key_enter(&mut app);
+    assert!(app.on_device_text(false, None).contains("Not installed"));
+    assert!(matches!(&key_enter(&mut app)[..], [Effect::InstallModel(_)]));
+    key(&mut app, KeyCode::Esc);
+    assert!(app.modal.is_none());
+    open_provider_setting(&mut app);
+    pick_value(&mut app, "deepgram");
+    key_enter(&mut app);
+    assert_eq!(app.config.stt.provider, "deepgram");
+    // The download finishing doesn't switch anything by itself.
+    app.install_done(Ok(true));
+    assert_eq!(app.config.stt.provider, "deepgram");
+}
+
+#[test]
+fn switching_api_to_on_device_and_back_keeps_the_custom_route() {
+    let (_dir, mut app) = app();
+    app.probe = || crate::local_models::Facts {
+        installed: true,
+        ..mac()
+    };
+    app.set(
+        "stt",
+        r#"{ provider = "custom", endpoint = "https://stt.example.com/v1/audio/transcriptions", model = "whisper-x", api_key_env = "MY_STT_KEY", languages = ["en", "fr"], vocabulary = ["xflow"], domain_hints = false }"#,
+    )
+    .unwrap();
+    let before = app.config.stt.clone();
+    open_provider_setting(&mut app);
+    pick_value(&mut app, xflow_providers::ON_DEVICE);
+    key_enter(&mut app);
+    assert!(render::keys(&app).iter().any(|(k, _)| *k == "Enter use it"));
+    key_enter(&mut app);
+    assert_eq!(app.config.stt.provider, xflow_providers::ON_DEVICE);
+    assert_eq!(app.config.on_device.previous_api.as_ref(), Some(&before));
+    assert_eq!(
+        app.settings()
+            .iter()
+            .find(|(k, _)| k == "action.stt_key")
+            .unwrap()
+            .1,
+        "Not needed"
+    );
+    // The saved custom server is offered to go back to, and comes back whole.
+    open_provider_setting(&mut app);
+    pick_value(&mut app, "custom");
+    key_enter(&mut app);
+    assert_eq!(app.config.stt, before);
+    assert!(app.config.on_device.previous_api.is_none());
+}
+
+#[test]
+fn remove_asks_first_and_switches_back_to_the_saved_route() {
+    let (_dir, mut app) = app();
+    app.probe = || crate::local_models::Facts {
+        installed: true,
+        ..mac()
+    };
+    open_provider_setting(&mut app);
+    pick_value(&mut app, xflow_providers::ON_DEVICE);
+    key_enter(&mut app);
+    key_enter(&mut app); // Use it
+    assert_eq!(app.config.stt.provider, xflow_providers::ON_DEVICE);
+    open_provider_setting(&mut app);
+    pick_value(&mut app, xflow_providers::ON_DEVICE);
+    key_enter(&mut app);
+    assert!(key(&mut app, KeyCode::Char('d')).is_empty());
+    assert!(screen(&app, 80, 24).contains("Remove the model"));
+    key(&mut app, KeyCode::Esc);
+    assert!(!app.on_device_text(false, None).contains("Remove the model"));
+    assert!(on_device_pane(&app));
+    key(&mut app, KeyCode::Char('d'));
+    assert!(matches!(&key_enter(&mut app)[..], [Effect::RemoveModel]));
+    assert_eq!(app.config.stt.provider, "groq");
+    app.model_removed(Ok(true));
+    assert!(app.on_device_text(false, None).contains("Not installed"));
+}
