@@ -1,0 +1,3 @@
+[env]
+# Xflow uses FTS5. The bundled SQLite defaults also compile these unused modules.
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB"
