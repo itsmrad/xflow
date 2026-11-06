@@ -1,4 +1,5 @@
 pub mod config_edit;
+pub mod context;
 #[cfg(unix)]
 pub mod daemon;
 pub mod gsettings;
