@@ -127,6 +127,9 @@ jobs:
             XFLOW_BIN=../cli/target/debug/xflow bun scripts/gen-docs.ts
           git status --porcelain -- content
           test -z "$(git status --porcelain -- content)" || { git diff -- content; echo "::error::run gen:docs (see apps/web/scripts/gen-docs.ts)"; exit 1; }
+      - name: Build Core ML speech helper
+        working-directory: ${{ github.workspace }}
+        run: swift build -c release --package-path tools/local-stt/coreml
 
   extension:
     name: GNOME extension
