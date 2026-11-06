@@ -151,10 +151,48 @@ fn save(path: &Path, bytes: &[u8], old: Option<&str>) -> Result<()> {
 fn entry(exe: &Path) -> Value {
     json!({"command":exe,"args":["mcp"]})
 }
+/// First number a rewrite through `Value` would change. `text` must already parse as JSON.
+fn lossy_number(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let (mut i, mut in_string) = (0, false);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if in_string => i += 1,
+            b'"' => in_string = !in_string,
+            b'-' | b'0'..=b'9' if !in_string => {
+                let len = bytes[i..]
+                    .iter()
+                    .position(|b| !matches!(b, b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E'))
+                    .unwrap_or(bytes.len() - i);
+                let token = &text[i..i + len];
+                let exact = if token.bytes().all(|b| b == b'-' || b.is_ascii_digit()) {
+                    token.parse::<i64>().is_ok() || token.parse::<u64>().is_ok()
+                } else {
+                    serde_json::from_str::<serde_json::Number>(token)
+                        .is_ok_and(|n| n.to_string() == token)
+                };
+                if !exact {
+                    return Some(token);
+                }
+                i += len - 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
 fn json_edit(path: &Path, key: &str, new: Option<Value>, force: bool) -> Result<()> {
     let old = read_file(path)?;
+    let manual = || format!("Add this snippet manually: {}", json!({key:{"xflow":new}}));
     let mut doc: Value = match &old {
-        Some(s) => serde_json::from_str(s).with_context(|| format!("Cannot parse {}; JSONC/trailing commas are not supported. Add this snippet manually: {}",path.display(),json!({key:{"xflow":new}})))?,
+        Some(s) => serde_json::from_str(s).with_context(|| {
+            format!(
+                "Cannot parse {}; JSONC/trailing commas are not supported. {}",
+                path.display(),
+                manual()
+            )
+        })?,
         None => json!({}),
     };
     let object = doc
@@ -172,6 +210,13 @@ fn json_edit(path: &Path, key: &str, new: Option<Value>, force: bool) -> Result<
     if previous == new.as_ref() {
         println!("xflow registration unchanged");
         return Ok(());
+    }
+    if let Some(number) = old.as_deref().and_then(lossy_number) {
+        bail!(
+            "Cannot rewrite {} without changing the number {number}. {}",
+            path.display(),
+            manual()
+        );
     }
     if let (Some(previous), Some(new)) = (previous, &new) {
         eprintln!(

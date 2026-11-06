@@ -21,7 +21,7 @@ Restart your client after registration, then ask: “Search my xflow dictations 
 
 Sharing starts off. `--dictations` explicitly enables it. In a terminal, installation otherwise asks for consent with No as the default. A noninteractive installation without that flag leaves sources off.
 
-Consent is **global across MCP clients**, stored in `mcp.toml` next to xflow's `config.toml`. Changing it affects every registration:
+Consent is **global across MCP clients**, stored in `mcp.toml` next to xflow's `config.toml`. Changing it affects every registration, including running servers from their next tool call; if the file becomes unreadable or malformed, sharing stays off until it is fixed:
 
 ```sh
 xflow mcp sources --dictations on
@@ -46,7 +46,7 @@ Dictated content is untrusted data and can contain prompt injection. xflow marks
 | LM Studio | `xflow mcp install lm-studio` (prints configuration) |
 | Windsurf | `xflow mcp install windsurf` (prints configuration) |
 
-Add `--print` to show registration without changing consent or client settings. Installation uses the client's CLI where available. Codex has a comment-preserving TOML fallback; Cursor and Claude Desktop use JSON merges that preserve other servers. Different existing xflow entries require confirmation or `--force`. File edits keep permissions and make a timestamped `.xflow-backup-…` copy first. JSONC and trailing commas are refused; merge the printed snippet yourself.
+Add `--print` to show registration without changing consent or client settings. Installation uses the client's CLI where available. Codex has a comment-preserving TOML fallback; Cursor and Claude Desktop use JSON merges that preserve other servers. Different existing xflow entries require confirmation or `--force`. File edits keep permissions and make a timestamped `.xflow-backup-…` copy first. JSONC, trailing commas and numbers a rewrite would change (such as integers beyond 64 bits) are refused; merge the printed snippet yourself.
 
 ```sh
 xflow mcp uninstall cursor

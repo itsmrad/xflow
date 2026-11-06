@@ -330,3 +330,145 @@ fn bounded_private_history_results_and_override() {
         .unwrap();
     assert!(!invalid.status.success());
 }
+
+fn assert_tools(input: &mut impl Write, output: &mut impl BufRead, notice: Option<&str>) {
+    for (name, arguments) in [
+        ("search_dictations", json!({"query":"consent-canary"})),
+        ("get_dictation", json!({"id":1})),
+    ] {
+        let call = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}});
+        writeln!(input, "{call}").unwrap();
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        let content = &v["result"]["structuredContent"];
+        assert_eq!(line.contains("consent-canary"), notice.is_none(), "{line}");
+        if let Some(notice) = notice {
+            assert!(
+                content["notice"].as_str().unwrap().contains(notice),
+                "{line}"
+            );
+        }
+    }
+}
+fn server(
+    root: &std::path::Path,
+    sources: Option<&str>,
+) -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    std::io::BufReader<std::process::ChildStdout>,
+) {
+    let mut c = command(root);
+    c.arg("mcp");
+    if let Some(s) = sources {
+        c.args(["--sources", s]);
+    }
+    let mut child = c.spawn().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    writeln!(input, "{}", init("2025-11-25")).unwrap();
+    output.read_line(&mut String::new()).unwrap();
+    (child, input, output)
+}
+#[test]
+fn consent_changes_reach_a_running_server_and_fail_closed() {
+    use std::fs;
+    let d = tempfile::tempdir().unwrap();
+    fs::create_dir_all(d.path().join("data/xflow")).unwrap();
+    fs::create_dir_all(d.path().join("config/xflow")).unwrap();
+    fs::write(
+        d.path().join("config/xflow/config.toml"),
+        "[privacy]\nhistory=true\n",
+    )
+    .unwrap();
+    let c = rusqlite::Connection::open(d.path().join("data/xflow/history.db")).unwrap();
+    c.execute_batch("CREATE TABLE history(id INTEGER PRIMARY KEY,created_at INTEGER,text TEXT,provider TEXT); INSERT INTO history VALUES(1,1700000000,'consent-canary','test'); PRAGMA user_version=1;").unwrap();
+    drop(c);
+    let set = |value: &str| {
+        let out = command(d.path())
+            .args(["mcp", "sources", "--dictations", value])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    };
+    let consent = d.path().join("config/xflow/mcp.toml");
+    let (off, unreadable) = (Some("not been allowed"), Some("cannot read"));
+    set("on");
+    let (mut child, mut input, mut output) = server(d.path(), None);
+    assert_tools(&mut input, &mut output, None);
+    set("off");
+    assert_tools(&mut input, &mut output, off);
+    set("on");
+    assert_tools(&mut input, &mut output, None);
+    fs::write(&consent, "dictations = [").unwrap();
+    assert_tools(&mut input, &mut output, unreadable);
+    fs::write(&consent, "dictations = \"yes\"\n").unwrap();
+    assert_tools(&mut input, &mut output, unreadable);
+    set("on");
+    assert_tools(&mut input, &mut output, None);
+    fs::remove_file(&consent).unwrap();
+    fs::create_dir(&consent).unwrap();
+    assert_tools(&mut input, &mut output, unreadable);
+    fs::remove_dir(&consent).unwrap();
+    assert_tools(&mut input, &mut output, off);
+    drop(input);
+    assert!(child.wait().unwrap().success());
+
+    // --sources stays a process-only override whatever the file says or becomes.
+    set("off");
+    let (mut child, mut input, mut output) = server(d.path(), Some("dictations"));
+    assert_tools(&mut input, &mut output, None);
+    fs::write(&consent, "dictations = [").unwrap();
+    assert_tools(&mut input, &mut output, None);
+    drop(input);
+    assert!(child.wait().unwrap().success());
+    fs::write(&consent, "dictations = true\n").unwrap();
+    let (mut child, mut input, mut output) = server(d.path(), Some("none"));
+    assert_tools(&mut input, &mut output, off);
+    drop(input);
+    assert!(child.wait().unwrap().success());
+}
+#[test]
+fn json_rewrites_refuse_numbers_they_would_change() {
+    use std::fs;
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("home/.cursor/mcp.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let run = |action: &str| {
+        command(d.path())
+            .args(["mcp", action, "cursor"])
+            .output()
+            .unwrap()
+    };
+    for number in ["18446744073709551617", "0.12345678901234567890123456789"] {
+        for (action, servers) in [
+            ("install", "{}"),
+            ("uninstall", "{\"xflow\":{\"command\":\"old\"}}"),
+        ] {
+            let text = format!("{{\"n\":[{number}],\"mcpServers\":{servers}}}");
+            fs::write(&path, &text).unwrap();
+            let out = run(action);
+            assert!(!out.status.success());
+            let stderr = String::from_utf8(out.stderr).unwrap();
+            assert!(stderr.contains(number), "{stderr}");
+            assert!(stderr.contains("Add this snippet manually"), "{stderr}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), text);
+            assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        }
+    }
+    // Exact numbers, and digits or escapes inside strings, must not block a write.
+    let kept = r#""s":"18446744073709551617 \" 1e5","18446744073709551617":0,"i":-9223372036854775808,"u":18446744073709551615,"f":[0.5,1.0,-2.5]"#;
+    fs::write(&path, format!("{{{kept},\"mcpServers\":{{}}}}")).unwrap();
+    let out = run("install");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(written["i"], json!(i64::MIN));
+    assert_eq!(written["u"], json!(u64::MAX));
+    assert_eq!(written["f"], json!([0.5, 1.0, -2.5]));
+    assert!(written["mcpServers"]["xflow"].is_object());
+}

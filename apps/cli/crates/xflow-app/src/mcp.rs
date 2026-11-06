@@ -48,15 +48,11 @@ pub fn run(args: &Mcp, config: &Path) -> Result<()> {
     let consent = config.with_file_name("mcp.toml");
     match &args.action {
         None => {
-            let sources = match args.sources.as_deref() {
-                Some("none") => Sources::default(),
-                Some(s) => Sources {
-                    dictations: s.split(',').any(|v| v == "dictations"),
-                    meetings: s.split(',').any(|v| v == "meetings"),
-                },
-                None => read_sources(&consent),
-            };
-            protocol::serve(&mut env, sources)
+            let sources = args.sources.as_deref().map(|s| Sources {
+                dictations: s.split(',').any(|v| v == "dictations"),
+                meetings: s.split(',').any(|v| v == "meetings"),
+            });
+            protocol::serve(&mut env, sources, &consent)
         }
         Some(Action::Install {
             client,
@@ -80,21 +76,22 @@ pub fn run(args: &Mcp, config: &Path) -> Result<()> {
         }
     }
 }
-fn read_sources(path: &Path) -> Sources {
-    let value = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| s.parse::<toml::Value>().ok());
-    let enabled = |key| {
-        value
-            .as_ref()
-            .and_then(|v| v.get(key))
-            .and_then(toml::Value::as_bool)
-            .unwrap_or(false)
+/// `None` means consent exists but cannot be trusted; a missing file is plain "off".
+fn load_sources(path: &Path) -> Option<Sources> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Sources::default()),
+        Err(_) => return None,
     };
-    Sources {
-        dictations: enabled("dictations"),
-        meetings: enabled("meetings"),
-    }
+    let value = text.parse::<toml::Value>().ok()?;
+    let enabled = |key| value.get(key).map_or(Some(false), toml::Value::as_bool);
+    Some(Sources {
+        dictations: enabled("dictations")?,
+        meetings: enabled("meetings")?,
+    })
+}
+fn read_sources(path: &Path) -> Sources {
+    load_sources(path).unwrap_or_default()
 }
 fn write_sources(path: &Path, sources: Sources) -> Result<()> {
     let parent = path
