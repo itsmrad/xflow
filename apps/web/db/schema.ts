@@ -82,7 +82,7 @@ export const subscriptions = pgTable(
   (t) => [index("subscriptions_user_idx").on(t.userId)],
 );
 
-export const usageKind = pgEnum("usage_kind", ["transcribe", "cleanup"]);
+export const usageKind = pgEnum("usage_kind", ["transcribe", "cleanup", "chat"]);
 
 export const usageEvents = pgTable(
   "usage_events",
