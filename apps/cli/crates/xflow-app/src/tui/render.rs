@@ -42,23 +42,6 @@ fn muted(app: &App) -> Style {
 fn accent(app: &App) -> Style {
     app.theme.base().fg(app.theme.accent)
 }
-/// Footer hint: the key is bold, the action stays muted. A sentence with no key stays plain.
-fn hint_line(label: &str, app: &App) -> Line<'static> {
-    let plain = muted(app);
-    match label.split_once(' ') {
-        Some((key, action)) if is_key(key) => Line::from(vec![
-            Span::styled(key.to_string(), plain.add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {action}"), plain),
-        ]),
-        _ => Line::from(Span::styled(label.to_string(), plain)),
-    }
-}
-fn is_key(token: &str) -> bool {
-    matches!(
-        token,
-        "Enter" | "Esc" | "Tab" | "Space" | "Del" | "↑↓" | "Type"
-    ) || token.chars().count() == 1
-}
 fn panel(
     frame: &mut Frame,
     area: Rect,
@@ -178,7 +161,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         ),
         header[1],
     );
-    // 16, not 14: the border takes two cells, and ">3  Dictionary" / " 8  Your stats" need the other 14.
+    // 16 leaves 14 inside the border: " 3  Dictionary" and " 8  Your stats".
     let nav_width = if area.width >= 70 { 18 } else { 16 };
     let body =
         Layout::horizontal([Constraint::Length(nav_width), Constraint::Min(1)]).split(rows[1]);
@@ -187,8 +170,11 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         .iter()
         .enumerate()
         .map(|(i, page)| {
-            let mark = if i == selected { ">" } else { " " };
-            ListItem::new(format!("{mark}{}  {}", i + 1, page.title()))
+            let mut label = format!(" {}  {}", i + 1, page.title());
+            if i == selected {
+                label.replace_range(..1, ">");
+            }
+            ListItem::new(label)
         })
         .collect::<Vec<_>>();
     let mut nav = ListState::default().with_selected(Some(app.page.index()));
@@ -221,7 +207,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
             rows[2],
         );
     }
-    // Keys line: bold key, plain action, clickable when the mouse is on.
+    // Keys line: plain words, clickable when mouse is on.
     let mut x = rows[3].x + 1;
     for (i, (label, action)) in keys(app).into_iter().enumerate() {
         let gap = if i == 0 { 0 } else { 3 };
@@ -236,7 +222,18 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
             );
         }
         let rect = Rect::new(x + gap, rows[3].y, width, 1);
-        frame.render_widget(Paragraph::new(hint_line(label, app)), rect);
+        frame.render_widget(Paragraph::new(label).style(muted(app)), rect);
+        if let Some(end) = label.find(' ') {
+            let key = &label[..end];
+            if key.len() == 1 || key.len() == 6 || (key.len() <= 5 && !key.starts_with('P')) {
+                let cols = frame.area().width as usize;
+                let start = rect.y as usize * cols + rect.x as usize;
+                let buf = frame.buffer_mut();
+                for cell in start..start + key.chars().count() {
+                    buf.content[cell].modifier.insert(Modifier::BOLD);
+                }
+            }
+        }
         if let Some(action) = action {
             hits.actions.push((rect, action));
         }
