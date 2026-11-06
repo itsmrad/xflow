@@ -706,7 +706,7 @@ fn reader_cannot_write_and_held_snapshot_defers_cleanup() {
     assert_eq!(again.summary.segment_count, 1);
     {
         let conn = Connection::open_with_flags(
-            db_path(dir.path()),
+            fs::canonicalize(db_path(dir.path())).unwrap(),
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )
         .unwrap();
@@ -733,7 +733,7 @@ fn reader_cannot_write_and_held_snapshot_defers_cleanup() {
     }
 
     let hold = Connection::open_with_flags(
-        db_path(dir.path()),
+        fs::canonicalize(db_path(dir.path())).unwrap(),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
     .unwrap();

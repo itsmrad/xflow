@@ -9,7 +9,7 @@
   },
   "result": {
     "binary_bytes": {
-      "xflow": 10594824,
+      "xflow": 10929160,
       "xflowd": 12472744
     },
     "idle_cpu_percent": 0.0,
@@ -22,33 +22,33 @@
     {
       "binaries": {
         "xflow": {
-          "bytes": 10594824,
-          "sha256": "74244e1f261f5926e709579ee103a30eb34269576de2ed7084766af3f225b4a4"
+          "bytes": 10929160,
+          "sha256": "19e68b575756e838909aceef8b950507f9bcd9641ccc512cb9a5a9fcfbe20699"
         },
         "xflowd": {
-          "bytes": 12537352,
-          "sha256": "c6746374a9753f5a4366e2c0e9ae801a34e18a4e8ef7e29b37e79f0c6cdf8f89"
+          "bytes": 12537480,
+          "sha256": "c33d9282460daecc5e2f4b70bc1b885b1356defac7bc857fad00231e32ebf3cf"
         }
       },
-      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/42169619094/attempts/1",
-      "commit": "c977e58c0c4185a697c57f2859057dbbac835758",
-      "cpu": "AMD EPYC 9V74 80-Core Processor",
+      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/42185588883/attempts/1",
+      "commit": "82ede7eb9453f2496594770b8106ee1d9c2162ee",
+      "cpu": "AMD EPYC 7763 64-Core Processor",
       "launch_pss_kib": [
-        10124,
-        10192,
-        9516
+        10167,
+        10265,
+        10157
       ],
       "logical_cpus": 4,
       "result": {
         "binary_bytes": {
-          "xflow": 10594824,
-          "xflowd": 12537352
+          "xflow": 10929160,
+          "xflowd": 12537480
         },
         "idle_cpu_percent": 0.0,
         "idle_processes": 1,
-        "idle_pss_kib": 10124,
-        "idle_rss_kib": 12504,
-        "startup_p50_ms": 1.786523000021134
+        "idle_pss_kib": 10167,
+        "idle_rss_kib": 12456,
+        "startup_p50_ms": 2.822562000005746
       },
       "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
     }

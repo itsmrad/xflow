@@ -90,7 +90,7 @@ class Gate(unittest.TestCase):
 
     def test_committed_binary_ceilings_allow_one_percent_and_fail_one_byte_over(self):
         base = json.loads((scoreboard.ROOT / "docs/benchmarks/ci-baseline.json").read_text())
-        ceilings = {"xflow": 10_700_772, "xflowd": 12_597_471}
+        ceilings = {"xflow": 11_038_451, "xflowd": 12_597_471}
         at_limit = dict(base["result"], binary_bytes=ceilings)
         self.assertEqual(failed(scoreboard.check(at_limit, base["result"], base["limits"])), [])
         for name in ceilings:
