@@ -10,6 +10,7 @@
 - **Corrections are saved seconds after you make them.** About two seconds after a fixed word settles and your cursor moves off it, or as soon as you switch fields or send, instead of at the end of a 60-second watch. The notice names the word for four seconds with a clickable Undo, even while you record.
 - **The next dictation is right.** An unusual word fixed to a close spelling now saves a literal correction at once, so it no longer depends on the recognizer honoring hints, including after model cleanup. An everyday word fixed to an unusual one saves only the word until you make the same fix again.
 - **More fixes count.** Ordinary typos (`definately`), short messages, whole retypes and fixes right after the paste are learned, in Chrome and Safari fields too, where a trailing space used to stop learning and leave your clipboard unrestored.
+- **A word you keep fixing leaves only the final spelling.** Saving `Kubernete` and then finishing it as `Kubernetes` removes the first save, and Undo goes back past both.
 - **The notice no longer swallows keys.** Its helper could become the front app when launched while you were idle, sending your typing nowhere until it exited.
 - **Deleting a word deletes its corrections**, and says how many.
 - **Tighter reads.** Field text is read in bounded ranges behind a security and focus check before every read, and watching stops for good on a real focus change.
