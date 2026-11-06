@@ -1031,7 +1031,8 @@ pub const COMMIT_QUIET_MS: u64 = 2_000;
 /// shorter one might be `Veronic` on its way to `Veronica`: it waits for the
 /// caret to move or for the user to leave. Calibration knob.
 pub const COMMIT_ON_WORD_MS: u64 = 4_000;
-/// A word left this recently, caret still on it, may be half typed.
+/// A word left this recently, caret still on it, may be half typed. One shorter
+/// than what it corrects is held back however long it sat (`complete_on_caret`).
 pub const LEAVE_QUIET_MS: u64 = 500;
 
 /// What the corrections found between `original` and `span` are, for timing

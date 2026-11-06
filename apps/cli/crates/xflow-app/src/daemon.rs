@@ -2967,12 +2967,20 @@ async fn watch_pinned(
     if good != settled {
         return Err(Some("unsettled"));
     }
-    // Left with the caret on a word touched a moment ago: it may be half typed.
-    if left
-        && pending_since.elapsed() < Duration::from_millis(learn::LEAVE_QUIET_MS)
-        && learn::caret_on(&learn::pending(&original, &good), caret_word.as_deref())
-    {
-        return Err(Some("partial"));
+    // Left with the caret on the corrected word: it may be half typed if touched a
+    // moment ago, or at any time if shorter than what it corrects, the same word the
+    // on-word wait holds back. A send is not a leave: a word sent is finished.
+    if left {
+        let under: Vec<Replacement> = learn::pending(&original, &good)
+            .into_iter()
+            .filter(|c| learn::caret_on(std::slice::from_ref(c), caret_word.as_deref()))
+            .collect();
+        if !under.is_empty()
+            && (pending_since.elapsed() < Duration::from_millis(learn::LEAVE_QUIET_MS)
+                || !learn::complete_on_caret(&under))
+        {
+            return Err(Some("partial"));
+        }
     }
     Ok((original, good))
 }
@@ -7176,18 +7184,63 @@ mod tests {
             assert_eq!(run.outcomes(), ["learned"]);
         }
     }
-    /// Where the claim stops: inside 500 ms of the last key nothing is saved, and a
-    /// shorter word the 4 s path holds back IS saved by a focus change.
+    /// `Veronic`, caret on it, and the user leaves to check the spelling: nothing is
+    /// saved, however long it sat, because a word and a rule would write it into
+    /// every later dictation. The same word held back under the caret by the 4 s path.
     #[tokio::test]
-    async fn a_focus_change_is_not_held_back_by_the_on_word_shorter_rule() {
-        let partial = "Please ask Veronic about tomorrow plans ";
-        // Held back under the caret, past the 4 s.
-        let mut run = Run::start("", DICTATED).await;
-        run.caret(Some(18));
-        run.edit(partial);
-        assert!(run.save_within(5000).await.is_none());
+    async fn leaving_a_shorter_word_under_the_caret_saves_nothing() {
+        let shorter = "Please ask Veronic about tomorrow plans ";
+        for wait in [700, 5000] {
+            let mut run = Run::start("", DICTATED).await;
+            run.caret(Some(18));
+            run.edit(shorter);
+            assert!(run.save_within(wait).await.is_none());
+            let _ = run.notify.send(FieldEvent::Invalidated);
+            (&mut run.task).await.unwrap();
+            assert_eq!(run.outcomes(), ["partial"], "{wait}");
+            assert!(!run.path.exists(), "{wait}");
+        }
+        // The known recall cost: a genuine shortening, left the same way, is missed.
+        let dictated = "Please ask Veronicaa about tomorrow plans ";
+        let mut run = Run::start("", dictated).await;
+        run.caret(Some(19));
+        run.edit(DICTATED);
+        tokio::time::sleep(Duration::from_millis(700)).await;
         let _ = run.notify.send(FieldEvent::Invalidated);
         (&mut run.task).await.unwrap();
+        assert_eq!(run.outcomes(), ["partial"]);
+        assert!(!run.path.exists());
+    }
+    /// The counterpart: the caret has moved off it, so a focus change saves it.
+    #[tokio::test]
+    async fn leaving_a_shorter_word_with_the_caret_off_it_saves_it() {
+        let mut run = Run::start("", "Please ask Veronicaa about tomorrow plans ").await;
+        run.caret(Some(FIXED.len()));
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.dictionary().words, ["Veronica"]);
+        assert_eq!(run.outcomes(), ["learned"]);
+    }
+    /// Scope of that rule: a send, and the next dictation (the same path as the 60 s
+    /// timeout), are not a leave, and still commit a shorter word under the caret.
+    #[tokio::test]
+    async fn a_send_or_the_next_dictation_still_commits_a_shorter_word() {
+        let shorter = "Please ask Veronic about tomorrow plans ";
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(18));
+        run.edit(shorter);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        run.edit("");
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.dictionary().words, ["Veronic"]);
+
+        let run = Run::start("", DICTATED).await;
+        run.caret(Some(18));
+        run.edit(shorter);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let run = run.finish().await;
         assert_eq!(run.dictionary().words, ["Veronic"]);
     }
     /// A hidden clear: a read of a retype unchanged by a further notification.
