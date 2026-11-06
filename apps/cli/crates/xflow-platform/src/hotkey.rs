@@ -177,6 +177,8 @@ impl HotkeyMachine {
             {
                 (Phase::Asking, Some(AskStart))
             }
+            // Idle Esc only hides an answer. A live gesture still cancels, and the tap stays listen-only.
+            (Phase::Idle, KeyEvent::Escape) => (Phase::Idle, Some(Dismiss)),
             (phase, KeyEvent::Escape) if phase != Phase::Idle => (Phase::Idle, Some(Cancel)),
             (phase, _) => (phase, None),
         };
@@ -420,5 +422,13 @@ mod tests {
                 (Escape, 30, &[Cancel]),
             ],
         );
+    }
+
+    #[test]
+    fn escape_while_idle_dismisses_and_dictation_still_starts_immediately() {
+        let mut machine = HotkeyMachine::new(HotkeyConfig::default());
+        assert_eq!(machine.event(Escape, 0), &[Dismiss]);
+        assert_eq!(machine.event(Press, 10), &[Start]);
+        assert_eq!(machine.event(Escape, 20), &[Cancel]);
     }
 }

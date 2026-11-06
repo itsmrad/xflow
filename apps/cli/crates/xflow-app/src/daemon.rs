@@ -2066,6 +2066,15 @@ impl Engine {
                             }
                         }
                         Ok(HotkeyAction::Start | HotkeyAction::AskStart) if !desktop_ops.is_empty() => self.reset_hotkeys(),
+                        Ok(HotkeyAction::Dismiss) if !self.active() => {
+                            // The passive tap already delivered Esc. This only drops a finished answer.
+                            let _ = self.desktop_events.send(DesktopEvent {
+                                state: State::Idle,
+                                level: 0.0,
+                                message: None,
+                                mode: Mode::Ask,
+                            });
+                        }
                         Ok(action @ (HotkeyAction::AskStart | HotkeyAction::AskStop)) => {
                             // Ask is never quiet and never injected. Dictation Start stays Inject below.
                             self.quiet = false;

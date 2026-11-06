@@ -798,7 +798,9 @@ pub(super) fn run(
             if let Some((at, _)) = closing {
                 let e = at.elapsed().as_secs_f64();
                 let fade = if reduce_motion { 0.0 } else { 0.15 };
-                let fade_from = if alert || hold {
+                let fade_from = if hold {
+                    super::answer_hold_secs(state.text.as_deref().unwrap_or("")) - fade
+                } else if alert {
                     ALERT_SECS - fade
                 } else {
                     0.0

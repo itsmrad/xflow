@@ -631,6 +631,8 @@ pub enum HotkeyAction {
     AskStart,
     /// Release of the ask chord.
     AskStop,
+    /// Esc while nothing is recording. Hides a finished ask answer. The key is not consumed.
+    Dismiss,
 }
 
 #[async_trait]
