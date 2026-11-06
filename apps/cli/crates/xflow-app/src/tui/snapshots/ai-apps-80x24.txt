@@ -1,0 +1,24 @@
+ xflow  ·  AI apps                                                       ✓ Done
+╭────────────────╮╭ AI apps ───────────────────────────────────────────────────╮
+│ 1  Home        ││› Dictation history:  off                                   │
+│ 2  History     ││  Claude Code         Found · set up                        │
+│ 3  Dictionary  ││  Claude Desktop      Not found · not set up                │
+│ 4  Snippets    ││  Codex               Found · not set up                    │
+│ 5  Styles      ││  Cursor              Found · set up · ! other version      │
+│ 6  Settings    ││  VS Code             Not found · not set up                │
+│ 7  Pill        │╰────────────────────────────────────────────────────────────╯
+│ 8  Your stats  │╭ Details ───────────────────────────────────────────────────╮
+│ 9  Check-up    ││ Sharing · Dictation history is off. Enter to turn it on.   │
+│>0  AI apps     ││                                                            │
+│                ││ When you ask about it, matching text is sent to that app's │
+│                ││ AI provider. One switch for every AI app.                  │
+│                ││                                                            │
+│                ││ Meetings can't be shared yet.                              │
+│                │╰────────────────────────────────────────────────────────────╯
+│                │ • Leaves this computer: matching text an AI app asks for,
+│                │ sent to that app's AI provider.
+│                │ • Dictated content is untrusted and can contain prompt
+│                │ injection; avoid combining it with tools that can send
+╰────────────────╯ private data out.
+
+ Enter choose · r refresh · Esc back · Tab next page · ? help · q quit

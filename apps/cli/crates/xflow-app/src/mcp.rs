@@ -1,6 +1,6 @@
 //! Local stdio transport; no daemon or model session is started.
 mod protocol;
-mod setup;
+pub(crate) mod setup;
 
 use crate::context::{ContextEnv, Sources};
 use anyhow::{bail, Result};
@@ -45,7 +45,7 @@ pub enum Action {
 pub fn run(args: &Mcp, config: &Path) -> Result<()> {
     let mut env = ContextEnv::current()?;
     env.config = config.to_owned();
-    let consent = config.with_file_name("mcp.toml");
+    let consent = consent_path(config);
     match &args.action {
         None => {
             let sources = args.sources.as_deref().map(|s| Sources {
@@ -59,15 +59,24 @@ pub fn run(args: &Mcp, config: &Path) -> Result<()> {
             dictations,
             force,
             print,
-        }) => setup::install(client, *dictations, *force, *print, &consent),
-        Some(Action::Uninstall { client }) => setup::uninstall(client),
-        Some(Action::Status) => setup::status(&consent),
+        }) => {
+            let report = setup::install(client, *dictations, *force, *print, true, &consent)?;
+            setup::print_report(&report);
+            Ok(())
+        }
+        Some(Action::Uninstall { client }) => {
+            setup::print_report(&setup::uninstall(client)?);
+            Ok(())
+        }
+        Some(Action::Status) => {
+            setup::print_status(&setup::status(&consent)?);
+            Ok(())
+        }
         Some(Action::Sources { dictations }) => {
-            let mut sources = read_sources(&consent);
-            if let Some(v) = dictations {
-                sources.dictations = v == "on";
-                write_sources(&consent, sources)?;
-            }
+            let sources = match dictations {
+                Some(v) => set_dictations(&consent, v == "on")?,
+                None => read_sources(&consent),
+            };
             println!(
                 "Global consent: dictations={}, meetings={} (all MCP clients)",
                 sources.dictations, sources.meetings
@@ -75,6 +84,17 @@ pub fn run(args: &Mcp, config: &Path) -> Result<()> {
             Ok(())
         }
     }
+}
+/// Global consent lives in `mcp.toml` next to `config.toml`.
+pub(crate) fn consent_path(config: &Path) -> std::path::PathBuf {
+    config.with_file_name("mcp.toml")
+}
+/// Turn global dictation consent on or off; other sources are kept.
+pub(crate) fn set_dictations(consent: &Path, on: bool) -> Result<Sources> {
+    let mut sources = read_sources(consent);
+    sources.dictations = on;
+    write_sources(consent, sources)?;
+    Ok(sources)
 }
 /// `None` means consent exists but cannot be trusted; a missing file is plain "off".
 fn load_sources(path: &Path) -> Option<Sources> {

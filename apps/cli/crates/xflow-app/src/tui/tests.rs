@@ -923,3 +923,190 @@ fn compact_nav_shows_full_labels_and_keys_are_bold_without_color() {
         }
     }
 }
+
+fn ai_status(sharing: bool) -> super::ai_apps::Status {
+    use super::ai_apps::{ClientStatus, Registration};
+    let clients = crate::mcp::setup::CLIENTS
+        .iter()
+        .map(|&client| ClientStatus {
+            client,
+            detected: matches!(client, "claude-code" | "codex" | "cursor"),
+            registration: match client {
+                "claude-code" => Registration::Command {
+                    command: "/usr/local/bin/xflow".into(),
+                    exists: true,
+                    version: format!("xflow {}", env!("CARGO_PKG_VERSION")),
+                },
+                "cursor" => Registration::Command {
+                    command: "/opt/old/xflow".into(),
+                    exists: true,
+                    version: "xflow 0.0.1".into(),
+                },
+                _ => Registration::Missing,
+            },
+            manual: match client {
+                "zed" => Some("{context_servers: xflow}".into()),
+                "chatgpt" => Some("Use Codex in ChatGPT desktop.".into()),
+                _ => None,
+            },
+        })
+        .collect();
+    super::ai_apps::Status {
+        exe: "/usr/local/bin/xflow".into(),
+        version: "1.0.0",
+        sources: crate::context::Sources {
+            dictations: sharing,
+            meetings: false,
+        },
+        clients,
+    }
+}
+fn ai_row(app: &mut App, client: &str) {
+    app.selected[Page::AiApps.index()] = 1 + super::ai_apps::CLIENTS
+        .iter()
+        .position(|(id, _)| *id == client)
+        .unwrap();
+}
+fn mcp_job(effects: &[Effect]) -> Option<super::ai_apps::Job> {
+    match effects {
+        [Effect::Mcp(job, _)] => Some(job.clone()),
+        _ => None,
+    }
+}
+#[test]
+fn ai_apps_screen_shows_status_and_its_privacy_lines() {
+    use super::ai_apps::{Job, INJECTION, LEAVES};
+    let (_dir, mut app) = populated();
+    // 0 opens the screen and asks for status off the UI loop, once at a time.
+    assert_eq!(
+        mcp_job(&key(&mut app, KeyCode::Char('0'))),
+        Some(Job::Status)
+    );
+    assert_eq!(app.page, Page::AiApps);
+    assert!(key(&mut app, KeyCode::Char('r')).is_empty());
+    assert!(app.ai.busy);
+    let text = screen(&app, 120, 35);
+    assert!(text.contains("Checking…"), "{text}");
+    super::ai_apps::done(&mut app, Ok(super::ai_apps::Done::Status(ai_status(false))));
+    assert!(!app.ai.busy);
+    for (width, height) in [(120, 35), (80, 24)] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("src/tui/snapshots/ai-apps-{width}x{height}.txt"));
+        let actual = screen(&app, width, height);
+        if std::env::var_os("XFLOW_UPDATE_TUI_SNAPSHOTS").is_some() {
+            std::fs::write(&path, &actual).unwrap();
+        }
+        assert_eq!(actual, std::fs::read_to_string(&path).unwrap());
+        assert_plain(&actual);
+        assert!(actual.contains("Dictation history:"));
+        assert!(!actual.contains("Meetings:"));
+    }
+    let text = screen(&app, 160, 40);
+    for line in [LEAVES, INJECTION] {
+        assert!(text.contains(line), "{text}");
+    }
+    // A different registered version is flagged with its path.
+    ai_row(&mut app, "cursor");
+    let text = screen(&app, 160, 40);
+    assert!(text.contains("/opt/old/xflow"), "{text}");
+    assert!(text.contains("different version (xflow 0.0.1"), "{text}");
+    // Print-only clients show their snippet; Enter only explains.
+    ai_row(&mut app, "zed");
+    assert!(screen(&app, 160, 40).contains("{context_servers: xflow}"));
+    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(app.modal.is_none());
+    assert!(app.toast.as_deref().unwrap().contains("Zed"));
+    ai_row(&mut app, "chatgpt");
+    assert!(screen(&app, 160, 40).contains("Use Codex in ChatGPT desktop."));
+}
+#[test]
+fn ai_apps_sharing_needs_explicit_consent_and_off_needs_none() {
+    use super::ai_apps::{Done, Job, CONSENT};
+    let (_dir, mut app) = populated();
+    app.page = Page::AiApps;
+    super::ai_apps::done(&mut app, Ok(Done::Status(ai_status(false))));
+    // Turning it on shows the consent text; Esc changes nothing.
+    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(matches!(&app.modal, Some(Modal::Confirm { prompt, .. }) if prompt.contains(CONSENT)));
+    assert!(screen(&app, 120, 35).contains("that app's AI provider"));
+    assert!(key(&mut app, KeyCode::Esc).is_empty());
+    assert!(app.modal.is_none());
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(
+        mcp_job(&key(&mut app, KeyCode::Enter)),
+        Some(Job::Share(true))
+    );
+    // A finished change refreshes status.
+    assert_eq!(
+        mcp_job(&super::ai_apps::done(&mut app, Ok(Done::Shared(true)))),
+        Some(Job::Status)
+    );
+    super::ai_apps::done(&mut app, Ok(Done::Status(ai_status(true))));
+    assert!(screen(&app, 120, 35).contains("Dictation history:  on"));
+    // Turning it off needs no confirmation.
+    assert_eq!(
+        mcp_job(&key(&mut app, KeyCode::Enter)),
+        Some(Job::Share(false))
+    );
+    assert!(app.modal.is_none());
+}
+#[test]
+fn ai_apps_install_confirms_a_replacement_and_remove_runs_the_cli_code() {
+    use super::ai_apps::{Done, Job, Report};
+    let (_dir, mut app) = populated();
+    app.page = Page::AiApps;
+    super::ai_apps::done(&mut app, Ok(Done::Status(ai_status(true))));
+    ai_row(&mut app, "cursor");
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(&editor(&app).target, EditTarget::Menu(_)));
+    let install = Job::Install {
+        client: "cursor",
+        force: false,
+    };
+    assert_eq!(mcp_job(&key(&mut app, KeyCode::Enter)), Some(install));
+    // While it runs, nothing else starts.
+    key(&mut app, KeyCode::Enter);
+    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    // A differing entry asks before replacing; yes reinstalls with force.
+    let replace = Done::Replace {
+        client: "cursor",
+        existing: "/opt/old/xflow".into(),
+    };
+    assert!(super::ai_apps::done(&mut app, Ok(replace)).is_empty());
+    assert!(
+        matches!(&app.modal, Some(Modal::Confirm { prompt, .. }) if prompt.contains("/opt/old/xflow"))
+    );
+    assert_eq!(
+        mcp_job(&key(&mut app, KeyCode::Enter)),
+        Some(Job::Install {
+            client: "cursor",
+            force: true
+        })
+    );
+    super::ai_apps::done(&mut app, Ok(Done::Installed("cursor", Report::default())));
+    assert!(app.toast.as_deref().unwrap().contains("Restart"));
+    super::ai_apps::done(&mut app, Ok(Done::Status(ai_status(true))));
+    // Remove; a missing client CLI leaves the command to run by hand.
+    ai_row(&mut app, "gemini");
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Down);
+    assert_eq!(
+        mcp_job(&key(&mut app, KeyCode::Enter)),
+        Some(Job::Remove("gemini"))
+    );
+    let report = Report {
+        manual: Some("gemini mcp remove -s user xflow".into()),
+        ..Report::default()
+    };
+    super::ai_apps::done(&mut app, Ok(Done::Removed("gemini", report)));
+    super::ai_apps::done(&mut app, Ok(Done::Status(ai_status(true))));
+    assert!(screen(&app, 160, 40).contains("gemini mcp remove -s user xflow"));
+    // Errors become a plain toast and free the screen.
+    super::ai_apps::done(&mut app, Err(anyhow::anyhow!("Unsafe client config file")));
+    assert!(!app.ai.busy);
+    assert!(app
+        .toast
+        .as_deref()
+        .unwrap()
+        .contains("Unsafe client config file"));
+}

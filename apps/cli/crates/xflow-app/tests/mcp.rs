@@ -527,3 +527,51 @@ fn json_rewrites_refuse_numbers_they_would_change() {
     assert_eq!(written["f"], json!([0.5, 1.0, -2.5]));
     assert!(written["mcpServers"]["xflow"].is_object());
 }
+#[test]
+fn status_reports_detection_and_version_and_replacing_needs_force() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let d = tempfile::tempdir().unwrap();
+    fs::create_dir(d.path().join("home")).unwrap();
+    let script = |name: &str, body: &str| {
+        let path = d.path().join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    };
+    let old = script("old-xflow", "echo 'xflow 0.0.1'\n");
+    let claude = script(
+        "fake-claude",
+        &format!(
+            "case \"$2\" in get) printf 'Command: {}\\nArgs: mcp\\n';; esac\n",
+            old.display()
+        ),
+    );
+    let run = |args: &[&str]| {
+        command(d.path())
+            .env("XFLOW_MCP_CLAUDE_CODE_BIN", &claude)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let out = run(&["mcp", "status"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains(&format!(
+            "claude-code: found; registered command={:?}",
+            old.display().to_string()
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("version=xflow 0.0.1 WARNING: version differs"));
+    assert!(stdout.contains("cursor: not found; not registered"));
+    // Without a terminal a differing entry is kept unless forced.
+    let out = run(&["mcp", "install", "claude-code"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("Kept existing registration"), "{stderr}");
+    assert!(stderr.contains("old-xflow"), "{stderr}");
+    assert!(run(&["mcp", "install", "claude-code", "--force"])
+        .status
+        .success());
+}

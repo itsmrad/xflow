@@ -215,6 +215,8 @@ xflow mcp status
 
 Sharing starts off. `--dictations` explicitly enables global consent across MCP clients; disable it with `xflow mcp sources --dictations off`. History stays local until a client requests a tool: returned snippets and text go to that client's model vendor. Dictations are untrusted data and may contain prompt injection; avoid combining history with tools that can send private data out.
 
+The TUI's **AI apps** screen (press `0` in `xflow`) shows the same status with the sharing switch, and installs or removes xflow per client.
+
 Zed, LM Studio and Windsurf configuration is printed by `xflow mcp install <client>`. Plain ChatGPT chat export comes later; Codex works now. An advanced user-run [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) sends results through OpenAI and is not tested by xflow. Do not use public tunnels. See the [MCP guide](apps/web/content/docs/using/mcp.mdx) for setup, consent and removal.
 
 M1 release sizes on macOS arm64 (2026-11-06): `xflow` 8,445,664 B (8.05 MiB), `xflowd` 8,634,656 B (8.23 MiB, unchanged in size). Direct read-only history access brings bundled SQLite into the CLI; MCP/context adds 215,168 B beyond a SQLite-only baseline. See [measurements and limits](docs/benchmarks/mcp-m1.md), including startup, search memory and the larger compressed package.

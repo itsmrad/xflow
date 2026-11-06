@@ -13,6 +13,8 @@ xflow mcp install claude-code --dictations
 xflow mcp status
 ```
 
+You can also do this in the TUI: run `xflow` and open **AI apps** (press `0`). It has the global **Dictation history** switch, which asks for the same consent before turning on, and one row per client showing whether it was found, whether xflow is registered, the registered binary's path, and a warning when that binary's version differs. Enter on a client installs or removes xflow with the same code as `xflow mcp install` and `uninstall`, and asks before replacing a different xflow entry. Zed, LM Studio and Windsurf show the snippet to add yourself.
+
 Use the installed `xflow` binary when registering. A development binary under `target/` or a temporary directory can disappear. Registration uses that binary's path and the argument `mcp`; Homebrew installs use the stable `bin/xflow` symlink when available.
 
 Restart your client after registration, then ask: “Search my xflow dictations for the release plan.” The client must request a tool call before xflow returns matching text. The tools are `search_dictations` (snippets, date filters and pagination) and `get_dictation` (cleaned text, with size limits). Raw transcripts are never returned.

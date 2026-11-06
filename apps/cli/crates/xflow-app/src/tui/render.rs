@@ -1,4 +1,5 @@
 use super::{
+    ai_apps,
     options::{self, glyph, value_text},
     state::{commands, fuzzy, Action, App, Editor, Modal, Page, Step, PAGES},
 };
@@ -170,7 +171,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         .iter()
         .enumerate()
         .map(|(i, page)| {
-            let mut label = format!(" {}  {}", i + 1, page.title());
+            let mut label = format!(" {}  {}", (i + 1) % 10, page.title());
             if i == selected {
                 label.replace_range(..1, ">");
             }
@@ -197,6 +198,23 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
     match app.page {
         Page::Home => home(frame, body[1], app, &mut hits),
         Page::Stats => stats(frame, body[1], app),
+        Page::AiApps => {
+            // The two privacy lines stay visible under the list.
+            let notes =
+                [ai_apps::LEAVES, ai_apps::INJECTION].map(|s| format!("{}{s}", glyph("• ", "- ")));
+            let width = body[1].width.saturating_sub(2);
+            let height = notes.iter().map(|n| wrapped(n, width)).sum();
+            let parts =
+                Layout::vertical([Constraint::Min(8), Constraint::Length(height)]).split(body[1]);
+            listing(frame, parts[0], app, &mut hits);
+            frame.render_widget(
+                Paragraph::new(notes.join("\n"))
+                    .wrap(Wrap { trim: true })
+                    .style(muted(app))
+                    .block(Block::new().padding(ratatui::widgets::Padding::horizontal(1))),
+                parts[1],
+            );
+        }
         _ => listing(frame, body[1], app, &mut hits),
     }
     if let Some(toast) = &app.toast {
@@ -345,6 +363,10 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                 Page::Stats | Page::Doctor => {
                     vec![("↑↓ move", None), ("r refresh", Some(Action::Refresh))]
                 }
+                Page::AiApps => vec![
+                    ("Enter choose", Some(Action::Choose)),
+                    ("r refresh", Some(Action::Refresh)),
+                ],
             };
             if app.page != Page::Home {
                 out.push(("Esc back", Some(Action::Back)));
@@ -588,6 +610,20 @@ fn item<'a>(
             ])
             .into()
         }
+        Page::AiApps => Line::from(vec![
+            Span::raw(format!("{label:<20}")),
+            Span::styled(
+                value.to_string(),
+                if value.contains('!') {
+                    app.theme.base().fg(app.theme.error)
+                } else if index == 0 {
+                    accent(app)
+                } else {
+                    muted(app)
+                },
+            ),
+        ])
+        .into(),
         Page::Doctor => {
             let style = if label.starts_with('!') {
                 app.theme.base().fg(app.theme.error)
@@ -685,6 +721,7 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
             format!("{group} · {label}\n{value}\n\n{help}\n\n{verb}")
         }).unwrap_or_default()),
         Page::Overlay => ("About", app.overlay.get(pos).map(|s| format!("{}\n{}\n\nEnter to change. Changes apply right away.", s.summary, super::state::overlay_value(&s.value))).unwrap_or_default()),
+        Page::AiApps => ("Details", ai_apps::details(app)),
         Page::Doctor => ("Details", rows.get(pos).map(|(row, more)| if more.is_empty() { row } else { more }.clone()).unwrap_or_else(|| "Checking…".into())),
         _ => ("", String::new()),
     }
@@ -803,7 +840,7 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
                 "Getting around".to_string(),
                 "  ↑ ↓      move            Enter   choose or change".into(),
                 "  Esc      go back         Tab     next page".into(),
-                "  1 – 9    jump to a page  ?       this help".into(),
+                "  1 – 0    jump to a page  ?       this help".into(),
                 String::new(),
                 "Dictating".into(),
                 "  Space    start / stop    x       cancel".into(),
@@ -1049,6 +1086,20 @@ fn editor(frame: &mut Frame, rect: Rect, app: &App, e: &Editor, hits: &mut HitMa
     }
 }
 /// Rows the intro takes when wrapped, plus one blank line below it.
+/// Lines a word-wrapped paragraph of `text` takes at `width`.
+fn wrapped(text: &str, width: u16) -> u16 {
+    let width = width.max(1) as usize;
+    let (mut lines, mut used) = (1, 0);
+    for word in text.split(' ').map(|w| w.chars().count()) {
+        if used > 0 && used + 1 + word > width {
+            lines += 1;
+            used = word;
+        } else {
+            used += word + usize::from(used > 0);
+        }
+    }
+    lines
+}
 fn intro_height(intro: &str, width: u16) -> u16 {
     if intro.is_empty() {
         return 0;
