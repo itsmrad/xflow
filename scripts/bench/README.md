@@ -200,7 +200,7 @@ two share text pages, which would split their PSS. It fails when:
 
 - a binary exceeds its target's ceiling: `floor(result.binary_bytes × 1.01)`
   (`limits.binary_pct = 1`). Current Linux ceilings are **11,377,682 B** for `xflow`
-  and **12,597,471 B** for `xflowd`, about 1% above the matching receipt;
+  and **12,839,063 B** for `xflowd`, about 1% above the matching receipt;
 - idle tree PSS grows by more than min(`limits.pss_kib`, `limits.pss_pct`);
 - idle tree CPU exceeds `limits.cpu_percent` of one core;
 - warm startup p50 exceeds the absolute `limits.startup_ms` budget. No relative
