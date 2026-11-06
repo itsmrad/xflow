@@ -682,10 +682,9 @@ pub(super) fn run(
             position.trim_matches('\''),
             s,
         );
-        let panel = status_panel(
-            window,
-            string(label_text(&first).unwrap_or(c"XFlow recording status")),
-        )?;
+        let first_caption =
+            cstring(&caption(&first).unwrap_or_else(|| "XFlow recording status".into()));
+        let panel = status_panel(window, string(first_caption.as_c_str()))?;
         let view = msg!(panel, c"contentView"; Id);
         let root = msg!(view, c"layer"; Id);
 
@@ -722,7 +721,7 @@ pub(super) fn run(
         place(square, BUTTON * s / 2.0, BUTTON * s / 2.0, 8.0 * s, 8.0 * s);
 
         let copied_label = msg!(class(c"CATextLayer"), c"layer"; Id);
-        msg!(copied_label, c"setString:", string(label_text(&first).unwrap_or(c"")) => Id; ());
+        msg!(copied_label, c"setString:", string(first_caption.as_c_str()) => Id; ());
         msg!(copied_label, c"setFontSize:", 12.0 * s => f64; ());
         msg!(copied_label, c"setAlignmentMode:", string(c"center") => Id; ());
         msg!(copied_label, c"setForegroundColor:", white => Id; ());
