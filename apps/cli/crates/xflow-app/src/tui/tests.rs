@@ -1050,7 +1050,7 @@ fn ai_status(sharing: bool) -> super::ai_apps::Status {
     }
 }
 fn ai_row(app: &mut App, client: &str) {
-    app.selected[Page::AiApps.index()] = 1 + super::ai_apps::CLIENTS
+    app.selected[Page::AiApps.index()] = 2 + super::ai_apps::CLIENTS
         .iter()
         .position(|(id, _)| *id == client)
         .unwrap();
@@ -1130,7 +1130,7 @@ fn ai_apps_sharing_needs_explicit_consent_and_off_needs_none() {
         Some(Job::Status)
     );
     super::ai_apps::done(&mut app, Ok(Done::Status(ai_status(true))));
-    assert!(screen(&app, 120, 35).contains("Dictation history:  on"));
+    assert!(screen(&app, 120, 35).contains("Dictation history:    on"));
     // Turning it off needs no confirmation.
     assert_eq!(
         mcp_job(&key(&mut app, KeyCode::Enter)),
@@ -1446,4 +1446,35 @@ fn remove_asks_first_and_switches_back_to_the_saved_route() {
     assert_eq!(app.config.stt.provider, "groq");
     app.model_removed(Ok(true));
     assert!(app.on_device_text(false, None).contains("Not installed"));
+}
+
+#[test]
+fn meeting_sharing_confirms_and_off_is_immediate() {
+    use super::ai_apps::{Done, Job, CONSENT};
+    let (_dir, mut app) = populated();
+    app.page = Page::AiApps;
+    super::ai_apps::done(&mut app, Ok(Done::Status(ai_status(false))));
+    app.selected[Page::AiApps.index()] = 1;
+    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    match &app.modal {
+        Some(Modal::Confirm {
+            action: Action::ShareMeetings,
+            prompt,
+        }) => {
+            assert!(prompt.contains("meeting transcripts"));
+            assert!(prompt.contains(CONSENT));
+        }
+        _ => panic!("meeting consent confirmation"),
+    }
+    assert_eq!(
+        mcp_job(&key(&mut app, KeyCode::Char('y'))),
+        Some(Job::ShareMeetings(true))
+    );
+    let mut status = ai_status(false);
+    status.sources.meetings = true;
+    super::ai_apps::done(&mut app, Ok(Done::Status(status)));
+    assert_eq!(
+        mcp_job(&key(&mut app, KeyCode::Enter)),
+        Some(Job::ShareMeetings(false))
+    );
 }

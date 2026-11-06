@@ -647,12 +647,12 @@ fn item<'a>(
             .into()
         }
         Page::AiApps => Line::from(vec![
-            Span::raw(format!("{label:<20}")),
+            Span::raw(format!("{label:<22}")),
             Span::styled(
                 value.to_string(),
                 if value.contains('!') {
                     app.theme.base().fg(app.theme.error)
-                } else if index == 0 {
+                } else if index < 2 {
                     accent(app)
                 } else {
                     muted(app)

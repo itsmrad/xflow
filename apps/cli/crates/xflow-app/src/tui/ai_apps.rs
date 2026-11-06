@@ -34,6 +34,7 @@ pub enum Job {
     Install { client: &'static str, force: bool },
     Remove(&'static str),
     Share(bool),
+    ShareMeetings(bool),
 }
 #[derive(Debug)]
 pub enum Done {
@@ -46,6 +47,7 @@ pub enum Done {
     },
     Removed(&'static str, Report),
     Shared(bool),
+    SharedMeetings(bool),
 }
 #[derive(Default)]
 pub struct AiApps {
@@ -63,7 +65,7 @@ pub fn run(job: Job, config: &Path) -> Result<Done> {
     Ok(match job {
         Job::Status => Done::Status(setup::status(&consent)?),
         Job::Install { client, force } => {
-            match setup::install(client, false, force, false, false, &consent) {
+            match setup::install(client, false, false, force, false, false, &consent) {
                 Ok(report) => Done::Installed(client, report),
                 Err(e) => match e.downcast_ref::<setup::Replace>() {
                     Some(r) => Done::Replace {
@@ -75,6 +77,10 @@ pub fn run(job: Job, config: &Path) -> Result<Done> {
             }
         }
         Job::Remove(client) => Done::Removed(client, setup::uninstall(client)?),
+        Job::ShareMeetings(on) => {
+            mcp::set_meetings(&consent, on)?;
+            Done::SharedMeetings(on)
+        }
         Job::Share(on) => {
             mcp::set_dictations(&consent, on)?;
             Done::Shared(on)
@@ -107,6 +113,15 @@ pub fn rows(app: &App) -> Vec<(String, String)> {
         None => "…",
     };
     std::iter::once(("Dictation history:".into(), sharing.into()))
+        .chain(std::iter::once((
+            "Meeting transcripts:".into(),
+            match app.ai.status.as_ref().map(|s| s.sources.meetings) {
+                Some(true) => "on",
+                Some(false) => "off",
+                None => "…",
+            }
+            .into(),
+        )))
         .chain(CLIENTS.iter().map(|(id, name)| {
             let value = match app.ai.client(id) {
                 None => "Checking…".into(),
@@ -132,7 +147,7 @@ pub fn rows(app: &App) -> Vec<(String, String)> {
 /// The selected client, if the selection is a client row.
 pub fn selected(app: &App) -> Option<&'static str> {
     app.selected()
-        .checked_sub(1)
+        .checked_sub(2)
         .and_then(|i| CLIENTS.get(i))
         .map(|(id, _)| *id)
 }
@@ -153,13 +168,26 @@ pub fn refresh(app: &mut App) -> Vec<Effect> {
 }
 pub fn choose(app: &mut App) -> Vec<Effect> {
     let Some(client) = selected(app) else {
-        return match app.ai.sharing() {
+        let meetings = app.selected() == 1;
+        let sharing = if meetings {
+            app.ai.status.as_ref().map(|s| s.sources.meetings)
+        } else {
+            app.ai.sharing()
+        };
+        return match sharing {
             None => vec![],
-            Some(true) => start(app, Job::Share(false)),
+            Some(true) => start(
+                app,
+                if meetings {
+                    Job::ShareMeetings(false)
+                } else {
+                    Job::Share(false)
+                },
+            ),
             Some(false) => {
                 app.modal = Some(Modal::Confirm {
-                    action: Action::Share,
-                    prompt: format!("Share your dictation history with AI apps? {CONSENT} This applies to every AI app you set up."),
+                    action: if meetings {Action::ShareMeetings} else {Action::Share},
+                    prompt: format!("Share your {} with AI apps? {CONSENT} This applies to every AI app you set up.", if meetings {"meeting transcripts"} else {"dictation history"}),
                 });
                 vec![]
             }
@@ -189,6 +217,7 @@ pub fn action(app: &mut App, action: Action) -> Vec<Effect> {
         return vec![];
     }
     match action {
+        Action::ShareMeetings => start(app, Job::ShareMeetings(true)),
         Action::Share => start(app, Job::Share(true)),
         Action::Replace => match app.ai.pending.take() {
             Some(client) => start(
@@ -269,6 +298,12 @@ pub fn done(app: &mut App, result: Result<Done>) -> Vec<Effect> {
             });
             app.ai.manual = report.manual.map(|m| (client, m));
         }
+        Done::SharedMeetings(on) => {
+            app.toast = Some(format!(
+                "Meeting transcripts sharing is {}.",
+                if on { "on" } else { "off" }
+            ));
+        }
         Done::Shared(on) => {
             app.toast = Some(
                 if on {
@@ -285,12 +320,24 @@ pub fn done(app: &mut App, result: Result<Done>) -> Vec<Effect> {
 /// The details panel for the selected row.
 pub fn details(app: &App) -> String {
     let Some(client) = selected(app) else {
-        let state = match app.ai.sharing() {
+        let meetings = app.selected() == 1;
+        let state = match if meetings {
+            app.ai.status.as_ref().map(|s| s.sources.meetings)
+        } else {
+            app.ai.sharing()
+        } {
             Some(true) => "on. Enter to turn it off.",
             Some(false) => "off. Enter to turn it on.",
             None => "being checked…",
         };
-        return format!("Sharing · Dictation history is {state}\n\n{CONSENT} One switch for every AI app.\n\nMeetings can't be shared yet.");
+        return format!(
+            "Sharing · {} is {state}\n\n{CONSENT} One switch for every AI app.",
+            if meetings {
+                "Meeting transcripts"
+            } else {
+                "Dictation history"
+            }
+        );
     };
     let Some(c) = app.ai.client(client) else {
         return "Checking…".into();

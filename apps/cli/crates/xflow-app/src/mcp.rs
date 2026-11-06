@@ -25,6 +25,9 @@ pub enum Action {
         /// Explicitly allow sharing dictation history with clients' model vendors.
         #[arg(long)]
         dictations: bool,
+        /// Explicitly allow meeting transcripts to be sent to clients' AI providers.
+        #[arg(long)]
+        meetings: bool,
         /// Replace a different existing xflow entry.
         #[arg(long)]
         force: bool,
@@ -40,6 +43,8 @@ pub enum Action {
     Sources {
         #[arg(long, value_parser = ["on", "off"])]
         dictations: Option<String>,
+        #[arg(long, value_parser = ["on", "off"])]
+        meetings: Option<String>,
     },
 }
 pub fn run(args: &Mcp, config: &Path) -> Result<()> {
@@ -57,10 +62,19 @@ pub fn run(args: &Mcp, config: &Path) -> Result<()> {
         Some(Action::Install {
             client,
             dictations,
+            meetings,
             force,
             print,
         }) => {
-            let report = setup::install(client, *dictations, *force, *print, true, &consent)?;
+            let report = setup::install(
+                client,
+                *dictations,
+                *meetings,
+                *force,
+                *print,
+                true,
+                &consent,
+            )?;
             setup::print_report(&report);
             Ok(())
         }
@@ -72,11 +86,17 @@ pub fn run(args: &Mcp, config: &Path) -> Result<()> {
             setup::print_status(&setup::status(&consent)?);
             Ok(())
         }
-        Some(Action::Sources { dictations }) => {
-            let sources = match dictations {
+        Some(Action::Sources {
+            dictations,
+            meetings,
+        }) => {
+            let mut sources = match dictations {
                 Some(v) => set_dictations(&consent, v == "on")?,
                 None => read_sources(&consent),
             };
+            if let Some(v) = meetings {
+                sources = set_meetings(&consent, v == "on")?;
+            }
             println!(
                 "Global consent: dictations={}, meetings={} (all MCP clients)",
                 sources.dictations, sources.meetings
@@ -93,6 +113,12 @@ pub(crate) fn consent_path(config: &Path) -> std::path::PathBuf {
 pub(crate) fn set_dictations(consent: &Path, on: bool) -> Result<Sources> {
     let mut sources = read_sources(consent);
     sources.dictations = on;
+    write_sources(consent, sources)?;
+    Ok(sources)
+}
+pub(crate) fn set_meetings(consent: &Path, on: bool) -> Result<Sources> {
+    let mut sources = read_sources(consent);
+    sources.meetings = on;
     write_sources(consent, sources)?;
     Ok(sources)
 }

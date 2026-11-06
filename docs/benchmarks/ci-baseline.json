@@ -1,5 +1,5 @@
 {
-  "about": "Linux CI gate baseline. The single CI receipt in runs is the source of the xflow binary bytes; its runtime measurements are observations, not a runtime baseline refresh. All other result values retain the median-PSS reference from runtime_runs (41375047607 attempt 2 at 71e4aa6f02420a58d5a89f2d531be9168b8401bf); the three original raw receipts are unchanged. xflow bytes are 10594824 from the receipt in runs (run 42169619094 at c977e58c0c4185a697c57f2859057dbbac835758) for bundled SQLite in the CLI (MCP); xflowd bytes keep the receipt from run 42154746953 attempt 1 at 100a18c9e09b7e02c261a1e40aa6536599d1ffd3. Regenerate full baselines with `scoreboard.py baseline` from scoreboard-gate artifacts in the PR that intentionally changes them.",
+  "about": "Linux CI gate baseline. The single CI receipt in runs is the source of the xflow binary bytes; its runtime measurements are observations, not a runtime baseline refresh. All other result values retain the median-PSS reference from runtime_runs (41375047607 attempt 2 at 71e4aa6f02420a58d5a89f2d531be9168b8401bf); the three original raw receipts are unchanged. xflow bytes are 11265032 from the receipt in runs (run 42212391796 at c742493f5c5055aebb77d1d3d53ab821516dee8f) for MCP meeting tools in the CLI; xflowd bytes keep the receipt from run 42154746953 attempt 1 at 100a18c9e09b7e02c261a1e40aa6536599d1ffd3. Regenerate full baselines with `scoreboard.py baseline` from scoreboard-gate artifacts in the PR that intentionally changes them.",
   "limits": {
     "binary_pct": 1,
     "cpu_percent": 0.1,
@@ -9,7 +9,7 @@
   },
   "result": {
     "binary_bytes": {
-      "xflow": 11149960,
+      "xflow": 11265032,
       "xflowd": 12472744
     },
     "idle_cpu_percent": 0.0,
@@ -22,35 +22,35 @@
     {
       "binaries": {
         "xflow": {
-          "bytes": 11149960,
-          "sha256": "f75f8639f4885273780c1a7432f372566e526ee50f5f1c7636726f9576303027"
+          "bytes": 11265032,
+          "sha256": "da5f14b541a73e5ee62022f080ce71be2f265672fd3a4c26bc2e4ec4af7a646e"
         },
         "xflowd": {
-          "bytes": 12574728,
-          "sha256": "43eff02a554cb7f09a297ab997e61ab299cf29cacd32970b8b0e9f143272f65b"
+          "bytes": 12596872,
+          "sha256": "ac0a921f4a9e564205f159bb60d440206f4b14dbbf4af2823acac4aa00a4beee"
         }
       },
-      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/42189270370/attempts/1",
-      "commit": "d87469ff4683455ff85277a13d55638833260a95",
-      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+      "ci_run": "https://github.com/itsmrad/xflow/actions/runs/42212391796/attempts/1",
+      "commit": "c742493f5c5055aebb77d1d3d53ab821516dee8f",
       "cpu": "AMD EPYC 9V45 96-Core Processor",
+      "launch_pss_kib": [
+        10005,
+        9840,
+        10085
+      ],
       "logical_cpus": 4,
       "result": {
         "binary_bytes": {
-          "xflow": 11149960,
-          "xflowd": 12574728
+          "xflow": 11265032,
+          "xflowd": 12596872
         },
         "idle_cpu_percent": 0.0,
         "idle_processes": 1,
-        "idle_pss_kib": 9868,
-        "idle_rss_kib": 12240,
-        "startup_p50_ms": 1.8592739999689911
+        "idle_pss_kib": 10005,
+        "idle_rss_kib": 12392,
+        "startup_p50_ms": 1.9008200000030229
       },
-      "launch_pss_kib": [
-        9669,
-        9868,
-        9872
-      ]
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
     }
   ],
   "runtime_runs": [
