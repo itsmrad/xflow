@@ -186,37 +186,70 @@ listed in the PR for #15.
 
 The `scoreboard gate` job in `.github/workflows/ci.yml` runs `scoreboard.py gate`
 against [`docs/benchmarks/ci-baseline.json`](../../docs/benchmarks/ci-baseline.json).
-It uses release `xflowd` and `xflow`, the only binaries the gate needs. They are
-cached under a key built from the `apps/cli` sources, `Cargo.lock` and the rustc
-version, so a change that doesn't touch the CLI skips the build. The gate takes
+It uses production release `xflowd` and `xflow` with `--locked`, no extra features,
+and the workspace release profile. Only this job pins Rust **1.99.1** and builds
+with `--target x86_64-unknown-linux-gnu`. Binary and Cargo cache namespaces include
+the compiler and target; the binary cache also includes CLI/config/packaging sources
+and the workflow. The gate's required `--target` declares the Cargo build target;
+it and the measured rustc version must match the baseline before any comparisons.
+Other targets need their own matching receipts and budgets; macOS bytes cannot be
+used for Linux. The gate takes
 10 startup launches, then idles three daemons side by side for 20 s and reports
 the median of their medians. Each daemon runs its own copy of the binary, so no
 two share text pages, which would split their PSS. It fails when:
 
-- a binary grows by more than `limits.binary_pct`. Sizes are byte-identical
-  between runs; the margin absorbs drift in the stable toolchain;
+- a binary exceeds its target's ceiling: `floor(result.binary_bytes × 1.01)`
+  (`limits.binary_pct = 1`). Current Linux ceilings are **8,308,777 B** for `xflow`
+  and **12,597,471 B** for `xflowd`, about 1% above the matching receipt;
 - idle tree PSS grows by more than min(`limits.pss_kib`, `limits.pss_pct`);
 - idle tree CPU exceeds `limits.cpu_percent` of one core;
 - warm startup p50 exceeds the absolute `limits.startup_ms` budget. No relative
   timing is gated, so runner noise can't fail it;
 - any helper process is running at idle.
 
-Measured runner noise behind those limits:
+The binary baseline uses the single [CI receipt from run 42154746953](https://github.com/itsmrad/xflow/actions/runs/42154746953/attempts/1)
+at merge commit `100a18c9e09b7e02c261a1e40aa6536599d1ffd3` (PR head `8ba3db8`).
+Since `71e4aa6`, the daemon grew 2.68% and the CLI 1.58%, exceeding the new 1%
+guard; the old 5% allowance hid that growth. This reviewed update moves only the
+binary baseline and keeps 1% headroom; it includes no MCP/chat allowance.
+
+Runtime baseline values and budgets are unchanged. The three original receipts
+remain intact in `runtime_runs` in the JSON: run 41375047607, attempts 1–3 at
+`71e4aa6`, with attempt 2 as the median-PSS reference. Their run PSS medians were
+9,710–9,877 KiB, per-launch medians 9,651–9,974 KiB, and warm startup p50 1.6–2.0 ms.
+The generated summary below describes only the current receipt in `runs`,
+including its observed runtime values; one CI run is not three new CI replicates:
 
 <!-- scoreboard:begin -->
-Generated from [`ci-baseline.json`](../../docs/benchmarks/ci-baseline.json) by `scoreboard.py render`; do not edit by hand. 3 CI runs of `71e4aa6` on AMD EPYC 9V45 96-Core Processor, 4 CPUs ([1](https://github.com/itsmrad/xflow/actions/runs/41375047607/attempts/1), [2](https://github.com/itsmrad/xflow/actions/runs/41375047607/attempts/2), [3](https://github.com/itsmrad/xflow/actions/runs/41375047607/attempts/3)):
+Generated from [`ci-baseline.json`](../../docs/benchmarks/ci-baseline.json) by `scoreboard.py render`; do not edit by hand. 1 CI runs of `100a18c` on AMD EPYC 9V74 80-Core Processor, 4 CPUs ([1](https://github.com/itsmrad/xflow/actions/runs/42154746953/attempts/1)):
 
-- Idle tree PSS: run medians 9,710–9,877 KiB (2 %), per-launch medians 9,651–9,974 KiB (3 %). The baseline is 9,873 KiB and the gate allows +987 KiB, 3.1× the per-launch spread.
-- Binaries: `xflow` 8,098,656 B in every run; `xflowd` 12,147,400 B in every run. The gate allows +5 %.
-- Warm startup p50: 1.6–2.0 ms against the absolute 100 ms budget; idle CPU at most 0.0000 % against 0.1 %.
+- Idle tree PSS: run medians 9,969–9,969 KiB (0 %), per-launch medians 9,944–10,072 KiB (1 %). The baseline is 9,873 KiB and the gate allows +987 KiB, 7.7× the per-launch spread.
+- Binaries: `xflow` 8,226,512 B in every run; `xflowd` 12,472,744 B in every run. The gate allows +1 %.
+- Warm startup p50: 1.7–1.7 ms against the absolute 100 ms budget; idle CPU at most 0.0000 % against 0.1 %.
 <!-- scoreboard:end -->
 
-When a change grows a binary or memory on purpose, download the job's
-`scoreboard-gate` artifacts and regenerate the baseline and this text in the
-same PR, so a reviewer sees the growth:
+Growth beyond a ceiling requires an **explicit budget change in that PR**, with
+the reason in the PR description. Download three `scoreboard-gate` artifacts from
+the same intended commit, compiler, target, release flags and features. Record
+their exact sizes, hashes and build provenance; update only the authorized
+binary's `result.binary_bytes` in `docs/benchmarks/ci-baseline.json`, retaining
+`limits.binary_pct = 1` and unrelated budgets. Update the ceiling expectations in
+`scripts/bench/test_scoreboard.py` and the current ceiling values above, regenerate
+the text and run the tests below.
+An intentional compiler/target change also needs matching receipts and an
+explicit update to the baseline's `rustc`/`target` and the workflow pins/cache keys.
+For a deliberate full baseline refresh (including runtime measurements), use:
 
 ```sh
 python3 -B scripts/bench/scoreboard.py baseline gate-1.json gate-2.json gate-3.json
 python3 -B scripts/bench/scoreboard.py render docs/benchmarks/ci-baseline.json --into scripts/bench/README.md
 python3 -B scripts/bench/test_scoreboard.py   # also fails if any generated text drifts from its JSON
 ```
+
+**Pending MCP/chat exception:** the approved CLI-only SQLite addition was estimated
+on macOS at about +1.88 MB (6.57 → 8.45 MB), but has no verified integrated receipt.
+The current Linux budgets above apply now. When integrated, measure the exact
+production Linux CLI with the pinned compiler/target and make the explicit CLI
+budget update above, with 1% headroom. Verify that the delta is the approved
+feature; keep the daemon budget unchanged. Do not add that approximate Mac delta
+to either Linux budget. macOS needs its own receipt before any exact allowance.
