@@ -179,18 +179,32 @@ impl xflow_core::replay::VisibleScreen for Reader {
     }
     fn visible_range(&self) -> Option<(usize, usize)> {
         let r = named_range(&self.element.0, "AXVisibleCharacterRange")?;
-        if r.length as usize > xflow_core::replay::MAX_VISIBLE_UTF16 {
+        if r.length == 0
+            || r.length as usize > xflow_core::replay::MAX_VISIBLE_UTF16
+            || r.location.checked_add(r.length).is_none()
+        {
             return None;
         }
         // iTerm2 advertises all scrollback as visible. Require geometric proof
         // before requesting any text; unsupported bounds fail closed too.
         let e = &self.element.0;
-        let mut frame = Rect::default();
         let mut bounds = Rect::default();
-        ax_value(&e.attribute("AXPosition")?, 1, &mut frame.origin)?;
-        ax_value(&e.attribute("AXSize")?, 2, &mut frame.size)?;
         ax_value(&parameterized(e, "AXBoundsForRange", &r)?, 3, &mut bounds)?;
-        if !frame.contains(&bounds) {
+        // A document view can be as tall as scrollback; its scroll area's frame
+        // is the viewport. Without that independent bound, do not request text.
+        let mut parent = e.attribute("AXParent")?;
+        let mut viewport = None;
+        for _ in 0..4 {
+            if parent.text("AXRole").as_deref() == Some("AXScrollArea") {
+                viewport = Some(parent);
+                break;
+            }
+            parent = parent.attribute("AXParent")?;
+        }
+        if !frame(e)?.contains(&bounds)
+            || !frame(&viewport?)?.contains(&bounds)
+            || !frame(&self.window.0)?.contains(&bounds)
+        {
             return None;
         }
         Some((r.location as usize, r.length as usize))
@@ -198,6 +212,12 @@ impl xflow_core::replay::VisibleScreen for Reader {
     fn range(&self, start: usize, len: usize) -> Option<String> {
         string_range(&self.element.0, start, len)
     }
+}
+fn frame(element: &Owned) -> Option<Rect> {
+    let mut rect = Rect::default();
+    ax_value(&element.attribute("AXPosition")?, 1, &mut rect.origin)?;
+    ax_value(&element.attribute("AXSize")?, 2, &mut rect.size)?;
+    Some(rect)
 }
 /// Unsupported optional metadata is distinct from a failed privacy query.
 fn optional_attribute(element: &Owned, name: &str) -> Option<Option<Owned>> {

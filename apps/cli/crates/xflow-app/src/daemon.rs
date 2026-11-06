@@ -7711,6 +7711,9 @@ mod tests {
         let secure = replay_watch("use kubernetis", vec![ReplayIn::Secure]).await;
         assert_eq!(secure.outcomes.get("secure").copied(), Some(1));
         assert!(!secure.outcomes.contains_key("learned"));
+        let missed = replay_watch("kubectl rollout ngin", vec![ReplayIn::Missed]).await;
+        assert_eq!(missed.outcomes.get("abstain").copied(), Some(1));
+        assert!(!missed.outcomes.contains_key("learned"));
         // One step before the start of the paste, then a typed letter: not a word.
         let mut steps = vec![
             replay_key(Key::LineStart),

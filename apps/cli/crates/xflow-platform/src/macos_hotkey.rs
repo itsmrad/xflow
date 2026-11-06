@@ -711,6 +711,43 @@ impl Drop for MacHotkeys {
 mod tests {
     use super::*;
     #[test]
+    fn replay_overflow_and_expiry_are_sticky_and_old_feed_cannot_disarm_new_one() {
+        let raw = RawEvent {
+            class: RAW_KEY,
+            keycode: 51,
+            flags: 0,
+            units: [0; 8],
+            len: 0,
+        };
+        let arm = || {
+            let (tx, rx) = mpsc::channel(2);
+            *BUS.tx.lock().unwrap() = Some(tx);
+            BUS.missed.store(false, Ordering::Release);
+            BUS.until_ms.store(now_ms() + 60_000, Ordering::Release);
+            let generation = BUS.generation.fetch_add(1, Ordering::AcqRel) + 1;
+            BUS.pid.store(123, Ordering::Release);
+            KeyFeed { rx, generation }
+        };
+        let first = arm();
+        for _ in 0..3 {
+            enqueue(raw);
+        }
+        assert!(first.missed());
+        assert!(first.missed(), "loss stays sticky");
+        assert_eq!(first.rx.len(), 2);
+        first.stop();
+        let second = arm();
+        drop(first);
+        assert!(
+            second.settled(),
+            "an old drop must not stop a new subscriber"
+        );
+        BUS.until_ms.store(now_ms(), Ordering::Release);
+        assert!(second.missed());
+        enqueue(raw);
+        assert!(second.rx.is_empty(), "nothing enqueued after expiry");
+    }
+    #[test]
     fn replay_decodes_keys_and_refuses_mouse_invalid_unicode_and_unknown_keys() {
         let raw = RawEvent {
             class: RAW_KEY,
