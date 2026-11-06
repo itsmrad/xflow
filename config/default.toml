@@ -115,6 +115,12 @@ window_terms = false         # opt in (macOS for now): spell file/project/branch
 theme = "paper"              # TUI theme; see `xflow tui` → Settings
 mouse = true
 
+[ask]
+enabled = true               # hold the chord, speak, release; the answer is shown, never pasted
+key = "right_option+right_command"
+provider = ""                # empty: the cleanup provider, or groq if cleanup is unset
+model = ""                   # empty: that provider's fast catalog default
+
 # Voice snippets: say the trigger, get the text.
 # [[snippets]]
 # trigger = "my email"

@@ -78,6 +78,7 @@ pub enum Action {
     Go(Page),
     Toggle,
     Command,
+    Ask,
     Cancel,
     Copy,
     Paste,
@@ -126,6 +127,7 @@ pub fn commands() -> Vec<Command> {
         (Action::Toggle, "Start or stop dictation", "Space"),
         (Action::Cancel, "Cancel dictation", "x"),
         (Action::Command, "Edit selected text by voice", "C"),
+        (Action::Ask, "Ask a question by voice", "a"),
         (Action::Copy, "Copy text", "c"),
         (Action::Paste, "Paste text into the app you were using", "p"),
         (Action::Retry, "Retry the failed dictation and copy it", "R"),
@@ -1256,6 +1258,7 @@ impl App {
             }
             KeyCode::Char(' ') => Action::Toggle,
             KeyCode::Char('C') => Action::Command,
+            KeyCode::Char('a') => Action::Ask,
             KeyCode::Char('x') => Action::Cancel,
             KeyCode::Esc => Action::Back,
             KeyCode::Char('c') => Action::Copy,
@@ -1565,6 +1568,24 @@ impl App {
                     },
                     Tag::Ordinary,
                 )]
+            }
+            Action::Ask => {
+                if self.status.state == State::Listening && self.status.mode == Some(Mode::Ask) {
+                    return vec![Effect::Request(Request::Stop, Tag::Ordinary)];
+                }
+                if self.active() {
+                    return vec![];
+                }
+                return vec![Effect::Request(
+                    Request::Start {
+                        mode: Mode::Ask,
+                        context: None,
+                        t0_us: None,
+                        delivery: Delivery::None,
+                        hold: false,
+                    },
+                    Tag::Ordinary,
+                )];
             }
             Action::Cancel => return vec![Effect::Request(Request::Cancel, Tag::Ordinary)],
             Action::Retry if self.status.failed_audio.is_none() => {

@@ -268,7 +268,7 @@ fn beside_pill(mut frame: Rect, position: &str, scale: f64) -> Rect {
 const ALERT_SECS: f64 = 2.0;
 
 /// What the pill says: a failure alert after release, or a listening advisory.
-fn label_text(event: PillEvent) -> Option<&'static CStr> {
+fn label_text(event: &PillEvent) -> Option<&'static CStr> {
     Some(match (event.alert, event.ends_soon, event.no_signal) {
         (Some(Alert::Copied), ..) => c"Copied — paste with ⌘V",
         (Some(Alert::NoSpeech), ..) => c"No speech heard",
@@ -279,6 +279,16 @@ fn label_text(event: PillEvent) -> Option<&'static CStr> {
         (None, _, true) => c"Can't hear you — check mic",
         (None, false, false) => return None,
     })
+}
+
+/// Static advisories, or the streaming answer in the same text layer.
+fn caption(event: &PillEvent) -> Option<String> {
+    event
+        .text
+        .as_ref()
+        .filter(|text| !text.is_empty())
+        .cloned()
+        .or_else(|| label_text(event).map(|text| text.to_string_lossy().into_owned()))
 }
 
 fn ease_out(p: f64) -> f64 {
@@ -744,14 +754,11 @@ pub(super) fn run(
                 if !event.active() {
                     closing = Some((Instant::now(), event.state));
                 }
-                if label_text(event) != label_text(state) {
-                    let label = label_text(event);
-                    if let Some(label) = label {
-                        msg!(copied_label, c"setString:", string(label) => Id; ());
-                    }
-                    // Without text, drop any hint so it is not read during fade-out.
-                    let label = string(label.unwrap_or(c"XFlow recording status"));
-                    msg!(panel, c"setAccessibilityLabel:", label => Id; ());
+                if caption(&event) != caption(&state) {
+                    let spoken = caption(&event).unwrap_or_else(|| "XFlow recording status".into());
+                    let owned = cstring(&spoken);
+                    msg!(copied_label, c"setString:", string(owned.as_c_str()) => Id; ());
+                    msg!(panel, c"setAccessibilityLabel:", string(owned.as_c_str()) => Id; ());
                 }
                 state = event;
             }
@@ -770,7 +777,8 @@ pub(super) fn run(
                 1.0 - (-dt / 70.0).exp()
             };
             let alert = state.alert.is_some();
-            let notice = label_text(state).is_some();
+            let hold = state.text.as_ref().is_some_and(|text| !text.is_empty());
+            let notice = caption(&state).is_some();
             width += ((if notice {
                 250.0
             } else if hands_free {
@@ -789,7 +797,11 @@ pub(super) fn run(
             if let Some((at, _)) = closing {
                 let e = at.elapsed().as_secs_f64();
                 let fade = if reduce_motion { 0.0 } else { 0.15 };
-                let fade_from = if alert { ALERT_SECS - fade } else { 0.0 };
+                let fade_from = if alert || hold {
+                    ALERT_SECS - fade
+                } else {
+                    0.0
+                };
                 if e >= fade_from + fade {
                     msg!(tick_pool, c"drain"; ());
                     break;

@@ -200,6 +200,8 @@ pub enum Mode {
     /// Apply the spoken instruction to the selected text, or write new text
     /// from the instruction when nothing is selected.
     Command,
+    /// Answer a spoken question in the overlay. Never inserted.
+    Ask,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -317,6 +319,36 @@ pub trait TextTransformer: Send + Sync {
         Ok(())
     }
     async fn transform(&self, request: TransformRequest<'_>) -> Result<String>;
+}
+
+/// One short answer from text. Audio never reaches an implementor.
+/// `stream` sends text deltas in order; the call site stays this trait so a
+/// later gateway client can replace the HTTP one.
+#[async_trait]
+pub trait ChatProvider: Send + Sync {
+    fn name(&self) -> &str;
+    fn model(&self) -> &str {
+        ""
+    }
+    /// What the privacy line calls this answerer: provider and model, or a local harness.
+    fn target(&self) -> String {
+        let model = self.model();
+        if model.is_empty() {
+            self.name().to_owned()
+        } else {
+            format!("{} {model}", self.name())
+        }
+    }
+    /// Like `SpeechToText::warm`: connection setup only. No prompt is sent.
+    async fn warm(&self) -> Result<()> {
+        Ok(())
+    }
+    async fn stream(&self, request: &str, tx: tokio::sync::mpsc::Sender<String>) -> Result<()>;
+}
+
+/// Every spoken answer ends with this one line. `stt` heard the audio; `chat` wrote the answer.
+pub fn privacy_line(stt: &str, chat: &str) -> String {
+    format!("Heard by {stt}. Answered by {chat}. Audio is not stored.")
 }
 
 #[async_trait]
@@ -595,6 +627,10 @@ pub enum HotkeyAction {
     HandsFree,
     /// The press is a real hold, not a tap or a modifier use: show feedback.
     Reveal,
+    /// Hold of the ask chord. Not a dictation `Start`: the answer is never injected.
+    AskStart,
+    /// Release of the ask chord.
+    AskStop,
 }
 
 #[async_trait]
@@ -828,6 +864,17 @@ mod tests {
         assert_eq!(stable_hash(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(stable_hash(b"a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(stable_hash(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn privacy_line_names_both_providers_and_says_audio_is_not_stored() {
+        let line = super::privacy_line("groq", "groq qwen/qwen3.8-27b");
+        assert_eq!(
+            line,
+            "Heard by groq. Answered by groq qwen/qwen3.8-27b. Audio is not stored."
+        );
+        assert!(line.ends_with("Audio is not stored."));
+        assert!(!line.contains('\n'));
     }
 
     #[test]

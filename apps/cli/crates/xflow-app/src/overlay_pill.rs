@@ -13,7 +13,7 @@ use xflow_core::{DesktopEvent, State};
 
 mod native;
 
-const MAX_EVENT_BYTES: usize = 192;
+const MAX_EVENT_BYTES: usize = 8192;
 /// A notice frame: at most four saved words of at most 40 characters.
 const MAX_NOTICE_BYTES: usize = 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
@@ -102,7 +102,7 @@ impl Notices {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PillEvent {
     state: State,
@@ -117,6 +117,11 @@ struct PillEvent {
     /// The only thing shown after release: a short red failure pill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     alert: Option<Alert>,
+    /// A spoken question. The helper stays up and draws `text` in the same panel.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    ask: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
 }
 
 /// Failures the user must act on; a paste, an asked-for copy or a discard is silent.
@@ -130,8 +135,19 @@ enum Alert {
     Record,
 }
 
+fn pill_text(message: &str) -> String {
+    const MAX: usize = 4000;
+    if message.len() <= MAX {
+        return message.to_owned();
+    }
+    let mut end = MAX;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &message[..end])
+}
 impl PillEvent {
-    fn active(self) -> bool {
+    fn active(&self) -> bool {
         matches!(self.state, State::Listening | State::Processing)
     }
 
@@ -150,6 +166,12 @@ impl PillEvent {
             hands_free: message.starts_with(HANDS_FREE),
             no_signal: listening && message.contains(NO_SIGNAL),
             ends_soon: listening && message.contains(ENDS_SOON),
+            ask: event.mode == xflow_core::Mode::Ask,
+            text: (event.mode == xflow_core::Mode::Ask
+                && matches!(event.state, State::Processing | State::Success))
+            .then_some(message)
+            .filter(|text| !text.is_empty())
+            .map(pill_text),
             alert: match event.state {
                 State::Idle if message == crate::speech::NOT_CAUGHT => Some(Alert::NoSpeech),
                 State::Success if message.starts_with(COPIED) => Some(Alert::Copied),
@@ -200,12 +222,25 @@ pub async fn run(
                             }
                         }
                     }
+                    State::Processing if event.ask => {
+                        session = Some(true);
+                        if helper.is_none() {
+                            helper = spawn(&config).ok();
+                        }
+                        if let Some(child) = &mut helper {
+                            if send(child, event).await.is_err() {
+                                close(&mut helper, false).await;
+                            }
+                        }
+                        Vec::new()
+                    }
                     State::Processing => {
                         session = Some(true);
                         close(&mut helper, false).await;
                     }
                     _ => {
-                        let alert = session.take().is_some() && event.alert.is_some();
+                        let ask_done = event.ask && event.text.is_some();
+                        let alert = session.take().is_some() && (event.alert.is_some() || ask_done);
                         if alert && helper.is_none() {
                             helper = spawn(&config).ok();
                         }
@@ -459,7 +494,7 @@ mod tests {
         };
         let mut stalled = false;
         for _ in 0..4096 {
-            if send(&mut child, event).await.is_err() {
+            if send(&mut child, event.clone()).await.is_err() {
                 stalled = true;
                 break;
             }

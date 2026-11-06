@@ -289,6 +289,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
             out,
         ),
         Command::Devices => provider::devices(out),
+        Command::Ask { question } => provider::ask(&path(cli)?, question, out),
         Command::Transcribe {
             file,
             provider,

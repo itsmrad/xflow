@@ -1,5 +1,5 @@
 //! A passive Quartz event tap: no key suppression, AppKit, or idle timer.
-use crate::hotkey::{HotkeyMachine, KeyEvent};
+use crate::hotkey::{AskGesture, HotkeyMachine, KeyEvent};
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use std::{
@@ -86,18 +86,34 @@ struct Binding {
     flag: u64,
     modifiers: u64,
 }
+/// One side of an ask chord: virtual key code and its device-dependent flag.
+fn modifier(name: &str) -> Option<(u16, u64)> {
+    Some(match name {
+        "fn" => (63, FN),
+        "left_option" => (58, 0x20),
+        "right_option" => (61, 0x40),
+        "right_command" => (54, 0x10),
+        "right_control" => (62, 0x2000),
+        "right_shift" => (60, 0x4),
+        _ => return None,
+    })
+}
+fn named_pair(key: &str) -> Option<[(u16, u64); 2]> {
+    let [a, b] = xflow_core::config::modifier_chord(key)?;
+    Some([modifier(a)?, modifier(b)?])
+}
+struct AskWatch {
+    keys: [(u16, u64); 2],
+    /// The side that is the dictation key. Its press/release stays on that path.
+    skip: Option<usize>,
+    down: [bool; 2],
+}
 impl Binding {
     fn parse(key: &str) -> Self {
-        let (code, flag) = match key {
-            "fn" => (63, FN),
-            "left_option" => (58, 0x20),
-            "right_option" => (61, 0x40),
-            "right_command" => (54, 0x10),
-            "right_control" => (62, 0x2000),
-            "right_shift" => (60, 0x4),
+        let (code, flag) = modifier(key).unwrap_or(match key {
             "caps_lock" => (57, 1 << 16),
             _ => (0, 0),
-        };
+        });
         if flag != 0 {
             return Self {
                 code,
@@ -196,6 +212,7 @@ struct Input {
 }
 struct TapContext {
     binding: Binding,
+    ask: Option<AskWatch>,
     down: bool,
     tap: Ref,
     at_ms: u64,
@@ -496,6 +513,29 @@ unsafe extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, context: Ref) 
         ns => ns / 1_000_000,
     };
     let code = CGEventGetIntegerValueField(event, 9) as u16;
+    let flags = CGEventGetFlags(event);
+    let flipped = if kind == FLAGS_CHANGED {
+        let ask = context.ask.as_mut();
+        ask.and_then(|ask| {
+            let mut found = None;
+            for (i, key) in ask.keys.iter().enumerate() {
+                if Some(i) == ask.skip || code != key.0 {
+                    continue;
+                }
+                let down = flags & key.1 != 0;
+                if down != ask.down[i] {
+                    ask.down[i] = down;
+                    found = Some((i as u8, down));
+                }
+            }
+            found
+        })
+    } else {
+        None
+    };
+    if let Some((slot, down)) = flipped {
+        context.send(KeyEvent::Ask { slot, down });
+    }
     if kind == KEY_DOWN && code != context.binding.code {
         if code == 53 {
             context.send(KeyEvent::Escape);
@@ -503,7 +543,6 @@ unsafe extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, context: Ref) 
             context.send(KeyEvent::Other);
         }
     }
-    let flags = CGEventGetFlags(event);
     let binding = &context.binding;
     let down = if binding.flag != 0 {
         if kind != FLAGS_CHANGED || code != binding.code {
@@ -557,14 +596,33 @@ pub struct MacHotkeys {
     thread: Option<thread::JoinHandle<()>>,
 }
 impl MacHotkeys {
-    pub fn new(config: HotkeyConfig) -> Result<Self> {
-        config.validate()?;
+    pub fn new(hotkey: &HotkeyConfig, ask: &xflow_core::config::AskConfig) -> Result<Self> {
+        hotkey.validate()?;
+        if ask.enabled {
+            ask.validate()?;
+        }
         let (events_tx, events) = mpsc::channel(32);
         let (ready_tx, ready) = std::sync::mpsc::sync_channel(1);
         let overflow = Arc::new(AtomicBool::new(false));
         let received = Arc::new(AtomicBool::new(false));
         let thread_received = received.clone();
-        let binding = Binding::parse(&config.key);
+        let binding = Binding::parse(&hotkey.key);
+        let gesture = ask.enabled.then(|| AskGesture {
+            overlaps: xflow_core::config::modifier_chord(&ask.key)
+                .is_some_and(|pair| pair.contains(&hotkey.key.as_str())),
+        });
+        let ask_watch = ask.enabled.then(|| {
+            let keys = named_pair(&ask.key).expect("ask.key was validated");
+            let skip = keys
+                .iter()
+                .position(|key| binding.flag != 0 && *key == (binding.code, binding.flag));
+            AskWatch {
+                keys,
+                skip,
+                down: [false; 2],
+            }
+        });
+        let machine = HotkeyMachine::with_ask(hotkey.clone(), gesture);
         let thread_overflow = overflow.clone();
         // The context is only touched through this raw pointer, on its run-loop thread.
         let thread = thread::Builder::new()
@@ -573,6 +631,7 @@ impl MacHotkeys {
             .spawn(move || unsafe {
                 let context = Box::into_raw(Box::new(TapContext {
                     binding,
+                    ask: ask_watch,
                     down: false,
                     tap: ptr::null_mut(),
                     at_ms: 0,
@@ -627,7 +686,7 @@ impl MacHotkeys {
         match handles {
             Ok((tap, runloop)) => Ok(Self {
                 events,
-                machine: HotkeyMachine::new(config),
+                machine,
                 pending: VecDeque::new(),
                 overflow,
                 received,
@@ -815,5 +874,9 @@ mod tests {
         for key in xflow_core::config::HOTKEY_KEYS {
             Binding::parse(key);
         }
+        let pair = named_pair("right_option+right_command").unwrap();
+        assert_eq!(pair, [(61, 0x40), (54, 0x10)]);
+        assert!(named_pair("right_option+right_option").is_none());
+        assert!(named_pair("fn").is_none());
     }
 }

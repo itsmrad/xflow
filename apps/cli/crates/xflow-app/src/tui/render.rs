@@ -12,7 +12,7 @@ use ratatui::{
 };
 use xflow_core::{
     ipc::{CleanupOutcome, Grant},
-    State,
+    Mode, State,
 };
 
 #[derive(Default)]
@@ -85,6 +85,12 @@ pub fn status(app: &App) -> (&'static str, &'static str, String, bool) {
             glyph("●", "*"),
             "Listening",
             "Speak now. Press Space to finish, or x to cancel.".into(),
+            false,
+        ),
+        State::Processing if app.status.mode == Some(Mode::Ask) => (
+            glyph("◌", "~"),
+            "Answering",
+            message.unwrap_or_else(|| "Thinking…".into()),
             false,
         ),
         State::Processing => (
@@ -597,7 +603,12 @@ fn home(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     } else {
         ratatui::text::Text::from(app.transcript.clone())
     };
-    panel(frame, rows[2], "Last dictation", last, app);
+    let title = if app.status.mode == Some(Mode::Ask) {
+        "Answer"
+    } else {
+        "Last dictation"
+    };
+    panel(frame, rows[2], title, last, app);
 }
 // Dictionary owns its layout so compact terminals do not change other lists.
 fn dictionary(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
