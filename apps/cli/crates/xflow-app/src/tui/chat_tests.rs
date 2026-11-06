@@ -461,7 +461,7 @@ fn setup_lists_the_catalog_with_key_state_and_saves_key_and_model() {
     let (_dir, mut app) = blank();
     app.page = Page::Home;
     assert!(matches!(
-        press(&mut app, KeyCode::Char('0'))[..],
+        press(&mut app, KeyCode::Char('-'))[..],
         [Effect::ChatKeys]
     ));
     assert_eq!(app.page, Page::Chat);
@@ -546,6 +546,8 @@ fn a_saved_key_is_kept_and_local_needs_a_loopback_address_and_a_model() {
     assert_eq!(app.config.ai.provider, "anthropic");
 
     let (_dir, mut app) = blank();
+    app.set("ai.fallback", r#"["openai"]"#).unwrap();
+    app.set("ai.consented", r#"["openai"]"#).unwrap();
     app.selected[Page::Chat.index()] = 3;
     press(&mut app, KeyCode::Enter);
     let form = |app: &mut App| {
@@ -576,6 +578,11 @@ fn a_saved_key_is_kept_and_local_needs_a_loopback_address_and_a_model() {
     app.paste("local-model");
     assert!(press(&mut app, KeyCode::Enter).is_empty());
     assert_eq!(app.config.ai.provider, "custom");
+    assert!(
+        app.config.ai.fallback.is_empty(),
+        "Local must never fall back to a cloud provider"
+    );
+    assert_eq!(app.chat_ctx().receivers, "Local");
     assert_eq!(app.config.ai.model.as_deref(), Some("local-model"));
     assert_eq!(
         app.config.ai.endpoint.as_deref(),

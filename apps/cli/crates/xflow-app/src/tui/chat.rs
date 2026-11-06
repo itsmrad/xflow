@@ -854,6 +854,10 @@ impl App {
         };
         let mut next = file.clone();
         next.set_typed("ai.provider", &ai.provider)?;
+        if local {
+            // Local setup promises no cloud transfer, including on connection failure.
+            next.set_typed("ai.fallback", &Vec::<String>::new())?;
+        }
         for (key, value) in [("ai.model", &ai.model), ("ai.endpoint", &ai.endpoint)] {
             match value {
                 Some(value) => next.set_typed(key, value)?,
