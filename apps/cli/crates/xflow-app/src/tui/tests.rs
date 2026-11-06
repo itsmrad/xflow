@@ -912,7 +912,7 @@ fn compact_nav_shows_full_labels_and_keys_are_bold_without_color() {
             let mark = (0..24).find_map(|row| {
                 (0..80).find_map(|x| {
                     let cell = &buffer[(x, row)];
-                    (cell.symbol() == ">").then(|| (cell.fg, cell.bg))
+                    (cell.symbol() == ">").then_some((cell.fg, cell.bg))
                 })
             });
             assert_eq!(
