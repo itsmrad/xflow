@@ -26,7 +26,9 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use xflow_core::meeting_detect::{outermost_app, AppSeen, Detector, Event, Window, BROWSERS};
+use xflow_core::meeting_detect::{
+    outermost_app, AppSeen, Detector, Event, MeetingId, Window, BROWSERS,
+};
 
 const fn fourcc(code: &[u8; 4]) -> u32 {
     u32::from_be_bytes(*code)
@@ -252,6 +254,15 @@ struct Seen {
 pub struct Observer {
     stop: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
+    declined: mpsc::Sender<MeetingId>,
+}
+impl Observer {
+    pub fn decline(&self, meeting: MeetingId) {
+        let _ = self.declined.send(meeting);
+        if let Some(wake) = WAKE.lock().ok().as_deref().and_then(Option::as_ref) {
+            let _ = wake.try_send(());
+        }
+    }
 }
 impl Drop for Observer {
     fn drop(&mut self) {
@@ -273,9 +284,16 @@ pub fn observe(mut on_event: impl FnMut(Event) + Send + 'static) -> Result<Obser
         bail!("meeting detection needs macOS 14.2 or later (Core Audio process objects)");
     }
     let (wake, woken) = mpsc::sync_channel(1);
-    *WAKE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(wake);
+    {
+        let mut slot = WAKE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.is_some() {
+            bail!("meeting observer already running");
+        }
+        *slot = Some(wake);
+    }
+    let (declined, declines) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let stopping = stop.clone();
     let thread = thread::Builder::new()
@@ -285,6 +303,7 @@ pub fn observe(mut on_event: impl FnMut(Event) + Send + 'static) -> Result<Obser
             let mut detector = Detector::new();
             let mut identities = Identities::new();
             let mut known: HashMap<String, (i32, String)> = HashMap::new();
+            let mut accessibility = HashMap::new();
             let start = Instant::now();
             let mut running = listeners.bind_device();
             while !stopping.load(Ordering::Relaxed) {
@@ -310,11 +329,16 @@ pub fn observe(mut on_event: impl FnMut(Event) + Send + 'static) -> Result<Obser
                     listeners = Listeners::register();
                     identities.clear();
                 }
+                for id in declines.try_iter() {
+                    detector.decline(id);
+                }
                 running = listeners.bind_device();
                 if !(running || detector.wants_poll(false)) {
                     continue;
                 }
-                let Some(apps) = reconcile(&detector, &mut identities, &mut known) else {
+                let Some(apps) =
+                    reconcile(&detector, &mut identities, &mut known, &mut accessibility)
+                else {
                     continue;
                 };
                 let at = start.elapsed().as_millis() as u64;
@@ -323,10 +347,17 @@ pub fn observe(mut on_event: impl FnMut(Event) + Send + 'static) -> Result<Obser
                 }
             }
             drop(listeners);
+        })
+        .map_err(|error| {
+            *WAKE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            error
         })?;
     Ok(Observer {
         stop,
         thread: Some(thread),
+        declined,
     })
 }
 
@@ -336,6 +367,7 @@ fn reconcile(
     detector: &Detector,
     identities: &mut Identities,
     known: &mut HashMap<String, (i32, String)>,
+    accessibility: &mut HashMap<i32, super::AccessibilityGuard<Owned>>,
 ) -> Option<Vec<AppSeen>> {
     let objects = process_objects()?;
     let own = std::process::id() as i32;
@@ -385,9 +417,24 @@ fn reconcile(
         }
         seen.contains_key(bundle)
     });
+    accessibility.retain(|pid, _| {
+        seen.iter()
+            .any(|(bundle, app)| app.main == *pid && detector.wants_windows(bundle, app.input))
+    });
     let mut apps = Vec::with_capacity(seen.len());
     for (bundle, app) in seen {
         known.insert(bundle.clone(), (app.main, app.root));
+        if detector.wants_windows(&bundle, app.input) && unsafe { AXIsProcessTrusted() } {
+            if let std::collections::hash_map::Entry::Vacant(entry) = accessibility.entry(app.main)
+            {
+                // Chromium builds its tree lazily; reuse dictation's restoring guard.
+                if let Some(guard) = Owned::new(unsafe { AXUIElementCreateApplication(app.main) })
+                    .and_then(super::AccessibilityGuard::enable)
+                {
+                    entry.insert(guard);
+                }
+            }
+        }
         let windows = detector
             .wants_windows(&bundle, app.input)
             .then(|| windows(app.main, BROWSERS.contains(&bundle.as_str())))
@@ -463,6 +510,7 @@ fn windows(pid: i32, browser: bool) -> Option<Vec<Window>> {
 fn ax_windows(pid: i32, browser: bool) -> Option<Vec<Window>> {
     let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) })?;
     unsafe { AXUIElementSetMessagingTimeout(app.0, 0.25) };
+    let _ = app.text("AXRole");
     let list = app.attribute("AXWindows")?;
     let mut out = Vec::new();
     for index in 0..unsafe { CFArrayGetCount(list.0) }.min(32) {
@@ -475,7 +523,13 @@ fn ax_windows(pid: i32, browser: bool) -> Option<Vec<Window>> {
         }
         out.push(Window {
             title: window.text("AXTitle").unwrap_or_default(),
-            url: browser.then(|| web_url(&window, 0, &mut 64)).flatten(),
+            url: browser.then(|| web_url(&window, 0, &mut 256)).flatten(),
+            in_call: call_state(
+                &window,
+                0,
+                &mut 512,
+                Instant::now() + Duration::from_millis(200),
+            ),
         });
     }
     Some(out)
@@ -501,6 +555,42 @@ fn web_url(element: &Owned, depth: u32, budget: &mut u32) -> Option<String> {
         web_url(&child, depth + 1, budget)
     })
 }
+
+/// Read controls only; a pre-join preview has no Leave control. A post-call
+/// Rejoin screen is positive end evidence even if the browser remains open.
+fn call_state(element: &Owned, depth: u32, budget: &mut u32, deadline: Instant) -> Option<bool> {
+    if depth > 16 || *budget == 0 || Instant::now() >= deadline {
+        return None;
+    }
+    *budget -= 1;
+    if element.text("AXRole").as_deref() == Some("AXButton") {
+        for attr in ["AXTitle", "AXDescription", "AXHelp"] {
+            if let Some(label) = element.text(attr) {
+                match label.to_ascii_lowercase().trim() {
+                    "leave call" | "leave meeting" | "leave" | "end call" | "hang up" => {
+                        return Some(true)
+                    }
+                    "rejoin" | "rejoin meeting" | "return to home screen" => return Some(false),
+                    _ => (),
+                }
+            }
+        }
+    }
+    let children = element.attribute("AXChildren")?;
+    let mut ended = None;
+    for index in 0..unsafe { CFArrayGetCount(children.0) }.min(64) {
+        let child = std::mem::ManuallyDrop::new(Owned(unsafe {
+            CFArrayGetValueAtIndex(children.0, index)
+        }));
+        match call_state(&child, depth + 1, budget, deadline) {
+            Some(true) => return Some(true),
+            Some(false) => ended = Some(false),
+            None => (),
+        }
+    }
+    ended
+}
+
 fn cg_windows(pid: i32) -> Option<Vec<Window>> {
     // kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements
     let list = Owned::new(unsafe { CGWindowListCopyWindowInfo(1 << 4, 0) })?;
@@ -523,7 +613,11 @@ fn cg_windows(pid: i32) -> Option<Vec<Window>> {
         if let Some(title) =
             cf_text(unsafe { CFDictionaryGetValue(dict, kCGWindowName) }).filter(|t| !t.is_empty())
         {
-            out.push(Window { title, url: None });
+            out.push(Window {
+                title,
+                url: None,
+                in_call: None,
+            });
         }
     }
     Some(out)
@@ -603,9 +697,45 @@ mod tests {
         assert_eq!(identity(std::process::id() as i32), None);
     }
 
+    /// Explicitly invoked on the isolated local Chrome fixture under desktop.lock.
+    #[test]
+    #[ignore = "requires a local browser fixture and the desktop lock"]
+    fn local_browser_call_controls() {
+        let pid: i32 = std::env::var("XFLOW_MEETING_FIXTURE_PID")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let expected = std::env::var("XFLOW_MEETING_FIXTURE_STATE").unwrap();
+        let expected = match expected.as_str() {
+            "joined" => Some(true),
+            "ended" => Some(false),
+            _ => None,
+        };
+        let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) }).unwrap();
+        let _guard = super::super::AccessibilityGuard::enable(app);
+        let windows = ax_windows(pid, true).expect("fixture AX windows readable");
+        let fixture = windows
+            .iter()
+            .find(|w| w.title == "Meet - abc-defg-hij")
+            .expect("local fixture title");
+        assert_eq!(fixture.in_call, expected);
+        assert!(fixture
+            .url
+            .as_ref()
+            .is_some_and(|url| url.starts_with("file:")));
+        let mut detector = Detector::new();
+        let apps = [AppSeen::new("com.google.Chrome", true, Some(windows))];
+        assert!(detector.update(0, &apps).is_empty());
+        assert!(
+            detector.update(3000, &apps).is_empty(),
+            "a local lookalike is not a Google meeting"
+        );
+    }
+
     #[test]
     fn observer_starts_and_tears_down() {
         let observer = observe(|_| {}).expect("process objects available");
+        assert!(observe(|_| {}).is_err(), "only one observer per process");
         std::thread::sleep(Duration::from_millis(200));
         drop(observer);
         assert!(WAKE.lock().unwrap().is_none(), "listener wake cleared");

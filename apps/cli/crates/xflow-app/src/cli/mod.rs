@@ -7,6 +7,7 @@ mod ipc;
 mod launchd;
 mod local_models;
 mod meeting;
+mod meeting_detect;
 mod output;
 mod provider;
 mod setup;
@@ -253,6 +254,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
         }
         Command::History { page, action } => ipc::history(page, action.as_ref(), out),
         Command::Meeting { action } => meeting::run(action, || path(cli), out),
+        Command::MeetingWatch => meeting_detect::run(&path(cli)?),
         Command::MeetingWorker => meeting::worker(&path(cli)?),
         Command::ClearHistory { yes } => {
             config::confirm(*yes, "Delete all dictation history?")?;

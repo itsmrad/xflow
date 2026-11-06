@@ -260,6 +260,8 @@ pub struct Engine {
     /// Counts for status and doctor.
     learning: Arc<std::sync::Mutex<Learning>>,
     notifications: tokio::task::JoinSet<()>,
+    #[cfg(target_os = "macos")]
+    meeting_detection: Option<watch::Sender<bool>>,
     // Tokio's clock (the same in production) so the listening hints can be tested on paused time.
     started: Option<tokio::time::Instant>,
     silent_since: Option<tokio::time::Instant>,
@@ -320,6 +322,8 @@ impl Engine {
             services,
             store,
             config_path: None,
+            #[cfg(target_os = "macos")]
+            meeting_detection: None,
             reload_factory: Arc::new(native_services),
             hotkey_factory: None,
             hotkeys: None,
@@ -747,6 +751,12 @@ impl Engine {
                     self.config.dictionary.clone()
                 };
                 let seq = seq.max(self.dictionary_seq);
+                #[cfg(target_os = "macos")]
+                if let Some(enabled) = &self.meeting_detection {
+                    enabled.send_if_modified(|value| {
+                        std::mem::replace(value, config.meetings.detect) != config.meetings.detect
+                    });
+                }
                 self.config = config;
                 self.install(dictionary, seq);
                 self.services = services;
@@ -3769,6 +3779,12 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
         events_tx.clone(),
         desktop_tx,
     );
+    #[cfg(target_os = "macos")]
+    if native {
+        let (enabled, changes) = watch::channel(engine.config.meetings.detect);
+        engine.meeting_detection = Some(enabled);
+        tokio::spawn(crate::meeting_detection::run(config_path.clone(), changes));
+    }
     engine.config_path = Some(config_path);
     engine.notice = notice_tx;
     engine.persistence_warning = persistence_warning;

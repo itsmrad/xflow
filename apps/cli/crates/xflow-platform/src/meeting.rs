@@ -11,3 +11,8 @@ pub struct Observer;
 pub fn observe(_: impl FnMut(Event) + Send + 'static) -> anyhow::Result<Observer> {
     anyhow::bail!("meeting detection is unsupported on this platform")
 }
+
+#[cfg(not(target_os = "macos"))]
+impl Observer {
+    pub fn decline(&self, _: xflow_core::meeting_detect::MeetingId) {}
+}

@@ -43,10 +43,23 @@ pub struct Config {
     pub privacy: PrivacyConfig,
     pub ui: UiConfig,
     pub ai: AiConfig,
+    /// Ask before recording recognized calls. No audio is captured by detection.
+    pub meetings: MeetingConfig,
     /// Spoken trigger phrase -> inserted text.
     pub snippets: Vec<Snippet>,
     /// Per-app cleanup styles; the first style whose `apps` matches wins.
     pub styles: Vec<Style>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MeetingConfig {
+    pub detect: bool,
+}
+impl Default for MeetingConfig {
+    fn default() -> Self {
+        Self { detect: true }
+    }
 }
 
 pub const HOTKEY_KEYS: &[&str] = &[
@@ -879,5 +892,21 @@ mod preferred_language_tests {
         let conflict: Config =
             toml::from_str("[stt]\nlanguage='hi'\nlanguages=['hi','en']").unwrap();
         assert!(conflict.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod meeting_config_tests {
+    use super::*;
+    #[test]
+    fn meeting_prompts_default_on_and_can_be_disabled() {
+        assert!(Config::default().meetings.detect);
+        assert!(
+            !toml::from_str::<Config>("[meetings]\ndetect = false")
+                .unwrap()
+                .meetings
+                .detect
+        );
+        assert!(toml::from_str::<Config>("[meetings]\ndetect = \"yes\"").is_err());
     }
 }

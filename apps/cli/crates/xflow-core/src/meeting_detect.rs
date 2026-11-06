@@ -136,6 +136,9 @@ pub const ADAPTERS: &[Adapter] = &[
 pub struct Window {
     pub title: String,
     pub url: Option<String>,
+    /// Some(true): a Leave control; Some(false): an explicit post-call screen.
+    /// None: unreadable, hidden, pre-join or otherwise ambiguous.
+    pub in_call: Option<bool>,
 }
 
 /// One watched app in a snapshot. An app missing from the snapshot is not running.
@@ -191,6 +194,8 @@ pub struct Event {
     pub app: &'static str,
     pub decision: Decision,
     pub meeting: MeetingId,
+    /// Parent bundle to pass to `xflow meeting record --app`.
+    pub bundle: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -293,14 +298,21 @@ impl Detector {
             let replaced = browser && candidates.iter().any(|c| c.0 != s.id && c.1 == s.bundle);
             // A background tab looks exactly like a closed one (window titles show
             // the active tab only), so a browser never ends on "window gone" alone.
+            let ended = app.is_some_and(|a| {
+                a.windows.as_ref().is_some_and(|ws| {
+                    ws.iter()
+                        .any(|w| w.in_call == Some(false) && browser_id(&a.bundle, w) == Some(s.id))
+                })
+            });
             let gone = held(s.gone_since) && (replaced || (!browser && held(s.quiet_since)));
+            let ended = ended && held(s.quiet_since);
             let id = s.id;
             if s.declined {
                 if held(s.missing_since) {
                     self.sessions.remove(index);
                     continue;
                 }
-            } else if held(s.absent_since) || gone {
+            } else if held(s.absent_since) || gone || ended {
                 events.push(event(at_ms, id, Decision::End));
                 self.sessions.remove(index);
                 continue;
@@ -351,6 +363,12 @@ fn event(at_ms: u64, meeting: MeetingId, decision: Decision) -> Event {
         app: ADAPTERS[meeting.adapter].name,
         decision,
         meeting,
+        bundle: ADAPTERS[meeting.adapter]
+            .bundles
+            .iter()
+            .copied()
+            .find(|b| crate::stable_hash(b.as_bytes()) == meeting.app)
+            .unwrap_or(""),
     }
 }
 
@@ -363,14 +381,21 @@ fn candidates(apps: &[AppSeen]) -> Vec<(MeetingId, String)> {
                 continue;
             }
             let id = native_id(index, &app.bundle);
-            if visibility(id, app) != Visible::No {
+            if app
+                .windows
+                .as_ref()
+                .is_some_and(|ws| ws.iter().any(|w| w.in_call == Some(true)))
+                && visibility(id, app) == Visible::Yes
+            {
                 out.push((id, app.bundle.clone()));
             }
         }
         // One input bit per browser: two meetings at once are ambiguous, stay silent.
         let mut found: Vec<MeetingId> = Vec::new();
         for window in app.windows.iter().flatten() {
-            if let Some(id) = browser_id(&app.bundle, window) {
+            if let Some(id) =
+                browser_id(&app.bundle, window).filter(|_| window.in_call == Some(true))
+            {
                 if !found.contains(&id) {
                     found.push(id);
                 }
@@ -398,14 +423,24 @@ fn visibility(id: MeetingId, app: &AppSeen) -> Visible {
         return Visible::Unknown;
     };
     let seen = match adapter.kind {
-        Kind::Native if adapter.title.is_empty() => return Visible::Unknown,
+        Kind::Native if adapter.title.is_empty() => {
+            if windows.iter().any(|w| w.in_call == Some(true)) {
+                return Visible::Yes;
+            }
+            if windows.iter().all(|w| w.in_call == Some(false)) {
+                return Visible::No;
+            }
+            return Visible::Unknown;
+        }
         Kind::Native => windows.iter().any(|w| {
-            !rejected(adapter, &w.title)
-                && adapter.title.iter().any(|p| find(p, &w.title).is_some())
+            w.in_call != Some(false)
+                && !rejected(adapter, &w.title)
+                && (w.in_call == Some(true)
+                    || adapter.title.iter().any(|p| find(p, &w.title).is_some()))
         }),
         Kind::Browser => windows
             .iter()
-            .any(|w| browser_id(&app.bundle, w) == Some(id)),
+            .any(|w| w.in_call != Some(false) && browser_id(&app.bundle, w) == Some(id)),
     };
     if seen {
         Visible::Yes
@@ -532,12 +567,14 @@ mod tests {
         Window {
             title: title.into(),
             url: None,
+            in_call: Some(true),
         }
     }
     fn page(title: &str, url: &str) -> Window {
         Window {
             title: title.into(),
             url: Some(url.into()),
+            in_call: Some(true),
         }
     }
     fn zoom(input: bool, meeting_window: bool) -> AppSeen {
@@ -546,7 +583,14 @@ mod tests {
         } else {
             "Zoom Workplace"
         };
-        AppSeen::new(ZOOM, input, Some(vec![win(title)]))
+        AppSeen::new(
+            ZOOM,
+            input,
+            Some(vec![Window {
+                in_call: meeting_window.then_some(true),
+                ..win(title)
+            }]),
+        )
     }
     fn chrome(input: bool, windows: Vec<Window>) -> AppSeen {
         AppSeen::new(CHROME, input, Some(windows))
@@ -572,6 +616,48 @@ mod tests {
             .step_by(1000)
             .map(|t| (t, apps.clone()))
             .collect()
+    }
+
+    #[test]
+    fn browser_prejoin_and_unrelated_microphone_stay_silent() {
+        for in_call in [None, Some(false)] {
+            let mut w = meet("abc-defg-hij");
+            w.in_call = in_call;
+            let apps = vec![chrome(true, vec![w])];
+            assert!(run(&mut Detector::new(), &hold(0, 20_000, apps)).is_empty());
+        }
+    }
+
+    #[test]
+    fn explicit_browser_end_stops_but_hidden_or_muted_call_does_not() {
+        let mut d = Detector::new();
+        let mut trace = hold(0, 3000, vec![chrome(true, vec![meet("abc-defg-hij")])]);
+        trace.extend(hold(
+            4000,
+            20_000,
+            vec![chrome(false, vec![meet("abc-defg-hij")])],
+        ));
+        let mut ended = meet("abc-defg-hij");
+        ended.in_call = Some(false);
+        trace.push((21_000, vec![chrome(false, vec![ended])]));
+        assert_eq!(
+            run(&mut d, &trace),
+            [
+                "2000 Google Meet start",
+                "12000 Google Meet maybe ended",
+                "21000 Google Meet end"
+            ]
+        );
+    }
+
+    #[test]
+    fn event_names_the_parent_bundle_for_the_recorder() {
+        let mut d = Detector::new();
+        d.update(0, &[chrome(true, vec![meet("abc-defg-hij")])]);
+        assert_eq!(
+            d.update(2000, &[chrome(true, vec![meet("abc-defg-hij")])])[0].bundle,
+            CHROME
+        );
     }
 
     #[test]
@@ -622,10 +708,10 @@ mod tests {
     }
 
     #[test]
-    fn native_without_window_information_starts_on_input() {
+    fn native_without_window_information_stays_silent() {
         let mut d = Detector::new();
         let trace = hold(0, 2000, vec![AppSeen::new(ZOOM, true, None)]);
-        assert_eq!(run(&mut d, &trace), ["2000 Zoom start"]);
+        assert!(run(&mut d, &trace).is_empty());
     }
 
     #[test]
