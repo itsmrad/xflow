@@ -907,15 +907,15 @@ mod tests {
 
     #[test]
     fn label_text_matches_the_daemon_messages_and_alerts_win() {
-        let text = |event| label_text(event).map(|t| t.to_str().unwrap());
+        let text = |event: &PillEvent| label_text(event).map(|t| t.to_str().unwrap());
         let mut event = PillEvent::default();
-        assert_eq!(text(event), None);
+        assert_eq!(text(&event), None);
         event.no_signal = true;
-        assert_eq!(text(event), Some(crate::daemon::NO_SIGNAL));
+        assert_eq!(text(&event), Some(crate::daemon::NO_SIGNAL));
         event.ends_soon = true;
-        assert_eq!(text(event), Some(crate::daemon::ENDS_SOON));
+        assert_eq!(text(&event), Some(crate::daemon::ENDS_SOON));
         event.alert = Some(Alert::Copied);
-        assert_eq!(text(event), Some("Copied — paste with ⌘V"));
+        assert_eq!(text(&event), Some("Copied — paste with ⌘V"));
     }
     #[test]
     fn notice_names_the_saved_words_and_its_undo() {

@@ -715,6 +715,7 @@ mod tests {
             no_signal: true,
             ends_soon: true,
             alert: Some(Alert::NoSpeech),
+            ..PillEvent::default()
         };
         let frame = format!("{}\n", serde_json::to_string(&all).unwrap());
         let read = read_event(&mut std::io::Cursor::new(frame))
