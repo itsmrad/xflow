@@ -54,12 +54,25 @@ fn checks(
         "Run xflow daemon start",
     ));
     let gnome = desktop.to_lowercase().contains("gnome");
+    // cfg! keeps this string out of the macOS binary. Production macOS always
+    // passes session "macos", so that path is unchanged.
+    let (session_detail, session_hint) = if cfg!(target_os = "linux") && session.is_empty() {
+        (
+            "No graphical session".to_string(),
+            "Paste and the GNOME extension need a desktop login. File transcription works: xflow transcribe <file>",
+        )
+    } else {
+        (
+            format!("desktop={desktop}; session={session}"),
+            "Desktop delivery requires a graphical login; file transcription works headlessly",
+        )
+    };
     checks.push(check(
         "session",
         !session.is_empty(),
         false,
-        format!("desktop={desktop}; session={session}"),
-        "Desktop delivery requires a graphical login; file transcription works headlessly",
+        session_detail,
+        session_hint,
     ));
     if session != "macos" {
         checks.push(check(
@@ -553,6 +566,14 @@ mod tests {
         let result = checks(&path, "GNOME", "wayland", |_| true, Ok("v1".into()));
         assert!(result.iter().all(|c| c.ok || !c.required));
         assert!(!result.iter().any(|c| c.name == "Wayland injection"));
+        #[cfg(target_os = "linux")]
+        {
+            let headless = checks(&path, "", "", |_| true, Ok("v1".into()));
+            let session = headless.iter().find(|c| c.name == "session").unwrap();
+            assert!(!session.ok && !session.required);
+            assert_eq!(session.detail, "No graphical session");
+            assert!(session.hint.contains("xflow transcribe"));
+        }
         let mac = checks(&path, "macOS", "macos", |_| true, Ok("v1".into()));
         assert!(mac.iter().any(|c| c.name == "launchd"));
         assert!(!mac

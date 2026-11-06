@@ -1,5 +1,5 @@
 {
-  "about": "Linux CI gate baseline. Binary bytes refreshed from the single CI receipt in runs; its runtime measurements are observations, not a runtime baseline refresh. All other result values retain the median-PSS reference from runtime_runs (41375047607 attempt 2 at 71e4aa6f02420a58d5a89f2d531be9168b8401bf); the three original raw receipts are unchanged. Regenerate full baselines with `scoreboard.py baseline` from scoreboard-gate artifacts in the PR that intentionally changes them.",
+  "about": "Linux CI gate baseline. Binary bytes refreshed from the single CI receipt in runs; its runtime measurements are observations, not a runtime baseline refresh. All other result values retain the median-PSS reference from runtime_runs (41375047607 attempt 2 at 71e4aa6f02420a58d5a89f2d531be9168b8401bf); the three original raw receipts are unchanged. xflow bytes were raised to 8319152 from run 42164184531 for Linux-only headless messages; xflowd is unchanged. Regenerate full baselines with `scoreboard.py baseline` from scoreboard-gate artifacts in the PR that intentionally changes them.",
   "limits": {
     "binary_pct": 1,
     "cpu_percent": 0.1,
@@ -9,7 +9,7 @@
   },
   "result": {
     "binary_bytes": {
-      "xflow": 8226512,
+      "xflow": 8319152,
       "xflowd": 12472744
     },
     "idle_cpu_percent": 0.0,

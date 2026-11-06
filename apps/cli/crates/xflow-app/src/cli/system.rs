@@ -68,27 +68,80 @@ pub(super) fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     file.persist(path)?;
     Ok(())
 }
+/// A missing user bus is not a missing binary. Say so, and how to run anyway.
+#[cfg(any(target_os = "linux", test))]
+fn explain_systemd(message: &str) -> Option<(&'static str, &'static str)> {
+    if message.contains("user scope bus") || message.contains("Failed to connect to bus") {
+        Some((
+            "No systemd user session, so the user service cannot start",
+            "Run xflowd in a terminal. A desktop login creates the user session",
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn systemd_user(args: &[&str]) -> Result<String> {
+    let output = Command::new("systemctl")
+        .args(args)
+        .output()
+        .map_err(|error| {
+            Error::new(
+                1,
+                format!("Cannot run systemctl: {error}"),
+                "Run xflowd in a terminal",
+            )
+        })?;
+    if output.status.success() {
+        return Ok(String::from_utf8(output.stdout)?);
+    }
+    let err = String::from_utf8_lossy(&output.stderr);
+    if let Some((message, hint)) = explain_systemd(err.trim()) {
+        return Err(Error::new(1, message, hint));
+    }
+    Err(Error::new(
+        1,
+        format!("systemctl failed: {}", super::output::clean(err.trim())),
+        "Run xflow doctor for desktop setup guidance",
+    ))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn service_notice(enabled: bool, graphical: bool) -> &'static str {
+    match (enabled, graphical) {
+        (true, false) => "User service is running now. It is part of the graphical session, so a reboot without a display will not start it; run xflow daemon start. Live dictation needs a microphone and a display",
+        (true, true) => "User service installed and started",
+        (false, _) => "User service installed (graphical-session.target); enable with xflow daemon start or xflow service install --enable",
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn graphical_session() -> bool {
+    Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", "graphical-session.target"])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 #[cfg(target_os = "linux")]
 pub fn service(action: &args::Service, out: &Output) -> Result<()> {
     match action {
         args::Service::Install { enable } => {
             atomic(&unit_path()?, UNIT.as_bytes())?;
-            tool("systemctl", &["--user", "daemon-reload"])?;
+            systemd_user(&["--user", "daemon-reload"])?;
             if *enable {
-                tool("systemctl", &["--user", "enable", "--now", "xflow.service"])?;
+                systemd_user(&["--user", "enable", "--now", "xflow.service"])?;
             }
-            out.confirm("User service installed (graphical-session.target); enable with xflow daemon start or xflow service install --enable")?;
+            out.confirm(service_notice(*enable, graphical_session()))?;
         }
         args::Service::Uninstall => {
-            tool(
-                "systemctl",
-                &["--user", "disable", "--now", "xflow.service"],
-            )?;
+            systemd_user(&["--user", "disable", "--now", "xflow.service"])?;
             let path = unit_path()?;
             if path.exists() {
                 std::fs::remove_file(path)?;
             }
-            tool("systemctl", &["--user", "daemon-reload"])?;
+            systemd_user(&["--user", "daemon-reload"])?;
             out.confirm("User service uninstalled")?;
         }
     }
@@ -147,6 +200,10 @@ pub fn daemon(action: &args::Daemon, out: &Output) -> Result<()> {
             .context("systemd unavailable; start xflowd in a separate terminal")?;
         let text = String::from_utf8(result.stdout)?;
         if !result.status.success() {
+            let err = String::from_utf8_lossy(&result.stderr);
+            if let Some((message, hint)) = explain_systemd(&err) {
+                return Err(Error::new(3, message, hint));
+            }
             return Err(Error::new(
                 3,
                 "User service unavailable",
@@ -158,7 +215,7 @@ pub fn daemon(action: &args::Daemon, out: &Output) -> Result<()> {
             text.trim_end(),
         )?;
     } else {
-        tool("systemctl", &["--user", verb, "xflow.service"])?;
+        systemd_user(&["--user", verb, "xflow.service"])?;
         out.confirm(&format!("Daemon service: {verb}"))?;
     }
     Ok(())
@@ -283,5 +340,24 @@ mod tests {
         atomic(&path, b"first").unwrap();
         atomic(&path, b"second").unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"second");
+    }
+
+    #[test]
+    fn headless_service_says_it_will_not_start_at_boot() {
+        let notice = service_notice(true, false);
+        assert!(notice.contains("will not start"));
+        assert!(notice.contains("xflow daemon start"));
+        assert_eq!(
+            service_notice(true, true),
+            "User service installed and started"
+        );
+        assert!(service_notice(false, false).contains("graphical-session.target"));
+        let (message, hint) = explain_systemd(
+            "Failed to connect to user scope bus via local transport: No such file or directory",
+        )
+        .unwrap();
+        assert!(message.contains("No systemd user session"));
+        assert!(hint.contains("xflowd"));
+        assert!(explain_systemd("Unit xflow.service not found.").is_none());
     }
 }
