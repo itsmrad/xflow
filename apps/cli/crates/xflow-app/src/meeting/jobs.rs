@@ -11,7 +11,6 @@ use xflow_core::meeting::{MeetingId, Source};
 use xflow_core::{TimedSpan, TimedTranscript, Timing};
 use xflow_providers::SttFailure;
 
-pub const ATTEMPTS: i64 = 3;
 /// Segment sequence = window * stride + index; a window holds at most 4096
 /// provider spans plus splits of long text.
 const SEQUENCE_STRIDE: i64 = 10_000;
@@ -295,15 +294,6 @@ pub fn queued_meetings(db: &Connection) -> Result<Vec<i64>> {
     let mut statement = db.prepare("SELECT c.meeting_id FROM captures c WHERE c.queued=1 AND EXISTS(SELECT 1 FROM jobs j WHERE j.meeting_id=c.meeting_id AND j.state IN ('pending','waiting') AND j.attempts<j.budget) ORDER BY c.meeting_id")?;
     let rows = statement
         .query_map([], |r| r.get(0))?
-        .collect::<rusqlite::Result<Vec<i64>>>()?;
-    Ok(rows)
-}
-/// Meetings with open jobs, oldest first.
-pub fn open_meetings(db_path: &Path, meeting: Option<i64>) -> Result<Vec<i64>> {
-    let db = open_writer(db_path)?;
-    let mut statement = db.prepare("SELECT DISTINCT meeting_id FROM jobs WHERE state IN ('pending','waiting') AND (?1 IS NULL OR meeting_id=?1) ORDER BY meeting_id")?;
-    let rows = statement
-        .query_map([meeting], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<i64>>>()?;
     Ok(rows)
 }

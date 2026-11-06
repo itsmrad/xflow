@@ -1677,7 +1677,6 @@ mod tests {
         cfg.vocabulary = vec!["Postgres".into()];
         let env = set_test_key(&mut cfg);
         let provider = build_stt(&cfg, true).unwrap();
-        assert!(!provider.supports_streaming());
         let result = provider
             .transcribe(
                 clip(),

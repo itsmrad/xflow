@@ -256,9 +256,6 @@ pub trait SpeechToText: Send + Sync {
     fn warning(&self) -> Option<&str> {
         None
     }
-    fn supports_streaming(&self) -> bool {
-        false
-    }
     /// Called when recording starts so stop -> transcript skips DNS/TCP/TLS
     /// setup. Must not upload audio or incur billable usage; errors are ignored.
     async fn warm(&self) -> Result<()> {
@@ -283,15 +280,6 @@ pub trait SpeechToText: Send + Sync {
             timing: Timing::TextOnly,
         })
     }
-}
-
-/// Streaming providers finalize before injection; partial text is preview-only.
-#[async_trait]
-pub trait StreamingSpeechSession: Send {
-    async fn send_audio(&mut self, samples: &[f32]) -> Result<()>;
-    async fn next_partial(&mut self) -> Result<Option<Transcript>>;
-    async fn finish(self: Box<Self>) -> Result<Transcript>;
-    async fn cancel(self: Box<Self>) -> Result<()>;
 }
 
 /// Input for optional LLM post-processing. Built by the daemon; providers own

@@ -6,7 +6,6 @@ pub const MAX_IMPORT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_SEGMENTS: usize = 1024;
 pub const MAX_TEXT_BYTES: usize = 4096;
 pub const MAX_PAGE_SEGMENTS: usize = 20;
-pub const MAX_PAGE_BYTES: usize = 24 * 1024;
 /// Conservative token bound: at most one token per serialized UTF-8 byte.
 pub const PAGE_BYTES: usize = 6000;
 pub const MAX_WINDOW_MS: i64 = 600_000;
