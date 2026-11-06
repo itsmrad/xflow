@@ -1,8 +1,5 @@
 //! Meeting pages use the same list/detail navigation and chat reducer.
-use super::{
-    chat,
-    state::{App, Effect, Page},
-};
+use super::state::{App, Effect, Page};
 use crate::meeting::{notes::Notes, MeetingReader};
 use anyhow::Result;
 use xflow_core::meeting::*;
@@ -110,10 +107,12 @@ pub fn choose(app: &mut App, pos: usize) -> Vec<Effect> {
     if let Some(id) = &app.meetings.id {
         if pos == 0 {
             app.ask_meeting = Some(id.clone());
-            app.chat = chat::Chat::default();
+            app.chat.meeting_chat();
             app.chat.paste("Summarize this meeting, including decisions, actions and uncertainties, with citations.");
             app.page = Page::Chat;
-            return app.refresh();
+            let mut effects = vec![Effect::ChatCancel];
+            effects.extend(app.refresh());
+            return effects;
         }
         if pos == 1 {
             return vec![Effect::Meetings(Job::Generate(

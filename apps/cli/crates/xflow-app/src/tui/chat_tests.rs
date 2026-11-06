@@ -1183,3 +1183,51 @@ fn meetings_need_new_consent_even_with_saved_provider_consent() {
     assert!(run.turn.meetings);
     assert!(!run.turn.dictations);
 }
+
+#[test]
+fn meeting_ask_cancels_and_rejects_old_turns_across_provider_changes() {
+    let (_dir, mut app) = ready();
+    let old = send(&mut app, "private dictation question");
+    app.set("ai.provider", "openai").unwrap();
+    app.set("ai.consented", r#"["openrouter","openai"]"#)
+        .unwrap();
+    let meeting = xflow_core::meeting::MeetingId {
+        store_id: "a".repeat(32),
+        id: 1,
+    };
+    app.page = Page::Meetings;
+    app.meetings
+        .apply(super::meetings::Done::Notes(meeting.clone(), None));
+    let effects = super::meetings::choose(&mut app, 0);
+    assert!(matches!(effects.first(), Some(Effect::ChatCancel)));
+    let Some(Effect::ChatTurn(run)) = press(&mut app, KeyCode::Enter).pop() else {
+        panic!("meeting turn")
+    };
+    assert!(run.turn.id > old.id);
+    assert_eq!(run.turn.meeting, Some(meeting));
+    assert!(!run.turn.dictations);
+    assert!(run.turn.history.is_empty());
+    text_event(&mut app, old.id, "old private transcript");
+    done(
+        &mut app,
+        old.id,
+        Ok(Stop::End),
+        vec![Message::User("old private transcript".into())],
+    );
+    assert!(
+        app.chat.running(),
+        "stale completion cannot finish the new turn"
+    );
+    assert!(!rows_text(&app, 80, 24).contains("old private transcript"));
+    done(
+        &mut app,
+        run.turn.id,
+        Ok(Stop::End),
+        vec![Message::User("meeting context".into())],
+    );
+    let followup = send(&mut app, "next question");
+    assert_eq!(
+        followup.history,
+        vec![Message::User("meeting context".into())]
+    );
+}

@@ -380,6 +380,11 @@ impl Chat {
         }));
         Out::Cancel
     }
+    pub(super) fn meeting_chat(&mut self) {
+        self.new_chat();
+        self.input.clear();
+        self.cursor = 0;
+    }
     /// The typed input survives; everything else is gone.
     fn new_chat(&mut self) -> Out {
         let was_running = self.running();
