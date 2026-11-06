@@ -30,8 +30,12 @@ pub enum Color {
     Always,
     Never,
 }
+// Construct arguments only for the chosen command, so MCP setup does not tax other launches.
 #[derive(Subcommand, Debug)]
+#[command(defer = true)]
 pub enum Command {
+    /// Share read-only dictation context with local MCP clients.
+    Mcp(xflow_app::mcp::Mcp),
     /// Set up a provider, microphone and optional desktop integration.
     Setup(Setup),
     /// Begin recording (bind to shortcut press for push-to-talk).
