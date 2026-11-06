@@ -2119,7 +2119,8 @@ mod accuracy_tests {
             Err(_) => vec![],
         }
     }
-    fn check(table: &[(&str, &str, &[(&str, &str)])]) {
+    type Row<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+    fn check(table: &[Row<'_>]) {
         for (original, corrected, want) in table {
             let want: Vec<(String, String)> = want
                 .iter()
