@@ -261,14 +261,6 @@ impl ConfigFile {
         Ok(Some(render(&value)))
     }
 
-    /// Every effective `key = value` (defaults included), sorted by key.
-    pub fn list_effective(&self) -> Result<Vec<(String, String)>> {
-        let mut rows = Vec::new();
-        flatten("", &toml::Value::try_from(self.config()?)?, &mut rows);
-        rows.sort();
-        Ok(rows)
-    }
-
     /// Set a dotted key. `raw` is read as a TOML value (`true`, `42`, `0.5`,
     /// `["a"]`, `"quoted"`), falling back to a plain string when that is what the
     /// schema accepts.
@@ -503,22 +495,6 @@ fn put(doc: &mut DocumentMut, key: &str, item: Item) -> Result<()> {
     Ok(())
 }
 
-fn flatten(prefix: &str, value: &toml::Value, rows: &mut Vec<(String, String)>) {
-    match value {
-        toml::Value::Table(table) if !table.is_empty() => {
-            for (key, value) in table {
-                let key = if prefix.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{prefix}.{key}")
-                };
-                flatten(&key, value, rows);
-            }
-        }
-        other => rows.push((prefix.to_owned(), render(other))),
-    }
-}
-
 /// Config floats are f32; print them the way they were written (0.005, not 0.004999…).
 fn render(value: &toml::Value) -> String {
     match value {
@@ -624,11 +600,6 @@ mod tests {
             file.effective("recording.max_seconds").unwrap().as_deref(),
             Some("1200")
         );
-        assert!(file
-            .list_effective()
-            .unwrap()
-            .iter()
-            .any(|(key, value)| key == "stt.provider" && value == r#""groq""#));
     }
 
     #[test]
