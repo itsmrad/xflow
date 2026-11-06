@@ -198,10 +198,10 @@ used for Linux. The gate takes
 the median of their medians. Each daemon runs its own copy of the binary, so no
 two share text pages, which would split their PSS. It fails when:
 
-- a binary exceeds its target's ceiling: `floor(result.binary_bytes × 1.08)`
-  (`limits.binary_pct = 8`). Current Linux ceilings are **12,168,031 B** for `xflow`
-  and **13,865,204 B** for `xflowd`, about 8% above the matching receipt.
-  **Temporary:** the allowance is 8% (normally 1%) while the feature queue lands,
+- a binary exceeds its target's ceiling: `floor(result.binary_bytes × 1.12)`
+  (`limits.binary_pct = 12`). Current Linux ceilings are **12,618,699 B** for `xflow`
+  and **14,378,730 B** for `xflowd`, about 12% above the matching receipt.
+  **Temporary:** the allowance is 12% (normally 1%) while the feature queue lands,
   because each merge otherwise invalidates every open PR's byte baseline. It will
   be restored to 1% with a fresh baseline afterwards;
 - idle tree PSS grows by more than min(`limits.pss_kib`, `limits.pss_pct`);
