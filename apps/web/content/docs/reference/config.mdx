@@ -137,6 +137,15 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | `ui.theme` | `"paper"` | TUI theme; see `xflow tui` → Settings |
 | `ui.mouse` | `true` |  |
 
+## [ask]
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `ask.enabled` | `true` | hold the chord, speak, release; the answer is shown, never pasted |
+| `ask.key` | `"right_option+right_command"` |  |
+| `ask.provider` | `""` | empty: the cleanup provider, or groq if cleanup is unset |
+| `ask.model` | `""` | empty: that provider's fast catalog default |
+
 ## [[snippets]]
 
 Voice snippets: say the trigger, get the text.
@@ -290,6 +299,12 @@ window_terms = false         # opt in (macOS for now): spell file/project/branch
 [ui]
 theme = "paper"              # TUI theme; see `xflow tui` → Settings
 mouse = true
+
+[ask]
+enabled = true               # hold the chord, speak, release; the answer is shown, never pasted
+key = "right_option+right_command"
+provider = ""                # empty: the cleanup provider, or groq if cleanup is unset
+model = ""                   # empty: that provider's fast catalog default
 
 # Voice snippets: say the trigger, get the text.
 # [[snippets]]

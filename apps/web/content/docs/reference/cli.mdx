@@ -25,6 +25,7 @@ Commands:
   status       Show daemon state, provider, model, version and timings
   watch        Subscribe to daemon events until interrupted
   listen       Print dictation to stdout without changing the desktop
+  ask          Ask a question in text and stream the answer. Does not use the microphone
   transcribe   Transcribe an audio file without a running daemon
   last         Print the last transcript
   copy         Copy the last transcript [alias: copy-last]
@@ -346,6 +347,26 @@ Options:
       --command
       --config <PATH>      Read/write an alternate configuration file
   -h, --help               Print help
+```
+
+## xflow ask
+
+Ask a question in text and stream the answer. Does not use the microphone
+
+```text
+Ask a question in text and stream the answer. Does not use the microphone
+
+Usage: xflow ask [OPTIONS] [QUESTION]...
+
+Arguments:
+  [QUESTION]...  The question. If omitted, read stdin
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
 ```
 
 ## xflow transcribe
