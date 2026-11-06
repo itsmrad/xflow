@@ -102,12 +102,14 @@ pub async fn install(
                         "{base}/{}/resolve/{}/{}",
                         artifact.repository, artifact.revision, file.path
                     );
-                    download(client, &url, &partial, file, &mut meter).await?;
+                    download(client, &url, &partial, file, &mut meter, true).await?;
                 }
                 (Source::Dir(dir), _) => {
                     std::fs::copy(dir.join(&file.path), &partial).with_context(|| {
                         format!("cannot copy {} from {}", file.path, dir.display())
                     })?;
+                    // Durable before the marker, as downloads are.
+                    std::fs::File::open(&partial)?.sync_all()?;
                     meter.add(file.bytes);
                 }
                 _ => unreachable!(),
@@ -143,6 +145,7 @@ async fn download(
     partial: &Path,
     file: &File,
     meter: &mut Meter<'_>,
+    restart: bool,
 ) -> Result<()> {
     let mut have = std::fs::metadata(partial).map(|m| m.len()).unwrap_or(0);
     if have > file.bytes {
@@ -175,9 +178,15 @@ async fn download(
     if !resume {
         meter.done -= have;
         if response.status().as_u16() == 206 {
-            // A different range or a changed file: start this file over.
-            std::fs::remove_file(partial)?;
-            return Box::pin(download(client, url, partial, file, meter)).await;
+            // A different range or a changed file: start this file over, once.
+            if !restart {
+                bail!(
+                    "download of {} failed: the server sent an unexpected byte range",
+                    file.path
+                );
+            }
+            let _ = std::fs::remove_file(partial);
+            return Box::pin(download(client, url, partial, file, meter, false)).await;
         }
     }
     let mut out = std::fs::OpenOptions::new()
@@ -348,6 +357,8 @@ mod tests {
         Changed,
         /// Send a shorter body than the pinned size.
         Truncated,
+        /// Always answer 206 with a range that was not asked for.
+        WrongRange,
     }
     type Requests = Vec<(String, Option<String>)>;
     struct Server {
@@ -390,6 +401,11 @@ mod tests {
                 }
                 let total = body.len();
                 let (status, extra, body) = match range.and_then(|r| r.parse::<usize>().ok()) {
+                    _ if mode == Mode::WrongRange => (
+                        "206 Partial Content",
+                        format!("Content-Range: bytes 1-1/{total}\r\n"),
+                        body[1..2].to_vec(),
+                    ),
                     Some(start) if mode != Mode::IgnoreRange => (
                         "206 Partial Content",
                         format!("Content-Range: bytes {start}-{}/{total}\r\n", total - 1),
@@ -493,6 +509,22 @@ mod tests {
             assert!(!models.join(MODEL_ID).exists());
             assert!(!partial(&models).exists());
         }
+    }
+
+    #[tokio::test]
+    async fn a_server_sending_the_wrong_range_fails_after_one_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let models = root.path().join("models");
+        let server = server(Mode::WrongRange).await;
+        let error = install(&artifact(), Source::Http(&server.url), &models, None)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("unexpected byte range"),
+            "{error:#}"
+        );
+        assert_eq!(server.requests.lock().unwrap().len(), 2);
+        assert!(!models.join(MODEL_ID).exists());
     }
 
     #[tokio::test]

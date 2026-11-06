@@ -171,11 +171,18 @@ impl Helper {
             if payload_len > MAX_PAYLOAD {
                 return Err(fail("protocol", "the helper sent an oversized frame"));
             }
-            tokio::io::copy(
+            let skipped = tokio::io::copy(
                 &mut (&mut self.stdout).take(payload_len as u64),
                 &mut tokio::io::sink(),
             )
             .await?;
+            // A short payload would leave the stream mid-frame: never reuse this helper.
+            if skipped < payload_len as u64 {
+                return Err(fail(
+                    "protocol",
+                    "the helper closed in the middle of a frame",
+                ));
+            }
             let header: Value = serde_json::from_slice(&header)
                 .map_err(|_| fail("protocol", "the helper sent invalid JSON"))?;
             match header["op"].as_str() {
@@ -213,6 +220,7 @@ struct Slot {
     uses: u64,
 }
 
+#[derive(Clone)]
 pub struct OnDevice {
     helper: Option<PathBuf>,
     model_dir: PathBuf,
@@ -327,13 +335,20 @@ impl SpeechToText for OnDevice {
         MODEL_ID
     }
     async fn warm(&self) -> Result<()> {
-        let mut slot = self.slot.lock().await;
-        let helper = match slot.helper.take() {
-            Some(helper) => helper,
-            None => self.start().await?,
-        };
-        self.used(&mut slot, helper);
-        Ok(())
+        // The first Core ML load takes ~20 s, longer than callers wait. The load is a
+        // task of its own, so a caller giving up leaves it to finish for the next request.
+        let this = self.clone();
+        tokio::spawn(async move {
+            let mut slot = this.slot.lock().await;
+            let helper = match slot.helper.take() {
+                Some(helper) => helper,
+                None => this.start().await?,
+            };
+            this.used(&mut slot, helper);
+            Ok(())
+        })
+        .await
+        .map_err(|_| anyhow!("on-device warmup task failed"))?
     }
     async fn transcribe(
         &self,
@@ -514,6 +529,39 @@ mod tests {
         assert_eq!(fake.log().matches("pid ").count(), 1);
     }
     #[tokio::test]
+    async fn a_short_reply_payload_is_a_protocol_error_and_the_helper_restarts() {
+        let fake = Fake::new("short_payload_first");
+        let engine = fake.engine();
+        let error = engine
+            .transcribe(clip(0.5), Default::default())
+            .await
+            .unwrap_err();
+        assert_eq!(code(&error), "protocol");
+        engine
+            .transcribe(clip(0.5), Default::default())
+            .await
+            .unwrap();
+        assert_eq!(fake.log().matches("pid ").count(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_warm_given_up_on_still_finishes_loading() {
+        let fake = Fake::new("slow_load");
+        let engine = fake.engine();
+        // The daemon caps warmup well below a first Core ML load.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), engine.warm())
+                .await
+                .is_err()
+        );
+        engine
+            .transcribe(clip(0.5), Default::default())
+            .await
+            .unwrap();
+        assert_eq!(fake.log().matches("pid ").count(), 1, "{}", fake.log());
+    }
+
+    #[tokio::test]
     async fn clips_under_300_ms_are_padded_with_silence() {
         let fake = Fake::new("ok");
         let engine = fake.engine();
@@ -523,7 +571,10 @@ mod tests {
                 .await
                 .unwrap()
                 .text;
-            assert!(text.starts_with(&format!("bytes={}", 2 * MIN_SAMPLES)), "{text}");
+            assert!(
+                text.starts_with(&format!("bytes={}", 2 * MIN_SAMPLES)),
+                "{text}"
+            );
         }
     }
 

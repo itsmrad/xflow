@@ -71,6 +71,8 @@ while True:
         if mode == "load_error":
             write({"op": "error", "code": "model_invalid", "message": "bad model"})
             sys.exit(1)
+        if mode == "slow_load":
+            time.sleep(0.5)
         write({"op": "progress", "stage": "loading"})
         write({"op": "ready", "protocol": 1, "helper": "fake", "load_ms": 1})
     elif op == "transcribe":
@@ -78,6 +80,12 @@ while True:
         if mode == "hang":
             time.sleep(60)
         if mode == "crash_first" and once("crashed"):
+            sys.exit(1)
+        if mode == "short_payload_first" and once("short"):
+            header_bytes = json.dumps({"op": "result", "id": header["id"], "text": "x"}).encode()
+            stdout.write(struct.pack("<I", len(header_bytes)) + header_bytes)
+            stdout.write(struct.pack("<I", 10) + b"abc")
+            stdout.flush()
             sys.exit(1)
         if mode == "bad_audio_first" and once("bad"):
             write({"op": "error", "id": header["id"], "code": "bad_audio", "message": "bad"})
