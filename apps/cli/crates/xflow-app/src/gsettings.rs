@@ -42,7 +42,6 @@ pub struct Setting {
 #[cfg(not(target_os = "macos"))]
 pub struct GSettings {
     schema_dir: Option<PathBuf>,
-    memory_backend: bool,
     #[cfg(test)]
     test_config_home: Option<PathBuf>,
 }
@@ -70,7 +69,6 @@ impl GSettings {
             .find(|dir| dir.join("gschemas.compiled").is_file());
         let settings = Self {
             schema_dir,
-            memory_backend: false,
             #[cfg(test)]
             test_config_home: None,
         };
@@ -80,22 +78,11 @@ impl GSettings {
         Ok(settings)
     }
 
-    /// For tests: a compiled schema directory and optional in-memory backend.
-    pub fn with_schema_dir(dir: PathBuf, memory_backend: bool) -> Self {
-        Self {
-            schema_dir: Some(dir),
-            memory_backend,
-            #[cfg(test)]
-            test_config_home: None,
-        }
-    }
-
     /// For tests: a compiled schema and a persistent keyfile in a private directory.
     #[cfg(all(test, target_os = "linux"))]
     fn with_test_schema_dir(dir: PathBuf, config_home: PathBuf) -> Self {
         Self {
             schema_dir: Some(dir),
-            memory_backend: false,
             test_config_home: Some(config_home),
         }
     }
@@ -138,9 +125,6 @@ impl GSettings {
         let mut command = Command::new("gsettings");
         if let Some(dir) = &self.schema_dir {
             command.arg("--schemadir").arg(dir);
-        }
-        if self.memory_backend {
-            command.env("GSETTINGS_BACKEND", "memory");
         }
         #[cfg(test)]
         if let Some(config_home) = &self.test_config_home {
