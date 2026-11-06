@@ -2,7 +2,33 @@
 
 The dated baselines below describe their named historical fixtures, not the combined v1 build. Integrated CLI measurements are in [the CLI report](apps/cli/crates/xflow-app/src/cli/REPORT.md); combined verification and short headless smoke are in [the integration report](docs/INTEGRATION_V1.md). Physical hotkey, microphone, live-provider, destination and compositor budgets remain unmeasured by those checks.
 
-## Scoreboard (macOS reference)
+## MCP M1 — 2026-11-06
+
+Current macOS arm64 release figures are in [the M1 report](docs/benchmarks/mcp-m1.md)
+and [raw observations](docs/benchmarks/mcp-m1.json). On the same M2/8 GB machine,
+fat LTO and stripped binaries: `xflow` is **8,445,664 B (8.05 MiB)**, versus
+6,567,520 B before M1 and 8,230,496 B with SQLite alone. MCP/context adds
+215,168 B beyond SQLite (budget 250 KB); JSON order preservation costs 16,512 B
+(budget 20 KB). `xflowd` remains **8,634,656 B (8.23 MiB)**, a zero-byte size delta,
+with zero `search_dictations` strings. A gzip -9n archive of the two binaries grows
+from 7,420,867 to 8,409,196 B (+988,329 B); no signed installer was built.
+
+Fresh-process MCP initialize p50/max is 5.56/8.12 ms; maximum EOF exit is 0.55 ms.
+On synthetic 100,000-row history, the worst search p95 is 65.51 ms, and maximum
+search RSS across the measured workloads is 14,876,672 B (14.88 MB). These pass
+the 50 ms p50 startup, 100 ms p95 search, 15 MB RSS and 1 s EOF targets.
+
+Database-free `--version` and guarded TUI first-frame p50 changes are +0.29 and
++0.28 ms, within observed baseline variation of 0.60 and 0.70 ms; neither's
+maximum RSS increases. These are fresh processes with cached files; first-launch
+warmups were much slower and are recorded separately. Linux CI's D-Bus and
+scoreboard checks still need Linux verification; its existing +5% binary ratchet
+has not been reset using these macOS measurements.
+
+## Scoreboard (macOS reference, 2026-10-29)
+
+This dated scoreboard retains its original binaries and workload. Use the M1
+report above for current binary sizes; its other daemon metrics were not remeasured.
 
 Raw data: [scoreboard-macos.json](docs/benchmarks/scoreboard-macos.json). Method,
 reproduction and the Linux CI gate: [scripts/bench/README.md](scripts/bench/README.md#scoreboard).

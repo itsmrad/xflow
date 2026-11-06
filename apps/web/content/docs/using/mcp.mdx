@@ -1,0 +1,65 @@
+---
+title: Use xflow with AI clients
+description: Search private dictation history from a local MCP client, with explicit consent.
+---
+
+xflow's read-only MCP server lets an AI client search your cleaned dictation history and fetch a dictation. It runs as a separate local process; no daemon restart or xflow account is needed. Meeting history is not available yet.
+
+Measured macOS arm64 M1 release sizes (2026-11-06, stripped, fat LTO): `xflow` is 8.05 MiB and `xflowd` is 8.23 MiB. The daemon's byte count is unchanged. Direct history access adds bundled SQLite to the CLI; MCP/context adds 215,168 bytes beyond SQLite alone. The optional MCP process runs only while a client uses it.
+
+```sh
+xflow mcp install claude-code --dictations
+# Or choose codex, cursor, vscode, gemini, or claude-desktop
+xflow mcp status
+```
+
+Use the installed `xflow` binary when registering. A development binary under `target/` or a temporary directory can disappear. Registration uses that binary's path and the argument `mcp`; Homebrew installs use the stable `bin/xflow` symlink when available.
+
+Restart your client after registration, then ask: “Search my xflow dictations for the release plan.” The client must request a tool call before xflow returns matching text. The tools are `search_dictations` (snippets, date filters and pagination) and `get_dictation` (cleaned text, with size limits). Raw transcripts are never returned.
+
+## Consent and privacy
+
+Sharing starts off. `--dictations` explicitly enables it. In a terminal, installation otherwise asks for consent with No as the default. A noninteractive installation without that flag leaves sources off.
+
+Consent is **global across MCP clients**, stored in `mcp.toml` next to xflow's `config.toml`. Changing it affects every registration, including running servers from their next tool call; if the file becomes unreadable or malformed, sharing stays off until it is fixed:
+
+```sh
+xflow mcp sources --dictations on
+xflow mcp sources --dictations off
+```
+
+History must also be enabled by `privacy.history`. xflow reads history locally, but the matching snippets or dictation text returned to your AI client are sent to that client's model vendor (for example Anthropic, OpenAI or Google). Disabling sharing prevents future reads; it cannot retract text already sent to a client.
+
+Dictated content is untrusted data and can contain prompt injection. xflow marks it as data and neutralizes images, but those measures do not guarantee a model will ignore malicious instructions. Avoid combining history access with tools that can send private data out, and review tool permissions in your client.
+
+## Clients
+
+| Client | Command |
+| --- | --- |
+| Claude Code | `xflow mcp install claude-code` |
+| Claude Desktop | `xflow mcp install claude-desktop` |
+| Codex CLI, IDE and Codex in ChatGPT desktop | `xflow mcp install codex` |
+| Cursor | `xflow mcp install cursor` |
+| VS Code | `xflow mcp install vscode` |
+| Gemini CLI | `xflow mcp install gemini` |
+| Zed | `xflow mcp install zed` (prints configuration) |
+| LM Studio | `xflow mcp install lm-studio` (prints configuration) |
+| Windsurf | `xflow mcp install windsurf` (prints configuration) |
+
+Add `--print` to show registration without changing consent or client settings. Installation uses the client's CLI where available. Codex has a comment-preserving TOML fallback; Cursor and Claude Desktop use JSON merges that preserve other servers. Different existing xflow entries require confirmation or `--force`. File edits keep permissions and make a timestamped `.xflow-backup-…` copy first. JSONC, trailing commas and numbers a rewrite would change (such as integers beyond 64 bits) are refused; merge the printed snippet yourself.
+
+```sh
+xflow mcp uninstall cursor
+```
+
+Uninstall removes only xflow's registration and keeps global consent. For clients with printed configuration, remove only the `xflow` entry manually.
+
+## ChatGPT
+
+Use **Codex** in ChatGPT desktop or the Codex CLI/IDE through `xflow mcp install codex`. Plain ChatGPT chat support through an export is planned for a later milestone.
+
+An advanced option is OpenAI's user-run [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Follow OpenAI's setup and permission instructions, and configure the tunnel to launch your installed `xflow mcp` stdio process. This sends tool results through OpenAI, requires your own OpenAI Platform setup, and has **not been tested by xflow**. xflow does not start or publish a tunnel; do not expose your history through a public tunnel.
+
+## Harnesses
+
+An application with its own consent can start `xflow mcp --sources dictations`. This overrides only that server process's MCP consent and still respects `privacy.history`; `none`, `meetings`, and `dictations,meetings` are also accepted (meetings have no tools yet). Normal client registrations never include this override.

@@ -470,7 +470,7 @@ pub fn words(text: &str) -> i64 {
     text.split_whitespace().count() as i64
 }
 
-fn escape_like(query: &str) -> String {
+pub(crate) fn escape_like(query: &str) -> String {
     let mut escaped = String::with_capacity(query.len());
     for c in query.chars() {
         if matches!(c, '\\' | '%' | '_') {

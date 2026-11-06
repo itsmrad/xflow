@@ -15,6 +15,7 @@ Fast dictation for developers, from your terminal
 Usage: xflow [OPTIONS] <COMMAND>
 
 Commands:
+  mcp          Share read-only dictation context with local MCP clients
   setup        Set up a provider, microphone and optional desktop integration
   start        Begin recording (bind to shortcut press for push-to-talk)
   stop         Stop recording and begin transcription
@@ -60,6 +61,110 @@ Start here: xflow (in a terminal: setup, then the control centre)
 Explore: xflow <command> --help
 Pipe text: xflow listen --seconds 5
 Exit codes: 0 success, 1 operation failed, 2 usage, 3 daemon unavailable, 4 config, 5 provider, 6 doctor.
+```
+
+## xflow mcp
+
+Share read-only dictation context with local MCP clients
+
+```text
+Share read-only dictation context with local MCP clients
+
+Usage: xflow mcp [OPTIONS]
+       xflow mcp <COMMAND>
+
+Commands:
+  install    Register this binary with a local MCP client. Consent is global
+  uninstall  Remove only xflow's registration; global consent is kept
+  status     Show consent, registrations and binary versions
+  sources    Inspect or change global source consent
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --json               Emit machine-readable JSON (watch emits one object per event)
+      --sources <SOURCES>  Override source consent for this server process only [possible values: dictations, meetings, dictations,meetings, none]
+  -q, --quiet              Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>      Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>      Read/write an alternate configuration file
+  -h, --help               Print help
+```
+
+### xflow mcp install
+
+Register this binary with a local MCP client. Consent is global
+
+```text
+Register this binary with a local MCP client. Consent is global
+
+Usage: xflow mcp install [OPTIONS] <CLIENT>
+
+Arguments:
+  <CLIENT>
+
+Options:
+      --dictations     Explicitly allow sharing dictation history with clients' model vendors
+      --json           Emit machine-readable JSON (watch emits one object per event)
+      --force          Replace a different existing xflow entry
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --print          Print registration without changing client configuration or consent
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow mcp uninstall
+
+Remove only xflow's registration; global consent is kept
+
+```text
+Remove only xflow's registration; global consent is kept
+
+Usage: xflow mcp uninstall [OPTIONS] <CLIENT>
+
+Arguments:
+  <CLIENT>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow mcp status
+
+Show consent, registrations and binary versions
+
+```text
+Show consent, registrations and binary versions
+
+Usage: xflow mcp status [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow mcp sources
+
+Inspect or change global source consent
+
+```text
+Inspect or change global source consent
+
+Usage: xflow mcp sources [OPTIONS]
+
+Options:
+      --dictations <DICTATIONS>  [possible values: on, off]
+      --json                     Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet                    Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>            Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>            Read/write an alternate configuration file
+  -h, --help                     Print help
 ```
 
 ## xflow setup

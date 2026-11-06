@@ -199,7 +199,7 @@ the median of their medians. Each daemon runs its own copy of the binary, so no
 two share text pages, which would split their PSS. It fails when:
 
 - a binary exceeds its target's ceiling: `floor(result.binary_bytes × 1.01)`
-  (`limits.binary_pct = 1`). Current Linux ceilings are **8,402,343 B** for `xflow`
+  (`limits.binary_pct = 1`). Current Linux ceilings are **10,700,772 B** for `xflow`
   and **12,597,471 B** for `xflowd`, about 1% above the matching receipt;
 - idle tree PSS grows by more than min(`limits.pss_kib`, `limits.pss_pct`);
 - idle tree CPU exceeds `limits.cpu_percent` of one core;
@@ -207,11 +207,17 @@ two share text pages, which would split their PSS. It fails when:
   timing is gated, so runner noise can't fail it;
 - any helper process is running at idle.
 
-The binary baseline uses the single [CI receipt from run 42154746953](https://github.com/itsmrad/xflow/actions/runs/42154746953/attempts/1)
+The `xflowd` binary baseline uses the single [CI receipt from run 42154746953](https://github.com/itsmrad/xflow/actions/runs/42154746953/attempts/1)
 at merge commit `100a18c9e09b7e02c261a1e40aa6536599d1ffd3` (PR head `8ba3db8`).
 Since `71e4aa6`, the daemon grew 2.68% and the CLI 1.58%, exceeding the new 1%
-guard; the old 5% allowance hid that growth. This reviewed update moves only the
-binary baseline and keeps 1% headroom; it includes no MCP/chat allowance.
+guard; the old 5% allowance hid that growth. That update kept 1% headroom.
+
+The `xflow` binary baseline uses the single [CI receipt from run 42169619094](https://github.com/itsmrad/xflow/actions/runs/42169619094/attempts/1)
+at merge commit `c977e58c0c4185a697c57f2859057dbbac835758` (PR head `c428a01`), the
+MCP server (#154). The CLI now links bundled SQLite for the dictation context
+tools, so it grew from 8,319,152 B (main's baseline after #157, run 42164184531)
+to 10,594,824 B. The daemon measured 12,537,352 B in the same receipt, under its
+12,597,471 B ceiling, which stays as it was.
 
 Runtime baseline values and budgets are unchanged. The three original receipts
 remain intact in `runtime_runs` in the JSON: run 41375047607, attempts 1–3 at
@@ -221,11 +227,11 @@ The generated summary below describes only the current receipt in `runs`,
 including its observed runtime values; one CI run is not three new CI replicates:
 
 <!-- scoreboard:begin -->
-Generated from [`ci-baseline.json`](../../docs/benchmarks/ci-baseline.json) by `scoreboard.py render`; do not edit by hand. 1 CI runs of `100a18c` on AMD EPYC 9V74 80-Core Processor, 4 CPUs ([1](https://github.com/itsmrad/xflow/actions/runs/42154746953/attempts/1)):
+Generated from [`ci-baseline.json`](../../docs/benchmarks/ci-baseline.json) by `scoreboard.py render`; do not edit by hand. 1 CI runs of `c977e58` on AMD EPYC 9V74 80-Core Processor, 4 CPUs ([1](https://github.com/itsmrad/xflow/actions/runs/42169619094/attempts/1)):
 
-- Idle tree PSS: run medians 9,969–9,969 KiB (0 %), per-launch medians 9,944–10,072 KiB (1 %). The baseline is 9,873 KiB and the gate allows +987 KiB, 7.7× the per-launch spread.
-- Binaries: `xflow` 8,226,512 B in every run; `xflowd` 12,472,744 B in every run. The gate allows +1 %.
-- Warm startup p50: 1.7–1.7 ms against the absolute 100 ms budget; idle CPU at most 0.0000 % against 0.1 %.
+- Idle tree PSS: run medians 10,124–10,124 KiB (0 %), per-launch medians 9,516–10,192 KiB (7 %). The baseline is 9,873 KiB and the gate allows +987 KiB, 1.5× the per-launch spread.
+- Binaries: `xflow` 10,594,824 B in every run; `xflowd` 12,537,352 B in every run. The gate allows +1 %.
+- Warm startup p50: 1.8–1.8 ms against the absolute 100 ms budget; idle CPU at most 0.0000 % against 0.1 %.
 <!-- scoreboard:end -->
 
 Growth beyond a ceiling requires an **explicit budget change in that PR**, with
@@ -246,10 +252,7 @@ python3 -B scripts/bench/scoreboard.py render docs/benchmarks/ci-baseline.json -
 python3 -B scripts/bench/test_scoreboard.py   # also fails if any generated text drifts from its JSON
 ```
 
-**Pending MCP/chat exception:** the approved CLI-only SQLite addition was estimated
-on macOS at about +1.88 MB (6.57 → 8.45 MB), but has no verified integrated receipt.
-The current Linux budgets above apply now. When integrated, measure the exact
-production Linux CLI with the pinned compiler/target and make the explicit CLI
-budget update above, with 1% headroom. Verify that the delta is the approved
-feature; keep the daemon budget unchanged. Do not add that approximate Mac delta
-to either Linux budget. macOS needs its own receipt before any exact allowance.
+**MCP exception:** the approved CLI-only SQLite addition was estimated on macOS
+at about +1.88 MB (6.57 → 8.45 MB). The Linux CLI budget above now uses the exact
+integrated Linux receipt (+2,275,672 B over main's baseline), not that Mac estimate;
+the daemon budget is unchanged. macOS needs its own receipt before any exact allowance.

@@ -173,6 +173,7 @@ fn path(cli: &Cli) -> Result<PathBuf> {
 }
 fn run(cli: &Cli, out: &Output) -> Result<()> {
     match &cli.command {
+        Command::Mcp(args) => xflow_app::mcp::run(args, &path(cli)?).map_err(Into::into),
         Command::Completions { shell } => {
             let mut bytes = Vec::new();
             clap_complete::generate(*shell, &mut Cli::command(), "xflow", &mut bytes);

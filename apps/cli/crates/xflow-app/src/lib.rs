@@ -1,9 +1,11 @@
 pub mod config_edit;
+pub mod context;
 #[cfg(unix)]
 pub mod daemon;
 pub mod gsettings;
 #[cfg(target_os = "macos")]
 mod macos_settings;
+pub mod mcp;
 #[cfg(target_os = "macos")]
 pub mod overlay_pill;
 pub mod paths;
