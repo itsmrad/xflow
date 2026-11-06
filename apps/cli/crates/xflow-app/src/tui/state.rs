@@ -1401,97 +1401,9 @@ impl App {
                 effects = self.on_device_key(*setup, *removing, key);
             }
             Modal::Editor(editor) => {
-                if editor.capturing {
-                    if key.code == KeyCode::Esc {
-                        editor.capturing = false;
-                    } else if let Some(chord) = options::chord(key) {
-                        let field = &mut editor.fields[editor.focus];
-                        if !field.choices.contains(&chord) {
-                            field.choices.push(chord.clone());
-                            field.labels.push(options::key_label(&chord));
-                        }
-                        *field.value = chord;
-                        editor.capturing = false;
-                        editor.error = None;
-                    } else {
-                        editor.error = Some(
-                            "Your terminal keeps that key for itself. Choose a key from the list or try another combination."
-                                .into(),
-                        );
-                    }
-                } else {
-                    let last = editor.focus + 1 == editor.fields.len();
-                    let picking = editor.picking();
-                    match key.code {
-                        KeyCode::Esc => {
-                            keep = false;
-                            if matches!(editor.target, EditTarget::Setup(_)) {
-                                self.setup = None;
-                            }
-                        }
-                        KeyCode::Enter
-                            if picking
-                                && editor.fields[editor.focus].value.as_str()
-                                    == options::CAPTURE =>
-                        {
-                            editor.capturing = true;
-                            editor.error = None;
-                        }
-                        KeyCode::Enter
-                            if !last && !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
-                            editor.focus += 1
-                        }
-                        KeyCode::Enter | KeyCode::F(2) => match self.apply_editor(editor) {
-                            Ok(next) => {
-                                keep = false;
-                                effects = next;
-                            }
-                            Err(error) => {
-                                editor.error = Some(options::plain(&format!("{error:#}")))
-                            }
-                        },
-                        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            match self.apply_editor(editor) {
-                                Ok(next) => {
-                                    keep = false;
-                                    effects = next;
-                                }
-                                Err(error) => {
-                                    editor.error = Some(options::plain(&format!("{error:#}")))
-                                }
-                            }
-                        }
-                        KeyCode::Tab => editor.focus = (editor.focus + 1) % editor.fields.len(),
-                        KeyCode::BackTab => {
-                            editor.focus =
-                                (editor.focus + editor.fields.len() - 1) % editor.fields.len()
-                        }
-                        KeyCode::Up
-                        | KeyCode::Down
-                        | KeyCode::Left
-                        | KeyCode::Right
-                        | KeyCode::Home
-                        | KeyCode::End
-                            if picking =>
-                        {
-                            let field = &mut editor.fields[editor.focus];
-                            let count = field.choices.len();
-                            let pos = field.position();
-                            let pos = match key.code {
-                                KeyCode::Home => 0,
-                                KeyCode::End => count - 1,
-                                KeyCode::Down | KeyCode::Right => (pos + 1).min(count - 1),
-                                _ => pos.saturating_sub(1),
-                            };
-                            *field.value = field.choices[pos].clone();
-                        }
-                        // Choice fields never accept typing.
-                        _ if picking => (),
-                        KeyCode::Up if editor.focus > 0 => editor.focus -= 1,
-                        KeyCode::Down if !last => editor.focus += 1,
-                        _ => text_key(&mut editor.fields[editor.focus], key),
-                    }
+                if let Some(next) = self.editor_key(editor, key) {
+                    keep = false;
+                    effects = next;
                 }
             }
         }
@@ -1499,6 +1411,91 @@ impl App {
             self.modal = Some(modal);
         }
         effects
+    }
+    /// Key in the settings editor. `Some` closes it with those effects.
+    fn editor_key(&mut self, editor: &mut Editor, key: KeyEvent) -> Option<Vec<Effect>> {
+        if editor.capturing {
+            if key.code == KeyCode::Esc {
+                editor.capturing = false;
+            } else if let Some(chord) = options::chord(key) {
+                let field = &mut editor.fields[editor.focus];
+                if !field.choices.contains(&chord) {
+                    field.choices.push(chord.clone());
+                    field.labels.push(options::key_label(&chord));
+                }
+                *field.value = chord;
+                editor.capturing = false;
+                editor.error = None;
+            } else {
+                editor.error = Some(
+                    "Your terminal keeps that key for itself. Choose a key from the list or try another combination."
+                        .into(),
+                );
+            }
+        } else {
+            let last = editor.focus + 1 == editor.fields.len();
+            let picking = editor.picking();
+            match key.code {
+                KeyCode::Esc => {
+                    if matches!(editor.target, EditTarget::Setup(_)) {
+                        self.setup = None;
+                    }
+                    return Some(vec![]);
+                }
+                KeyCode::Enter
+                    if picking
+                        && editor.fields[editor.focus].value.as_str() == options::CAPTURE =>
+                {
+                    editor.capturing = true;
+                    editor.error = None;
+                }
+                KeyCode::Enter if !last && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    editor.focus += 1
+                }
+                KeyCode::Enter | KeyCode::F(2) => return self.save_editor(editor),
+                KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return self.save_editor(editor)
+                }
+                KeyCode::Tab => editor.focus = (editor.focus + 1) % editor.fields.len(),
+                KeyCode::BackTab => {
+                    editor.focus = (editor.focus + editor.fields.len() - 1) % editor.fields.len()
+                }
+                KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Home
+                | KeyCode::End
+                    if picking =>
+                {
+                    let field = &mut editor.fields[editor.focus];
+                    let count = field.choices.len();
+                    let pos = field.position();
+                    let pos = match key.code {
+                        KeyCode::Home => 0,
+                        KeyCode::End => count - 1,
+                        KeyCode::Down | KeyCode::Right => (pos + 1).min(count - 1),
+                        _ => pos.saturating_sub(1),
+                    };
+                    *field.value = field.choices[pos].clone();
+                }
+                // Choice fields never accept typing.
+                _ if picking => (),
+                KeyCode::Up if editor.focus > 0 => editor.focus -= 1,
+                KeyCode::Down if !last => editor.focus += 1,
+                _ => text_key(&mut editor.fields[editor.focus], key),
+            }
+        }
+        None
+    }
+    fn save_editor(&mut self, editor: &mut Editor) -> Option<Vec<Effect>> {
+        match self.apply_editor(editor) {
+            Ok(next) => Some(next),
+            Err(error) => {
+                editor.error = Some(options::plain(&format!("{error:#}")));
+                None
+            }
+        }
     }
     /// Mouse click on an option row in the open picker: choose it.
     pub fn pick(&mut self, index: usize) -> Vec<Effect> {
