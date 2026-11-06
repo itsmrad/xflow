@@ -468,6 +468,7 @@ fn setup_lists_the_catalog_with_key_state_and_saves_key_and_model() {
     handle(
         &mut app,
         Update::ChatKeys(vec![
+            ("groq".into(), KeySource::Missing),
             ("openai".into(), KeySource::Missing),
             ("anthropic".into(), KeySource::Keystore),
             ("openrouter".into(), KeySource::Environment("X".into())),
@@ -489,6 +490,7 @@ fn setup_lists_the_catalog_with_key_state_and_saves_key_and_model() {
     }
     snapshot("chat-setup-80x24", &text);
     // Choosing reuses the secure key form with a model field.
+    press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Enter);
     let Some(Modal::Editor(editor)) = &app.modal else {
         panic!("key form");
@@ -537,6 +539,7 @@ fn a_saved_key_is_kept_and_local_needs_a_loopback_address_and_a_model() {
     let (_dir, mut app) = blank();
     app.chat.keys = vec![("anthropic".into(), KeySource::Keystore)];
     press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Enter);
     assert!(
@@ -548,7 +551,7 @@ fn a_saved_key_is_kept_and_local_needs_a_loopback_address_and_a_model() {
     let (_dir, mut app) = blank();
     app.set("ai.fallback", r#"["openai"]"#).unwrap();
     app.set("ai.consented", r#"["openai"]"#).unwrap();
-    app.selected[Page::Chat.index()] = 3;
+    app.selected[Page::Chat.index()] = 4;
     press(&mut app, KeyCode::Enter);
     let form = |app: &mut App| {
         let Some(Modal::Editor(editor)) = &mut app.modal else {
