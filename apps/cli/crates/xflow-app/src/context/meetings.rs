@@ -123,14 +123,15 @@ fn sanitize(v: &mut Value) {
 fn summary(s: MeetingSummary) -> Value {
     json!({"meeting_id":s.meeting,"title":s.title,"started_at_ms":s.started_at_ms,"ended_at_ms":s.ended_at_ms,"duration_ms":s.ended_at_ms-s.started_at_ms,"timezone":s.timezone,"notes_exist":!matches!(s.notes,NotesStatus::Absent)})
 }
-pub(super) fn call(
-    env: &ContextEnv,
-    sources: Sources,
-    name: &str,
-    args: &Value,
-) -> Result<ToolOutput, ToolError> {
-    // Validate before consent or any storage access.
-    let (list, search, transcript, notes) = match name {
+/// One validated tool call.
+enum Request {
+    List(List),
+    Search(SearchArgs),
+    Transcript(Transcript),
+    Notes(Notes),
+}
+fn request(name: &str, args: &Value) -> Result<Request, ToolError> {
+    Ok(match name {
         "list_meetings" => {
             let a: List = parse(args)?;
             limit(a.limit)?;
@@ -138,7 +139,7 @@ pub(super) fn call(
                 return Err(invalid());
             }
             let _: Option<ListCursor> = decode(a.cursor.as_deref())?;
-            (Some(a), None, None, None)
+            Request::List(a)
         }
         "search_meetings" => {
             let a: SearchArgs = parse(args)?;
@@ -151,7 +152,7 @@ pub(super) fn call(
                 return Err(invalid());
             }
             let _: Option<SearchCursor> = decode(a.cursor.as_deref())?;
-            (None, Some(a), None, None)
+            Request::Search(a)
         }
         "get_transcript" => {
             let a: Transcript = parse(args)?;
@@ -161,14 +162,145 @@ pub(super) fn call(
                 return Err(invalid());
             }
             let _: Option<Cursor> = decode(a.cursor.as_deref())?;
-            (None, None, Some(a), None)
+            Request::Transcript(a)
         }
         _ => {
             let a: Notes = parse(args)?;
             valid_id(&a.meeting_id)?;
-            (None, None, None, Some(a))
+            Request::Notes(a)
         }
+    })
+}
+fn list(reader: &MeetingReader, a: List) -> Result<Value, ToolError> {
+    let filter = ListFilter {
+        since_ms: a.since.unwrap_or(0),
+        until_ms: a.until.unwrap_or(i64::MAX),
     };
+    let c = decode(a.cursor.as_deref())?;
+    let page = reader
+        .list_limited(&filter, c.as_ref(), limit(a.limit)?)
+        .map_err(storage)?;
+    Ok(
+        json!({"items":page.meetings.into_iter().map(summary).collect::<Vec<_>>(),"next_cursor":page.next.as_ref().map(encode)}),
+    )
+}
+fn search(reader: &MeetingReader, a: SearchArgs) -> Result<Value, ToolError> {
+    let c = decode(a.cursor.as_deref())?;
+    let page = reader
+        .search_limited(&a.query, c.as_ref(), limit(a.limit)?)
+        .map_err(storage)?;
+    let mut items = Vec::new();
+    for s in page.segments {
+        let status = reader.status(&s.meeting).map_err(storage)?;
+        let label = status
+            .sources
+            .iter()
+            .find(|x| x.id == s.source_id)
+            .and_then(|x| x.label.as_ref());
+        let start = s.text.find(&a.query).unwrap_or(0);
+        let snippet = s.text[start..].chars().take(300).collect::<String>();
+        items.push(json!({"meeting_id":s.meeting,"title":status.summary.title,"start_ms":s.range.start_ms,"end_ms":s.range.end_ms,"source_id":s.source_id,"source":label,"snippet":snippet}));
+    }
+    Ok(json!({"items":items,"next_cursor":page.next.as_ref().map(encode)}))
+}
+fn transcript(reader: &MeetingReader, a: Transcript) -> Result<Value, ToolError> {
+    let status = reader.status(&a.meeting_id).map_err(storage)?;
+    let requested = TimeRange {
+        start_ms: a.start_ms.unwrap_or(0),
+        end_ms: a
+            .end_ms
+            .unwrap_or(status.summary.ended_at_ms - status.summary.started_at_ms),
+    };
+    if requested.end_ms <= requested.start_ms {
+        return Err(invalid());
+    }
+    let mut c = decode::<Cursor>(a.cursor.as_deref())?.unwrap_or(Cursor {
+        meeting: a.meeting_id.clone(),
+        requested,
+        window: TimeRange {
+            start_ms: requested.start_ms,
+            end_ms: requested
+                .start_ms
+                .saturating_add(MAX_WINDOW_MS)
+                .min(requested.end_ms),
+        },
+        snapshot: status.snapshot,
+        segment: None,
+    });
+    if c.meeting != a.meeting_id
+        || c.requested != requested
+        || c.snapshot != status.snapshot
+        || c.window.start_ms < requested.start_ms
+        || c.window.end_ms > requested.end_ms
+    {
+        return Err(invalid());
+    }
+    let page = reader
+        .transcript(&TranscriptQuery {
+            meeting: a.meeting_id,
+            range: c.window,
+            snapshot: Some(c.snapshot),
+            cursor: c.segment.clone(),
+        })
+        .map_err(storage)?;
+    // Cross-window overlaps were already returned in the previous window.
+    let segments: Vec<_> = page
+        .segments
+        .into_iter()
+        .filter(|s| {
+            c.window.start_ms == requested.start_ms || s.range.start_ms >= c.window.start_ms
+        })
+        .collect();
+    let gaps: Vec<_> = status
+        .gaps
+        .into_iter()
+        .filter(|g| g.range.start_ms < c.window.end_ms && g.range.end_ms > c.window.start_ms)
+        .collect();
+    let covered = c.window;
+    let next = if let Some(next) = page.next {
+        c.segment = Some(next);
+        Some(encode(&c))
+    } else if c.window.end_ms < requested.end_ms {
+        c.window = TimeRange {
+            start_ms: c.window.end_ms,
+            end_ms: c
+                .window
+                .end_ms
+                .saturating_add(MAX_WINDOW_MS)
+                .min(requested.end_ms),
+        };
+        c.segment = None;
+        Some(encode(&c))
+    } else {
+        None
+    };
+    Ok(
+        json!({"segments":segments,"gaps":gaps,"window":covered,"next_cursor":next,"provenance":"imported_unverified"}),
+    )
+}
+fn notes(reader: &MeetingReader, a: Notes) -> Result<Value, ToolError> {
+    Ok(match reader.notes(&a.meeting_id).map_err(storage)? {
+        None => json!({"items":[],"notice":"no notes for this meeting yet"}),
+        Some(mut notes) => {
+            let mut omitted = 0;
+            while serde_json::to_vec(&notes).map_err(|_| invalid())?.len() > 16 * 1024 {
+                if notes.claims.pop().is_none() {
+                    break;
+                }
+                omitted += 1;
+            }
+            json!({"notes":notes,"omitted_claims":omitted,"notice":if omitted>0 {Some("Notes excerpt; use xflow meeting notes for all claims")} else {None}})
+        }
+    })
+}
+pub(super) fn call(
+    env: &ContextEnv,
+    sources: Sources,
+    name: &str,
+    args: &Value,
+) -> Result<ToolOutput, ToolError> {
+    // Validate before consent or any storage access.
+    let request = request(name, args)?;
     if !sources.meetings {
         return Ok(empty(
             "xflow has not been allowed to share meetings; run `xflow mcp sources --meetings on`",
@@ -187,121 +319,11 @@ pub(super) fn call(
         Ok(_) => (),
     }
     let reader = MeetingReader::at(path);
-    let mut result = if let Some(a) = list {
-        let filter = ListFilter {
-            since_ms: a.since.unwrap_or(0),
-            until_ms: a.until.unwrap_or(i64::MAX),
-        };
-        let c = decode(a.cursor.as_deref())?;
-        let page = reader
-            .list_limited(&filter, c.as_ref(), limit(a.limit)?)
-            .map_err(storage)?;
-        json!({"items":page.meetings.into_iter().map(summary).collect::<Vec<_>>(),"next_cursor":page.next.as_ref().map(encode)})
-    } else if let Some(a) = search {
-        let c = decode(a.cursor.as_deref())?;
-        let page = reader
-            .search_limited(&a.query, c.as_ref(), limit(a.limit)?)
-            .map_err(storage)?;
-        let mut items = Vec::new();
-        for s in page.segments {
-            let status = reader.status(&s.meeting).map_err(storage)?;
-            let label = status
-                .sources
-                .iter()
-                .find(|x| x.id == s.source_id)
-                .and_then(|x| x.label.as_ref());
-            let start = s.text.find(&a.query).unwrap_or(0);
-            let snippet = s.text[start..].chars().take(300).collect::<String>();
-            items.push(json!({"meeting_id":s.meeting,"title":status.summary.title,"start_ms":s.range.start_ms,"end_ms":s.range.end_ms,"source_id":s.source_id,"source":label,"snippet":snippet}));
-        }
-        json!({"items":items,"next_cursor":page.next.as_ref().map(encode)})
-    } else if let Some(a) = transcript {
-        let status = reader.status(&a.meeting_id).map_err(storage)?;
-        let requested = TimeRange {
-            start_ms: a.start_ms.unwrap_or(0),
-            end_ms: a
-                .end_ms
-                .unwrap_or(status.summary.ended_at_ms - status.summary.started_at_ms),
-        };
-        if requested.end_ms <= requested.start_ms {
-            return Err(invalid());
-        }
-        let mut c = decode::<Cursor>(a.cursor.as_deref())?.unwrap_or(Cursor {
-            meeting: a.meeting_id.clone(),
-            requested,
-            window: TimeRange {
-                start_ms: requested.start_ms,
-                end_ms: requested
-                    .start_ms
-                    .saturating_add(MAX_WINDOW_MS)
-                    .min(requested.end_ms),
-            },
-            snapshot: status.snapshot,
-            segment: None,
-        });
-        if c.meeting != a.meeting_id
-            || c.requested != requested
-            || c.snapshot != status.snapshot
-            || c.window.start_ms < requested.start_ms
-            || c.window.end_ms > requested.end_ms
-        {
-            return Err(invalid());
-        }
-        let page = reader
-            .transcript(&TranscriptQuery {
-                meeting: a.meeting_id,
-                range: c.window,
-                snapshot: Some(c.snapshot),
-                cursor: c.segment.clone(),
-            })
-            .map_err(storage)?;
-        // Cross-window overlaps were already returned in the previous window.
-        let segments: Vec<_> = page
-            .segments
-            .into_iter()
-            .filter(|s| {
-                c.window.start_ms == requested.start_ms || s.range.start_ms >= c.window.start_ms
-            })
-            .collect();
-        let gaps: Vec<_> = status
-            .gaps
-            .into_iter()
-            .filter(|g| g.range.start_ms < c.window.end_ms && g.range.end_ms > c.window.start_ms)
-            .collect();
-        let covered = c.window;
-        let next = if let Some(next) = page.next {
-            c.segment = Some(next);
-            Some(encode(&c))
-        } else if c.window.end_ms < requested.end_ms {
-            c.window = TimeRange {
-                start_ms: c.window.end_ms,
-                end_ms: c
-                    .window
-                    .end_ms
-                    .saturating_add(MAX_WINDOW_MS)
-                    .min(requested.end_ms),
-            };
-            c.segment = None;
-            Some(encode(&c))
-        } else {
-            None
-        };
-        json!({"segments":segments,"gaps":gaps,"window":covered,"next_cursor":next,"provenance":"imported_unverified"})
-    } else {
-        let id = notes.expect("notes arguments").meeting_id;
-        match reader.notes(&id).map_err(storage)? {
-            None => json!({"items":[],"notice":"no notes for this meeting yet"}),
-            Some(mut notes) => {
-                let mut omitted = 0;
-                while serde_json::to_vec(&notes).map_err(|_| invalid())?.len() > 16 * 1024 {
-                    if notes.claims.pop().is_none() {
-                        break;
-                    }
-                    omitted += 1;
-                }
-                json!({"notes":notes,"omitted_claims":omitted,"notice":if omitted>0 {Some("Notes excerpt; use xflow meeting notes for all claims")} else {None}})
-            }
-        }
+    let mut result = match request {
+        Request::List(a) => list(&reader, a)?,
+        Request::Search(a) => search(&reader, a)?,
+        Request::Transcript(a) => transcript(&reader, a)?,
+        Request::Notes(a) => notes(&reader, a)?,
     };
     // Cursor strings are machine state, never display text.
     let cursor = result.as_object_mut().and_then(|o| o.remove("next_cursor"));
