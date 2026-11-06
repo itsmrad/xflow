@@ -493,26 +493,32 @@ pub fn review(
         if matched || (i == a.len() && j == b.len()) {
             if from < i || to < j {
                 match hunk(&a[from..i], &b[to..j]) {
-                    // A removed word is not learned back in either direction.
-                    Ok(c) if never(&c.to) || never(&c.from) => found.rejected = "known",
-                    Ok(c) => {
-                        let lower = c.to.to_lowercase();
-                        let stored = dictionary.words.iter().find(|w| w.to_lowercase() == lower);
-                        let (list, term) = match stored {
-                            Some(word) => {
+                    Ok(pairs) => {
+                        for c in pairs {
+                            // A removed word is not learned back in either direction.
+                            if never(&c.to) || never(&c.from) {
                                 found.rejected = "known";
-                                (&mut found.known, word.clone())
+                                continue;
                             }
-                            None => (&mut found.new, c.to),
-                        };
-                        let source = c.from.to_lowercase();
-                        if !list.iter().any(|f| {
-                            f.to.to_lowercase() == lower && f.from.to_lowercase() == source
-                        }) {
-                            list.push(Replacement {
-                                from: c.from,
-                                to: term,
-                            });
+                            let lower = c.to.to_lowercase();
+                            let stored =
+                                dictionary.words.iter().find(|w| w.to_lowercase() == lower);
+                            let (list, term) = match stored {
+                                Some(word) => {
+                                    found.rejected = "known";
+                                    (&mut found.known, word.clone())
+                                }
+                                None => (&mut found.new, c.to),
+                            };
+                            let source = c.from.to_lowercase();
+                            if !list.iter().any(|f| {
+                                f.to.to_lowercase() == lower && f.from.to_lowercase() == source
+                            }) {
+                                list.push(Replacement {
+                                    from: c.from,
+                                    to: term,
+                                });
+                            }
                         }
                     }
                     Err(reason) => found.rejected = reason,
@@ -541,19 +547,80 @@ pub fn review(
 /// deleted words right next to the correction. Words typed right after or
 /// before the fix ("DevTerms 2", "DevTerms done") are not part of it: a
 /// shorter start or end of the new text that already matches wins.
-fn hunk(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
+fn hunk(from: &[&str], to: &[&str]) -> Result<Vec<Replacement>, &'static str> {
     let (n, m) = (from.len(), to.len());
     for len in 1..m.min(MAX_HUNK_WORDS + 1) {
         for part in [&to[..len], &to[m - len..]] {
             if let Ok(c) = candidate(from, part) {
-                return Ok(c);
+                return Ok(vec![c]);
             }
         }
     }
     let k = n.min(m);
-    candidate(from, to)
-        .or_else(|e| candidate(&from[..k], &to[..k]).map_err(|_| e))
-        .or_else(|e| candidate(&from[n - k..], &to[m - k..]).map_err(|_| e))
+    aligned(from, to)
+        .or_else(|e| aligned(&from[..k], &to[..k]).map_err(|_| e))
+        .or_else(|e| aligned(&from[n - k..], &to[m - k..]).map_err(|_| e))
+}
+/// As many words on each side are compared word for word, so a fix beside
+/// another edit is learned alone: "Veronika about" -> "Veronica abouts" is one
+/// correction and one word with text on it, never a two-word term. Only words
+/// that cannot be paired (a name regrouped, "Rimpas Kar" -> "Rimpa Sarkar") are
+/// a term together.
+fn aligned(from: &[&str], to: &[&str]) -> Result<Vec<Replacement>, &'static str> {
+    if from.len() != to.len() || from.len() < 2 {
+        return candidate(from, to).map(|c| vec![c]);
+    }
+    let pairs: Vec<_> = from
+        .iter()
+        .zip(to)
+        .map(|(f, t)| candidate(&[f], &[t]))
+        .collect();
+    if pairs.iter().any(|p| matches!(p, Err("not-close"))) {
+        if let Ok(whole) = candidate(from, to) {
+            return Ok(vec![whole]);
+        }
+    }
+    let first = pairs.iter().find_map(|p| p.as_ref().err().copied());
+    let kept: Vec<Replacement> = pairs.into_iter().filter_map(Result::ok).collect();
+    if kept.is_empty() {
+        Err(first.unwrap_or("shape"))
+    } else {
+        Ok(kept)
+    }
+}
+/// Text put on a word is an addition, not a spelling: the dictated word whole, at
+/// one end of the new one ("tomorrow" -> "tomorrowand", "Please" -> "kPlease").
+/// A fragment that the rest completes is a spelling ("Postgre" -> "Postgres"):
+/// only a complete everyday word counts, or any word with a real word put on it
+/// ("Zorblax" -> "Zorblaxbefore"), or a capitalized one with text typed in front
+/// of it ("Veronika" -> "kVeronika"). Among several dictated words, an everyday
+/// one left whole in the new one counts too ("report before" -> "reportbefor").
+fn attached(from: &str, to: &str, x: &[char], y: &[char]) -> bool {
+    let everyday = |word: &str| {
+        crate::words::common(word) || common(word) || crate::snap::FUNCTION_WORDS.contains(&word)
+    };
+    let words: Vec<String> = from.split(' ').map(str::to_lowercase).collect();
+    if y.len() > x.len() && (y.starts_with(x) || y.ends_with(x)) {
+        let rest: String = if y.starts_with(x) {
+            y[x.len()..].iter().collect()
+        } else {
+            y[..y.len() - x.len()].iter().collect()
+        };
+        let whole = words.iter().all(|w| w.chars().count() < 3 || everyday(w));
+        let in_front = !y.starts_with(x)
+            && from.starts_with(char::is_uppercase)
+            && to.contains(from.split(' ').next().unwrap_or_default());
+        return whole || (rest.chars().count() >= 2 && everyday(&rest)) || in_front;
+    }
+    let joined = to.to_lowercase();
+    words.len() > 1
+        && x != y
+        && !to.contains(' ')
+        && words.iter().any(|w| {
+            w.chars().count() >= 3
+                && everyday(w)
+                && (joined.starts_with(w.as_str()) || joined.ends_with(w.as_str()))
+        })
 }
 /// A word without the punctuation around it.
 fn key(token: &str) -> &str {
@@ -662,9 +729,28 @@ fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
     } else if (to.split(' ').all(common) || everyday) && !uncommon_source(&from) {
         // Tier 3: both common. A swap between real words is a choice, not a spelling.
         Err("everyday-word")
+    } else if attached(&from, &to, &x, &y) {
+        Err("addition")
+    } else if x == y && heard > 1 && !to.contains(' ') && joined_plainly(&to, capitals(&from)) {
+        // A space deleted between two words. A term shows it was meant: "useEffect".
+        Err("merge")
+    } else if x == y && to.split(' ').count() > heard {
+        Err("split")
+    } else if to.contains(' ')
+        && to
+            .split(' ')
+            .any(|w| crate::words::common(&w.to_lowercase()) || common(w))
+    {
+        // A term of several words is a name, not words that happen to be close.
+        Err("shape")
     } else {
         Ok(Replacement { from, to })
     }
+}
+/// A joined word with no sign it was meant as a term: no new capital, no symbol.
+fn joined_plainly(to: &str, capitals_before: usize) -> bool {
+    to.chars().all(char::is_alphanumeric)
+        && to.chars().filter(|c| c.is_uppercase()).count() <= capitals_before
 }
 pub(crate) fn distance(a: &[char], b: &[char]) -> usize {
     let mut row: Vec<usize> = (0..=b.len()).collect();
@@ -1107,9 +1193,13 @@ mod tests {
             learn("ship it to cooper netties now", "ship it to Kubernetes now"),
             pair("cooper netties", "Kubernetes")
         );
+        // Two fixes side by side are two corrections, not a two-word term.
         assert_eq!(
             learn("please ask jon smyth today", "please ask John Smith today"),
-            pair("jon smyth", "John Smith")
+            vec![
+                ("jon".to_string(), "John".to_string()),
+                ("smyth".to_string(), "Smith".to_string())
+            ]
         );
         // The user fixed a word and kept typing.
         assert_eq!(
@@ -2014,6 +2104,302 @@ mod tests {
         time("periodic 64 KB, 18 KB needle", || {
             assert!(Receipt::new(&field, &needle, None).is_none());
         });
+    }
+}
+
+/// What the user did -> what is learned, on varied wording. Each line is a
+/// behaviour; together they are the precision and recall of the candidate logic.
+#[cfg(test)]
+mod accuracy_tests {
+    use super::*;
+
+    fn saved(original: &str, corrected: &str) -> Vec<(String, String)> {
+        match review(original, corrected, &DictionaryConfig::default()) {
+            Ok(found) => found.new.into_iter().map(|r| (r.from, r.to)).collect(),
+            Err(_) => vec![],
+        }
+    }
+    fn check(table: &[(&str, &str, &[(&str, &str)])]) {
+        for (original, corrected, want) in table {
+            let want: Vec<(String, String)> = want
+                .iter()
+                .map(|(f, t)| (f.to_string(), t.to_string()))
+                .collect();
+            assert_eq!(
+                saved(original, corrected),
+                want,
+                "{original} -> {corrected}"
+            );
+        }
+    }
+    /// A learned word is one token: the evidence's junk, and its class.
+    #[test]
+    fn a_word_is_never_saved_with_something_else_on_it() {
+        check(&[
+            // T14: the fix alone, with no two-word rule.
+            (
+                "Please ask Veronika about tomorrow plans",
+                "Please ask Veronica abouts tomorrow plans",
+                &[("Veronika", "Veronica")],
+            ),
+            (
+                "Send Zorblax today please",
+                "Send Zorblex todays please",
+                &[("Zorblax", "Zorblex")],
+            ),
+            // A fix and a real-word swap beside it.
+            (
+                "ask Veronika about plans",
+                "ask Veronica above plans",
+                &[("Veronika", "Veronica")],
+            ),
+            // Text typed straight onto the last dictated word.
+            (
+                "Please bring the cat home tomorrow",
+                "Please bring the cat home tomorrowand then the dog as well",
+                &[],
+            ),
+            (
+                "Please check the final report",
+                "Please check the final reportly done with this",
+                &[],
+            ),
+            ("We meet tomorrow", "We meet Tomorrowland", &[]),
+            ("Ship the deploy", "Ship the deployment", &[]),
+            ("the plans", "the plansc", &[]),
+            ("the plans", "the xplans", &[]),
+            // A stray key in front of a word.
+            (
+                "Please ask Veronika about tomorrow plans",
+                "kPlease ask Veronika about tomorrow plans",
+                &[],
+            ),
+            ("Thanks Veronika for this", "Thanks kVeronika for this", &[]),
+            // An uncommon word with a real word on it.
+            ("Rimpa Sarkar called", "Rimpa Sarkarbefore called", &[]),
+            ("Open Zorblax later", "Open Zorblaxbefore later", &[]),
+            // A space deleted: neither word.
+            (
+                "the final report before lunch",
+                "the final reportbefore lunch",
+                &[],
+            ),
+            ("ask Zorblex before lunch", "ask Zorblexbefore lunch", &[]),
+            (
+                "ask Veronica tomorrow morning",
+                "ask Veronicatomorrow morning",
+                &[],
+            ),
+            ("we had a lot today", "we had alot today", &[]),
+            (
+                "the final report before lunch",
+                "the final reportbefor lunch",
+                &[],
+            ),
+            // A space inserted.
+            ("the final report today", "the final rep ort today", &[]),
+            ("use kubernetes now", "use kuber netes now", &[]),
+        ]);
+    }
+    /// A fragment the rest completes, or a true misspelling, is still a correction.
+    #[test]
+    fn real_spelling_fixes_survive() {
+        check(&[
+            (
+                "We deploy on Kubernete daily",
+                "We deploy on Kubernetes daily",
+                &[("Kubernete", "Kubernetes")],
+            ),
+            (
+                "We use Postgre here",
+                "We use Postgres here",
+                &[("Postgre", "Postgres")],
+            ),
+            (
+                "We use postgress here",
+                "We use Postgres here",
+                &[("postgress", "Postgres")],
+            ),
+            (
+                "use kubernetis here",
+                "use Kubernetes here",
+                &[("kubernetis", "Kubernetes")],
+            ),
+            (
+                "This is definately right",
+                "This is definitely right",
+                &[("definately", "definitely")],
+            ),
+            // Dropped first letter of a word no list knows.
+            (
+                "use ubernetes here",
+                "use Kubernetes here",
+                &[("ubernetes", "Kubernetes")],
+            ),
+            // A common word to an unusual one, not contained in it.
+            (
+                "open cloud today",
+                "open Claude today",
+                &[("cloud", "Claude")],
+            ),
+            ("the plans today", "the planz today", &[("plans", "planz")]),
+        ]);
+    }
+    #[test]
+    fn developer_wording() {
+        check(&[
+            // Case alone is not a spelling.
+            ("call useeffect here", "call useEffect here", &[]),
+            ("use oauth here", "use OAuth here", &[]),
+            // A space deleted with a capital or a symbol is a term.
+            (
+                "call use effect here",
+                "call useEffect here",
+                &[("use effect", "useEffect")],
+            ),
+            ("use o auth here", "use OAuth here", &[("o auth", "OAuth")]),
+            (
+                "built with next js",
+                "built with Next.js",
+                &[("next js", "Next.js")],
+            ),
+            ("we like re act", "we like React", &[("re act", "React")]),
+            (
+                "set dev terms",
+                "set DevTerms",
+                &[("dev terms", "DevTerms")],
+            ),
+            (
+                "run cube cuddle get pods",
+                "run kubectl get pods",
+                &[("cube cuddle", "kubectl")],
+            ),
+            (
+                "run kube cuttle get pods",
+                "run kubectl get pods",
+                &[("kube cuttle", "kubectl")],
+            ),
+            (
+                "run kubectle get pods",
+                "run kubectl get pods",
+                &[("kubectle", "kubectl")],
+            ),
+            (
+                "deploy to kay eights",
+                "deploy to k8s",
+                &[("kay eights", "k8s")],
+            ),
+            (
+                "use postgre sql here",
+                "use PostgreSQL here",
+                &[("postgre sql", "PostgreSQL")],
+            ),
+            // A plain join is not, however technical the words.
+            ("git re base now", "git rebase now", &[]),
+            // Typed flags and code are additions or symbols.
+            ("git rebase now", "git rebase --continue now", &[]),
+            ("fix my_var", "fix my_vat", &[]),
+        ]);
+    }
+    #[test]
+    fn names_from_many_cultures() {
+        check(&[
+            (
+                "Please call Nguen today",
+                "Please call Nguyen today",
+                &[("Nguen", "Nguyen")],
+            ),
+            (
+                "Please call Priyanca today",
+                "Please call Priyanka today",
+                &[("Priyanca", "Priyanka")],
+            ),
+            (
+                "Ask Muhamed about it",
+                "Ask Muhammad about it",
+                &[("Muhamed", "Muhammad")],
+            ),
+            (
+                "Ask Siobhan about it",
+                "Ask Siobhán about it",
+                &[("Siobhan", "Siobhán")],
+            ),
+            (
+                "Meet Oluwaseum soon",
+                "Meet Oluwaseun soon",
+                &[("Oluwaseum", "Oluwaseun")],
+            ),
+            (
+                "Write to Xiaoming now",
+                "Write to Xiaomin now",
+                &[("Xiaoming", "Xiaomin")],
+            ),
+            (
+                "Hi Rimpas or Kar, call me",
+                "Hi Rimpa Sarkar, call me",
+                &[("Rimpas or Kar", "Rimpa Sarkar")],
+            ),
+            (
+                "Hi Rimpas Kar, call me",
+                "Hi Rimpa Sarkar, call me",
+                &[("Rimpas Kar", "Rimpa Sarkar")],
+            ),
+            // Two names side by side stay two corrections.
+            (
+                "Ask Nguen Priyanca now",
+                "Ask Nguyen Priyanka now",
+                &[("Nguen", "Nguyen"), ("Priyanca", "Priyanka")],
+            ),
+            // A name's other spelling is a common source: word, then rule on repeat.
+            ("Ask Brian today", "Ask Bryan today", &[("Brian", "Bryan")]),
+            // A different person is not close.
+            ("Ask Priya today", "Ask Anjali today", &[]),
+        ]);
+    }
+    #[test]
+    fn hindi_and_english_together() {
+        check(&[
+            ("kal कृष्णन aayega", "kal कृष्णा aayega", &[("कृष्णन", "कृष्णा")]),
+            (
+                "mujhe Sarkaar ka kaam hai",
+                "mujhe Sarkar ka kaam hai",
+                &[("Sarkaar", "Sarkar")],
+            ),
+            ("kal meeting hai yaar", "kal meetingg hai yaar", &[]),
+            ("kal meeting hai", "kal meeting bhi hai", &[]),
+        ]);
+    }
+    #[test]
+    fn numbers_and_punctuation() {
+        check(&[
+            ("call me at five", "call me at 5", &[]),
+            ("room 5 is free", "room 6 is free", &[]),
+            ("version 2 ships", "version 2.1 ships", &[]),
+            ("we use v2 here", "we use v3 here", &[]),
+            ("it costs ten dollars", "it costs 10 dollars", &[]),
+            ("Hello there, friend", "Hello there! friend", &[]),
+            ("send the e-mail", "send the email", &[]),
+            ("check its done", "check it's done", &[]),
+            ("open example dot com", "open example.com", &[]),
+        ]);
+    }
+    #[test]
+    fn tongue_twisters_are_real_word_swaps() {
+        check(&[
+            ("she sells sea shells", "she sells see shells", &[]),
+            (
+                "peter piper picked a peck",
+                "peter piper picked a pack",
+                &[],
+            ),
+            ("red lorry yellow lorry", "red lorry yellow lorries", &[]),
+            (
+                "how much wood would a woodchuck chuck",
+                "how much would wood a woodchuck chuck",
+                &[],
+            ),
+            ("betty bought some butter", "betty bought some better", &[]),
+        ]);
     }
 }
 
