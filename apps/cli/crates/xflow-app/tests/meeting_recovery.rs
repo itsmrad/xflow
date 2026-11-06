@@ -168,7 +168,7 @@ impl Sandbox {
             .ok()?;
         // macOS has no /proc. ps is available on both supported test platforms.
         let command = Command::new("/bin/ps")
-            .args(["-p", &pid.to_string(), "-o", "args="])
+            .args(["-ww", "-p", &pid.to_string(), "-o", "args="])
             .output()
             .ok()?;
         (command.status.success()
