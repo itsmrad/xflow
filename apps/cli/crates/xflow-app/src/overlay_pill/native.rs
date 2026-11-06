@@ -253,6 +253,17 @@ fn sized_frame(screen: Rect, position: &str, scale: f64, win_w: f64) -> Rect {
     )
 }
 
+/// `frame` moved one window height off the screen edge the pill sits on.
+fn beside_pill(mut frame: Rect, position: &str, scale: f64) -> Rect {
+    let step = WIN_H * scale;
+    frame.origin.y += if position.starts_with("top") {
+        -step
+    } else {
+        step
+    };
+    frame
+}
+
 /// The alert held after release, at most this long including the fade.
 const ALERT_SECS: f64 = 2.0;
 
@@ -299,14 +310,51 @@ unsafe fn appkit() -> Result<(Id, Id, *mut c_void)> {
     }
     let pool = msg!(class(c"NSAutoreleasePool"), c"new"; Id);
     let app = msg!(class(c"NSApplication"), c"sharedApplication"; Id);
-    msg!(app, c"setActivationPolicy:", 1isize => isize; i8); // Accessory: no Dock icon.
+    // Prohibited, not Accessory: launched while the user is idle, an accessory app
+    // becomes the front application at `finishLaunching` whatever its window's
+    // style says, and every key goes to it until it exits (FB01).
+    msg!(app, c"setActivationPolicy:", 2isize => isize; i8);
     Ok((pool, app, appkit))
+}
+
+unsafe extern "C" fn never(_: Id, _: Sel) -> i8 {
+    0
+}
+/// An NSPanel that can never be the key or main window, whatever is clicked: its
+/// actions still fire, and no key is ever sent to it.
+unsafe fn panel_class() -> Result<Id> {
+    let name = c"XFlowStatusPanel";
+    let mut panel = objc_getClass(name.as_ptr());
+    if panel.is_null() {
+        panel = objc_allocateClassPair(class(c"NSPanel"), name.as_ptr(), 0);
+        let imp = std::mem::transmute::<unsafe extern "C" fn(Id, Sel) -> i8, unsafe extern "C" fn()>(
+            never,
+        );
+        if panel.is_null()
+            || class_addMethod(
+                panel,
+                sel_registerName(c"canBecomeKeyWindow".as_ptr()),
+                imp,
+                c"c@:".as_ptr(),
+            ) == 0
+            || class_addMethod(
+                panel,
+                sel_registerName(c"canBecomeMainWindow".as_ptr()),
+                imp,
+                c"c@:".as_ptr(),
+            ) == 0
+        {
+            bail!("cannot create the status panel");
+        }
+        objc_registerClassPair(panel);
+    }
+    Ok(panel)
 }
 
 /// The borderless, non-activating status panel both modes draw in: it never
 /// takes focus, so the user's app keeps its key window and caret.
 unsafe fn status_panel(window: Rect, label: Id) -> Result<Id> {
-    let panel = msg!(class(c"NSPanel"), c"alloc"; Id);
+    let panel = msg!(panel_class()?, c"alloc"; Id);
     // Borderless | non-activating panel: never takes focus.
     let panel = msg!(panel, c"initWithContentRect:styleMask:backing:defer:",
         window => Rect, 1usize << 7 => usize, 2usize => usize, 0i8 => i8; Id);
@@ -332,7 +380,8 @@ unsafe fn status_panel(window: Rect, label: Id) -> Result<Id> {
 }
 
 /// How long the learning notice stays, from its first frame: no hover hold.
-const NOTICE: Duration = Duration::from_millis(1000);
+/// Long enough to read the word and reach Undo with the mouse.
+const NOTICE: Duration = Duration::from_millis(4000);
 /// The notice window's width before `scale`; the capsule fits its text.
 const NOTICE_W: f64 = 360.0;
 
@@ -409,13 +458,13 @@ fn undo(op: u64) {
     }
 }
 
-/// The learning notice: the saved word and an Undo (×) for one second, timed
+/// The learning notice: the saved word and an Undo (×) for four seconds, timed
 /// from its first committed frame (the screen shows it up to a frame later),
-/// then gone. No animation, no hover extension. The
-/// panel never activates, so the caret stays in the user's app; the × is a
-/// real momentary button (VoiceOver: "Undo: remove … from dictionary",
-/// pressed through accessibility like a click), and the save is announced, as
-/// one second is too short to reach the button: `xflow dictionary undo` is the
+/// then gone. No animation, no hover extension. The panel never activates, so
+/// the caret stays in the user's app, and it sits one pill clear of where the
+/// recording pill draws, so both can show. The × is a real momentary button
+/// (VoiceOver: "Undo: remove … from dictionary", pressed through accessibility
+/// like a click); the save is also announced, and `xflow dictionary undo` is the
 /// durable route.
 pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
     let s: f64 = settings.get("scale")?.parse()?;
@@ -451,11 +500,15 @@ pub(super) fn notice(notice: Notice, settings: GSettings) -> Result<()> {
         let (w, h) = (text_w + BUTTON * s + 3.0 * pad + 6.0 * s, PILL_H * s);
         // The window is the capsule plus its padding: clicks beside it reach the app below.
         let win_w = w / s + (WIN_H - PILL_H);
-        let window = sized_frame(
-            rect_of(screen, c"visibleFrame"),
+        let window = beside_pill(
+            sized_frame(
+                rect_of(screen, c"visibleFrame"),
+                position.trim_matches('\''),
+                s,
+                win_w,
+            ),
             position.trim_matches('\''),
             s,
-            win_w,
         );
         let panel = status_panel(window, string(&text))?;
         let view = msg!(panel, c"contentView"; Id);
@@ -821,6 +874,23 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_notice_sits_clear_of_the_recording_pill() {
+        let screen = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        for (position, scale) in [("bottom-center", 1.0), ("top-right", 1.5)] {
+            let pill = sized_frame(screen, position, scale, 200.0);
+            let notice = beside_pill(pill, position, scale);
+            let (low, high) = if position.starts_with("top") {
+                (notice, pill)
+            } else {
+                (pill, notice)
+            };
+            assert!(
+                low.origin.y + low.size.height <= high.origin.y + 1e-6,
+                "{position}"
+            );
+        }
+    }
 
     #[test]
     fn label_text_matches_the_daemon_messages_and_alerts_win() {
@@ -856,6 +926,16 @@ mod tests {
         assert_eq!(cstring("a\0b").to_str().unwrap(), "ab");
     }
 
+    /// Nothing clicked on the panel can make it receive keys.
+    #[test]
+    fn the_panel_can_never_take_key_status() {
+        unsafe {
+            let (_pool, _app, _appkit) = appkit().unwrap();
+            let panel = msg!(panel_class().unwrap(), c"alloc"; Id);
+            assert_eq!(msg!(panel, c"canBecomeKeyWindow"; i8), 0);
+            assert_eq!(msg!(panel, c"canBecomeMainWindow"; i8), 0);
+        }
+    }
     #[test]
     fn notice_undo_requires_an_explicit_action() {
         NOTICE_PRESSED.store(false, Ordering::Relaxed);

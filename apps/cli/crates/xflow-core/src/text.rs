@@ -287,6 +287,22 @@ pub fn prepare(
     };
     (text, outcome)
 }
+/// Dictionary replacements again, for what model cleanup returned: it may have
+/// put back a spelling `prepare` already fixed. Every word gets one pass: a rule
+/// with a source word any rule writes (A -> B next to B -> C, or x -> x y) ran
+/// in `prepare` alone, so text a rule inserted is never rewritten by this one.
+pub fn reapply(text: &str, config: &Config) -> String {
+    let lower =
+        |s: &str| -> Vec<String> { words(s).iter().map(|w| w.text.to_lowercase()).collect() };
+    let replacements = &config.dictionary.replacements;
+    let written: Vec<String> = replacements.iter().flat_map(|r| lower(&r.to)).collect();
+    let pairs: Vec<_> = replacements
+        .iter()
+        .filter(|r| !lower(&r.from).iter().any(|w| written.contains(w)))
+        .map(|r| (r.from.as_str(), r.to.as_str()))
+        .collect();
+    replace(text, &pairs, false)
+}
 pub fn after_cleanup(text: &str, config: &Config) -> String {
     let pairs: Vec<_> = config
         .snippets
@@ -602,6 +618,60 @@ pub fn style<'a>(config: &'a Config, app_id: Option<&str>) -> Option<&'a Style> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Rules fire once on what the recognizer said, in raw and fallback paths
+    /// (`prepare` alone) and after cleanup (`reapply` on the model's text).
+    #[test]
+    fn dictionary_rules_apply_exactly_once_on_every_path() {
+        let rule = |from: &str, to: &str| crate::config::Replacement {
+            from: from.into(),
+            to: to.into(),
+        };
+        let mut config = Config::default();
+        config.dictionary.replacements = vec![
+            rule("Rimpas or Kar", "Rimpa Sarkar"),
+            rule("definately", "definitely"),
+            rule("Zorblax", "Zorblex"),
+            // Manual chain and self-containing rule: one pass only.
+            rule("Alpha", "Beta"),
+            rule("Beta", "Gamma"),
+            rule("gpt", "gpt model"),
+        ];
+        let local = before_cleanup(
+            "Rimpas or Kar is definately ZORBLAX, Alpha Beta gpt",
+            &config,
+            false,
+        );
+        assert_eq!(
+            local,
+            "Rimpa Sarkar is definitely Zorblex, Beta Gamma gpt model"
+        );
+        // A model that keeps the text changes nothing, chain and x -> x y included.
+        assert_eq!(reapply(&local, &config), local);
+        // A model that restores a misspelling is corrected, once.
+        assert_eq!(
+            reapply(
+                "Rimpas or Kar is definately zorblax, Beta Gamma gpt model",
+                &config
+            ),
+            "Rimpa Sarkar is definitely Zorblex, Beta Gamma gpt model"
+        );
+        // Longest first, whole words, and never across punctuation.
+        assert_eq!(reapply("Rimpas, or Kar", &config), "Rimpas, or Kar");
+        assert_eq!(
+            reapply("undefinately Zorblaxes", &config),
+            "undefinately Zorblaxes"
+        );
+        // Literal targets, combining marks and curly apostrophes in the source.
+        config.dictionary.replacements = vec![
+            rule("कृष्णन", "कृष्णा"),
+            rule("dont’t", "don’t"),
+            rule("veroniká", "Priyanka"),
+        ];
+        assert_eq!(
+            reapply("कृष्णन dont’t VERONIKÁ", &config),
+            "कृष्णा don’t Priyanka"
+        );
+    }
     use crate::config::{Replacement, Snippet};
     #[test]
     fn fillers_boundaries_unicode_and_punctuation() {

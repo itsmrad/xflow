@@ -13,7 +13,7 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicU8, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -26,7 +26,7 @@ use tokio::{
 };
 pub use xflow_core::ipc::Command;
 use xflow_core::{
-    config::{Config, DictionaryConfig, HotkeyConfig},
+    config::{Config, DictionaryConfig, HotkeyConfig, Replacement},
     ipc::{
         CleanupOutcome, Delivery, FailedAudio, Grant, HistoryEntry, Learning, Permissions, Request,
         Response, Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
@@ -135,6 +135,7 @@ enum Completion {
         generation: u64,
         processed: Processed,
         result: Result<Option<InjectionOutcome>>,
+        ticket: Option<xflow_core::DeliveryTicket>,
     },
     /// `seq`: the dictionary clock, read before the file was (see `Learned`).
     Reloaded {
@@ -243,7 +244,9 @@ pub struct Engine {
     context_abort: Option<tokio::task::AbortHandle>,
     warm_job: Option<JoinHandle<()>>,
     /// Ends the observation of the last pasted field (see `observe`).
-    observing: Option<oneshot::Sender<()>>,
+    observing: Option<Observation>,
+    /// First corrections waiting to repeat (see `DictionaryConfig::adopt`).
+    seen: Arc<std::sync::Mutex<Vec<Replacement>>>,
     /// Orders dictionary snapshots (see `Completion::Learned`).
     dictionary_clock: Arc<AtomicU64>,
     /// The clock value of the dictionary installed now.
@@ -348,6 +351,7 @@ impl Engine {
             context_abort: None,
             warm_job: None,
             observing: None,
+            seen: Default::default(),
             dictionary_clock: Arc::new(AtomicU64::new(0)),
             dictionary_seq: 0,
             change: None,
@@ -505,8 +509,8 @@ impl Engine {
         let kept = retry::load(&dir)?
             .filter(|_| self.config.privacy.keep_failed_audio)
             .context("no failed dictation is kept")?;
-        if let Some(finalize) = self.observing.take() {
-            let _ = finalize.send(());
+        if let Some(observation) = self.observing.take() {
+            let _ = observation.finalize.send(());
         }
         self.advance();
         self.retrying = true;
@@ -980,8 +984,8 @@ impl Engine {
             ..
         } = opening;
         // The user is done editing the last dictation; read the field once more.
-        if let Some(finalize) = self.observing.take() {
-            let _ = finalize.send(());
+        if let Some(observation) = self.observing.take() {
+            let _ = observation.finalize.send(());
         }
         self.advance();
         self.retrying = false;
@@ -1521,7 +1525,8 @@ impl Engine {
                         // A rewrite that reads as a reply is never pasted over the selection.
                         Some(Some(s)) if !rewrite || !xflow_providers::command_answered(selection, &s) => {
                             outcome = Some(CleanupOutcome::Applied);
-                            s
+                            // The model may have put back what a rule fixed.
+                            if dictation { xflow_core::text::reapply(&s, &config) } else { s }
                         }
                         result if rewrite => {
                             (rewrite, copy) = (false, true);
@@ -1641,6 +1646,12 @@ impl Engine {
     async fn cancel(&mut self) -> Result<()> {
         let processing = (self.state == State::Processing).then_some(self.generation);
         self.advance();
+        // Dropping the sender aborts the watch. A save already past admission stands.
+        if let Some(observation) = self.observing.take() {
+            observation
+                .admission
+                .store(SAVE_CANCELLED, Ordering::Release);
+        }
         if let Some(job) = self.job.take() {
             job.abort();
         }
@@ -1806,8 +1817,9 @@ impl Engine {
                     while desktop_ops.try_join_next().is_some() {}
                     if (is_query(&request) || matches!(request, Request::Reload | Request::UndoLearned { .. })) && queries.len() + desktop_ops.len() >= 32 { let _ = reply.send(Response::error(self.state, "daemon request capacity reached")); continue; }
                     if let Request::HistoryUpdate { id, text } = request {
-                        let status = self.status(); let store = self.store.clone(); let path = self.config_path.clone(); let tx = completion_tx.clone(); let clock = self.dictionary_clock.clone();
-                        queries.spawn(async move { let state = status.state; let response = edit_history(status, store, id, text, path, tx, clock).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
+                        let status = self.status(); let store = self.store.clone();
+                        let learner = self.config_path.clone().map(|path| Learner { path, completion: completion_tx.clone(), clock: self.dictionary_clock.clone(), seen: self.seen.clone(), notice: false, admission: None });
+                        queries.spawn(async move { let state = status.state; let response = edit_history(status, store, id, text, learner).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
                         continue;
                     }
                     if let Request::UndoLearned { op } = request {
@@ -1817,6 +1829,8 @@ impl Engine {
                             continue;
                         };
                         self.set_change(None);
+                        // An undone word starts over: its correction has not repeated.
+                        lock(&self.seen).retain(|s| !change.words.contains(&s.to));
                         let status = self.status(); let path = self.config_path.clone(); let tx = completion_tx.clone(); let clock = self.dictionary_clock.clone();
                         queries.spawn(async move { let state = status.state; let response = undo(status, path, change, clock, tx).await.unwrap_or_else(|e| Response::error(state, format!("{e:#}"))); let _ = reply.send(response); });
                         continue;
@@ -1871,8 +1885,14 @@ impl Engine {
                     }
                     // Late, from a canceled session: nothing it kept may stay.
                     Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
-                    Completion::Finished { generation, mut processed, result } => {
+                    Completion::Finished { generation, mut processed, result, ticket } => {
                         self.delivering = false;
+                        // Late, or for a dictation that will not be watched: wait out its reads.
+                        let watched = matches!(result, Ok(Some(InjectionOutcome::Pasted | InjectionOutcome::Typed))) && generation == self.generation && self.mode == Mode::Dictation && self.config.dictionary.auto_learn && self.config_path.is_some();
+                        let ticket = if watched { ticket } else {
+                            if let Some(mut ticket) = ticket { tokio::spawn(async move { ticket.field.stop().await; }); }
+                            None
+                        };
                         if generation != self.generation { continue; }
                         self.abort_context();
                         match result {
@@ -1886,11 +1906,13 @@ impl Engine {
                                 // One final success event: subscribers can trust its complete payload.
                                 self.last_timings = Some(processed.timings.clone());
                                 self.served = Some((processed.provider.clone(), processed.model.clone()));
-                                if matches!(outcome, Some(InjectionOutcome::Pasted | InjectionOutcome::Typed)) && self.mode == Mode::Dictation && self.config.dictionary.auto_learn {
+                                if watched {
                                     if let Some(path) = self.config_path.clone() {
                                         let (finalize, finalized) = oneshot::channel();
-                                        self.observing = Some(finalize);
-                                        tokio::spawn(observe(self.services.desktop.clone(), processed.target.clone(), processed.text.clone(), finalized, path, completion_tx.clone(), self.dictionary_clock.clone(), self.learning.clone()));
+                                        let admission = Arc::new(AtomicU8::new(SAVE_OPEN));
+                                        self.observing = Some(Observation { finalize, admission: admission.clone() });
+                                        let learner = Learner { path, completion: completion_tx.clone(), clock: self.dictionary_clock.clone(), seen: self.seen.clone(), notice: true, admission: Some(admission) };
+                                        tokio::spawn(observe(ticket, finalized, learner, self.learning.clone()));
                                     }
                                 }
                                 self.state = State::Success; self.message = message; let mut r = self.status();
@@ -1928,19 +1950,22 @@ impl Engine {
                     if self.state != State::Processing { continue; }
                     let generation = self.generation; let delivery = self.delivery; let desktop = self.services.desktop.clone(); let store = self.store.clone(); let tx = completion_tx.clone();
                     let recent = (self.config.privacy.history && self.config.stt.domain_hints).then(|| self.recent.clone());
+                    // Only a dictation that may be learned from pays for a watch.
+                    let observed = self.mode == Mode::Dictation && !processed.rewrite && self.config.dictionary.auto_learn && self.config_path.is_some();
                     self.delivering = true;
                     deliveries.spawn(async move {
                         let start = Instant::now();
                         // The selection must still be the one rewritten: same app, window and text.
                         let moved = delivery == Delivery::Inject && processed.rewrite && desktop.context_with_selection().await.ok().as_ref() != Some(&processed.target);
                         if moved { add_warning(&mut processed.warning, "Selection changed; rewrite copied"); }
-                        let result = match delivery { Delivery::Inject if processed.copy || moved => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
+                        let mut ticket = None;
+                        let result = match delivery { Delivery::Inject if processed.copy || moved => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::Inject if observed => desktop.inject_observed(&processed.text, &processed.target).await.map(|delivered| { ticket = delivered.ticket; Some(delivered.outcome) }), Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
                         if delivery != Delivery::None { processed.timings.inject_ms = Some(ms(start.elapsed())); }
                         processed.timings.total_ms = ms(processed.stopped.elapsed());
                         if let Some(entry) = &mut processed.entry { entry.latency_ms = Some(processed.timings.total_ms as u64); if store.set_latency(entry.id, processed.timings.total_ms as u64).await.is_err() { add_warning(&mut processed.warning, "History latency update failed"); } }
                         // After delivery: the terms it mentions lead the next dictation's hints.
                         let text = recent.as_ref().map(|_| processed.text.clone());
-                        let _ = tx.send(Completion::Finished { generation, processed, result }).await;
+                        let _ = tx.send(Completion::Finished { generation, processed, result, ticket }).await;
                         if let (Some(recent), Some(text)) = (recent, text) { lock(&recent).note(&text); }
                     });
                 }
@@ -2189,43 +2214,212 @@ fn fit_history(r: &mut Response, rows: Vec<HistoryEntry>) -> Result<()> {
     r.history.truncate(fit);
     Ok(())
 }
-/// Learn from the user's corrections of a pasted dictation, then count the
-/// outcome for status and doctor and log it at debug level. Neither contains
-/// field text.
-#[allow(clippy::too_many_arguments)]
-async fn observe(
-    desktop: Arc<dyn Desktop>,
-    target: AppContext,
-    inserted: String,
-    finalize: oneshot::Receiver<()>,
+/// The running watch, as the actor sees it.
+struct Observation {
+    /// Sent: the user moved on, finish. Dropped: abort.
+    finalize: oneshot::Sender<()>,
+    admission: Arc<AtomicU8>,
+}
+/// Who wins between a save and Cancel, without either waiting: a save claims
+/// SAVE_RUNNING just before the rename, Cancel stores SAVE_CANCELLED. A save that
+/// claimed first stands, and stays undoable; after Cancel none starts.
+const SAVE_OPEN: u8 = 0;
+const SAVE_RUNNING: u8 = 1;
+const SAVE_CANCELLED: u8 = 2;
+/// What a save needs, from the observer or a history edit.
+struct Learner {
     path: PathBuf,
     completion: mpsc::Sender<Completion>,
     clock: Arc<AtomicU64>,
+    seen: Arc<std::sync::Mutex<Vec<Replacement>>>,
+    /// From the paste observer: the pill may show it.
+    notice: bool,
+    admission: Option<Arc<AtomicU8>>,
+}
+/// A re-edit found the watch's saved word was not the final one, and config.toml
+/// moved under the watch: nothing is overwritten.
+const SUPERSEDE_CONFLICT: &str = "supersede-conflict";
+/// The saves of one watch: each correction once, however often it is seen. A
+/// correction edited again replaces its save instead of adding to it (see
+/// `Rebase`).
+struct Commits {
+    learner: Learner,
+    /// Corrections already considered: saved, or filtered and not asked again.
+    done: Vec<Replacement>,
+    /// Of those, the ones saved, and what those saves did, in order.
+    saved: Vec<Replacement>,
+    records: Vec<xflow_core::learn::Adopted>,
+    /// This watch's first and latest save.
+    first: Option<Undo>,
+    latest: Option<Undo>,
+    /// A re-edit met an intervening edit: this watch saves nothing more.
+    halted: bool,
+    /// When the corrections being saved last changed; for the debug timing line.
+    edited: Option<tokio::time::Instant>,
+    outcomes: Vec<String>,
+}
+impl Commits {
+    fn forget_saves(&mut self) {
+        self.saved.clear();
+        self.records.clear();
+        self.first = None;
+        self.latest = None;
+    }
+    /// Save and count what `corrected` adds, first taking back any earlier save
+    /// it replaces. Err: nothing new.
+    async fn save(
+        &mut self,
+        original: String,
+        corrected: String,
+    ) -> std::result::Result<(), String> {
+        use xflow_core::learn::{pending, same_pair, superseded};
+        if self.halted {
+            return Err(format!("filtered:{SUPERSEDE_CONFLICT}"));
+        }
+        let now = pending(&original, &corrected);
+        let gone = superseded(&self.saved, &now, &corrected);
+        let kept: Vec<Replacement> = self
+            .saved
+            .iter()
+            .filter(|c| !gone.iter().any(|g| same_pair(g, c)))
+            .cloned()
+            .collect();
+        let replayed: Vec<_> = self.records.iter().map(|a| a.keeping(&kept)).collect();
+        let rebase = self
+            .first
+            .as_ref()
+            .zip(self.latest.as_ref())
+            .filter(|_| !gone.is_empty())
+            .map(|(first, latest)| Rebase {
+                undo: latest.back_to(first),
+                kept: replayed.clone(),
+                gone: gone.clone(),
+                all: self.records.clone(),
+            });
+        let skip: Vec<Replacement> = self
+            .done
+            .iter()
+            .filter(|c| !gone.iter().any(|g| same_pair(g, c)))
+            .cloned()
+            .collect();
+        let latest = self.latest.clone();
+        let saved = learn(&self.learner, original, corrected, &skip, rebase, latest).await;
+        match saved {
+            Ok(Ok(learned)) => {
+                if learned.moved {
+                    // Undone or replaced by someone else: not ours to take back.
+                    self.forget_saves();
+                } else if learned.rebased {
+                    self.done.retain(|c| !gone.iter().any(|g| same_pair(g, c)));
+                    self.saved = kept;
+                    self.records = replayed;
+                    self.outcomes.push("superseded".into());
+                }
+                if let Some(at) = self.edited {
+                    log(
+                        "debug",
+                        &format!("auto-learn: edit_to_save_ms={}", at.elapsed().as_millis()),
+                    );
+                }
+                if let Some(undo) = learned.undo {
+                    if self.first.is_none() {
+                        self.first = Some(undo.clone());
+                    }
+                    self.latest = Some(undo);
+                }
+                if learned.rebased && self.saved.is_empty() && learned.pairs.is_empty() {
+                    self.forget_saves();
+                }
+                self.done.extend(learned.pairs.iter().cloned());
+                self.saved.extend(learned.pairs);
+                self.records.push(learned.adopted);
+                self.outcomes.push(learned.outcome.into());
+                if learned.refused {
+                    self.outcomes.push("rule-refused".into());
+                }
+                Ok(())
+            }
+            Ok(Err(SUPERSEDE_CONFLICT)) => {
+                // The state stays as it is, and this watch does not try again.
+                self.forget_saves();
+                self.halted = true;
+                Err(SUPERSEDE_CONFLICT.into())
+            }
+            Ok(Err(reason)) => {
+                // A take-back that found its save already gone is not retried.
+                if !gone.is_empty() {
+                    self.forget_saves();
+                }
+                Err(format!("filtered:{reason}"))
+            }
+            Err(_) => {
+                log("warn", "could not save learned dictionary words");
+                Err("save-failed".into())
+            }
+        }
+    }
+}
+/// Learn from the user's corrections of a pasted dictation, then count the
+/// outcome for status and doctor and log it at debug level. Neither contains
+/// field text.
+async fn observe(
+    ticket: Option<xflow_core::DeliveryTicket>,
+    finalize: oneshot::Receiver<()>,
+    learner: Learner,
     learning: Arc<std::sync::Mutex<Learning>>,
 ) {
     let mut counts = Counts::default();
-    let watched = watch_counted(&*desktop, &target, &inserted, finalize, &mut counts).await;
-    let outcome: String = match watched {
+    let mut commits = Commits {
+        learner,
+        done: vec![],
+        saved: vec![],
+        records: vec![],
+        first: None,
+        latest: None,
+        halted: false,
+        edited: None,
+        outcomes: vec![],
+    };
+    let watched = match ticket {
+        Some(mut ticket) => {
+            let result = watch_pinned(
+                &mut ticket.field,
+                ticket.receipt,
+                finalize,
+                &mut counts,
+                Some(&mut commits),
+            )
+            .await;
+            // Acknowledged: no read is running and the observer has gone.
+            ticket.field.stop().await;
+            result
+        }
+        None => Err(Some("safe-miss:unsupported-or-late")),
+    };
+    // Corrections already saved along the way are this watch's outcome; what ended
+    // it only counts if it ended with nothing.
+    let saved = !commits.outcomes.is_empty();
+    match watched {
         Ok((original, corrected)) => {
-            match learn(path, original, corrected, completion, clock, true).await {
-                Ok(Ok((outcome, _))) => outcome.into(),
-                Ok(Err(reason)) => format!("filtered:{reason}"),
-                Err(_) => {
-                    log("warn", "could not save learned dictionary words");
-                    "save-failed".into()
+            if let Err(outcome) = commits.save(original, corrected).await {
+                if !saved || outcome == SUPERSEDE_CONFLICT {
+                    commits.outcomes.push(outcome);
                 }
             }
         }
-        Err(Some(outcome)) => outcome.into(),
+        Err(Some(outcome)) if !saved => commits.outcomes.push(outcome.into()),
         // The daemon is stopping or another dictation replaced this one.
-        Err(None) => "cancelled".into(),
-    };
+        Err(None) if !saved => commits.outcomes.push("cancelled".into()),
+        Err(_) => {}
+    }
     let mut total = lock(&learning);
     total.watches = total.watches.saturating_add(1);
-    // Outcome names come from a fixed set; the bound only guards the map.
-    if total.outcomes.len() < 64 || total.outcomes.contains_key(&outcome) {
-        let count = total.outcomes.entry(outcome.clone()).or_default();
-        *count = count.saturating_add(1);
+    for outcome in &commits.outcomes {
+        // Outcome names come from a fixed set; the bound only guards the map.
+        if total.outcomes.len() < 64 || total.outcomes.contains_key(outcome) {
+            let count = total.outcomes.entry(outcome.clone()).or_default();
+            *count = count.saturating_add(1);
+        }
     }
     total.reads = total.reads.saturating_add(counts.reads);
     total.unread_max = total.unread_max.max(counts.unread_max);
@@ -2233,7 +2427,9 @@ async fn observe(
     total.merged = total.merged.saturating_add(counts.merged);
     total.editing = total.editing.saturating_add(counts.editing);
     drop(total);
-    log("debug", &format!("auto-learn: {outcome}"));
+    for outcome in &commits.outcomes {
+        log("debug", &format!("auto-learn: {outcome}"));
+    }
 }
 /// Minimum gap between field reads; reads follow every change notification.
 const FIELD_READ_GAP: Duration = Duration::from_millis(20);
@@ -2242,15 +2438,27 @@ const FIELD_READ_GAP: Duration = Duration::from_millis(20);
 /// if the clear was the only change since that read, so a word still being
 /// typed is never learned. Notifications carry no text: when more than one
 /// change happened between two reads, the states in between are unknown (a
-/// clear, then a new message) and nothing is learned from that field. A change
-/// with no notification at all (an app that doesn't report edits, or a missed
-/// one) is unknown in the same way: only announced edits are ever learned.
+/// clear, then a new message), so nothing is learned unless the text moved by
+/// no more than those few changes could type (see `burst`). A change with no
+/// notification at all (an app that doesn't report edits, or a missed one) is
+/// unknown in the same way: only announced edits are ever learned.
 /// The same pause is a grace after the field is found empty: a change folded
 /// into the clear, or one arriving within it, means the last read may not be
 /// the last spelling, so nothing is learned. That narrows truncated saves to
 /// apps that coalesce or drop notifications, which no reader can detect; the
 /// notice showing the exact saved word, and its undo, are the backstop.
 const FIELD_SETTLE: Duration = Duration::from_millis(60);
+/// While the user is typing a settle read is wasted: the next key resets it
+/// before anything could settle. Hold it this much longer after a recent change.
+const FIELD_TYPING_SETTLE: Duration = Duration::from_millis(150);
+/// How long a read may wait for the paste to show (Electron and Chromium can be
+/// late) before the watch gives up on this delivery.
+const LANDING: Duration = Duration::from_secs(1);
+/// While a saved-looking correction waits for the caret to leave it, how often
+/// to look. Bounded by the watch's 60 s; never when nothing is pending.
+const COMMIT_RECHECK: Duration = Duration::from_secs(1);
+/// Failed reads in a row retried after a notification.
+const READ_RETRIES: u32 = 5;
 /// The span to trust when the dictation has left the field: the last one read,
 /// if the clear was the only change after it. With no unread change the clear's
 /// own notification is still in flight, so the edits before it are unknown too.
@@ -2261,19 +2469,66 @@ fn trusted_before_clear(unread: usize, last: &str) -> String {
         String::new()
     }
 }
-/// Pin the field a dictation was pasted into and return (dictated, corrected)
-/// spans. The field is read ~120 ms after the paste to anchor the span, then
-/// after each change notification, keeping the last span that is still
-/// recognisably the dictation. A read that no longer looks like it, while the
-/// user is visibly retyping part of it (see `Receipt::editing`), keeps the
-/// watch going; if the watch ends there, nothing is learned. Once the
-/// dictation leaves the field (a chat app's Enter, a clear, a rewrite) the
-/// observation is over: its last span is learned only if nothing typed after
-/// it went unread (see FIELD_SETTLE), and nothing typed there later is read.
-/// Otherwise the window ends when focus leaves the field (after a 250 ms
-/// grace), the next dictation starts, or after 60 s, with one last read. Only
-/// the span and 16 characters each side stay in memory. Err holds the outcome
-/// when there is nothing to learn, None when cancelled.
+/// `changes` unread notifications can explain moving from `last` to `span`: each
+/// one a key or two, not a clear and a whole new message between two reads.
+fn burst(last: &str, span: &str, changes: usize) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (last.chars().collect(), span.chars().collect());
+    let head = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let tail = a[head..]
+        .iter()
+        .rev()
+        .zip(b[head..].iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    (a.len() - head - tail).max(b.len() - head - tail) <= changes.saturating_mul(2)
+}
+/// Queued notifications, counted without waiting: a change that arrived during
+/// a read, or behind a finalize, is still a change.
+#[derive(Default)]
+struct Drained {
+    changed: usize,
+    merged: usize,
+    /// A terminal event: nothing more may be read.
+    invalid: bool,
+    overflow: bool,
+}
+fn drain(
+    field: &mut Box<dyn xflow_core::FieldWatch>,
+    recheck: &mut Option<tokio::time::Instant>,
+) -> Drained {
+    let mut seen = Drained::default();
+    while let Some(event) = field.try_next() {
+        match event {
+            FieldEvent::Changed => seen.changed += 1,
+            FieldEvent::Merged => seen.merged += 1,
+            FieldEvent::Invalidated | FieldEvent::Unsupported => seen.invalid = true,
+            FieldEvent::Overflow => seen.overflow = true,
+            FieldEvent::Focus => {
+                *recheck = Some(tokio::time::Instant::now() + Duration::from_millis(250))
+            }
+        }
+    }
+    seen
+}
+/// How a read ended.
+enum Read {
+    Done(Option<xflow_core::FieldSnapshot>),
+    Finalized,
+    Cancelled,
+}
+/// One bounded read that a finalize or Cancel does not have to wait for. Its
+/// late result is never used; `FieldWatch::stop` waits it out.
+async fn read_field(
+    field: &mut Box<dyn xflow_core::FieldWatch>,
+    finalize: &mut oneshot::Receiver<()>,
+) -> Read {
+    tokio::select! {
+        biased;
+        finalized = finalize => if finalized.is_err() { Read::Cancelled } else { Read::Finalized },
+        read = tokio::time::timeout(Duration::from_millis(250), field.snapshot()) => Read::Done(read.ok().flatten()),
+    }
+}
+/// Test adapter for scripted fields. Production accepts delivery tickets only.
 #[cfg(test)]
 async fn watch_edit(
     desktop: &dyn Desktop,
@@ -2281,59 +2536,70 @@ async fn watch_edit(
     inserted: &str,
     finalize: oneshot::Receiver<()>,
 ) -> std::result::Result<(String, String), Option<&'static str>> {
-    watch_counted(desktop, target, inserted, finalize, &mut Counts::default()).await
-}
-/// `watch_edit`, counting reads and notifications into `counts`.
-async fn watch_counted(
-    desktop: &dyn Desktop,
-    target: &AppContext,
-    inserted: &str,
-    mut finalize: oneshot::Receiver<()>,
-    counts: &mut Counts,
-) -> std::result::Result<(String, String), Option<&'static str>> {
-    use tokio::time::{sleep_until, timeout, Instant};
-    // Too long to ever compare (see corrections): no reads at all.
     if inserted.split_whitespace().count() > xflow_core::learn::MAX_DIFF_WORDS {
         return Err(Some("too-long"));
     }
-    async fn read(field: &mut Box<dyn xflow_core::FieldWatch>) -> Option<xflow_core::FieldText> {
-        timeout(Duration::from_millis(250), field.read())
-            .await
-            .ok()
-            .flatten()
-    }
-    // Takes the notifications already queued, without waiting: a change that
-    // arrived during a read, or behind a finalize, is still a change. Returns
-    // (changes, merged changes).
-    fn drain(
-        field: &mut Box<dyn xflow_core::FieldWatch>,
-        recheck: &mut Option<Instant>,
-    ) -> (usize, usize) {
-        let (mut changed, mut merged) = (0, 0);
-        while let Some(event) = field.try_next() {
-            match event {
-                FieldEvent::Changed => changed += 1,
-                FieldEvent::Merged => merged += 1,
-                FieldEvent::Focus => *recheck = Some(Instant::now() + Duration::from_millis(250)),
-            }
-        }
-        (changed, merged)
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let mut field = desktop
+        .watch_field(target)
+        .await
+        .ok_or(Some("unreadable"))?;
+    let text = field.read().await.ok_or(Some("unreadable"))?;
+    let receipt = xflow_core::learn::Receipt::new(&text.value, inserted, text.caret)
+        .ok_or(Some("no-receipt"))?;
+    let result = watch_pinned(&mut field, receipt, finalize, &mut Counts::default(), None).await;
+    field.stop().await;
+    result
+}
+/// Follow the field a dictation was pasted into, from the moment of delivery, and
+/// return (dictated, corrected) spans when the watch ends with a correction it
+/// has not already saved. The field is read after each change notification,
+/// keeping the last span that is still recognisably the dictation. A read that no
+/// longer looks like it, while the user is visibly retyping part of it (see
+/// `Receipt::editing`), keeps the watch going; if the watch ends there, nothing
+/// is learned.
+///
+/// `commits`: corrections are saved along the way, about 2 s after the corrected
+/// words stopped changing and the caret has left them (`learn::caret_on`), so the
+/// notice follows the edit and not the end of the watch; the watch then goes on
+/// for further fixes. A correction taken back in the field is retracted.
+///
+/// Once the dictation leaves the field (a chat app's Enter, a clear, a rewrite)
+/// the observation is over: its last span is learned only if nothing typed after
+/// it went unread (see FIELD_SETTLE), and nothing typed there later is read. A
+/// field that empties, or a change that leaves a retype's read as it was (a
+/// hidden clear), is a new message however similar what follows.
+///
+/// Otherwise the window ends on a real focus departure, with no further read and
+/// only an already settled span; when the next dictation starts or after 60 s,
+/// with one last read. Err holds the outcome when there is nothing to learn, None
+/// when cancelled.
+async fn watch_pinned(
+    field: &mut Box<dyn xflow_core::FieldWatch>,
+    mut receipt: xflow_core::learn::Receipt,
+    mut finalize: oneshot::Receiver<()>,
+    counts: &mut Counts,
+    mut commits: Option<&mut Commits>,
+) -> std::result::Result<(String, String), Option<&'static str>> {
+    use tokio::time::{sleep_until, Instant};
+    use xflow_core::learn;
+    if receipt.inserted().split_whitespace().count() > learn::MAX_DIFF_WORDS {
+        return Err(Some("too-long"));
     }
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
-    tokio::time::sleep(Duration::from_millis(120)).await;
     let started = Instant::now();
-    let mut field = timeout(Duration::from_secs(1), desktop.watch_field(target))
-        .await
-        .ok()
-        .flatten()
-        .ok_or(Some("unreadable"))?;
     let deadline = started + Duration::from_secs(60);
-    let mut receipt: Option<xflow_core::learn::Receipt> = None;
     // The last span read, and the last one read twice in a row.
-    let (mut good, mut settled) = (String::new(), String::new());
+    let mut original = receipt.inserted().to_owned();
+    let (mut good, mut settled) = (original.clone(), original.clone());
     let (mut dirty, mut left, mut lost) = (true, false, false);
+    // The delivered text has been seen in the field.
+    let mut landed = false;
     // The last read showed the user retyping part of the dictation.
     let mut editing = false;
+    // A select-all retype's last read: the same read after a further change means
+    // a state in between went unseen.
+    let mut retyped: Option<String> = None;
     // Whether the field has announced any change since the paste.
     let mut notified = false;
     // Change notifications handled since the last read; events that queued
@@ -2341,9 +2607,18 @@ async fn watch_counted(
     let mut changes = 0;
     // Changes folded into another since the last read (`FieldEvent::Merged`).
     let mut merged = 0;
+    let mut failed = 0;
+    let mut generation = None;
+    // Keys arriving close together: no settle read between them.
+    let (mut typing, mut last_change) = (false, None);
     let (mut last_read, mut next_read) = (started, started);
     let mut recheck: Option<Instant> = None;
-    loop {
+    // What is waiting to be saved, since when, the save's time, and the caret's word.
+    let mut pending: Vec<Replacement> = vec![];
+    let mut pending_since = started;
+    let mut commit_at: Option<Instant> = None;
+    let mut caret_word: Option<String> = None;
+    'watch: loop {
         tokio::select! {
             biased;
             finalized = &mut finalize => {
@@ -2366,12 +2641,18 @@ async fn watch_counted(
                     notified = true;
                     changes += 1;
                     dirty = true;
+                    failed = 0;
                     next_read = last_read + FIELD_READ_GAP;
+                    typing = last_change.is_some_and(|at: Instant| at.elapsed() < Duration::from_millis(300));
+                    last_change = Some(Instant::now());
                 }
                 Some(FieldEvent::Merged) => {
                     merged += 1;
                     counts.merged = counts.merged.saturating_add(1);
                 }
+                Some(FieldEvent::Invalidated) => { left = true; break; }
+                Some(FieldEvent::Overflow) => return Err(Some("overflow")),
+                Some(FieldEvent::Unsupported) => return Err(Some("unsupported")),
                 Some(FieldEvent::Focus) => recheck = Some(Instant::now() + Duration::from_millis(250)),
                 None => break,
             },
@@ -2379,40 +2660,45 @@ async fn watch_counted(
                 dirty = false;
                 let unread = std::mem::take(&mut changes);
                 let folded = std::mem::take(&mut merged);
-                let text = read(&mut field).await;
+                let read = match read_field(field, &mut finalize).await {
+                    Read::Done(read) => read,
+                    Read::Finalized => { changes += unread; merged += folded; break; }
+                    Read::Cancelled => return Err(None),
+                };
                 last_read = Instant::now();
                 counts.reads = counts.reads.saturating_add(1);
                 counts.unread_max = counts.unread_max.max(count(unread));
-                let Some(anchored) = &receipt else {
-                    let readable = text.is_some();
-                    receipt = text.and_then(|t| xflow_core::learn::Receipt::new(&t.value, inserted, t.caret));
-                    match &receipt {
-                        Some(r) => {
-                            good = r.inserted().to_owned();
-                            settled = good.clone();
-                        }
-                        // Electron and Chromium can show the paste late.
-                        None if started.elapsed() < Duration::from_secs(1) => {
-                            dirty = true;
-                            next_read = last_read + Duration::from_millis(50);
-                        }
-                        None => return Err(Some(if readable { "no-receipt" } else { "unreadable" })),
-                    }
-                    continue;
-                };
-                let Some(text) = text else {
+                let Some(snapshot) = read else {
                     // A failed read saw nothing; its changes are still unread.
                     changes += unread;
                     merged += folded;
+                    if !landed && started.elapsed() >= LANDING {
+                        return Err(Some("unreadable"));
+                    }
+                    failed += 1;
+                    if !landed || failed < READ_RETRIES {
+                        dirty = true;
+                        next_read = last_read + FIELD_SETTLE;
+                    }
                     continue;
                 };
-                if unread > 1 {
-                    return Err(Some("unsettled"));
-                }
+                failed = 0;
+                let text = snapshot.text;
                 // Changes announced while the read ran: after its value, so they
                 // are carried to the next read, but they count if this read
                 // finds the dictation gone.
-                let (late, late_merged) = drain(&mut field, &mut recheck);
+                let late_events = drain(field, &mut recheck);
+                if late_events.overflow {
+                    return Err(Some("overflow"));
+                }
+                // Focus left during the read: its value is not used.
+                if late_events.invalid {
+                    changes += unread + late_events.changed;
+                    merged += folded + late_events.merged;
+                    left = true;
+                    break;
+                }
+                let (late, late_merged) = (late_events.changed, late_events.merged);
                 counts.late = counts.late.saturating_add(count(late));
                 counts.merged = counts.merged.saturating_add(count(late_merged));
                 merged += late_merged;
@@ -2420,25 +2706,78 @@ async fn watch_counted(
                     notified = true;
                     changes += late;
                 }
-                match anchored.corrected(&text.value) {
+                if !landed {
+                    match receipt.span(&text.value) {
+                        // What the app made of the text is the baseline, not an edit,
+                        // and the paste's own notifications announce nothing.
+                        Some(span) if receipt.delivered(span) => {
+                            let span = span.to_owned();
+                            receipt.landed(&span);
+                            original.clone_from(&span);
+                            good.clone_from(&span);
+                            settled = span;
+                            landed = true;
+                            notified = false;
+                            changes = late;
+                            merged = 0;
+                            if late > 0 {
+                                dirty = true;
+                                next_read = last_read + FIELD_READ_GAP;
+                            }
+                            receipt.track(&text.value);
+                            continue;
+                        }
+                        // Corrected before the first read, and announced.
+                        Some(_) if unread + late > 0 && receipt.corrected(&text.value).is_some() => landed = true,
+                        _ if started.elapsed() < LANDING => {
+                            changes += unread;
+                            dirty = true;
+                            next_read = last_read + Duration::from_millis(50);
+                            continue;
+                        }
+                        _ => return Err(Some("no-receipt")),
+                    }
+                }
+                caret_word = text.caret.and_then(|caret| learn::word_at(&text.value, caret));
+                // Equal text across a generation change proves nothing: read once more.
+                let same_generation = generation == Some(snapshot.generation);
+                generation = Some(snapshot.generation);
+                match receipt.corrected(&text.value) {
                     Some(span) if span == good => {
-                        settled = good.clone();
+                        if same_generation || late == 0 && unread == 0 {
+                            settled = good.clone();
+                        } else {
+                            dirty = true;
+                            next_read = last_read + FIELD_SETTLE;
+                        }
                         editing = false;
+                        retyped = None;
                     }
                     // The span changed without a notification for it.
                     Some(_) if unread + late == 0 => return Err(Some("unsettled")),
+                    // More text moved than these few changes can have typed.
+                    Some(span) if unread > 1 && !burst(&good, span, unread) => return Err(Some("unsettled")),
                     Some(span) => {
                         good = span.to_owned();
                         editing = false;
+                        retyped = None;
                         dirty = true;
-                        next_read = last_read + FIELD_SETTLE;
+                        next_read = last_read + if typing { FIELD_TYPING_SETTLE } else { FIELD_SETTLE };
+                    }
+                    // A retype's read unchanged by a further change: the field went
+                    // through something unseen, such as a clear.
+                    None if receipt.whole_field() && unread > 0 && retyped.as_deref() == Some(text.value.as_str()) => {
+                        settled.clear();
+                        lost = true;
+                        break;
                     }
                     // Retyping part of the dictation: keep the last good span.
-                    None if anchored.editing(&text.value, &good) => {
+                    None if receipt.editing(&text.value, &good) => {
                         if unread + late == 0 {
                             return Err(Some("unsettled"));
                         }
                         editing = true;
+                        retyped = receipt.whole_field().then(|| text.value.clone());
                         counts.editing = counts.editing.saturating_add(1);
                     }
                     // Sent or cleared mid-edit: its last spelling was never read.
@@ -2454,41 +2793,126 @@ async fn watch_counted(
                         break;
                     }
                 }
+                receipt.track(&text.value);
                 if late > 0 {
                     dirty = true;
                     next_read = last_read + FIELD_READ_GAP;
                 }
+                if let Some(commits) = commits.as_deref_mut() {
+                    let now = learn::pending(&original, &good);
+                    // A saved correction taken back in the field goes at once. One edited
+                    // again goes when its new spelling is ready to save, below.
+                    let mut found = now.clone();
+                    found.retain(|c| !commits.done.iter().any(|d| learn::same_pair(c, d)));
+                    if found.is_empty() && !learn::superseded(&commits.saved, &now, &good).is_empty() {
+                        if let Err(outcome) = commits.save(original.clone(), good.clone()).await {
+                            if outcome == SUPERSEDE_CONFLICT {
+                                commits.outcomes.push(outcome);
+                            }
+                        }
+                    }
+                    if found != pending {
+                        pending = found;
+                        pending_since = Instant::now();
+                        commit_at = (!pending.is_empty()).then(|| pending_since + Duration::from_millis(learn::COMMIT_QUIET_MS));
+                    }
+                }
+            }
+            _ = sleep_until(commit_at.unwrap_or(deadline)), if commit_at.is_some() && !dirty && changes == 0 && !editing => {
+                let Some(commits) = commits.as_deref_mut() else {
+                    commit_at = None;
+                    continue;
+                };
+                // The caret moves without a notification: look where it is now.
+                let read = match read_field(field, &mut finalize).await {
+                    Read::Done(read) => read,
+                    Read::Finalized => break,
+                    Read::Cancelled => return Err(None),
+                };
+                last_read = Instant::now();
+                counts.reads = counts.reads.saturating_add(1);
+                commit_at = Some(last_read + COMMIT_RECHECK);
+                let Some(snapshot) = read else { continue };
+                let late_events = drain(field, &mut recheck);
+                if late_events.overflow {
+                    return Err(Some("overflow"));
+                }
+                if late_events.invalid {
+                    changes += late_events.changed;
+                    left = true;
+                    break;
+                }
+                if late_events.changed + late_events.merged > 0 {
+                    notified = true;
+                    changes += late_events.changed;
+                    dirty = true;
+                    next_read = last_read + FIELD_READ_GAP;
+                    continue;
+                }
+                let text = snapshot.text;
+                if receipt.corrected(&text.value) != Some(good.as_str()) {
+                    dirty = true;
+                    next_read = last_read;
+                    continue;
+                }
+                caret_word = text.caret.and_then(|caret| learn::word_at(&text.value, caret));
+                let on_word = text.caret.is_none() || learn::caret_on(&pending, caret_word.as_deref());
+                let ripe = pending_since.elapsed() >= Duration::from_millis(learn::COMMIT_ON_WORD_MS)
+                    && learn::complete_on_caret(&pending);
+                if on_word && !ripe {
+                    continue 'watch;
+                }
+                commit_at = None;
+                settled = good.clone();
+                commits.edited = Some(pending_since);
+                let filtered = std::mem::take(&mut pending);
+                if let Err(outcome) = commits.save(original.clone(), good.clone()).await {
+                    // Not asked again this watch; a failed save may still go at its end.
+                    if outcome.starts_with("filtered:") {
+                        commits.done.extend(filtered);
+                    }
+                    commits.outcomes.push(outcome);
+                }
             }
         }
     }
-    let receipt = receipt.ok_or(Some("no-receipt"))?;
-    // The user moved on: what the field shows now is final, under the same
-    // rules. A field that never announced a change is not read again: in an
-    // app that doesn't report edits, the dictation may already be sent and
-    // the field may hold the next message.
     // Finalize, focus leave and the deadline win over queued notifications in
     // the select above; count those before deciding.
     if !lost {
-        let (pending, pending_merged) = drain(&mut field, &mut recheck);
-        notified |= pending > 0;
-        changes += pending;
-        merged += pending_merged;
-        counts.merged = counts.merged.saturating_add(count(pending_merged));
+        let events = drain(field, &mut recheck);
+        if events.overflow {
+            return Err(Some("overflow"));
+        }
+        left |= events.invalid;
+        notified |= events.changed > 0;
+        changes += events.changed;
+        merged += events.merged;
+        counts.merged = counts.merged.saturating_add(count(events.merged));
     }
-    if !lost && notified {
+    // The user left: nothing more is read, and an edit not yet read is unknown.
+    if left && changes > 0 {
+        return Err(Some("unsettled"));
+    }
+    if !lost && notified && !left {
         let unread = changes;
         counts.unread_max = counts.unread_max.max(count(unread));
         if unread > 1 {
             return Err(Some("unsettled"));
         }
-        let text = read(&mut field).await;
+        let read = tokio::time::timeout(Duration::from_millis(250), field.snapshot())
+            .await
+            .ok()
+            .flatten();
         counts.reads = counts.reads.saturating_add(1);
         // Still changing while the final read ran: its value is not final.
-        let (late, late_merged) = drain(&mut field, &mut recheck);
-        if late + late_merged > 0 {
-            counts.late = counts.late.saturating_add(count(late));
+        let events = drain(field, &mut recheck);
+        if events.changed + events.merged > 0 || events.overflow {
+            counts.late = counts.late.saturating_add(count(events.changed));
             return Err(Some("unsettled"));
         }
+        // Focus left during the read: its value is not used.
+        let text = read.filter(|_| !events.invalid).map(|s| s.text);
+        left |= events.invalid;
         match text {
             Some(text) => match receipt.corrected(&text.value) {
                 Some(span) if span == good => settled = good.clone(),
@@ -2515,21 +2939,22 @@ async fn watch_counted(
             None if unread == 0 => settled = good.clone(),
             None => return Err(Some("unsettled")),
         }
+    } else if editing && !lost {
+        return Err(Some("editing"));
     }
     // A change arriving just after the field emptied may be the last letter's
     // (its notification lagged the read), or the clear's own after a letter
     // that was never read: either way the last read was not final.
-    if lost && !settled.is_empty() && good != receipt.inserted() {
+    if lost && !settled.is_empty() && good != original {
         tokio::time::sleep(FIELD_SETTLE).await;
-        let (late, late_merged) = drain(&mut field, &mut recheck);
-        if late + late_merged > 0 {
-            counts.late = counts.late.saturating_add(count(late));
-            counts.merged = counts.merged.saturating_add(count(late_merged));
+        let events = drain(field, &mut recheck);
+        if events.changed + events.merged > 0 {
+            counts.late = counts.late.saturating_add(count(events.changed));
+            counts.merged = counts.merged.saturating_add(count(events.merged));
             settled.clear();
         }
     }
-    drop(field);
-    if good == receipt.inserted() {
+    if good == original {
         return Err(Some(if lost {
             "anchors-lost"
         } else if left {
@@ -2542,7 +2967,22 @@ async fn watch_counted(
     if good != settled {
         return Err(Some("unsettled"));
     }
-    Ok((receipt.inserted().to_owned(), good))
+    // Left with the caret on the corrected word: it may be half typed if touched a
+    // moment ago, or at any time if shorter than what it corrects, the same word the
+    // on-word wait holds back. A send is not a leave: a word sent is finished.
+    if left {
+        let under: Vec<Replacement> = learn::pending(&original, &good)
+            .into_iter()
+            .filter(|c| learn::caret_on(std::slice::from_ref(c), caret_word.as_deref()))
+            .collect();
+        if !under.is_empty()
+            && (pending_since.elapsed() < Duration::from_millis(learn::LEAVE_QUIET_MS)
+                || !learn::complete_on_caret(&under))
+        {
+            return Err(Some("partial"));
+        }
+    }
+    Ok((original, good))
 }
 fn quoted(words: &[String]) -> String {
     words
@@ -2551,73 +2991,202 @@ fn quoted(words: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+/// What a save did.
+struct Learned {
+    outcome: &'static str,
+    message: String,
+    /// Corrections this save covered, so one watch never counts them twice.
+    pairs: Vec<Replacement>,
+    /// A rule was earned and refused by a cap or a conflict.
+    refused: bool,
+    /// What it did, and the file it left (None when it changed nothing).
+    adopted: xflow_core::learn::Adopted,
+    undo: Option<Undo>,
+    /// Earlier saves of the watch were taken back first.
+    rebased: bool,
+    /// Someone else moved the file since the watch's last save, and took those
+    /// saves' words with them.
+    moved: bool,
+}
+/// Take a watch's earlier saves back before saving what replaced them, so the
+/// dictionary only ever ends with the final word and the new notice's Undo goes
+/// back past them. Only with its revision check passing: an intervening edit
+/// means nothing here is overwritten.
+struct Rebase {
+    /// The bytes before the watch's first save, the revision of its latest.
+    undo: Undo,
+    /// What stays saved, to apply again on those bytes.
+    kept: Vec<xflow_core::learn::Adopted>,
+    gone: Vec<Replacement>,
+    /// Everything the watch saved, to tell an undone save from an overwritten one.
+    all: Vec<xflow_core::learn::Adopted>,
+}
+impl Rebase {
+    fn still_there(&self, dictionary: &DictionaryConfig) -> bool {
+        self.all.iter().any(|a| {
+            a.added.iter().any(|w| dictionary.words.contains(w))
+                || a.rules.iter().any(|r| dictionary.replacements.contains(r))
+        })
+    }
+}
+/// A claim on the Cancel race (see SAVE_OPEN), released when the save ends.
+struct Admission(Option<Arc<AtomicU8>>, bool);
+impl Admission {
+    fn claim(&mut self) -> bool {
+        self.1 = self.1
+            || self.0.as_ref().is_none_or(|a| {
+                a.compare_exchange(SAVE_OPEN, SAVE_RUNNING, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+            });
+        self.1
+    }
+}
+impl Drop for Admission {
+    fn drop(&mut self) {
+        if let Some(a) = self.0.as_ref().filter(|_| self.1) {
+            let _ =
+                a.compare_exchange(SAVE_RUNNING, SAVE_OPEN, Ordering::AcqRel, Ordering::Acquire);
+        }
+    }
+}
 /// The one learning path for corrected pastes and history edits: find close word
-/// corrections, save them to config.toml, and hand the new dictionary to the actor.
-/// A term the dictionary already had moves to the front (hint limits keep it);
-/// a second correction of one may add a narrow replacement (see
-/// `DictionaryConfig::derive`). Every save keeps the file's exact previous bytes
-/// so it can be undone once; `notice`: the pill may offer that.
-/// Returns the outcome and a user-facing message, or why nothing was learned.
+/// corrections, save what each earns (see `DictionaryConfig::adopt`) to
+/// config.toml, and hand the new dictionary to the actor. Every save keeps the
+/// file's exact previous bytes so it can be undone once.
+/// `skip`: corrections from this watch that are already saved. `rebase`: earlier
+/// saves this one replaces. `latest`: the watch's last save, to notice the file
+/// moved under it.
+/// Returns what was saved, or why nothing was learned.
 async fn learn(
-    path: PathBuf,
+    learner: &Learner,
     original: String,
     corrected: String,
-    completion: mpsc::Sender<Completion>,
-    clock: Arc<AtomicU64>,
-    notice: bool,
-) -> Result<std::result::Result<(&'static str, String), &'static str>> {
-    let saved = tokio::task::spawn_blocking(move || -> Result<_> {
-        let _lock = crate::config_edit::lock_within(&path, LOCK_WAIT)?;
-        let (mut file, before) = ConfigFile::load_exact(&path)?;
-        let mut dictionary = file.config()?.dictionary;
-        if !dictionary.auto_learn {
-            return Ok(Err("disabled"));
-        }
-        let found = match xflow_core::learn::review(&original, &corrected, &dictionary) {
-            Ok(found) => found,
-            Err(reason) => return Ok(Err(reason)),
-        };
-        let promoted = dictionary.promote(&found.known);
-        let rules = dictionary.derive(&found.known);
-        let added = dictionary.learn(&found.new);
-        if added.is_empty() && rules.is_empty() && promoted.is_empty() {
-            return Ok(Err(if found.new.is_empty() {
-                found.rejected
-            } else {
-                "dictionary-full"
-            }));
-        }
-        // An edit that couldn't be undone exactly is not made automatically.
-        if before
-            .as_ref()
-            .is_some_and(|b| b.len() > crate::config_edit::MAX_UNDO_BYTES)
-        {
-            return Ok(Err("too-large"));
-        }
-        file.set_typed("dictionary.words", &dictionary.words)?;
-        file.set_typed("dictionary.learned", &dictionary.learned)?;
-        if !rules.is_empty() {
-            file.set_typed("dictionary.replacements", &dictionary.replacements)?;
-        }
-        let revision = file.save_tracked()?;
-        // Numbered while the lock is held, after the rename (see `Completion::Learned`).
-        let seq = clock.fetch_add(1, Ordering::SeqCst) + 1;
-        let undo = Undo::new(&path, before, revision);
-        Ok(Ok((dictionary, seq, undo, added, rules, promoted)))
-    })
-    .await??;
-    let (dictionary, seq, undo, added, rules, promoted) = match saved {
+    skip: &[Replacement],
+    rebase: Option<Rebase>,
+    latest: Option<Undo>,
+) -> Result<std::result::Result<Learned, &'static str>> {
+    use xflow_core::learn::same_pair;
+    let (path, clock, seen, admission) = (
+        learner.path.clone(),
+        learner.clock.clone(),
+        learner.seen.clone(),
+        learner.admission.clone(),
+    );
+    let skip = skip.to_vec();
+    let saved =
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            let _lock = crate::config_edit::lock_within(&path, LOCK_WAIT)?;
+            let mut admission = Admission(admission, false);
+            let (mut file, mut before) = ConfigFile::load_exact(&path)?;
+            let mut dictionary = file.config()?.dictionary;
+            if !dictionary.auto_learn {
+                return Ok(Err("disabled"));
+            }
+            let mut remembered = lock(&seen).clone();
+            let moved = latest.as_ref().map(Undo::current).transpose()? == Some(false);
+            let mut rebased = None;
+            if let Some(rebase) = &rebase {
+                if !moved {
+                    if !admission.claim() {
+                        return Ok(Err("cancelled"));
+                    }
+                    rebase.undo.restore(&path)?;
+                    (file, before) = ConfigFile::load_exact(&path)?;
+                    dictionary = file.config()?.dictionary;
+                    let mut revision = None;
+                    if rebase.kept.iter().any(|a| {
+                        !a.added.is_empty() || !a.rules.is_empty() || !a.promoted.is_empty()
+                    }) {
+                        for adopted in &rebase.kept {
+                            dictionary.replay(adopted);
+                        }
+                        file.set_typed("dictionary.words", &dictionary.words)?;
+                        file.set_typed("dictionary.learned", &dictionary.learned)?;
+                        file.set_typed("dictionary.replacements", &dictionary.replacements)?;
+                        revision = Some(file.save_tracked()?);
+                        (file, before) = ConfigFile::load_exact(&path)?;
+                    }
+                    // An intermediate spelling is not a correction that can repeat.
+                    remembered.retain(|s| !rebase.gone.iter().any(|g| same_pair(g, s)));
+                    rebased = Some(revision);
+                } else if rebase.still_there(&dictionary) {
+                    return Ok(Err(SUPERSEDE_CONFLICT));
+                }
+            }
+            let mut found = match xflow_core::learn::review(&original, &corrected, &dictionary) {
+                Ok(found) => found,
+                Err(reason) if rebased.is_none() => return Ok(Err(reason)),
+                Err(_) => xflow_core::learn::Corrections::default(),
+            };
+            found.new.retain(|c| !skip.iter().any(|d| same_pair(c, d)));
+            found
+                .known
+                .retain(|c| !skip.iter().any(|d| same_pair(c, d)));
+            let adopted = dictionary.adopt(&found, &mut remembered);
+            let pairs: Vec<Replacement> = found.new.iter().chain(&found.known).cloned().collect();
+            if adopted.added.is_empty() && adopted.rules.is_empty() && adopted.promoted.is_empty() {
+                *lock(&seen) = remembered;
+                // Only taken back: that is a change of its own, with no new word to undo.
+                let Some(revision) = rebased else {
+                    return Ok(Err(if found.new.is_empty() {
+                        found.rejected
+                    } else {
+                        "dictionary-full"
+                    }));
+                };
+                let seq = clock.fetch_add(1, Ordering::SeqCst) + 1;
+                let undo = revision.map(|revision| Undo::new(&path, None, revision));
+                return Ok(Ok((
+                    dictionary, seq, undo, adopted, pairs, true, moved, false,
+                )));
+            }
+            // An edit that couldn't be undone exactly is not made automatically.
+            if before
+                .as_ref()
+                .is_some_and(|b| b.len() > crate::config_edit::MAX_UNDO_BYTES)
+            {
+                return Ok(Err("too-large"));
+            }
+            file.set_typed("dictionary.words", &dictionary.words)?;
+            file.set_typed("dictionary.learned", &dictionary.learned)?;
+            if !adopted.rules.is_empty() {
+                file.set_typed("dictionary.replacements", &dictionary.replacements)?;
+            }
+            if !admission.claim() {
+                return Ok(Err("cancelled"));
+            }
+            let revision = file.save_tracked()?;
+            *lock(&seen) = remembered;
+            // Numbered while the lock is held, after the rename (see `Completion::Learned`).
+            let seq = clock.fetch_add(1, Ordering::SeqCst) + 1;
+            let undo = Undo::new(&path, before, revision);
+            Ok(Ok((
+                dictionary,
+                seq,
+                Some(undo),
+                adopted,
+                pairs,
+                rebased.is_some(),
+                moved,
+                true,
+            )))
+        })
+        .await??;
+    let (dictionary, seq, undo, adopted, pairs, rebased, moved, wrote) = match saved {
         Ok(saved) => saved,
         Err(reason) => return Ok(Err(reason)),
     };
-    let rules: Vec<String> = rules.into_iter().map(|r| r.to).collect();
+    let rules: Vec<String> = adopted.rules.iter().map(|r| r.to.clone()).collect();
+    let (added, promoted) = (adopted.added.clone(), adopted.promoted.clone());
     let mut notice_words = Vec::new();
     for word in added.iter().chain(&rules).chain(&promoted) {
         if !notice_words.contains(word) {
             notice_words.push(word.clone());
         }
     }
-    let (outcome, message, words) = if !added.is_empty() {
+    let (outcome, message, words) = if !wrote {
+        ("retracted", String::new(), notice_words)
+    } else if !added.is_empty() {
         (
             "learned",
             format!("Added {} to your dictionary", quoted(&added)),
@@ -2636,17 +3205,18 @@ async fn learn(
             notice_words,
         )
     };
-    // A reorder alone is not announced or offered for undo.
-    let announce = outcome != "promoted";
-    let change = announce.then(|| Change {
+    // A reorder alone is not announced or offered for undo, nor is a take-back.
+    let announce = wrote && outcome != "promoted";
+    let change = undo.clone().filter(|_| announce).map(|undo| Change {
         // Opaque: never derived from the words.
         id: std::collections::hash_map::RandomState::new().hash_one(seq) | 1,
         undo,
         correction: outcome == "corrected",
         words,
-        notice,
+        notice: learner.notice,
     });
-    let _ = completion
+    let _ = learner
+        .completion
         .send(Completion::Learned {
             dictionary,
             seq,
@@ -2654,7 +3224,16 @@ async fn learn(
             change,
         })
         .await;
-    Ok(Ok((outcome, message)))
+    Ok(Ok(Learned {
+        outcome,
+        message,
+        pairs,
+        refused: adopted.refused,
+        adopted,
+        undo,
+        rebased,
+        moved,
+    }))
 }
 /// Undo one automatic dictionary change (see `config_edit::Undo`) under the
 /// config lock, then hand the restored dictionary to the actor like a learn.
@@ -2693,9 +3272,7 @@ async fn edit_history(
     store: Store,
     id: i64,
     text: String,
-    path: Option<PathBuf>,
-    completion: mpsc::Sender<Completion>,
-    clock: Arc<AtomicU64>,
+    learner: Option<Learner>,
 ) -> Result<Response> {
     if text.trim().is_empty() || text.len() > 32 * 1024 {
         bail!("corrected text must be non-empty and at most 32 KiB");
@@ -2707,9 +3284,9 @@ async fn edit_history(
     r.entry = store.get(id).await?;
     // Command-mode output is the model's text, not speech recognition; nothing to learn.
     let dictated = r.entry.as_ref().is_some_and(|e| e.mode == Mode::Dictation);
-    if let Some(path) = path.filter(|_| dictated) {
-        r.message = match learn(path, original, text, completion, clock, false).await {
-            Ok(learned) => learned.ok().map(|(_, message)| message),
+    if let Some(learner) = learner.filter(|_| dictated) {
+        r.message = match learn(&learner, original, text, &[], None, None).await {
+            Ok(learned) => learned.ok().map(|learned| learned.message),
             Err(e) => Some(format!("Transcript saved; dictionary not updated: {e:#}")),
         };
     }
@@ -3802,6 +4379,10 @@ mod tests {
         field_left: Arc<AtomicBool>,
         /// Field watches started (one per observed paste).
         watches: AtomicUsize,
+        /// Where the caret sits, when not at the field's end (UTF-16 units).
+        field_caret: Arc<Mutex<Option<usize>>>,
+        /// Field reads, for "nothing is read after" assertions.
+        field_reads: Arc<AtomicUsize>,
         /// Text around the caret, for smart spacing, and how long reading it takes.
         around: Option<(&'static str, &'static str)>,
         around_delay: Duration,
@@ -3822,6 +4403,8 @@ mod tests {
         field: Arc<Mutex<Option<String>>>,
         events: Option<mpsc::UnboundedReceiver<FieldEvent>>,
         left: Arc<AtomicBool>,
+        caret: Arc<Mutex<Option<usize>>>,
+        reads: Arc<AtomicUsize>,
     }
     #[async_trait]
     impl xflow_core::FieldWatch for ScriptedField {
@@ -3835,8 +4418,14 @@ mod tests {
             self.events.as_mut()?.try_recv().ok()
         }
         async fn read(&mut self) -> Option<xflow_core::FieldText> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
             let value = self.field.lock().unwrap().clone()?;
-            let caret = Some(value.encode_utf16().count());
+            let caret = Some(
+                self.caret
+                    .lock()
+                    .unwrap()
+                    .unwrap_or_else(|| value.encode_utf16().count()),
+            );
             Some(xflow_core::FieldText { value, caret })
         }
         async fn focused(&mut self) -> bool {
@@ -3890,6 +4479,22 @@ mod tests {
             }
             Ok(self.outcome.unwrap_or(InjectionOutcome::Pasted))
         }
+        async fn inject_observed(
+            &self,
+            text: &str,
+            target: &AppContext,
+        ) -> Result<xflow_core::ObservedDelivery> {
+            let before = self.field.lock().unwrap().clone();
+            let field = self.watch_field(target).await;
+            let receipt = before.as_ref().and_then(|b| {
+                xflow_core::learn::Receipt::delivery(b, (b.encode_utf16().count(), 0), text)
+            });
+            let outcome = self.inject(text, target).await?;
+            let ticket = field
+                .zip(receipt)
+                .map(|(field, receipt)| xflow_core::DeliveryTicket { field, receipt });
+            Ok(xflow_core::ObservedDelivery { outcome, ticket })
+        }
         async fn watch_field(&self, _: &AppContext) -> Option<Box<dyn xflow_core::FieldWatch>> {
             self.field.lock().unwrap().as_ref()?;
             self.watches.fetch_add(1, Ordering::SeqCst);
@@ -3897,6 +4502,8 @@ mod tests {
                 field: self.field.clone(),
                 events: self.field_events.lock().unwrap().take(),
                 left: self.field_left.clone(),
+                caret: self.field_caret.clone(),
+                reads: self.field_reads.clone(),
             }))
         }
         async fn neighbors(&self) -> Option<(String, String)> {
@@ -5831,8 +6438,14 @@ mod tests {
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Gress", "Postgres"]);
         assert_eq!(dictionary.learned, ["Postgres", "Gress"]);
-        // Learning adds vocabulary hints only, never replacements.
-        assert!(dictionary.replacements.is_empty());
+        // An uncommon source earns its literal rule at once; the second overlaps it.
+        assert_eq!(
+            dictionary.replacements,
+            [Replacement {
+                from: "post gres".into(),
+                to: "Postgres".into()
+            }]
+        );
         assert!(
             !ask(
                 &tx,
@@ -5884,13 +6497,12 @@ mod tests {
         tokio::time::timeout(
             Duration::from_secs(20),
             observe(
-                desktop,
-                target,
-                original.into(),
+                Some(xflow_core::DeliveryTicket {
+                    field: desktop.watch_field(&target).await.unwrap(),
+                    receipt: xflow_core::learn::Receipt::new(original, original, None).unwrap(),
+                }),
                 finalized,
-                path.clone(),
-                completion,
-                Arc::new(AtomicU64::new(0)),
+                test_learner(path.clone(), completion, Arc::new(AtomicU64::new(0))),
                 learning.clone(),
             ),
         )
@@ -5922,8 +6534,831 @@ mod tests {
         change.undo.restore(&path).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
+    fn test_learner(
+        path: PathBuf,
+        completion: mpsc::Sender<Completion>,
+        clock: Arc<AtomicU64>,
+    ) -> Learner {
+        Learner {
+            path,
+            completion,
+            clock,
+            seen: Default::default(),
+            notice: true,
+            admission: Some(Arc::new(AtomicU8::new(SAVE_OPEN))),
+        }
+    }
+    /// One observed dictation, as the daemon runs it, over a scripted field.
+    struct Run {
+        desktop: Arc<RecordingDesktop>,
+        notify: mpsc::UnboundedSender<FieldEvent>,
+        finalize: Option<oneshot::Sender<()>>,
+        path: PathBuf,
+        saves: mpsc::Receiver<Completion>,
+        learning: Arc<std::sync::Mutex<Learning>>,
+        admission: Arc<AtomicU8>,
+        task: JoinHandle<()>,
+        _dir: tempfile::TempDir,
+    }
+    impl Run {
+        async fn start(before: &str, dictated: &str) -> Self {
+            Self::again(before, dictated, Default::default(), None).await
+        }
+        /// `seen` carries memory from an earlier watch; `seed` is config.toml's first bytes.
+        async fn again(
+            before: &str,
+            dictated: &str,
+            seen: Arc<std::sync::Mutex<Vec<Replacement>>>,
+            seed: Option<&str>,
+        ) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            let (notify, field_events) = mpsc::unbounded_channel();
+            let desktop = Arc::new(RecordingDesktop {
+                field: Arc::new(Mutex::new(Some(before.into()))),
+                field_events: Mutex::new(Some(field_events)),
+                ..RecordingDesktop::default()
+            });
+            let delivered = desktop
+                .inject_observed(dictated, &AppContext::default())
+                .await
+                .unwrap();
+            let (finalize, finalized) = oneshot::channel();
+            let (completion, saves) = mpsc::channel(8);
+            let learning = Arc::new(std::sync::Mutex::new(Learning::default()));
+            let mut learner = test_learner(path.clone(), completion, Arc::new(AtomicU64::new(0)));
+            learner.seen = seen.clone();
+            if let Some(seed) = seed {
+                std::fs::write(&path, seed).unwrap();
+            }
+            let admission = learner.admission.clone().unwrap();
+            let task = tokio::spawn(observe(
+                delivered.ticket,
+                finalized,
+                learner,
+                learning.clone(),
+            ));
+            // The first read has seen the delivery.
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            Self {
+                desktop,
+                notify,
+                finalize: Some(finalize),
+                path,
+                saves,
+                learning,
+                admission,
+                task,
+                _dir: dir,
+            }
+        }
+        fn edit(&self, text: &str) {
+            *self.desktop.field.lock().unwrap() = Some(text.into());
+            let _ = self.notify.send(FieldEvent::Changed);
+        }
+        fn caret(&self, at: Option<usize>) {
+            *self.desktop.field_caret.lock().unwrap() = at;
+        }
+        fn reads(&self) -> usize {
+            self.desktop.field_reads.load(Ordering::SeqCst)
+        }
+        fn dictionary(&self) -> DictionaryConfig {
+            Config::load(&self.path)
+                .map(|c| c.dictionary)
+                .unwrap_or_default()
+        }
+        /// The next save, if one lands within `ms`.
+        async fn save_within(&mut self, ms: u64) -> Option<Completion> {
+            tokio::time::timeout(Duration::from_millis(ms), self.saves.recv())
+                .await
+                .ok()
+                .flatten()
+        }
+        async fn finish(mut self) -> Self {
+            let _ = self.finalize.take().unwrap().send(());
+            (&mut self.task).await.unwrap();
+            self
+        }
+        fn outcomes(&self) -> Vec<String> {
+            lock(&self.learning).outcomes.keys().cloned().collect()
+        }
+    }
+    const DICTATED: &str = "Forward Priyanca the quarterly numbers first ";
+    const FIXED: &str = "Forward Priyanka the quarterly numbers first ";
+    /// The approved timing: about 2 s after the word settles, no focus change or
+    /// send needed; the watch then goes on, and a second fix saves too (T09).
+    #[tokio::test]
+    async fn a_settled_correction_saves_in_about_two_seconds_and_the_watch_goes_on() {
+        let mut run = Run::start("", "Please ask Priyanca and Zorblax tomorrow ").await;
+        run.edit("Please ask Priyanka and Zorblax tomorrow ");
+        let started = Instant::now();
+        assert!(run.save_within(1500).await.is_none(), "too early");
+        let Some(Completion::Learned {
+            change: Some(change),
+            ..
+        }) = run.save_within(1500).await
+        else {
+            panic!("nothing saved within 3 s of the edit");
+        };
+        let took = started.elapsed();
+        assert!(
+            took >= Duration::from_millis(1900) && took < Duration::from_millis(2800),
+            "{took:?}"
+        );
+        assert_eq!(change.words, ["Priyanka"]);
+        assert!(change.notice);
+        run.edit("Please ask Priyanka and Zorblex tomorrow ");
+        assert!(run.save_within(3000).await.is_some(), "the second fix");
+        let run = run.finish().await;
+        let dictionary = run.dictionary();
+        assert_eq!(dictionary.words, ["Zorblex", "Priyanka"]);
+        assert_eq!(dictionary.replacements.len(), 2);
+        assert_eq!(run.outcomes(), ["learned"]);
+        assert_eq!(lock(&run.learning).watches, 1);
+    }
+    /// Typing on after a fix does not hold it back, and is not learned.
+    #[tokio::test]
+    async fn typing_on_after_the_fix_saves_the_fix_alone() {
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        for more in ["and", "and din", "and dinner"] {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            run.edit(&format!("{FIXED}{more}"));
+        }
+        assert!(run.save_within(1200).await.is_some());
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
+    }
+    /// `Priyank`, caret on it: not saved however long it sits; finishing it saves
+    /// the finished word alone.
+    #[tokio::test]
+    async fn a_partial_word_under_the_caret_is_never_saved() {
+        let mut run = Run::start("", DICTATED).await;
+        let partial = "Forward Priyank the quarterly numbers first ";
+        run.edit(partial);
+        run.caret(Some(15));
+        assert!(
+            run.save_within(5500).await.is_none(),
+            "saved a partial word"
+        );
+        run.edit(FIXED);
+        run.caret(Some(18));
+        assert!(run.save_within(3000).await.is_some());
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
+    }
+    /// A finished word under the caret goes after the longer wait, not after 60 s.
+    #[tokio::test]
+    async fn a_complete_word_under_the_caret_saves_after_the_longer_wait() {
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(16));
+        run.edit(FIXED);
+        assert!(run.save_within(3000).await.is_none(), "caret still on it");
+        // Moving off it saves at the next look.
+        run.caret(Some(FIXED.len()));
+        assert!(run.save_within(1500).await.is_some());
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(16));
+        run.edit(FIXED);
+        assert!(run.save_within(5500).await.is_some(), "caret never moved");
+        run.finish().await;
+    }
+    /// Leaving with the caret on a word touched a moment ago: it may be half typed.
+    #[tokio::test]
+    async fn leaving_right_after_a_keystroke_on_the_word_saves_nothing() {
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(15));
+        run.edit("Forward Priyank the quarterly numbers first ");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.outcomes(), ["partial"]);
+        assert!(run.dictionary().words.is_empty());
+        // The same word left alone first: its caret no longer says "typing".
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(16));
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.outcomes(), ["learned"]);
+    }
+    /// T04/C03: a select-all retype: the first key replaces the field. Its pair,
+    /// CEN2: a clear, then the same words as a new message, saves nothing.
+    #[tokio::test]
+    async fn a_select_all_retype_learns_unless_the_field_emptied() {
+        let keys = [
+            "F",
+            "For",
+            "Forward ",
+            "Forward Priy",
+            "Forward Priyanka the ",
+            FIXED,
+        ];
+        let mut run = Run::start("", DICTATED).await;
+        for text in keys {
+            run.edit(text);
+            tokio::time::sleep(Duration::from_millis(90)).await;
+        }
+        assert!(run.save_within(3000).await.is_some());
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
+
+        let mut run = Run::start("", DICTATED).await;
+        run.edit("");
+        tokio::time::sleep(Duration::from_millis(90)).await;
+        let reads = run.reads();
+        for text in keys {
+            run.edit(text);
+            tokio::time::sleep(Duration::from_millis(90)).await;
+        }
+        assert!(run.save_within(2500).await.is_none());
+        let run = run.finish().await;
+        assert_eq!(run.outcomes(), ["anchors-lost"]);
+        assert_eq!(run.reads(), reads, "the next message is never read");
+        assert!(run.dictionary().words.is_empty());
+    }
+    /// T03 with its pair: a short whole field is corrected in place, or replaced
+    /// by a different message.
+    #[tokio::test]
+    async fn a_short_field_learns_its_fix_but_not_the_next_message() {
+        let mut run = Run::start("", "Hi Priyanca ").await;
+        run.edit("Hi Priyanka ");
+        assert!(run.save_within(3000).await.is_some());
+        run.finish().await;
+        let mut run = Run::start("", "Hi Priyanca ").await;
+        run.edit("");
+        tokio::time::sleep(Duration::from_millis(90)).await;
+        run.edit("Hi Priyanka ");
+        assert!(run.save_within(2500).await.is_none());
+        let run = run.finish().await;
+        assert!(run.dictionary().words.is_empty());
+    }
+    /// T02: corrected before the first read; the notification says so.
+    #[tokio::test]
+    async fn an_edit_before_the_first_read_is_still_the_correction() {
+        let dir = tempfile::tempdir().unwrap();
+        let (notify, field_events) = mpsc::unbounded_channel();
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some(String::new()))),
+            field_events: Mutex::new(Some(field_events)),
+            ..RecordingDesktop::default()
+        });
+        let delivered = desktop
+            .inject_observed(DICTATED, &AppContext::default())
+            .await
+            .unwrap();
+        *desktop.field.lock().unwrap() = Some(FIXED.into());
+        notify.send(FieldEvent::Changed).unwrap();
+        let (finish, finalized) = oneshot::channel();
+        let (completion, mut saves) = mpsc::channel(8);
+        let path = dir.path().join("config.toml");
+        let learning = Arc::new(std::sync::Mutex::new(Learning::default()));
+        let task = tokio::spawn(observe(
+            delivered.ticket,
+            finalized,
+            test_learner(path.clone(), completion, Arc::new(AtomicU64::new(0))),
+            learning,
+        ));
+        assert!(tokio::time::timeout(Duration::from_secs(3), saves.recv())
+            .await
+            .is_ok());
+        let _ = finish.send(());
+        task.await.unwrap();
+        assert_eq!(Config::load(&path).unwrap().dictionary.words, ["Priyanka"]);
+    }
+    /// An app's substitutions at delivery are the baseline: no notification, no
+    /// edit, so a later fix is compared with what the field really showed.
+    #[tokio::test]
+    async fn what_the_app_made_of_the_delivery_is_not_a_correction() {
+        let mut run = Run::start("", DICTATED).await;
+        // Chromium's trailing space: no save and no "unsettled" from it.
+        *run.desktop.field.lock().unwrap() = Some(DICTATED.replace(" first ", " first\u{a0}"));
+        run.edit(&FIXED.replace(" first ", " first\u{a0}"));
+        assert!(run.save_within(3000).await.is_some());
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
+    }
+    /// A real focus journey is terminal: nothing read after it, returning to the
+    /// field resumes nothing, and an edit not yet read is unknown.
+    #[tokio::test]
+    async fn a_focus_journey_reads_nothing_more_and_saves_nothing_unread() {
+        let mut run = Run::start("", DICTATED).await;
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let reads = run.reads();
+        run.edit(FIXED);
+        assert!(run.save_within(2500).await.is_none());
+        let run = run.finish().await;
+        assert_eq!(run.reads(), reads);
+        assert_eq!(run.outcomes(), ["focus-left-before-edit"]);
+        // The edit and the departure queued together: its read never happens.
+        let mut run = Run::start("", DICTATED).await;
+        *run.desktop.field.lock().unwrap() = Some(FIXED.into());
+        let _ = run.notify.send(FieldEvent::Changed);
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.outcomes(), ["unsettled"]);
+        assert!(run.dictionary().words.is_empty());
+        // A settled edit, then a departure: saved from what was already read.
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let reads = run.reads();
+        *run.desktop.field.lock().unwrap() = Some("Another field entirely".into());
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.reads(), reads);
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
+    }
+    /// Notifications lost, the observer unable to cover the field: nothing saved.
+    #[tokio::test]
+    async fn overflow_and_missing_capabilities_end_the_watch_with_nothing() {
+        for (event, outcome) in [
+            (FieldEvent::Overflow, "overflow"),
+            (FieldEvent::Unsupported, "unsupported"),
+        ] {
+            let mut run = Run::start("", DICTATED).await;
+            run.edit(FIXED);
+            let _ = run.notify.send(event);
+            (&mut run.task).await.unwrap();
+            assert_eq!(run.outcomes(), [outcome]);
+            assert!(run.dictionary().words.is_empty());
+        }
+    }
+    /// A storm of duplicate notifications is one reread, not an aborted watch.
+    #[tokio::test]
+    async fn a_burst_of_notifications_rereads_and_still_learns() {
+        let mut run = Run::start("", DICTATED).await;
+        *run.desktop.field.lock().unwrap() = Some(FIXED.into());
+        for _ in 0..200 {
+            let _ = run.notify.send(FieldEvent::Changed);
+        }
+        assert!(run.save_within(3000).await.is_some());
+        let run = run.finish().await;
+        assert!(run.reads() < 20, "{} reads", run.reads());
+    }
+    /// Cancel wins before a save starts: no write, no notice.
+    #[tokio::test]
+    async fn cancel_before_admission_saves_nothing_and_stops_the_reads() {
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        run.admission.store(SAVE_CANCELLED, Ordering::Release);
+        drop(run.finalize.take());
+        (&mut run.task).await.unwrap();
+        let reads = run.reads();
+        assert_eq!(run.outcomes(), ["cancelled"]);
+        assert!(!run.path.exists());
+        assert!(run.save_within(100).await.is_none());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(run.reads(), reads);
+        // A save that reached admission after Cancel is refused too.
+        let (completion, _saves) = mpsc::channel(8);
+        let mut learner = test_learner(run.path.clone(), completion, Arc::new(AtomicU64::new(0)));
+        learner.admission = Some(run.admission.clone());
+        assert!(matches!(
+            learn(&learner, DICTATED.into(), FIXED.into(), &[], None, None).await,
+            Ok(Err("cancelled"))
+        ));
+        assert!(run.dictionary().words.is_empty());
+    }
+    /// Fix then Undo in the field (N10, CEN5): within the wait nothing is saved;
+    /// after it, the save is taken back and the reverse is never learned.
+    #[tokio::test]
+    async fn taking_a_correction_back_in_the_field_saves_nothing() {
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        run.edit(DICTATED);
+        assert!(run.save_within(2800).await.is_none());
+        let run = run.finish().await;
+        assert!(run.dictionary().words.is_empty());
+
+        let mut run = Run::start("", DICTATED).await;
+        run.edit(FIXED);
+        assert!(run.save_within(3000).await.is_some());
+        run.edit(DICTATED);
+        // Saved word and rule gone, the notice with them, no new change to undo.
+        let Some(Completion::Learned {
+            change: None,
+            message: None,
+            dictionary,
+            ..
+        }) = run.save_within(1000).await
+        else {
+            panic!("no take-back");
+        };
+        assert!(dictionary.words.is_empty() && dictionary.replacements.is_empty());
+        assert!(!run.path.exists(), "the file is back as it was: absent");
+        assert!(
+            run.save_within(2800).await.is_none(),
+            "the reverse was learned"
+        );
+        let run = run.finish().await;
+        assert!(run.outcomes().contains(&"retracted".to_string()));
+    }
+    /// A save that claimed the correction too early: `plans` -> `planz` -> `plans`.
+    #[tokio::test]
+    async fn a_mistaken_save_taken_back_leaves_no_trace_and_no_repeat() {
+        let seed = "# my settings\n";
+        let dictated = "Please ask about tomorrow plans ";
+        let mistaken = "Please ask about tomorrow planz ";
+        let seen = Arc::<std::sync::Mutex<Vec<Replacement>>>::default();
+        let mut run = Run::again("", dictated, seen.clone(), Some(seed)).await;
+        run.edit(mistaken);
+        assert!(run.save_within(3000).await.is_some());
+        assert_eq!(run.dictionary().words, ["planz"]);
+        assert!(
+            run.dictionary().replacements.is_empty(),
+            "Tier 2: the word only"
+        );
+        assert_eq!(lock(&seen).len(), 1);
+        run.edit(dictated);
+        assert!(run.save_within(1000).await.is_some());
+        assert_eq!(
+            std::fs::read_to_string(&run.path).unwrap(),
+            seed,
+            "exact bytes"
+        );
+        assert!(lock(&seen).is_empty(), "not a repeat later");
+        // The same slip again in this watch is a first correction again.
+        run.edit(mistaken);
+        assert!(run.save_within(3000).await.is_some());
+        assert!(run.dictionary().replacements.is_empty());
+        run.finish().await;
+    }
+    /// `Kubernete` saved, then finished as `Kubernetes`: only the final word, and
+    /// Undo on the new notice goes back past both.
+    #[tokio::test]
+    async fn a_correction_edited_again_replaces_its_save() {
+        let seed = "# my settings\n";
+        let dictated = "We deploy on kubernetis daily ";
+        let mut run = Run::again("", dictated, Default::default(), Some(seed)).await;
+        run.edit("We deploy on Kubernete daily ");
+        assert!(run.save_within(3000).await.is_some());
+        assert_eq!(run.dictionary().words, ["Kubernete"]);
+        run.edit("We deploy on Kubernetes daily ");
+        let Some(Completion::Learned {
+            change: Some(change),
+            dictionary,
+            ..
+        }) = run.save_within(3000).await
+        else {
+            panic!("the final word was not saved");
+        };
+        assert_eq!(change.words, ["Kubernetes"]);
+        assert_eq!(dictionary.words, ["Kubernetes"]);
+        assert_eq!(dictionary.learned, ["Kubernetes"]);
+        assert_eq!(
+            dictionary.replacements,
+            [Replacement {
+                from: "kubernetis".into(),
+                to: "Kubernetes".into()
+            }]
+        );
+        let on_disk = run.dictionary();
+        assert_eq!(on_disk.words, dictionary.words);
+        assert_eq!(on_disk.replacements, dictionary.replacements);
+        let run = run.finish().await;
+        assert!(run.outcomes().contains(&"superseded".to_string()));
+        assert!(run.outcomes().contains(&"learned".to_string()));
+        {
+            let _guard = crate::config_edit::lock(&run.path).unwrap();
+            change.undo.restore(&run.path).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(&run.path).unwrap(),
+            seed,
+            "before the first save"
+        );
+    }
+    /// Another writer got in between: nothing is overwritten, and the outcome says so.
+    #[tokio::test]
+    async fn a_re_edit_never_overwrites_an_intervening_edit() {
+        let mut run = Run::start("", "We deploy on kubernetis daily ").await;
+        run.edit("We deploy on Kubernete daily ");
+        assert!(run.save_within(3000).await.is_some());
+        let mut bytes = std::fs::read_to_string(&run.path).unwrap();
+        bytes.push_str("\n# a manual edit\n");
+        std::fs::write(&run.path, &bytes).unwrap();
+        run.edit("We deploy on Kubernetes daily ");
+        assert!(run.save_within(3000).await.is_none(), "saved over it");
+        // Not retried on further edits.
+        run.edit("We deploy on Kubernetess daily ");
+        assert!(run.save_within(2500).await.is_none());
+        let run = run.finish().await;
+        assert_eq!(std::fs::read_to_string(&run.path).unwrap(), bytes);
+        assert!(run.outcomes().contains(&SUPERSEDE_CONFLICT.to_string()));
+    }
+    /// The user already undid the first save: the new word is an ordinary save.
+    #[tokio::test]
+    async fn a_re_edit_after_undo_is_an_ordinary_save() {
+        let mut run = Run::start("", "We deploy on kubernetis daily ").await;
+        run.edit("We deploy on Kubernete daily ");
+        let Some(Completion::Learned {
+            change: Some(change),
+            ..
+        }) = run.save_within(3000).await
+        else {
+            panic!("no save");
+        };
+        {
+            let _guard = crate::config_edit::lock(&run.path).unwrap();
+            change.undo.restore(&run.path).unwrap();
+        }
+        run.edit("We deploy on Kubernetes daily ");
+        assert!(run.save_within(3000).await.is_some());
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Kubernetes"]);
+        assert!(!run.outcomes().contains(&SUPERSEDE_CONFLICT.to_string()));
+        assert!(!run.outcomes().contains(&"superseded".to_string()));
+    }
+    /// The other fix stays, and Undo on the new notice leaves it there.
+    #[tokio::test]
+    async fn re_editing_one_fix_keeps_the_other() {
+        let seed = "# my settings\n";
+        let mut run = Run::again(
+            "",
+            "Ask Priyanca and Zorblax now ",
+            Default::default(),
+            Some(seed),
+        )
+        .await;
+        run.edit("Ask Priyanka and Zorblax now ");
+        assert!(run.save_within(3000).await.is_some());
+        run.edit("Ask Priyanka and Zorblex now ");
+        assert!(run.save_within(3000).await.is_some());
+        assert_eq!(run.dictionary().words, ["Zorblex", "Priyanka"]);
+        run.edit("Ask Priyankka and Zorblex now ");
+        let Some(Completion::Learned {
+            change: Some(change),
+            ..
+        }) = run.save_within(3000).await
+        else {
+            panic!("the re-edit was not saved");
+        };
+        let d = run.dictionary();
+        assert_eq!(d.words, ["Priyankka", "Zorblex"]);
+        assert_eq!(d.learned, ["Zorblex", "Priyankka"]);
+        assert_eq!(d.replacements.len(), 2);
+        assert!(!d.replacements.iter().any(|r| r.to == "Priyanka"));
+        let run = run.finish().await;
+        {
+            let _guard = crate::config_edit::lock(&run.path).unwrap();
+            change.undo.restore(&run.path).unwrap();
+        }
+        let d = run.dictionary();
+        assert_eq!(d.words, ["Zorblex"]);
+        assert_eq!(d.replacements.len(), 1);
+    }
+    /// A Tier 2 slip on the way to the final word does not make the final word,
+    /// or the slip, a repeat.
+    #[tokio::test]
+    async fn an_intermediate_word_is_not_a_repeat() {
+        let seen = Arc::<std::sync::Mutex<Vec<Replacement>>>::default();
+        let mut run = Run::again("", "Please open cloud today ", seen.clone(), None).await;
+        run.edit("Please open Claud today ");
+        assert!(run.save_within(3000).await.is_some());
+        run.edit("Please open Claude today ");
+        assert!(run.save_within(3000).await.is_some());
+        let d = run.dictionary();
+        assert_eq!(d.words, ["Claude"]);
+        assert!(
+            d.replacements.is_empty(),
+            "first correction of the final word"
+        );
+        assert_eq!(
+            *lock(&seen),
+            [Replacement {
+                from: "cloud".into(),
+                to: "Claude".into()
+            }]
+        );
+        run.finish().await;
+        // The slip again in the next watch is a first correction: no rule.
+        let mut run = Run::again("", "Please open cloud today ", seen.clone(), None).await;
+        run.edit("Please open Claud today ");
+        assert!(run.save_within(3000).await.is_some());
+        assert!(
+            run.dictionary().replacements.is_empty(),
+            "the slip was promoted"
+        );
+        run.finish().await;
+    }
+    /// The word the 4 s path would have saved is the word a field or focus change
+    /// saves once it has settled: the handoff claim about `COMMIT_ON_WORD_MS`.
+    #[tokio::test]
+    async fn a_focus_change_after_the_settle_saves_the_same_word_as_the_on_word_path() {
+        // (edited field, caret on the word, the word)
+        for (dictated, edited, caret, word) in [
+            (
+                "Please ask Priyanca about plans ",
+                "Please ask Priyanka about plans ",
+                19,
+                "Priyanka",
+            ),
+            (
+                "Please ask about tomorrow plans ",
+                "Please ask about tomorrow planz ",
+                31,
+                "planz",
+            ),
+        ] {
+            // Caret still on it, left alone: the 4 s path.
+            let mut run = Run::start("", dictated).await;
+            run.caret(Some(caret));
+            run.edit(edited);
+            assert!(run.save_within(3000).await.is_none(), "{word}: too early");
+            assert!(run.save_within(2000).await.is_some(), "{word}: never saved");
+            assert_eq!(run.dictionary().words, [word]);
+            run.finish().await;
+            // The same, but the user leaves after the settle: same word, sooner.
+            let mut run = Run::start("", dictated).await;
+            run.caret(Some(caret));
+            run.edit(edited);
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            let _ = run.notify.send(FieldEvent::Invalidated);
+            (&mut run.task).await.unwrap();
+            assert_eq!(run.dictionary().words, [word]);
+            assert_eq!(run.outcomes(), ["learned"]);
+        }
+    }
+    /// `Priyank`, caret on it, and the user leaves to check the spelling: nothing is
+    /// saved, however long it sat, because a word and a rule would write it into
+    /// every later dictation. The same word held back under the caret by the 4 s path.
+    #[tokio::test]
+    async fn leaving_a_shorter_word_under_the_caret_saves_nothing() {
+        let shorter = "Forward Priyank the quarterly numbers first ";
+        for wait in [700, 5000] {
+            let mut run = Run::start("", DICTATED).await;
+            run.caret(Some(15));
+            run.edit(shorter);
+            assert!(run.save_within(wait).await.is_none());
+            let _ = run.notify.send(FieldEvent::Invalidated);
+            (&mut run.task).await.unwrap();
+            assert_eq!(run.outcomes(), ["partial"], "{wait}");
+            assert!(!run.path.exists(), "{wait}");
+        }
+        // The known recall cost: a genuine shortening, left the same way, is missed.
+        let dictated = "Forward Priyankaa the quarterly numbers first ";
+        let mut run = Run::start("", dictated).await;
+        run.caret(Some(16));
+        run.edit(DICTATED);
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.outcomes(), ["partial"]);
+        assert!(!run.path.exists());
+    }
+    /// The counterpart: the caret has moved off it, so a focus change saves it.
+    #[tokio::test]
+    async fn leaving_a_shorter_word_with_the_caret_off_it_saves_it() {
+        let mut run = Run::start("", "Forward Priyankaa the quarterly numbers first ").await;
+        run.caret(Some(FIXED.len()));
+        run.edit(FIXED);
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let _ = run.notify.send(FieldEvent::Invalidated);
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.dictionary().words, ["Priyanka"]);
+        assert_eq!(run.outcomes(), ["learned"]);
+    }
+    /// Scope of that rule: a send, and the next dictation (the same path as the 60 s
+    /// timeout), are not a leave, and still commit a shorter word under the caret.
+    #[tokio::test]
+    async fn a_send_or_the_next_dictation_still_commits_a_shorter_word() {
+        let shorter = "Forward Priyank the quarterly numbers first ";
+        let mut run = Run::start("", DICTATED).await;
+        run.caret(Some(15));
+        run.edit(shorter);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        run.edit("");
+        (&mut run.task).await.unwrap();
+        assert_eq!(run.dictionary().words, ["Priyank"]);
+
+        let run = Run::start("", DICTATED).await;
+        run.caret(Some(15));
+        run.edit(shorter);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let run = run.finish().await;
+        assert_eq!(run.dictionary().words, ["Priyank"]);
+    }
+    /// A hidden clear: a read of a retype unchanged by a further notification.
+    #[tokio::test]
+    async fn only_small_bursts_cross_a_read_and_nothing_crosses_a_clear() {
+        assert!(burst("post gres", "post gress", 1));
+        assert!(burst("post gres is", "Post gres is", 3));
+        assert!(!burst(
+            "post gres is ready",
+            "Postgres is ready for staging",
+            2
+        ));
+        assert!(!burst("Please ask Priyanca", "Hi", 2));
+    }
+    /// Two terms of the full loop, cleanup included: a first correction, then the
+    /// recognizer says the same again and the provider hint is ignored.
+    #[tokio::test]
+    async fn the_next_dictation_is_right_on_raw_cleanup_and_fallback_paths() {
+        for (transformer, label) in [
+            (None, "raw"),
+            // The model puts the misspelling back: corrected after it.
+            (
+                Some(RecordingTransformer(
+                    Mutex::default(),
+                    Some("post gres is ready to go"),
+                )),
+                "cleanup",
+            ),
+            // The model keeps the corrected text: unchanged, one pass.
+            (
+                Some(RecordingTransformer(
+                    Mutex::default(),
+                    Some("Postgres is ready to go"),
+                )),
+                "kept",
+            ),
+            // The model answers instead: the local text, already corrected.
+            (
+                Some(RecordingTransformer(
+                    Mutex::default(),
+                    Some("I cannot help with that request today sorry"),
+                )),
+                "rejected",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            let (notify, field_events) = mpsc::unbounded_channel();
+            let desktop = Arc::new(RecordingDesktop {
+                field: Arc::new(Mutex::new(Some(String::new()))),
+                field_events: Mutex::new(Some(field_events)),
+                ..RecordingDesktop::default()
+            });
+            let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+            let (mut engine, tx, rx, mut events, _) =
+                fixture(Config::default(), desktop.clone(), store);
+            engine.config_path = Some(path.clone());
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+            success(&mut events).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            *desktop.field.lock().unwrap() = Some("Postgres is ready ".into());
+            notify.send(FieldEvent::Changed).unwrap();
+            learned_message(&mut events).await;
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+            assert_eq!(
+                Config::load(&path).unwrap().dictionary.replacements,
+                [Replacement {
+                    from: "post gres".into(),
+                    to: "Postgres".into()
+                }]
+            );
+
+            let desktop = Arc::new(RecordingDesktop::default());
+            let store = Store::open(&dir.path().join("h2.db"), true, 10).unwrap();
+            let mut config = Config::load(&path).unwrap();
+            let cleaning = transformer.is_some();
+            if cleaning {
+                config.cleanup.mode = CleanupMode::Polished;
+            }
+            let (mut engine, tx, rx, mut events, _) = fixture(config, desktop, store);
+            engine.services.transformer =
+                transformer.map(|t| Arc::new(t) as Arc<dyn TextTransformer>);
+            let task = tokio::spawn(engine.run(rx));
+            ask(&tx, Request::start()).await;
+            ask(&tx, Request::Stop).await;
+            let text = success(&mut events).await.text.unwrap();
+            assert!(text.starts_with("Postgres is ready"), "{label}: {text}");
+            assert!(!text.contains("post gres"), "{label}: {text}");
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    /// Only a dictation that may be learned from starts a watch.
+    #[tokio::test]
+    async fn a_watch_starts_only_for_a_learnable_dictation() {
+        let dir = tempfile::tempdir().unwrap();
+        let desktop = Arc::new(RecordingDesktop {
+            field: Arc::new(Mutex::new(Some(String::new()))),
+            ..RecordingDesktop::default()
+        });
+        let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let mut config = Config::default();
+        config.dictionary.auto_learn = false;
+        let (mut engine, tx, rx, mut events, _) = fixture(config, desktop.clone(), store);
+        engine.config_path = Some(dir.path().join("config.toml"));
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        success(&mut events).await;
+        assert_eq!(desktop.watches.load(Ordering::SeqCst), 0);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
     async fn learned_message(events: &mut broadcast::Receiver<Response>) -> String {
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if let Some(message) = events.recv().await.unwrap().message {
                     if message.starts_with("Added") {
@@ -5976,7 +7411,7 @@ mod tests {
         );
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Postgres"]);
-        assert!(dictionary.replacements.is_empty());
+        assert_eq!(dictionary.replacements.len(), 1);
         // The same misrecognition now comes out as the learned spelling.
         *desktop.field.lock().unwrap() = None;
         ask(&tx, Request::start()).await;
@@ -6319,7 +7754,6 @@ mod tests {
         );
         let dictionary = Config::load(&path).unwrap().dictionary;
         assert_eq!(dictionary.words, ["Postgres"]);
-        assert!(dictionary.replacements.is_empty());
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
@@ -6891,9 +8325,9 @@ mod tests {
         let learning = status.learning.unwrap();
         assert_eq!(
             (learning.words, learning.learned, learning.replacements),
-            (1, 1, 0)
+            (1, 1, 1)
         );
-        // The paste with no readable field was watched and counted.
+        // The paste with no field to watch was counted as a safe miss.
         let learning = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let learning = ask(&tx, Request::Status).await.learning.unwrap();
@@ -6906,7 +8340,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(learning.watches, 1);
-        assert_eq!(learning.outcomes.get("unreadable"), Some(&1));
+        assert_eq!(
+            learning.outcomes.get("safe-miss:unsupported-or-late"),
+            Some(&1)
+        );
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }
@@ -8579,7 +10016,9 @@ mod tests {
             .contains("check it landed"));
         assert_eq!(ask(&tx, Request::Last).await.text, event.text);
         tokio::time::sleep(Duration::from_millis(150)).await;
-        assert_eq!(desktop.watches.load(Ordering::SeqCst), 0);
+        // The watch armed for the delivery is stopped, unread and uncounted.
+        assert_eq!(desktop.field_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(ask(&tx, Request::Status).await.learning.unwrap().watches, 0);
         let message = delivery_message(Some("Cleanup failed".into()), event.injection).unwrap();
         assert!(message.contains("Cleanup failed") && message.contains("check it landed"));
         ask(&tx, Request::Shutdown).await;

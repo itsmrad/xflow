@@ -120,15 +120,29 @@ impl Revision {
 #[derive(Clone, Debug)]
 pub struct Undo {
     target: PathBuf,
-    before: Option<Vec<u8>>,
+    /// Shared: one watch's saves and the pill's undo hold the same bytes.
+    before: Option<std::sync::Arc<Vec<u8>>>,
     after: Revision,
 }
 impl Undo {
     pub fn new(path: &Path, before: Option<Vec<u8>>, after: Revision) -> Self {
         Self {
             target: target(path),
-            before,
+            before: before.map(std::sync::Arc::new),
             after,
+        }
+    }
+    /// Whether the file is still byte for byte the one this edit wrote.
+    pub fn current(&self) -> Result<bool> {
+        Ok(Revision::read(&self.target)? == Some(self.after))
+    }
+    /// An undo of this edit that goes back to the state before `first`: several
+    /// edits as one, with this one's revision check.
+    pub fn back_to(&self, first: &Undo) -> Undo {
+        Undo {
+            target: self.target.clone(),
+            before: first.before.clone(),
+            after: self.after,
         }
     }
     /// Put config.toml back exactly as it was before the edit, atomically. The
@@ -138,7 +152,7 @@ impl Undo {
     /// same word), replaces the file, and an in-place edit changes its time.
     /// Returns the configuration now on disk.
     pub fn restore(&self, path: &Path) -> Result<Config> {
-        if target(path) != self.target || Revision::read(&self.target)? != Some(self.after) {
+        if target(path) != self.target || !self.current()? {
             bail!("config.toml changed after that automatic edit; nothing was undone");
         }
         let Some(before) = &self.before else {

@@ -18,7 +18,7 @@ const MAX_EVENT_BYTES: usize = 192;
 const MAX_NOTICE_BYTES: usize = 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
 
-/// The learning notice a separate helper shows for one second: the exact words
+/// The learning notice a separate helper shows for four seconds: the exact words
 /// saved and the change its Undo sends back. Its own first frame, so recording
 /// frames are unchanged.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,26 +55,22 @@ impl Notice {
     }
 }
 
-/// When the pill shows the learning notice. Recording comes first: a session
-/// start removes a visible notice and drops a waiting one; a notice saved
-/// during a session (often finalized by the next dictation) waits for it and
-/// shows once the pill is idle, only while it is still the current change.
-/// The actor owns that: it publishes None, or a newer change, when this one
-/// can no longer be undone, and a visible notice for it goes at once.
+/// When the learning notice shows: at once, recording or not (the helper sits
+/// clear of the recording pill), so a correction saved as the next dictation
+/// starts is still named within the feedback target. Only the actor ends one
+/// early: it publishes None, or a newer change, when this one can no longer be
+/// undone, and a visible notice for it goes at once.
 #[derive(Debug, Default)]
 struct Notices {
-    pending: Option<Notice>,
     /// The change of the notice helper on screen.
     shown: Option<u64>,
-    /// The last change shown or dropped: never shown again.
+    /// The last change shown: never shown again.
     done: Option<u64>,
 }
 #[derive(Debug, PartialEq)]
 enum Step {
-    /// A new recording session started.
-    Session,
-    /// The actor's current change; `busy`: a recording or its alert is on screen.
-    Latest(Option<Notice>, bool),
+    /// The actor's current change.
+    Latest(Option<Notice>),
     /// The notice helper exited.
     Exited,
 }
@@ -88,30 +84,16 @@ impl Notices {
     fn step(&mut self, step: Step) -> Vec<Action> {
         let mut actions = Vec::new();
         match step {
-            Step::Session => {
-                if let Some(notice) = self.pending.take() {
-                    self.done = Some(notice.op);
-                }
-                if self.shown.take().is_some() {
-                    actions.push(Action::Kill);
-                }
-            }
-            Step::Latest(latest, busy) => {
+            Step::Latest(latest) => {
                 let op = latest.as_ref().map(|n| n.op);
                 if self.shown.is_some() && self.shown != op {
                     self.shown = None;
                     actions.push(Action::Kill);
                 }
-                self.pending = latest.filter(|n| Some(n.op) != self.done);
-                if !busy {
-                    if let Some(notice) = self.pending.take() {
-                        if self.shown.take().is_some() {
-                            actions.push(Action::Kill);
-                        }
-                        self.done = Some(notice.op);
-                        self.shown = Some(notice.op);
-                        actions.push(Action::Show(notice));
-                    }
+                if let Some(notice) = latest.filter(|n| Some(n.op) != self.done) {
+                    self.done = Some(notice.op);
+                    self.shown = Some(notice.op);
+                    actions.push(Action::Show(notice));
                 }
             }
             Step::Exited => self.shown = None,
@@ -184,7 +166,8 @@ impl PillEvent {
 /// deliberately isolated from recording; no helper, timer or AppKit exists at idle.
 /// The pill shows while listening and collapses on release; afterwards only a
 /// session's failure brings it back, briefly. A saved correction's notice is a
-/// separate short-lived helper (see `Notices`), never waited on here.
+/// separate short-lived helper (see `Notices`), never waited on here. Its ordinary
+/// exit is reaped by the select below; a kill is reaped in the background.
 pub async fn run(
     mut events: broadcast::Receiver<DesktopEvent>,
     mut notices: watch::Receiver<Option<LearnNotice>>,
@@ -197,7 +180,7 @@ pub async fn run(
     let mut notice: Option<Child> = None;
     let mut notices_open = true;
     loop {
-        let steps = tokio::select! {
+        tokio::select! {
             event = events.recv() => {
                 let event = match event {
                     Ok(event) => PillEvent::from_desktop(event, session == Some(true)),
@@ -206,11 +189,8 @@ pub async fn run(
                 };
                 match event.state {
                     State::Listening => {
-                        let mut steps = Vec::new();
                         if session.is_none() {
                             session = Some(false);
-                            // Only the transition: level frames repeat at 25 Hz.
-                            steps.push(Step::Session);
                             // Retry only on the next session, not on every microphone-level event.
                             helper = spawn(&config).ok();
                         }
@@ -219,12 +199,10 @@ pub async fn run(
                                 close(&mut helper, false).await;
                             }
                         }
-                        steps
                     }
                     State::Processing => {
                         session = Some(true);
                         close(&mut helper, false).await;
-                        Vec::new()
                     }
                     _ => {
                         let alert = session.take().is_some() && event.alert.is_some();
@@ -235,8 +213,6 @@ pub async fn run(
                             let _ = send(child, event).await;
                         }
                         close(&mut helper, alert).await;
-                        // Idle again: a notice that waited shows now, if still current.
-                        vec![Step::Latest(current(&mut notices), false)]
                     }
                 }
             }
@@ -245,25 +221,23 @@ pub async fn run(
                     notices_open = false;
                     continue;
                 }
-                vec![Step::Latest(current(&mut notices), session.is_some() || helper.is_some())]
+                let step = Step::Latest(current(&mut notices));
+                for action in state.step(step) {
+                    if let Some(mut child) = notice.take() {
+                        // Never waited on: dropped children are reaped in the background.
+                        let _ = child.start_kill();
+                    }
+                    if let Action::Show(shown) = action {
+                        notice = show(&config, &shown).await;
+                        if notice.is_none() {
+                            state.step(Step::Exited);
+                        }
+                    }
+                }
             }
             _ = async { notice.as_mut().unwrap().wait().await }, if notice.is_some() => {
                 notice = None;
-                vec![Step::Exited]
-            }
-        };
-        for step in steps {
-            for action in state.step(step) {
-                if let Some(mut child) = notice.take() {
-                    // Never waited on: dropped children are reaped in the background.
-                    let _ = child.start_kill();
-                }
-                if let Action::Show(shown) = action {
-                    notice = show(&config, &shown).await;
-                    if notice.is_none() {
-                        state.step(Step::Exited);
-                    }
-                }
+                state.step(Step::Exited);
             }
         }
     }
@@ -419,7 +393,7 @@ pub fn helper(config: &std::path::Path) -> Result<()> {
 }
 
 /// Hidden `xflow overlay preview`: cycles listening, hands-free (then no signal)
-/// and a failure alert without dictating. `notice`: the one-second learning
+/// and a failure alert without dictating. `notice`: the four-second learning
 /// notice instead, for an example word (its Undo is refused: no such change);
 /// with XFLOW_PILL_TIMING set, the helper prints how long it was visible.
 pub fn preview(notice: bool) -> Result<()> {
@@ -590,48 +564,30 @@ mod tests {
     }
 
     #[test]
-    fn notice_waits_for_recording_and_shows_once_while_current() {
-        let mut notices = Notices::default();
-        // Idle: shown at once, and never again for the same change.
+    fn notice_shows_at_once_even_while_recording_and_only_once() {
+        let mut state = Notices::default();
+        // Shown as soon as it is saved, whatever else is on screen.
         assert_eq!(
-            notices.step(Step::Latest(Some(notice(1)), false)),
+            state.step(Step::Latest(Some(notice(1)))),
             [Action::Show(notice(1))]
         );
-        assert!(notices.step(Step::Exited).is_empty());
-        assert!(notices
-            .step(Step::Latest(Some(notice(1)), false))
-            .is_empty());
-        // Saved during a session (often finalized by the next dictation): it
-        // waits through the 25 Hz level frames, which are not session starts,
-        // and shows once the pill is idle.
-        assert!(notices.step(Step::Session).is_empty());
-        assert!(notices.step(Step::Latest(Some(notice(2)), true)).is_empty());
-        assert_eq!(notices.pending, Some(notice(2)));
+        // The same change again is not shown twice.
+        assert!(state.step(Step::Latest(Some(notice(1)))).is_empty());
+        // Replaced: the old one goes, the new one shows.
         assert_eq!(
-            notices.step(Step::Latest(Some(notice(2)), false)),
-            [Action::Show(notice(2))]
+            state.step(Step::Latest(Some(notice(2)))),
+            [Action::Kill, Action::Show(notice(2))]
         );
-        // A new session removes a visible notice at once and drops a waiting one.
-        assert_eq!(notices.step(Step::Session), [Action::Kill]);
-        assert!(notices.step(Step::Latest(Some(notice(3)), true)).is_empty());
-        assert!(notices.step(Step::Session).is_empty());
-        assert!(notices
-            .step(Step::Latest(Some(notice(3)), false))
-            .is_empty());
-        // A newer change replaces the visible notice; one that can no longer be
-        // undone takes it away, and a waiting one is forgotten.
+        // No longer undoable: gone at once, and never back.
+        assert_eq!(state.step(Step::Latest(None)), [Action::Kill]);
+        assert!(state.step(Step::Latest(Some(notice(2)))).is_empty());
+        // Exited by itself: nothing to kill afterwards.
         assert_eq!(
-            notices.step(Step::Latest(Some(notice(4)), false)),
-            [Action::Show(notice(4))]
+            state.step(Step::Latest(Some(notice(3)))),
+            [Action::Show(notice(3))]
         );
-        assert_eq!(
-            notices.step(Step::Latest(Some(notice(5)), false)),
-            [Action::Kill, Action::Show(notice(5))]
-        );
-        assert_eq!(notices.step(Step::Latest(None, false)), [Action::Kill]);
-        assert!(notices.step(Step::Latest(Some(notice(6)), true)).is_empty());
-        assert!(notices.step(Step::Latest(None, true)).is_empty());
-        assert!(notices.step(Step::Latest(None, false)).is_empty());
+        state.step(Step::Exited);
+        assert!(state.step(Step::Latest(None)).is_empty());
     }
 
     #[test]

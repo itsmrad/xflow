@@ -2,6 +2,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+    Arc,
+};
 
 pub mod backtrack;
 pub mod code;
@@ -229,6 +233,14 @@ pub trait AudioCapture: Send + Sync {
 pub trait Desktop: Send + Sync {
     async fn context(&self) -> Result<AppContext>;
     async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome>;
+    /// Optional observation must be prepared by injection itself, before keys.
+    /// Unsupported adapters deliver normally and explicitly report a safe miss.
+    async fn inject_observed(&self, text: &str, target: &AppContext) -> Result<ObservedDelivery> {
+        Ok(ObservedDelivery {
+            outcome: self.inject(text, target).await?,
+            ticket: None,
+        })
+    }
     async fn copy(&self, text: &str) -> Result<()>;
     /// The current text selection (PRIMARY) for command mode; `None` when
     /// nothing is selected or the desktop cannot provide it.
@@ -259,6 +271,141 @@ pub trait Desktop: Send + Sync {
     }
 }
 
+/// A delivery-owned field and span. Never obtained by searching for text after delivery.
+pub struct DeliveryTicket {
+    pub field: Box<dyn FieldWatch>,
+    pub receipt: learn::Receipt,
+}
+pub struct ObservedDelivery {
+    pub outcome: InjectionOutcome,
+    /// None is an unsupported/late-readiness safe miss, never permission to reacquire.
+    pub ticket: Option<DeliveryTicket>,
+}
+/// Selection and generation belong to the same guarded bounded read as text.
+pub struct FieldSnapshot {
+    pub text: FieldText,
+    pub selection: Option<(usize, usize)>,
+    pub generation: u64,
+}
+/// The native calls one bounded field read is made of. Each runs only after a
+/// fresh `guard`, so a field that turns secure or loses focus stops the read
+/// before any more of its text crosses processes.
+pub trait FieldSource: Send + Sync + 'static {
+    /// Labels and capabilities that rarely change: checked once per read.
+    fn policy(&self) -> bool;
+    /// Not secure, not protected, still focused. Unknown or failed is false.
+    fn guard(&self) -> bool;
+    /// Selection start and length, UTF-16 units.
+    fn selection(&self) -> Option<(usize, usize)>;
+    /// The field's length, UTF-16 units.
+    fn count(&self) -> Option<usize>;
+    /// Exactly `len` units from `start`.
+    fn range(&self, start: usize, len: usize) -> Option<String>;
+}
+/// One watch's stop and invalidation state, set from any thread. Latched: a focus
+/// journey ends the watch even if focus returns before the next read.
+#[derive(Default)]
+pub struct ReadGate {
+    pub stop: AtomicBool,
+    pub invalid: AtomicBool,
+    pub overflow: AtomicBool,
+    /// The observer could not cover the field; nothing it reports can be trusted.
+    pub unsupported: AtomicBool,
+    /// Bumped by every value notification.
+    pub generation: AtomicU64,
+    /// Native reads admitted and finished; `stop` waits for them to match.
+    pub started: AtomicU32,
+    pub finished: AtomicU32,
+}
+impl ReadGate {
+    pub fn open(&self) -> bool {
+        !self.stop.load(Ordering::Acquire)
+            && !self.invalid.load(Ordering::Acquire)
+            && !self.overflow.load(Ordering::Acquire)
+            && !self.unsupported.load(Ordering::Acquire)
+    }
+}
+/// One guarded read: at most MAX_FIELD_UTF16 units, never a whole-value copy.
+/// Returns nothing if the gate closes, the guard fails or the field or its
+/// generation moves at any step. Blocking.
+pub fn read_field<S: FieldSource>(source: &S, gate: &ReadGate) -> Option<FieldSnapshot> {
+    let generation = gate.generation.load(Ordering::Acquire);
+    let admit = || gate.open() && source.guard();
+    if !gate.open() || !source.policy() || !admit() {
+        return None;
+    }
+    let selection = source.selection()?;
+    if !admit() {
+        return None;
+    }
+    let count = source.count()?;
+    let end = selection.0.checked_add(selection.1)?;
+    if count > MAX_FIELD_UTF16 || end > count || !admit() {
+        return None;
+    }
+    let value = source.range(0, count)?;
+    // Too late to take back, but a field that moved during the copy is not used.
+    if value.encode_utf16().count() != count || !admit() || source.count()? != count {
+        return None;
+    }
+    (gate.open() && generation == gate.generation.load(Ordering::Acquire)).then_some(
+        FieldSnapshot {
+            text: FieldText {
+                value,
+                caret: Some(end),
+            },
+            selection: Some(selection),
+            generation,
+        },
+    )
+}
+/// At most one native read at a time, off the async runtime. A caller that timed
+/// out finds its read still in flight and joins it instead of starting another.
+pub struct BoundedReader<S: FieldSource> {
+    source: Arc<S>,
+    gate: Arc<ReadGate>,
+    inflight: Option<tokio::task::JoinHandle<Option<FieldSnapshot>>>,
+}
+impl<S: FieldSource> BoundedReader<S> {
+    pub fn new(source: Arc<S>, gate: Arc<ReadGate>) -> Self {
+        Self {
+            source,
+            gate,
+            inflight: None,
+        }
+    }
+    /// A read whose generation is still current, or nothing.
+    pub async fn snapshot(&mut self) -> Option<FieldSnapshot> {
+        if !self.gate.open() {
+            return None;
+        }
+        if self.inflight.is_none() {
+            let (source, gate) = (self.source.clone(), self.gate.clone());
+            self.inflight = Some(tokio::task::spawn_blocking(move || {
+                gate.started.fetch_add(1, Ordering::AcqRel);
+                let read = read_field(&*source, &gate);
+                gate.finished.fetch_add(1, Ordering::AcqRel);
+                read
+            }));
+        }
+        let read = self.inflight.as_mut()?.await.ok().flatten();
+        self.inflight = None;
+        read.filter(|r| {
+            self.gate.open() && r.generation == self.gate.generation.load(Ordering::Acquire)
+        })
+    }
+    /// Close the gate, then wait out a native call already running: it cannot be
+    /// preempted, and its result is discarded. No read starts after this.
+    pub async fn stop(&mut self) {
+        self.gate.stop.store(true, Ordering::Release);
+        if let Some(read) = self.inflight.take() {
+            let _ = read.await;
+        }
+    }
+    pub fn gate(&self) -> &ReadGate {
+        &self.gate
+    }
+}
 /// A pinned text field, for learning user corrections.
 #[async_trait]
 pub trait FieldWatch: Send {
@@ -267,14 +414,28 @@ pub trait FieldWatch: Send {
     async fn next(&mut self) -> Option<FieldEvent>;
     /// A notification already queued, without waiting.
     fn try_next(&mut self) -> Option<FieldEvent>;
-    /// The field's value and caret now, read from the pinned element even when
-    /// focus has moved on.
+    /// Bounded text from the pinned element, only while it still owns focus.
     async fn read(&mut self) -> Option<FieldText>;
     /// Whether the pinned field still has keyboard focus.
     async fn focused(&mut self) -> bool;
+    async fn snapshot(&mut self) -> Option<FieldSnapshot> {
+        Some(FieldSnapshot {
+            text: self.read().await?,
+            selection: None,
+            generation: 0,
+        })
+    }
+    /// Invalidate immediately, then acknowledge that native reads/observer have drained.
+    async fn stop(&mut self) {}
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldEvent {
+    /// A real departure, a destroyed element or a stop: terminal, nothing more is read.
+    Invalidated,
+    /// Notifications were lost: the field's history is unknown.
+    Overflow,
+    /// The observer could not cover this field.
+    Unsupported,
     Changed,
     /// Focus may have left the field; re-check after a short grace.
     Focus,
@@ -285,8 +446,7 @@ pub enum FieldEvent {
     /// the last one a cleared field held.
     Merged,
 }
-/// Fields longer than this (UTF-16 units) are not read for learning: each read
-/// copies the whole value across processes, on every edit.
+/// Maximum requested native range length, in UTF-16 units. No whole-value fallback.
 pub const MAX_FIELD_UTF16: usize = 20_000;
 pub struct FieldText {
     pub value: String,
@@ -327,6 +487,211 @@ pub trait Overlay: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{log_enabled, stable_hash};
+    use super::{read_field, BoundedReader, FieldSource, ReadGate, MAX_FIELD_UTF16};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A scripted field: `secure_at` turns it secure just before that native call
+    /// (0 selection, 1 count, 2 range, 3 recount), and each call is counted.
+    #[derive(Default)]
+    struct Field {
+        text: String,
+        secure_at: Option<usize>,
+        grow_by: usize,
+        bump: Option<Arc<ReadGate>>,
+        calls: AtomicUsize,
+        policy_false: bool,
+        guards: AtomicUsize,
+        hold: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
+    }
+    impl Field {
+        fn native(&self) -> usize {
+            self.calls.fetch_add(1, Ordering::SeqCst)
+        }
+        fn with(text: &str) -> Self {
+            Field {
+                text: text.into(),
+                ..Field::default()
+            }
+        }
+    }
+    impl FieldSource for Field {
+        fn policy(&self) -> bool {
+            !self.policy_false
+        }
+        fn guard(&self) -> bool {
+            self.guards.fetch_add(1, Ordering::SeqCst);
+            self.secure_at
+                .is_none_or(|at| self.calls.load(Ordering::SeqCst) < at)
+        }
+        fn selection(&self) -> Option<(usize, usize)> {
+            self.native();
+            Some((0, 0))
+        }
+        fn count(&self) -> Option<usize> {
+            let call = self.native();
+            Some(self.text.encode_utf16().count() + if call > 1 { self.grow_by } else { 0 })
+        }
+        fn range(&self, start: usize, len: usize) -> Option<String> {
+            self.native();
+            assert!(len <= MAX_FIELD_UTF16, "unbounded request");
+            if let Some((entered, release)) = &self.hold {
+                entered.wait();
+                release.wait();
+            }
+            if let Some(gate) = &self.bump {
+                gate.generation.fetch_add(1, Ordering::SeqCst);
+            }
+            assert_eq!(start, 0);
+            Some(self.text.clone())
+        }
+    }
+    #[test]
+    fn a_field_turning_secure_stops_the_read_at_that_step() {
+        for at in 0..=3 {
+            let field = Field {
+                secure_at: Some(at),
+                ..Field::with("private")
+            };
+            let gate = ReadGate::default();
+            assert!(read_field(&field, &gate).is_none(), "{at}");
+            assert_eq!(
+                field.calls.load(Ordering::SeqCst),
+                at,
+                "no call after step {at}"
+            );
+        }
+        let field = Field::with("visible");
+        let snapshot = read_field(&field, &ReadGate::default()).unwrap();
+        assert_eq!(snapshot.text.value, "visible");
+        assert_eq!(snapshot.selection, Some((0, 0)));
+        // A guard before each of the four native calls.
+        assert_eq!(field.guards.load(Ordering::SeqCst), 4);
+    }
+    #[test]
+    fn policy_and_a_closed_gate_read_nothing() {
+        let field = Field {
+            policy_false: true,
+            ..Field::with("search box")
+        };
+        assert!(read_field(&field, &ReadGate::default()).is_none());
+        assert_eq!(field.calls.load(Ordering::SeqCst), 0);
+        for close in [
+            |g: &ReadGate| g.stop.store(true, Ordering::SeqCst),
+            |g: &ReadGate| g.invalid.store(true, Ordering::SeqCst),
+            |g: &ReadGate| g.overflow.store(true, Ordering::SeqCst),
+            |g: &ReadGate| g.unsupported.store(true, Ordering::SeqCst),
+        ] {
+            let field = Field::with("field");
+            let gate = ReadGate::default();
+            close(&gate);
+            assert!(read_field(&field, &gate).is_none());
+            assert_eq!(field.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+    #[test]
+    fn an_oversized_or_moving_field_is_not_kept() {
+        // Over the bound: only metadata, no text crosses.
+        let field = Field::with(&"x".repeat(MAX_FIELD_UTF16 + 1));
+        assert!(read_field(&field, &ReadGate::default()).is_none());
+        assert_eq!(field.calls.load(Ordering::SeqCst), 2);
+        // Exactly at the bound is fine.
+        assert!(read_field(
+            &Field::with(&"x".repeat(MAX_FIELD_UTF16)),
+            &ReadGate::default()
+        )
+        .is_some());
+        // Growing while read.
+        let field = Field {
+            grow_by: 1,
+            ..Field::with("growing")
+        };
+        assert!(read_field(&field, &ReadGate::default()).is_none());
+        // A notification during the read: its value is stale.
+        let gate = Arc::new(ReadGate::default());
+        let field = Field {
+            bump: Some(gate.clone()),
+            ..Field::with("edited")
+        };
+        assert!(read_field(&field, &gate).is_none());
+    }
+    #[tokio::test]
+    async fn stop_waits_out_a_running_read_discards_it_and_starts_no_other() {
+        let (entered, release) = (
+            Arc::new(std::sync::Barrier::new(2)),
+            Arc::new(std::sync::Barrier::new(2)),
+        );
+        let field = Arc::new(Field {
+            hold: Some((entered.clone(), release.clone())),
+            ..Field::with("in flight")
+        });
+        let gate = Arc::new(ReadGate::default());
+        let mut reader = BoundedReader::new(field.clone(), gate.clone());
+        // The caller times out; the native read keeps going and stays owned.
+        let timed_out =
+            tokio::time::timeout(std::time::Duration::from_millis(20), reader.snapshot()).await;
+        assert!(timed_out.is_err());
+        let wait = entered.clone();
+        tokio::task::spawn_blocking(move || wait.wait())
+            .await
+            .unwrap();
+        assert_eq!(gate.started.load(Ordering::SeqCst), 1);
+        assert_eq!(gate.finished.load(Ordering::SeqCst), 0);
+        // Stop closes the gate at once and is not done until the read has drained.
+        let drained = Arc::new(AtomicBool::new(false));
+        let done = drained.clone();
+        let stopping = tokio::spawn(async move {
+            reader.stop().await;
+            done.store(true, Ordering::SeqCst);
+            reader
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(!gate.open());
+        assert!(!drained.load(Ordering::SeqCst));
+        let wait = release.clone();
+        tokio::task::spawn_blocking(move || wait.wait())
+            .await
+            .unwrap();
+        let mut reader = stopping.await.unwrap();
+        assert!(drained.load(Ordering::SeqCst));
+        assert_eq!(gate.started.load(Ordering::SeqCst), 1);
+        assert_eq!(gate.finished.load(Ordering::SeqCst), 1);
+        // Nothing starts afterwards.
+        let calls = field.calls.load(Ordering::SeqCst);
+        assert!(reader.snapshot().await.is_none());
+        assert_eq!(gate.started.load(Ordering::SeqCst), 1);
+        assert_eq!(field.calls.load(Ordering::SeqCst), calls);
+    }
+    #[tokio::test]
+    async fn a_read_that_finished_before_a_change_is_not_adopted() {
+        let (entered, release) = (
+            Arc::new(std::sync::Barrier::new(2)),
+            Arc::new(std::sync::Barrier::new(2)),
+        );
+        let field = Arc::new(Field {
+            hold: Some((entered.clone(), release.clone())),
+            ..Field::with("old text")
+        });
+        let gate = Arc::new(ReadGate::default());
+        let mut reader = BoundedReader::new(field, gate.clone());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), reader.snapshot())
+                .await
+                .is_err()
+        );
+        let wait = entered.clone();
+        tokio::task::spawn_blocking(move || wait.wait())
+            .await
+            .unwrap();
+        let wait = release.clone();
+        tokio::task::spawn_blocking(move || wait.wait())
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        // Completed behind a timed-out caller; the field then changed.
+        gate.generation.fetch_add(1, Ordering::SeqCst);
+        assert!(reader.snapshot().await.is_none());
+    }
 
     #[test]
     fn stable_hash_is_fnv_1a_64() {
