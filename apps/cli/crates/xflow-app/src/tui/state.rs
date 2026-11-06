@@ -455,6 +455,7 @@ pub struct App {
     pub chat: chat::Chat,
     pub meetings: super::meetings::View,
     pub ask_meeting: Option<xflow_core::meeting::MeetingId>,
+    pub pending_notes: Option<xflow_core::meeting::MeetingId>,
 }
 impl App {
     pub fn new(path: PathBuf, colors: ColorMode) -> Self {
@@ -527,6 +528,7 @@ impl App {
             chat: chat::Chat::default(),
             meetings: Default::default(),
             ask_meeting: None,
+            pending_notes: None,
         }
     }
     pub fn load(&mut self, file: ConfigFile, disk: Option<String>) -> Result<()> {

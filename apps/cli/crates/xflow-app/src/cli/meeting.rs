@@ -32,7 +32,7 @@ pub fn run(
                 serde_json::to_string(&id)?,
                 question
             );
-            super::ask::run_with_sources(
+            super::ask::run(
                 &config()?,
                 &args::Ask {
                     question: Some(question),
@@ -40,10 +40,10 @@ pub fn run(
                     model: None,
                     timing: false,
                     no_context: false,
+                    sources: "meetings".into(),
                     yes: *yes,
                 },
                 out,
-                true,
             )
         }
         args::MeetingCmd::Term { from, to } => {
@@ -1104,8 +1104,10 @@ fn notes(id: &str, generate: bool, yes: bool, path: &Path, out: &Output) -> Resu
     let store = MeetingStore::new().map_err(store_err)?;
     let notes = if generate {
         let cfg = super::config::load(path)?.config().map_err(Error::config)?;
+        let mut route = cfg.ai.clone();
+        route.fallback.clear();
         let (ai, gateway) = xflow_providers::llm::build_provider_with_cleanup(
-            &cfg.ai,
+            &route,
             &cfg.cleanup,
             cfg.privacy.offline,
         )
@@ -1119,6 +1121,7 @@ fn notes(id: &str, generate: bool, yes: bool, path: &Path, out: &Output) -> Resu
                 model: None,
                 timing: false,
                 no_context: false,
+                sources: "meetings".into(),
                 yes,
             },
         )?;

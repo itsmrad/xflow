@@ -1,5 +1,5 @@
 //! Meeting pages use the same list/detail navigation and chat reducer.
-use super::state::{App, Effect, Page};
+use super::state::{App, Effect, Modal, Page};
 use crate::meeting::{notes::Notes, MeetingReader};
 use anyhow::Result;
 use xflow_core::meeting::*;
@@ -115,10 +115,12 @@ pub fn choose(app: &mut App, pos: usize) -> Vec<Effect> {
             return effects;
         }
         if pos == 1 {
-            return vec![Effect::Meetings(Job::Generate(
-                id.clone(),
-                app.path.clone(),
-            ))];
+            app.pending_notes = Some(id.clone());
+            app.modal = Some(Modal::ChatConsent {
+                name: app.chat_ctx().name,
+                opened_at: std::time::Instant::now(),
+            });
+            return vec![];
         }
     } else if let Some(page) = &app.meetings.page {
         let job = if let Some(m) = page.meetings.get(pos) {
@@ -139,12 +141,14 @@ pub fn run(job: Job) -> Result<Done> {
     match job {
         Job::Generate(id, path) => {
             let cfg = crate::config_edit::ConfigFile::load(&path)?.config()?;
+            let mut route = cfg.ai.clone();
+            route.fallback.clear();
             let (ai, gateway) = xflow_providers::llm::build_provider_with_cleanup(
-                &cfg.ai,
+                &route,
                 &cfg.cleanup,
                 cfg.privacy.offline,
             )?;
-            anyhow::ensure!(ai.consented.contains(&ai.provider),"Allow the provider on the Chat page first, or run xflow meeting notes ID --generate in a terminal");
+
             let model = ai
                 .model
                 .clone()

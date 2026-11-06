@@ -384,6 +384,7 @@ impl Chat {
         self.new_chat();
         self.input.clear();
         self.cursor = 0;
+        self.source = 1;
     }
     /// The typed input survives; everything else is gone.
     fn new_chat(&mut self) -> Out {
@@ -769,11 +770,7 @@ impl App {
         !self.config.ai.provider.is_empty()
     }
     pub fn chat_ctx(&self) -> Ctx {
-        let mut ctx = Ctx::new(&self.config);
-        if self.ask_meeting.is_some() {
-            ctx.history = true;
-        }
-        ctx
+        Ctx::new(&self.config)
     }
     pub fn chat_key(&mut self, key: KeyEvent) -> Vec<Effect> {
         let ctx = self.chat_ctx();
@@ -793,7 +790,7 @@ impl App {
                 vec![]
             }
             Out::Send(mut turn) => {
-                turn.meeting = self.ask_meeting.clone();
+                turn.meeting = self.ask_meeting.clone().filter(|_| turn.meetings);
                 if turn.meeting.is_some() {
                     turn.dictations = false;
                 }
@@ -809,6 +806,17 @@ impl App {
     }
     /// Yes stages `ai.consented`, which the runtime saves like any other choice.
     pub fn chat_consent(&mut self, yes: bool) -> Vec<Effect> {
+        if let Some(id) = self.pending_notes.take() {
+            return if yes {
+                vec![Effect::Meetings(super::meetings::Job::Generate(
+                    id,
+                    self.path.clone(),
+                ))]
+            } else {
+                vec![]
+            };
+        }
+
         if yes && self.chat.source == 0 {
             let mut consented = self.config.ai.consented.clone();
             consented.push(self.config.ai.provider.clone());

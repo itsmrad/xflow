@@ -1200,7 +1200,9 @@ fn meeting_ask_cancels_and_rejects_old_turns_across_provider_changes() {
         .apply(super::meetings::Done::Notes(meeting.clone(), None));
     let effects = super::meetings::choose(&mut app, 0);
     assert!(matches!(effects.first(), Some(Effect::ChatCancel)));
-    let Some(Effect::ChatTurn(run)) = press(&mut app, KeyCode::Enter).pop() else {
+    assert!(press(&mut app, KeyCode::Enter).is_empty());
+    settle(&mut app);
+    let Some(Effect::ChatTurn(run)) = press(&mut app, KeyCode::Char('y')).pop() else {
         panic!("meeting turn")
     };
     assert!(run.turn.id > old.id);
@@ -1225,9 +1227,33 @@ fn meeting_ask_cancels_and_rejects_old_turns_across_provider_changes() {
         Ok(Stop::End),
         vec![Message::User("meeting context".into())],
     );
-    let followup = send(&mut app, "next question");
+    typed(&mut app, "next question");
+    assert!(press(&mut app, KeyCode::Enter).is_empty());
+    settle(&mut app);
+    let Some(Effect::ChatTurn(followup)) = press(&mut app, KeyCode::Char('y')).pop() else {
+        panic!("meeting consent")
+    };
     assert_eq!(
-        followup.history,
+        followup.turn.history,
         vec![Message::User("meeting context".into())]
     );
+}
+
+#[test]
+fn notes_generation_requires_fresh_meeting_consent_even_for_saved_provider() {
+    let (_dir, mut app) = ready();
+    let id = xflow_core::meeting::MeetingId {
+        store_id: "a".repeat(32),
+        id: 1,
+    };
+    app.page = Page::Meetings;
+    app.meetings.apply(super::meetings::Done::Notes(id, None));
+    assert!(super::meetings::choose(&mut app, 1).is_empty());
+    assert!(matches!(app.modal, Some(Modal::ChatConsent { .. })));
+    assert!(app.chat_consent(false).is_empty());
+    assert!(super::meetings::choose(&mut app, 1).is_empty());
+    assert!(matches!(
+        app.chat_consent(true).as_slice(),
+        [Effect::Meetings(super::meetings::Job::Generate(..))]
+    ));
 }

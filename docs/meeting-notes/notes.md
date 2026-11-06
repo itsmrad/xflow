@@ -13,13 +13,14 @@ xflow meeting apply-terms STORE:ID
 
 Generation and ask use the existing AI provider, offline setting, fallback
 policy and transcript consent. `--yes` grants consent for that run; otherwise
-the usual gateway prompt applies. Notes never run automatically. MCP exposure
+the gateway prompts for this meeting run. Saved dictation consent does not
+authorize meeting transcripts. Notes never run automatically. MCP exposure
 still requires its separate meeting-source setting. No audio is read or deleted.
 
 In the TUI press `=` (or find Meetings in the command palette), arrows to select,
 Enter for notes, then Enter on Ask or Generate. Ask opens the existing chat
-editor with a summary question ready to edit. Generation requires the provider
-already allowed on Chat; errors explain how to grant consent. Escape returns
+editor with a summary question ready to edit. Generation and each meeting ask require fresh transcript consent, even for a
+previously allowed provider. Escape returns
 to the meeting list. Notes and citations use plain text and work with NO_COLOR.
 
 Notes contain summary, decision and action claims, each with a segment ID,
