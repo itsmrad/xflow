@@ -359,9 +359,9 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ("p paste", Some(Action::Paste)),
                 ],
                 Page::History => vec![
-                    ("↑↓ move", None),
-                    ("Enter options", Some(Action::Choose)),
                     ("/ search", Some(Action::Search)),
+                    ("Enter options", Some(Action::Choose)),
+                    ("↑↓ move", None),
                 ],
                 // No "↑↓ move" here: the footer must fit "q quit" at 80 columns.
                 Page::Dictionary | Page::Snippets | Page::Styles => {
@@ -572,9 +572,20 @@ fn home(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     panel(frame, rows[2], "Last dictation", last, app);
 }
 fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
+    let rows = app.rows();
+    if app.page == Page::History && rows.is_empty() {
+        panel(frame, area, "History", empty(app), app);
+        return;
+    }
     let (list, detail) = if area.width >= 90 {
         let parts = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
             .split(area);
+        (parts[0], parts[1])
+    } else if app.page == Page::History {
+        // Share short windows; taller windows earn a longer transcript preview.
+        let detail_height = (area.height / 2).clamp(5, 12);
+        let parts =
+            Layout::vertical([Constraint::Min(4), Constraint::Length(detail_height)]).split(area);
         (parts[0], parts[1])
     } else {
         let parts = Layout::vertical([Constraint::Min(6), Constraint::Length(8)]).split(area);
@@ -592,15 +603,20 @@ fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
         }
         _ => app.page.title().into(),
     };
-    let rows = app.rows();
     if rows.is_empty() {
         panel(frame, list, &title, empty(app), app);
     } else {
-        let two_line = app.page == Page::History;
+        let two_line = app.page == Page::History && area.height >= 18;
         let items = rows
             .iter()
             .enumerate()
-            .map(|(i, (label, value))| item(app, i, label, value, &rows))
+            .map(|(i, (label, value))| {
+                if app.page == Page::History && !two_line {
+                    ListItem::new(label.clone())
+                } else {
+                    item(app, i, label, value, &rows)
+                }
+            })
             .collect::<Vec<_>>();
         let mut state = ListState::default().with_selected(Some(app.selected()));
         frame.render_stateful_widget(
@@ -618,7 +634,12 @@ fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
                 break;
             }
             hits.rows.push((
-                Rect::new(list.x + 1, y, list.width.saturating_sub(2), height as u16),
+                Rect::new(
+                    list.x + 1,
+                    y,
+                    list.width.saturating_sub(2),
+                    (height as u16).min(list.bottom().saturating_sub(y + 1)),
+                ),
                 index,
             ));
         }
