@@ -218,6 +218,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         Page::Styles => styles(frame, body[1], app, &mut hits),
         Page::Snippets => snippets(frame, body[1], app, &mut hits),
         Page::Settings => settings(frame, body[1], app, &mut hits),
+        Page::Overlay => pill(frame, body[1], app, &mut hits),
         Page::AiApps => {
             // The two privacy lines stay visible under the list.
             let notes =
@@ -434,7 +435,25 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ];
                 }
                 Page::Overlay => {
-                    vec![("↑↓ move", None), ("Enter change", Some(Action::Choose))]
+                    return if app.overlay.is_empty() {
+                        vec![
+                            ("r refresh", Some(Action::Refresh)),
+                            ("q quit", Some(Action::Quit)),
+                            ("? help", Some(Action::Help)),
+                            ("Esc back", Some(Action::Back)),
+                            ("Tab next page", None),
+                        ]
+                    } else {
+                        vec![
+                            ("Enter change", Some(Action::Choose)),
+                            ("q quit", Some(Action::Quit)),
+                            ("↑↓ move", None),
+                            ("r refresh", Some(Action::Refresh)),
+                            ("Esc back", Some(Action::Back)),
+                            ("Tab next page", None),
+                            ("? help", Some(Action::Help)),
+                        ]
+                    };
                 }
                 Page::Meetings => vec![
                     ("↑↓ move", None),
@@ -975,6 +994,71 @@ fn on_device(
             .style(app.theme.base()),
         parts[1],
     );
+}
+
+// Pill preferences share the existing editor and actions; only their presentation differs.
+fn pill(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
+    if app.overlay.is_empty() {
+        let text = if app.overlay_error {
+            "Pill settings unavailable.\n\nCheck the installation with xflow setup. Press r to retry."
+        } else {
+            "Loading pill settings…\n\nPress r to refresh."
+        };
+        panel(frame, area, "Pill", text, app);
+        return;
+    }
+    let parts = if area.width >= 90 {
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).split(area)
+    } else {
+        Layout::vertical([
+            Constraint::Min(3),
+            Constraint::Length((area.height / 2).clamp(4, 8)),
+        ])
+        .split(area)
+    };
+    let selected = app.selected();
+    let items = app
+        .overlay
+        .iter()
+        .map(|setting| ListItem::new(setting.summary.clone()))
+        .collect::<Vec<_>>();
+    let mut state = ListState::default().with_selected(Some(selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(block(
+                app,
+                format!("Pill · {}/{}", selected + 1, app.overlay.len()),
+            ))
+            .highlight_symbol("> ")
+            .highlight_style(app.theme.selected()),
+        parts[0],
+        &mut state,
+    );
+    for index in state.offset()..app.overlay.len() {
+        let y = parts[0].y + 1 + (index - state.offset()) as u16;
+        if y + 1 >= parts[0].bottom() {
+            break;
+        }
+        hits.rows.push((
+            Rect::new(parts[0].x + 1, y, parts[0].width.saturating_sub(2), 1),
+            index,
+        ));
+    }
+    if let Some(setting) = app.overlay.get(selected) {
+        let text = vec![
+            Line::from(Span::styled(
+                super::state::overlay_value(&setting.value),
+                app.theme.base().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(setting.summary.clone()),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Enter to change · applies right away",
+                muted(app),
+            )),
+        ];
+        panel(frame, parts[1], "Current value", text, app);
+    }
 }
 
 fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
