@@ -384,14 +384,17 @@ fn worker_survives_its_cli_terminal_and_sighup() {
         "worker has its own session"
     );
     assert_eq!(session_of(worker), Some(worker), "worker leads its session");
+    // Counted at the kill: reaping the CLI below can take seconds on macOS.
+    let done_before = sandbox.n("SELECT count(*) FROM jobs WHERE state='accepted'");
+    assert!(done_before < 6, "the kill happened mid-transcription");
     kill9(cli_pid);
-    cli.wait().unwrap();
+    // Close the terminal before reaping: on macOS a dying process blocks
+    // until its unread terminal output drains or the master closes.
     unsafe {
         libc::killpg(cli_pid, libc::SIGHUP);
         libc::close(master);
     }
-    let done_before = sandbox.n("SELECT count(*) FROM jobs WHERE state='accepted'");
-    assert!(done_before < 6, "the kill happened mid-transcription");
+    cli.wait().unwrap();
     sandbox.wait_idle(Duration::from_secs(60));
     complete(&sandbox);
     assert_eq!(sandbox.n("SELECT count(*) FROM segments"), 6);
@@ -574,7 +577,8 @@ fn disk_and_permission_errors_stop_visibly_and_keep_audio() {
 /// audio is transcribed exactly once.
 #[test]
 fn random_process_kills_lose_and_duplicate_nothing() {
-    let stub = stub(Duration::from_millis(15));
+    // Slow enough that a worker is still transcribing when a kill lands.
+    let stub = stub(Duration::from_millis(300));
     let sandbox = Sandbox::new(&stub);
     let a = sandbox.wav("a.wav", 60, 8);
     let b = sandbox.wav("b.wav", 45, 9);
@@ -600,13 +604,25 @@ fn random_process_kills_lose_and_duplicate_nothing() {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        std::thread::sleep(Duration::from_millis(next(1_500)));
+        let mut worker = None;
+        if trial % 6 == 3 {
+            // A process trial that always kills the worker mid-transcription,
+            // so coverage never depends on where the random kills land.
+            let start = Instant::now();
+            while worker.is_none() {
+                assert!(start.elapsed() < Duration::from_secs(30), "no worker");
+                std::thread::sleep(Duration::from_millis(10));
+                worker = sandbox.worker_pid();
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(next(1_500)));
+        }
         if child.try_wait().unwrap().is_none() {
             kills_cli += 1;
         }
         kill9(child.id() as i32);
         child.wait().unwrap();
-        if let Some(worker) = sandbox.worker_pid() {
+        if let Some(worker) = worker.or_else(|| sandbox.worker_pid()) {
             kill9(worker);
             kills_worker += 1;
         }
