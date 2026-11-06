@@ -207,6 +207,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
     }
     match app.page {
         Page::Home => home(frame, body[1], app, &mut hits),
+        Page::Dictionary => dictionary(frame, body[1], app, &mut hits),
         Page::Stats => stats(frame, body[1], app),
         Page::AiApps => {
             // The two privacy lines stay visible under the list.
@@ -364,7 +365,14 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ("↑↓ move", None),
                 ],
                 // No "↑↓ move" here: the footer must fit "q quit" at 80 columns.
-                Page::Dictionary | Page::Snippets | Page::Styles => {
+                Page::Dictionary => vec![
+                    ("Enter options", Some(Action::Choose)),
+                    ("q quit", Some(Action::Quit)),
+                    ("Del delete", Some(Action::Delete)),
+                    ("Tab next page", None),
+                    ("? help", Some(Action::Help)),
+                ],
+                Page::Snippets | Page::Styles => {
                     vec![
                         ("Enter choose", Some(Action::Choose)),
                         ("Del delete", Some(Action::Delete)),
@@ -386,6 +394,9 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ("r refresh", Some(Action::Refresh)),
                 ],
             };
+            if app.page == Page::Dictionary {
+                return out;
+            }
             if app.page != Page::Home {
                 out.push(("Esc back", Some(Action::Back)));
             } else if app.status.failed_audio.is_some() {
@@ -571,6 +582,84 @@ fn home(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     };
     panel(frame, rows[2], "Last dictation", last, app);
 }
+// Dictionary owns its layout so compact terminals do not change other lists.
+fn dictionary(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
+    let (list, detail) = if area.width >= 90 {
+        let parts = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .split(area);
+        (parts[0], parts[1])
+    } else {
+        let detail_height = (area.height / 3).clamp(4, 8);
+        let parts =
+            Layout::vertical([Constraint::Min(5), Constraint::Length(detail_height)]).split(area);
+        (parts[0], parts[1])
+    };
+    let rows = app.rows();
+    let count = rows.len().saturating_sub(app.adds());
+    let title = format!("Dictionary ({count})");
+    let list_block = block(app, title);
+    let inner = list_block.inner(list);
+    frame.render_widget(list_block, list);
+    let parts = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+    frame.render_widget(
+        Paragraph::new("↑↓ move  n add word").style(muted(app)),
+        parts[0],
+    );
+    let items = rows
+        .iter()
+        .enumerate()
+        .map(|(index, (label, kind))| {
+            let line = if index < app.adds() {
+                Line::from(Span::styled(
+                    label.clone(),
+                    accent(app).add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(vec![
+                    Span::styled(format!("{kind}: "), muted(app)),
+                    Span::raw(label.clone()),
+                ])
+            };
+            ListItem::new(line)
+        })
+        .collect::<Vec<_>>();
+    let mut state = ListState::default().with_selected(Some(app.selected()));
+    frame.render_stateful_widget(
+        List::new(items)
+            .highlight_style(app.theme.selected())
+            .highlight_symbol("> "),
+        parts[1],
+        &mut state,
+    );
+    for index in state.offset()..rows.len() {
+        let y = parts[1].y + (index - state.offset()) as u16;
+        if y >= parts[1].bottom() {
+            break;
+        }
+        hits.rows
+            .push((Rect::new(parts[1].x, y, parts[1].width, 1), index));
+    }
+    let (title, text) = if count == 0 {
+        (
+            "Start here",
+            "No saved words yet.\nAdd a word or correction above.".into(),
+        )
+    } else {
+        details(app, &rows)
+    };
+    let title = if app.selected() < app.adds() {
+        title
+    } else {
+        "Enter options / Del"
+    };
+    let text = if app.selected() >= app.adds() {
+        format!("{text}\n\nDel deletes this entry.")
+    } else {
+        text
+    };
+    panel(frame, detail, title, text, app);
+}
+
 fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     let rows = app.rows();
     if app.page == Page::History && rows.is_empty() {
@@ -766,9 +855,9 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
             0 => "Add names, brands and terms so xflow recognizes them and spells them your way.".into(),
             1 => "A correction swaps a word xflow keeps mishearing for the one you meant — for example “post grass” → “Postgres”.".into(),
             _ => match app.config.dictionary.words.get(pos - adds) {
-                Some(word) => format!("xflow recognizes “{word}” and always spells it this way.\n\nEnter to edit or delete."),
+                Some(word) => format!("{word}\n\nxflow recognizes this word and spells it this way.\n\nEnter for edit / delete options."),
                 None => app.config.dictionary.replacements.get(pos - adds - app.config.dictionary.words.len())
-                    .map(|r| format!("When you say “{}”, xflow writes “{}”.\n\nEnter to edit or delete.", r.from, r.to))
+                    .map(|r| format!("When you say “{}”, xflow writes “{}”.\n\nEnter for edit / delete options.", r.from, r.to))
                     .unwrap_or_default(),
             },
         }),

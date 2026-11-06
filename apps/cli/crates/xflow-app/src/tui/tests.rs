@@ -1604,3 +1604,77 @@ fn meeting_sharing_confirms_and_off_is_immediate() {
         Some(Job::ShareMeetings(false))
     );
 }
+
+#[test]
+fn dictionary_layout_keeps_selection_and_hits_together() {
+    let (_dir, mut app) = app();
+    app.page = Page::Dictionary;
+    app.config.dictionary.words = vec![
+        "Kubernetes".into(),
+        "PostgreSQL".into(),
+        "useEffect".into(),
+        "Siobhán O’Connor".into(),
+        "Nguyễn Minh".into(),
+        "नमस्ते team, deployment कल करेंगे".into(),
+        "Review OAuth token rotation before the next Kubernetes deployment".into(),
+    ];
+    app.config.dictionary.replacements = vec![xflow_core::config::Replacement {
+        from: "post grass".into(),
+        to: "PostgreSQL".into(),
+    }];
+    for (width, height) in [(120, 32), (80, 24), (40, 16)] {
+        for (name, colors) in [
+            ("midnight", ColorMode::TrueColor),
+            ("paper", ColorMode::TrueColor),
+            ("paper", ColorMode::None),
+        ] {
+            app.theme = Theme::resolve(name, &BTreeMap::new(), colors).unwrap();
+            for selected in 0..app.rows().len() {
+                app.select(selected as isize - app.selected() as isize);
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut hits = render::HitMap::default();
+                terminal.draw(|f| hits = render::draw(f, &app)).unwrap();
+                let (rect, _) = hits
+                    .rows
+                    .iter()
+                    .find(|(_, i)| *i == selected)
+                    .expect("selected row visible");
+                let buffer = terminal.backend().buffer();
+                assert_eq!(buffer[(rect.x, rect.y)].symbol(), ">");
+                assert!(buffer[(rect.x, rect.y)]
+                    .modifier
+                    .contains(Modifier::REVERSED | Modifier::BOLD));
+                for (row, index) in &hits.rows {
+                    assert_eq!(row.height, 1);
+                    assert!(row.bottom() < height - 2);
+                    assert!(*index < app.rows().len());
+                }
+                key(&mut app, KeyCode::Enter);
+                assert!(matches!(app.modal, Some(Modal::Editor(_))));
+                if selected >= app.adds() {
+                    key(&mut app, KeyCode::Enter);
+                    assert!(matches!(
+                        editor(&app).target,
+                        EditTarget::Word(_) | EditTarget::Replacement(_)
+                    ));
+                }
+                key(&mut app, KeyCode::Esc);
+                if selected >= app.adds() {
+                    key(&mut app, KeyCode::Delete);
+                    assert!(matches!(app.modal, Some(Modal::Confirm { .. })));
+                    key(&mut app, KeyCode::Esc);
+                }
+            }
+            app.select(-(app.selected() as isize));
+            app.config.dictionary.words.clear();
+            app.config.dictionary.replacements.clear();
+            let text = screen(&app, width, height);
+            assert!(text.contains("No saved words yet."));
+            assert!(text.contains("+ Add a word"));
+            assert!(text.contains("+ Add a correction"));
+            assert!(text.contains("q quit"));
+            // Restore fixtures for the next theme without persisting any edits.
+            app.config.dictionary.words = vec!["Kubernetes".into(), "नमस्ते team".into()];
+        }
+    }
+}
