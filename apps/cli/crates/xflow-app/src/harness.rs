@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -58,6 +58,19 @@ fn classify(text: &str) -> LlmError {
         invalid()
     }
 }
+// Keep CLI shutdown alive until every supervisor has killed/reaped its group.
+static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+struct Active;
+impl Drop for Active {
+    fn drop(&mut self) {
+        ACTIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+pub async fn drain() {
+    while ACTIVE.load(Ordering::SeqCst) != 0 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
 // The supervisor owns the child until group cleanup and wait, including on future drop.
 struct Cancel(Arc<AtomicBool>);
 impl Drop for Cancel {
@@ -74,7 +87,13 @@ async fn run(
 ) -> Result<(), LlmError> {
     let cancelled = Arc::new(AtomicBool::new(false));
     let _guard = Cancel(cancelled.clone());
+    ACTIVE.fetch_add(1, Ordering::SeqCst);
+    let active = Active;
     let worker = tokio::task::spawn_blocking(move || {
+        let _active = active;
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(LlmError::Interrupted { partial: false });
+        }
         use std::os::unix::process::CommandExt;
         let dir = tempfile::tempdir().map_err(|_| invalid())?;
         let mut child = Command::new(path)

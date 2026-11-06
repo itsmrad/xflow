@@ -11,7 +11,12 @@ pub fn block_on<T>(future: impl std::future::Future<Output = Result<T>>) -> Resu
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(future);
+    let result = runtime.block_on(async {
+        let result = future.await;
+        // A cancelled turn drops its future before its process-group supervisor exits.
+        xflow_app::harness::drain().await;
+        result
+    });
     // Don't wait on a blocking task stuck behind an OS prompt (e.g. a Keychain read).
     runtime.shutdown_background();
     result
