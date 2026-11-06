@@ -30,6 +30,7 @@ pub struct Config {
     #[serde(skip)]
     pub title_terms: Vec<String>,
     pub stt: SttConfig,
+    pub on_device: OnDeviceConfig,
     pub cleanup: CleanupConfig,
     pub recording: RecordingConfig,
     pub hotkey: HotkeyConfig,
@@ -154,6 +155,15 @@ impl Default for SttConfig {
             timeout_secs: 30,
         }
     }
+}
+/// On-device speech (`stt.provider = "on-device"`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct OnDeviceConfig {
+    /// The API `[stt]` section saved when switching to on-device; restored when switching back.
+    pub previous_api: Option<SttConfig>,
+    /// Reserved language preference for on-device speech; empty detects automatically.
+    pub languages: Vec<String>,
 }
 impl SttConfig {
     pub fn validate_languages(&self) -> Result<()> {
@@ -509,6 +519,18 @@ impl Config {
     }
     pub fn validate(&self) -> Result<()> {
         self.stt.validate_languages()?;
+        if let Some(previous) = &self.on_device.previous_api {
+            if previous.provider == "on-device" {
+                bail!("on_device.previous_api must be an API provider");
+            }
+            previous.validate_languages()?;
+        }
+        SttConfig {
+            languages: self.on_device.languages.clone(),
+            ..SttConfig::default()
+        }
+        .validate_languages()
+        .context("invalid on_device.languages")?;
         self.hotkey.validate()?;
         if !(1..=MAX_RECORDING_SECS).contains(&self.recording.max_seconds) {
             bail!("recording.max_seconds must be 1..{MAX_RECORDING_SECS}");

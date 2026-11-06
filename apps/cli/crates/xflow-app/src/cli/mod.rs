@@ -260,6 +260,10 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
         Command::OverlayPill => xflow_app::overlay_pill::helper(&path(cli)?).map_err(Into::into),
         Command::Providers { action } => provider::run(&path(cli)?, action.as_ref(), out),
         Command::Models {
+            action: Some(action),
+            ..
+        } => local_models::manage(action, out),
+        Command::Models {
             on_device: true, ..
         } => local_models::run(out),
         Command::Models { provider, .. } => provider::models(&path(cli)?, provider.as_deref(), out),

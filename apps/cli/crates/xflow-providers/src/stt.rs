@@ -214,6 +214,10 @@ fn push_hints(
 }
 /// How many of `words` the configured provider sends after `stt.vocabulary`.
 pub fn hint_fit(config: &SttConfig, words: &[String]) -> Result<usize> {
+    // Nothing is sent; dictionary words still apply locally after transcription.
+    if config.provider == ON_DEVICE {
+        return Ok(words.len());
+    }
     let (_, model, protocol) = resolve(config)?;
     let languages = preferred_languages(config)?;
     let mut hints = configured_options(config, &languages, protocol).vocabulary;
@@ -257,6 +261,9 @@ fn resolve(config: &SttConfig) -> Result<(&'static ProviderInfo, &str, Protocol)
 }
 /// Request-level behavior, not a promise of script accuracy. Unknown models stay conservative.
 pub fn language_capability(config: &SttConfig) -> Result<&'static str> {
+    if config.provider == ON_DEVICE {
+        return Ok("auto-detect (25 European languages)");
+    }
     let (_, model, protocol) = resolve(config)?;
     Ok(match protocol {
         Protocol::Multipart | Protocol::WhisperCpp
@@ -974,6 +981,9 @@ pub fn backup_providers() -> Result<Vec<String>> {
         .collect()
 }
 pub fn validate_fallback_route(config: &SttConfig, offline: bool) -> Result<()> {
+    if config.provider == ON_DEVICE {
+        return on_device::validate(config);
+    }
     let languages = preferred_languages(config)?;
     if !languages.is_empty() {
         let (_, model, protocol) = resolve(config)?;
@@ -1165,6 +1175,11 @@ impl SpeechToText for Failover {
     }
 }
 pub fn build_stt(config: &SttConfig, offline: bool) -> Result<Arc<dyn SpeechToText>> {
+    // Before any credential, endpoint or failover: on-device has no cloud route.
+    if config.provider == ON_DEVICE {
+        on_device::validate(config)?;
+        return on_device::build();
+    }
     validate_fallback_route(config, offline)?;
     let mut primary = HttpProvider::new(config, offline)?;
     primary.warning = fallback_warning(config);
@@ -1220,6 +1235,9 @@ fn gemini_locale(code: &str) -> Result<&'static str> {
     }
 }
 pub async fn transcribe_file(config: &SttConfig, offline: bool, path: &Path) -> Result<Transcript> {
+    if config.provider == ON_DEVICE {
+        return on_device_file(config, path).await;
+    }
     let provider = HttpProvider::new(config, offline)?;
     let format = path
         .extension()
@@ -1265,7 +1283,39 @@ pub async fn transcribe_file(config: &SttConfig, offline: bool, path: &Path) -> 
     .await
     .map_err(|_| anyhow!("provider file request timed out; it was not retried"))?
 }
+/// WAV only, decoded here; in on-device mode audio never leaves the machine.
+async fn on_device_file(config: &SttConfig, path: &Path) -> Result<Transcript> {
+    let wav = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case("wav"));
+    if !wav {
+        bail!("on-device transcription reads WAV files only; convert the audio to WAV first");
+    }
+    let stt = build_stt(config, true)?;
+    let mut bytes = Vec::new();
+    {
+        use tokio::io::AsyncReadExt;
+        tokio::fs::File::open(path)
+            .await
+            .map_err(|_| anyhow!("could not open audio file"))?
+            .take(xflow_core::MAX_UPLOAD_WAV_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| anyhow!("could not read audio file"))?;
+    }
+    if bytes.is_empty() || bytes.len() > xflow_core::MAX_UPLOAD_WAV_BYTES {
+        bail!("audio file is empty or exceeds 25 MB");
+    }
+    let audio = tokio::task::spawn_blocking(move || audio::decode_wav(&bytes))
+        .await
+        .map_err(|_| anyhow!("WAV decoding task failed"))??;
+    stt.transcribe(audio, Default::default()).await
+}
 pub async fn check_stt(config: &SttConfig, offline: bool) -> Result<CheckReport> {
+    if config.provider == ON_DEVICE {
+        return on_device::check().await;
+    }
     let provider = HttpProvider::new(config, offline)?;
     let (method, url) = provider.probe()?;
     check_request(

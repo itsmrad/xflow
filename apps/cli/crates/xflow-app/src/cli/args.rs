@@ -107,8 +107,11 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<Providers>,
     },
-    /// List provider models, or inspect the offline on-device model catalog and hardware.
+    /// List provider models, inspect the on-device model and hardware, or install/remove it.
+    #[command(args_conflicts_with_subcommands = true)]
     Models {
+        #[command(subcommand)]
+        action: Option<ModelAction>,
         provider: Option<String>,
         /// Report on-device model requirements and host facts without installing or selecting a model.
         #[arg(long, conflicts_with = "provider")]
@@ -301,6 +304,18 @@ pub enum Providers {
         #[arg(long)]
         model: Option<String>,
     },
+}
+#[derive(Subcommand, Debug)]
+pub enum ModelAction {
+    /// Download the pinned on-device model files (or copy them with --from) and verify them.
+    Install {
+        model: String,
+        /// Copy from a local directory with the same files instead of downloading.
+        #[arg(long, value_name = "DIR")]
+        from: Option<PathBuf>,
+    },
+    /// Delete the installed on-device model and any partial download.
+    Remove { model: String },
 }
 #[derive(Subcommand, Debug)]
 pub enum Key {

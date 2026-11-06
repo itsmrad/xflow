@@ -146,7 +146,7 @@ pub(crate) fn encode_upload(audio: &AudioClip, flac: bool) -> Result<(Vec<u8>, &
         Ok((wav(&samples)?, "wav"))
     }
 }
-fn pcm16(sample: f32) -> i16 {
+pub(crate) fn pcm16(sample: f32) -> i16 {
     (sample * if sample < 0.0 { 32768.0 } else { 32767.0 }).round() as i16
 }
 fn wav(samples: &[f32]) -> Result<Vec<u8>> {
