@@ -1678,3 +1678,113 @@ fn dictionary_layout_keeps_selection_and_hits_together() {
         }
     }
 }
+
+#[test]
+fn styles_keep_selection_actions_and_details_in_short_terminals() {
+    let (_dir, mut app) = app();
+    app.page = Page::Styles;
+    app.config.styles = [
+        ("Ada: concise", "com.apple.mail", "Use concise sentences."),
+        (
+            "Kubernetes PostgreSQL useEffect git rebase OAuth kubectl — development notes",
+            "code",
+            "José, Mei, Fatima and Chinedu: preserve identifiers, punctuation, 14:30 and v2.",
+        ),
+        (
+            "Priya और José: कल API deploy करना है",
+            "slack",
+            "Hindi-English: technical terms वैसे ही रखो। 42, 3.14, 2026.",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, id, prompt)| xflow_core::config::Style {
+        name: name.into(),
+        apps: vec![id.into()],
+        mode: None,
+        prompt: Some(prompt.into()),
+    })
+    .collect();
+    let capture = std::env::var_os("XFLOW_STYLES_CAPTURES").map(PathBuf::from);
+    for (theme, mode) in [
+        ("midnight", ColorMode::TrueColor),
+        ("paper", ColorMode::TrueColor),
+        ("none", ColorMode::None),
+    ] {
+        app.theme = Theme::resolve(
+            if theme == "none" { "paper" } else { theme },
+            &BTreeMap::new(),
+            mode,
+        )
+        .unwrap();
+        for (width, height) in [(120, 32), (80, 24), (40, 16), (40, 12)] {
+            for selected in 0..=app.config.styles.len() {
+                app.selected[Page::Styles.index()] = selected;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut hits = render::HitMap::default();
+                terminal.draw(|f| hits = render::draw(f, &app)).unwrap();
+                let text = screen(&app, width, height);
+                assert!(text.contains("Styles (3)"), "{text}");
+                assert!(text.contains("PgUp/PgDn details"), "{text}");
+                assert!(
+                    text.contains(if selected == 0 {
+                        "Enter add"
+                    } else {
+                        "Enter options"
+                    }),
+                    "{text}"
+                );
+                assert!(text.contains("q quit"), "{text}");
+                assert!(hits.rows.iter().any(|(_, i)| *i == selected), "{text}");
+                for (rect, index) in &hits.rows {
+                    assert!(*index <= app.config.styles.len());
+                    assert_eq!(rect.height, 1);
+                    for x in rect.x..rect.right() {
+                        assert!(!["─", "╰", "╯"]
+                            .contains(&terminal.backend().buffer()[(x, rect.y)].symbol()));
+                    }
+                }
+                let selected_rect = hits.rows.iter().find(|(_, i)| *i == selected).unwrap().0;
+                let cell = &terminal.backend().buffer()[(selected_rect.x, selected_rect.y)];
+                assert_eq!(cell.symbol(), ">");
+                assert!(cell.modifier.contains(Modifier::REVERSED | Modifier::BOLD));
+                if let Some(root) = &capture {
+                    std::fs::create_dir_all(root).unwrap();
+                    std::fs::write(
+                        root.join(format!("{width}x{height}-{theme}-{selected}.txt")),
+                        text,
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+    app.selected[Page::Styles.index()] = 0;
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(editor(&app).target, EditTarget::Style(None)));
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Down);
+    assert_eq!(app.selected(), 1);
+    key(&mut app, KeyCode::PageDown);
+    assert_eq!(app.scroll, 8);
+    assert!(screen(&app, 40, 12).contains("Apps: Mail"));
+    key(&mut app, KeyCode::PageUp);
+    assert_eq!(app.scroll, 0);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(editor(&app).target, EditTarget::Menu(_)));
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(editor(&app).target, EditTarget::Style(Some(0))));
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Delete);
+    assert!(matches!(app.modal, Some(Modal::Confirm { .. })));
+    key(&mut app, KeyCode::Esc);
+    app.config.styles.clear();
+    app.selected[Page::Styles.index()] = 0;
+    assert!(screen(&app, 40, 16).contains("No styles yet."));
+    app.toast = Some("Could not save: synthetic read-only config".into());
+    assert!(screen(&app, 80, 24).contains("Could not save"));
+    let start = std::time::Instant::now();
+    for _ in 0..30 {
+        screen(&app, 120, 32);
+    }
+    eprintln!("Styles: 30 synthetic redraws: {:?}", start.elapsed());
+}
