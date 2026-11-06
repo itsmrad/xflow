@@ -215,6 +215,61 @@ fn install_uses_fakes_and_never_registers_source_override() {
     let toml = fs::read_to_string(d.path().join("home/.codex/config.toml")).unwrap();
     assert!(!toml.contains("--sources"));
 }
+#[test]
+fn claude_code_reinstall_is_noop_and_force_replaces() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let d = tempfile::tempdir().unwrap();
+    fs::create_dir(d.path().join("home")).unwrap();
+    let fake = d.path().join("fake-claude");
+    let state = d.path().join("state");
+    // Like Claude Code: `mcp add` fails when the name already exists.
+    fs::write(
+        &fake,
+        r#"#!/bin/sh
+s="$FAKE_STATE"
+case "$2" in
+get) [ -f "$s" ] || exit 1; { read c; read a; } < "$s"; printf 'xflow:\n  Command: %s\n  Args: %s\n' "$c" "$a";;
+remove) [ -f "$s" ] || exit 1; /bin/rm "$s";;
+add) [ -f "$s" ] && exit 1; shift 6; [ -n "$FAKE_REJECT" ] && [ "$1" != /old/xflow ] && exit 1
+    c=$1; shift; printf '%s\n%s\n' "$c" "$*" > "$s";;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&state, "/old/xflow\nmcp\n").unwrap();
+    let install = |extra: &[&str], reject: bool| {
+        let mut c = command(d.path());
+        c.env("XFLOW_MCP_CLAUDE_CODE_BIN", &fake)
+            .env("FAKE_STATE", &state)
+            .args(["mcp", "install", "claude-code"])
+            .args(extra);
+        if reject {
+            c.env("FAKE_REJECT", "1");
+        }
+        c.output().unwrap()
+    };
+    assert!(!install(&[], false).status.success());
+    assert!(!install(&["--force"], true).status.success());
+    assert_eq!(fs::read_to_string(&state).unwrap(), "/old/xflow\nmcp\n");
+    let out = install(&["--force"], false);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let new = fs::read_to_string(&state).unwrap();
+    assert!(!new.starts_with("/old/") && new.ends_with("\nmcp\n"));
+    for extra in [&[][..], &["--force"]] {
+        let out = install(extra, false);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(fs::read_to_string(&state).unwrap(), new);
+    }
+}
 #[tokio::test]
 async fn rmcp_client_oracle_both_lifecycles() {
     use rmcp::{

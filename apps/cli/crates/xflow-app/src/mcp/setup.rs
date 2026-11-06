@@ -476,6 +476,7 @@ pub(super) fn install(
         return Ok(());
     }
     let mut replace = force;
+    let mut differs = false;
     let previous = if matches!(client, "claude-code" | "codex" | "gemini" | "vscode") {
         registered(client)?
     } else {
@@ -495,6 +496,7 @@ pub(super) fn install(
                 bail!("Kept existing registration; use --force");
             }
             replace = true;
+            differs = true;
         }
     }
     let mut sources = read_sources(consent);
@@ -508,6 +510,15 @@ pub(super) fn install(
         "Consent is global across all MCP clients; matching text is sent to {}.",
         vendor(client)
     );
+    if client == "claude-code" {
+        if let Some(old) = previous.as_ref().filter(|_| differs) {
+            return claude_replace(&args, old);
+        }
+        if previous.is_some() {
+            println!("xflow is already registered with Claude Code");
+            return Ok(());
+        }
+    }
     match client {
         "cursor" | "claude-desktop" => {
             let (path, key) = config(client)?;
@@ -533,6 +544,33 @@ pub(super) fn install(
                 Ok(())
             }
         }
+    }
+}
+/// Claude Code refuses `mcp add` for an existing name, so remove first and
+/// put the old entry back if the new add fails.
+fn claude_replace(args: &[String], old: &Value) -> Result<()> {
+    let remove = ["mcp", "remove", "--scope", "user", "xflow"].map(String::from);
+    if !run_cli("claude-code", &remove)? {
+        bail!("Claude Code CLI missing");
+    }
+    let Err(e) = run_cli("claude-code", args) else {
+        return Ok(());
+    };
+    let old = old.get("transport").unwrap_or(old);
+    let mut back: Vec<String> = ["mcp", "add", "--scope", "user", "xflow", "--"]
+        .map(String::from)
+        .into();
+    back.push(old["command"].as_str().unwrap_or_default().to_owned());
+    back.extend(
+        old["args"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| a.as_str().map(str::to_owned)),
+    );
+    match run_cli("claude-code", &back) {
+        Ok(true) => Err(e.context("Kept the previous Claude Code registration")),
+        _ => Err(e.context("Previous Claude Code registration was removed; reinstall xflow")),
     }
 }
 pub(super) fn uninstall(client: &str) -> Result<()> {
