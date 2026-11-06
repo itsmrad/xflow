@@ -344,6 +344,7 @@ pub struct Permissions {
 impl Permissions {
     /// The listen-only tap gets key events with either grant: Accessibility trust
     /// covers it too (CGEventTapCreate), so Input Monitoring is only a fallback.
+    /// Terminal correction replay subscribes to this same tap and does not ask again.
     pub fn events(&self) -> bool {
         self.input_monitoring || self.accessibility
     }
