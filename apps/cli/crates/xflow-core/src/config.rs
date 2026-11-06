@@ -42,6 +42,7 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     pub privacy: PrivacyConfig,
     pub ui: UiConfig,
+    pub ai: AiConfig,
     /// Spoken trigger phrase -> inserted text.
     pub snippets: Vec<Snippet>,
     /// Per-app cleanup styles; the first style whose `apps` matches wins.
@@ -489,6 +490,32 @@ impl Default for UiConfig {
         }
     }
 }
+/// Model gateway for `xflow ask`; an empty `provider` means not set up.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AiConfig {
+    pub provider: String,
+    pub model: Option<String>,
+    /// Full endpoint URL for `provider = "custom"`; loopback only.
+    pub endpoint: Option<String>,
+    /// Tried only before the first output, and only once consented.
+    pub fallback: Vec<String>,
+    /// Providers the user allowed to receive transcript excerpts.
+    pub consented: Vec<String>,
+    pub max_context_tokens: u32,
+}
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            model: None,
+            endpoint: None,
+            fallback: vec![],
+            consented: vec![],
+            max_context_tokens: 32_000,
+        }
+    }
+}
 
 fn check_text(field: &str, value: &str, max: usize) -> Result<()> {
     if value.trim().is_empty() {
@@ -649,6 +676,9 @@ impl Config {
             bail!("sounds.volume must be 0.0..1.0");
         }
         check_text("ui.theme", &self.ui.theme, 64)?;
+        if !(1000..=2_000_000).contains(&self.ai.max_context_tokens) {
+            bail!("ai.max_context_tokens must be 1000..2000000");
+        }
         Ok(())
     }
 }
@@ -656,6 +686,20 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_section_is_empty_by_default_and_rejects_unknown_keys() {
+        let defaults: Config = toml::from_str("").unwrap();
+        assert_eq!(defaults.ai, AiConfig::default());
+        assert!(defaults.ai.provider.is_empty());
+        assert_eq!(defaults.ai.max_context_tokens, 32_000);
+        assert!(toml::from_str::<Config>("[ai]\nnope = 1").is_err());
+        let config: Config =
+            toml::from_str("[ai]\nprovider = \"openai\"\nconsented = [\"openai\"]").unwrap();
+        assert_eq!(config.ai.consented, ["openai"]);
+        let small: Config = toml::from_str("[ai]\nmax_context_tokens = 1").unwrap();
+        assert!(small.validate().is_err());
+    }
 
     #[test]
     fn microphone_config_defaults_and_explicit_bluetooth_override() {

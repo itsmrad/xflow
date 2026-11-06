@@ -16,6 +16,7 @@ Usage: xflow [OPTIONS] <COMMAND>
 
 Commands:
   mcp          Share read-only dictation context with local MCP clients
+  ask          Ask a question about your dictations; excerpts go to the [ai] provider
   setup        Set up a provider, microphone and optional desktop integration
   start        Begin recording (bind to shortcut press for push-to-talk)
   stop         Stop recording and begin transcription
@@ -168,6 +169,31 @@ Options:
       --color <COLOR>            Control colour in human output [default: auto] [possible values: auto, always, never]
       --config <PATH>            Read/write an alternate configuration file
   -h, --help                     Print help
+```
+
+## xflow ask
+
+Ask a question about your dictations; excerpts go to the [ai] provider
+
+```text
+Ask a question about your dictations; excerpts go to the [ai] provider
+
+Usage: xflow ask [OPTIONS] [QUESTION]
+
+Arguments:
+  [QUESTION]  The question; read from stdin when omitted
+
+Options:
+      --json                 Emit machine-readable JSON (watch emits one object per event)
+      --provider <PROVIDER>  Use this provider instead of ai.provider
+      --model <MODEL>        Use this model instead of ai.model or the provider's default
+  -q, --quiet                Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>        Control colour in human output [default: auto] [possible values: auto, always, never]
+      --timing               Print retrieval, overhead, first-token and total times and tokens to stderr
+      --config <PATH>        Read/write an alternate configuration file
+      --no-context           Send only the question: no transcript search or read tools
+      --yes                  Allow this provider to receive transcript excerpts for this run; not saved
+  -h, --help                 Print help
 ```
 
 ## xflow setup

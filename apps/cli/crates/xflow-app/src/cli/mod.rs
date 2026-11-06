@@ -1,4 +1,5 @@
 mod args;
+mod ask;
 mod config;
 mod doctor;
 mod ipc;
@@ -150,6 +151,8 @@ pub fn main() -> ExitCode {
                     "{}",
                     serde_json::json!({"ok":false,"error":error.message,"hint":error.hint,"exit_code":error.code})
                 );
+            } else if error.hint.is_empty() {
+                eprintln!("error: {}", output::clean(&error.message));
             } else {
                 eprintln!(
                     "error: {}\nhint: {}",
@@ -175,6 +178,7 @@ fn path(cli: &Cli) -> Result<PathBuf> {
 fn run(cli: &Cli, out: &Output) -> Result<()> {
     match &cli.command {
         Command::Mcp(args) => xflow_app::mcp::run(args, &path(cli)?).map_err(Into::into),
+        Command::Ask(args) => ask::run(&path(cli)?, args, out),
         Command::Completions { shell } => {
             let mut bytes = Vec::new();
             clap_complete::generate(*shell, &mut Cli::command(), "xflow", &mut bytes);

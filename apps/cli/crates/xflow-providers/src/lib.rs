@@ -27,6 +27,7 @@ mod catalog;
 pub mod on_device;
 pub use on_device::ON_DEVICE;
 pub mod keystore;
+pub mod llm;
 #[cfg(all(not(test), target_os = "macos"))]
 mod macos_keychain;
 #[cfg(test)]
@@ -293,9 +294,12 @@ fn checked_timeout(seconds: u64) -> Result<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 fn client(timeout: Duration) -> Result<Client> {
+    client_with(timeout, timeout.min(Duration::from_secs(10)))
+}
+fn client_with(timeout: Duration, connect: Duration) -> Result<Client> {
     Client::builder()
         .timeout(timeout)
-        .connect_timeout(timeout.min(Duration::from_secs(10)))
+        .connect_timeout(connect)
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .no_proxy()
@@ -500,6 +504,7 @@ fn validate_provider(provider: &str) -> Result<()> {
     if provider != "cleanup"
         && find_provider(ProviderKind::Stt, provider).is_none()
         && find_provider(ProviderKind::Cleanup, provider).is_none()
+        && find_provider(ProviderKind::Chat, provider).is_none()
     {
         bail!("unsupported credential provider");
     }
@@ -528,6 +533,7 @@ fn credential_ids() -> Vec<&'static str> {
     let mut ids: Vec<_> = stt_providers()
         .iter()
         .chain(cleanup_providers())
+        .chain(chat_providers())
         .filter(|p| !p.local)
         .map(|p| p.id)
         .chain(["cleanup", "custom"])
@@ -636,7 +642,8 @@ pub async fn key_status(provider: &str, api_key_env: Option<&str>) -> KeySource 
         return KeySource::Missing;
     }
     let info = find_provider(ProviderKind::Stt, provider)
-        .or_else(|| find_provider(ProviderKind::Cleanup, provider));
+        .or_else(|| find_provider(ProviderKind::Cleanup, provider))
+        .or_else(|| find_provider(ProviderKind::Chat, provider));
     let env = api_key_env.or_else(|| info.and_then(|p| p.env_var));
     if let Some(name) = env {
         match std::env::var(name) {
