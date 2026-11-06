@@ -696,6 +696,14 @@ impl Engine {
                     } else {
                         store.reopen(config.privacy.history, config.privacy.history_limit)?
                     };
+                    {
+                        let store = store.clone();
+                        tokio::spawn(async move {
+                            if store.upgrade_search_index().await.is_err() {
+                                log("warn", "history search index upgrade failed; history remains available");
+                            }
+                        });
+                    }
                     Ok(Reloaded {
                         config,
                         services,
@@ -3006,6 +3014,17 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
             (Store::open(&history_path, false, config.privacy.history_limit)?, Some(bounded_message(&format!("History unavailable: {error:#}; original database preserved; repair it and reload"))))
         }
     };
+    {
+        let store = store.clone();
+        tokio::spawn(async move {
+            if store.upgrade_search_index().await.is_err() {
+                log(
+                    "warn",
+                    "history search index upgrade failed; history remains available",
+                );
+            }
+        });
+    }
     let (commands_tx, commands_rx) = mpsc::channel(32);
     let (events_tx, _) = broadcast::channel(64);
     let (desktop_tx, desktop_rx) = broadcast::channel(32);
