@@ -1,6 +1,7 @@
 #!/bin/sh
-# Build dist/xflow-<version>.pkg: /usr/local/bin/{xflow,xflowd}, signed with stable
-# identifiers.
+# Build dist/xflow-<version>.pkg: /usr/local/bin/{xflow,xflowd} plus the arm64-only
+# on-device speech helper xflow-stt-coreml next to them, signed with stable identifiers.
+# Needs Swift (Xcode command line tools) for the helper.
 # Usage: scripts/package-macos-pkg.sh [bin-dir]   (default: build apps/cli/target/release)
 # OUT=<dir> changes the output directory; SIGN=<identity> the signing identity
 # (default xflow-dev, see README; - signs ad-hoc); KEYCHAIN=<path> looks it up in that
@@ -21,6 +22,8 @@ rm -rf "$work"
 mkdir -p "$work/root/usr/local/bin" "$work/root/usr/local/share/doc/xflow" "$work/component"
 cp -R packaging/macos/scripts "$work/scripts"
 install -m755 "$bin/xflow" "$bin/xflowd" "$work/root/usr/local/bin/"
+# arm64 only, even in a universal pkg: Intel Macs report on-device speech unsupported.
+scripts/build-stt-helper.sh "$work/root/usr/local/bin/xflow-stt-coreml"
 # Third-party notices for embedded data: SCOWL word lists (xflow-core/src/words.rs)
 # and OpenAI's BPE merges (xflow-providers/src/stt.rs).
 install -m644 apps/cli/crates/xflow-core/src/SCOWL-LICENSE.txt "$work/root/usr/local/share/doc/xflow/"
@@ -39,6 +42,7 @@ set -- --force --sign "$sign" ${KEYCHAIN:+--keychain "$KEYCHAIN"} --timestamp=no
 # The hardened runtime (required for notarisation) needs the microphone entitlement.
 codesign "$@" --entitlements packaging/macos/xflowd.entitlements --identifier com.xflow.xflowd "$work/root/usr/local/bin/xflowd"
 codesign "$@" --identifier com.xflow.xflow "$work/root/usr/local/bin/xflow"
+codesign "$@" --identifier com.xflow.stt-coreml "$work/root/usr/local/bin/xflow-stt-coreml"
 archs=$(lipo -archs "$bin/xflowd" | tr ' ' ',')
 sed -e "s/@VERSION@/$version/g" -e "s/@ARCHS@/$archs/" packaging/macos/distribution.xml >"$work/distribution.xml"
 

@@ -562,9 +562,14 @@ fn dispatch(
                     let progress = tx.clone();
                     Update::Installed(blocking(move || install_model(&cancel, &progress)).await)
                 }
-                Effect::RemoveModel => Update::Removed(blocking(|| {
-                    crate::local_models::install::remove(&xflow_providers::on_device::models_dir()?)
-                }).await),
+                Effect::RemoveModel => Update::Removed(
+                    blocking(|| {
+                        crate::local_models::install::remove(
+                            &xflow_providers::on_device::models_dir()?,
+                        )
+                    })
+                    .await,
+                ),
                 Effect::AskAgain(grant) => {
                     // A fresh xflowd asks no grant by itself: ask it once it answers.
                     let restarted = blocking(restart).await.is_ok();

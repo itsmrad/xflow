@@ -63,10 +63,9 @@ pub fn manage(action: &args::ModelAction, out: &Output) -> Result<()> {
                 if progress {
                     eprintln!();
                 }
-                result
-                    .map_err(|e| {
-                        Error::new(1, format!("{e:#}"), "Run the same command again to resume")
-                    })
+                result.map_err(|e| {
+                    Error::new(1, format!("{e:#}"), "Run the same command again to resume")
+                })
             })?;
             let dir = models.join(on_device::MODEL_ID);
             out.data(

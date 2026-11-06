@@ -333,10 +333,16 @@ impl Editor {
 }
 pub enum Modal {
     Help,
-    Palette { query: String, selected: usize },
+    Palette {
+        query: String,
+        selected: usize,
+    },
     Search,
     Editor(Box<Editor>),
-    Confirm { action: Action, prompt: String },
+    Confirm {
+        action: Action,
+        prompt: String,
+    },
     Setup(Step),
     /// On-device speech facts and install; `removing` asks to confirm Remove.
     OnDevice {
@@ -948,21 +954,19 @@ impl App {
                     "Run again"
                 }
                 .into(),
-                "action.stt_key" => {
-                    if matches!(
-                        self.config.stt.provider.as_str(),
-                        "local" | "custom" | xflow_providers::ON_DEVICE
-                    ) {
-                        "Not needed"
-                    } else if self.key_issue.is_some() {
-                        "Needs attention — see Home"
-                    } else if self.missing_key {
-                        "Missing — add one"
-                    } else {
-                        "Added"
-                    }
-                    .into()
+                "action.stt_key" => if matches!(
+                    self.config.stt.provider.as_str(),
+                    "local" | "custom" | xflow_providers::ON_DEVICE
+                ) {
+                    "Not needed"
+                } else if self.key_issue.is_some() {
+                    "Needs attention — see Home"
+                } else if self.missing_key {
+                    "Missing — add one"
+                } else {
+                    "Added"
                 }
+                .into(),
                 "action.cleanup_key" => if self.config.cleanup.provider.is_none() {
                     "Choose a service first"
                 } else if self.cleanup_key_issue.is_some() {
@@ -2568,7 +2572,7 @@ impl App {
                 let cleanup = key.starts_with("cleanup.");
                 // While on-device, the saved API route (even a custom server) is a choice.
                 let saved = (!cleanup)
-                    .then(|| self.config.on_device.previous_api.as_ref())
+                    .then_some(self.config.on_device.previous_api.as_ref())
                     .flatten()
                     .map(|stt| stt.provider.clone());
                 let mut choices: Vec<String> = integrations::catalog(cleanup)

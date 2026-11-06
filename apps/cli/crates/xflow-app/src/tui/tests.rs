@@ -1240,7 +1240,11 @@ fn pick_value(app: &mut App, value: &str) {
     while editor(app).fields[0].value.as_str() != value {
         let before = editor(app).fields[0].value.to_string();
         key(app, KeyCode::Down);
-        assert_ne!(before, editor(app).fields[0].value.as_str(), "{value} not offered");
+        assert_ne!(
+            before,
+            editor(app).fields[0].value.as_str(),
+            "{value} not offered"
+        );
     }
 }
 
@@ -1255,7 +1259,9 @@ fn setup_on_this_mac_skips_the_key_and_downloads_only_on_install() {
     // The three kinds are all offered: API services, this Mac, a local server.
     let labels = editor(&app).fields[0].labels.join("\n");
     assert!(labels.contains("Groq") && labels.contains("On this Mac (offline)"));
-    assert!(editor(&app).fields[0].choices.contains(&"local".to_string()));
+    assert!(editor(&app).fields[0]
+        .choices
+        .contains(&"local".to_string()));
     let effects = key_enter(&mut app);
     assert!(effects.is_empty(), "choosing the row never downloads");
     assert!(on_device_pane(&app));
@@ -1267,7 +1273,12 @@ fn setup_on_this_mac_skips_the_key_and_downloads_only_on_install() {
         if std::env::var_os("XFLOW_UPDATE_TUI_SNAPSHOTS").is_some() {
             std::fs::write(&path, &text).unwrap();
         }
-        assert_eq!(text, std::fs::read_to_string(&path).unwrap(), "{}", path.display());
+        assert_eq!(
+            text,
+            std::fs::read_to_string(&path).unwrap(),
+            "{}",
+            path.display()
+        );
         assert!(!text.contains("Paste your"));
     }
     let text = app.on_device_text(false, None);
@@ -1284,21 +1295,44 @@ fn setup_on_this_mac_skips_the_key_and_downloads_only_on_install() {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
     // Install, cancel (staging kept), resume, fail, retry, done.
-    assert!(matches!(&key_enter(&mut app)[..], [Effect::InstallModel(_)]));
+    assert!(matches!(
+        &key_enter(&mut app)[..],
+        [Effect::InstallModel(_)]
+    ));
     app.install_progress(120_000_000, 483_105_645);
-    assert!(app.on_device_text(false, None).contains("Downloading… 120 MB of 484 MB"));
+    assert!(app
+        .on_device_text(false, None)
+        .contains("Downloading… 120 MB of 484 MB"));
     assert!(render::keys(&app).iter().any(|(k, _)| *k == "x cancel"));
     assert!(key_enter(&mut app).is_empty(), "one download at a time");
     key(&mut app, KeyCode::Char('x'));
-    assert!(key_enter(&mut app).is_empty(), "no second download while stopping");
+    assert!(
+        key_enter(&mut app).is_empty(),
+        "no second download while stopping"
+    );
     app.install_done(Err(anyhow::anyhow!("cancelled")));
-    assert!(app.toast.as_deref().unwrap().contains("picks up where it stopped"));
-    assert!(matches!(&key_enter(&mut app)[..], [Effect::InstallModel(_)]));
+    assert!(app
+        .toast
+        .as_deref()
+        .unwrap()
+        .contains("picks up where it stopped"));
+    assert!(matches!(
+        &key_enter(&mut app)[..],
+        [Effect::InstallModel(_)]
+    ));
     app.install_done(Err(anyhow::anyhow!("network is unreachable")));
-    assert!(app.on_device_text(false, None).contains("network is unreachable"));
+    assert!(app
+        .on_device_text(false, None)
+        .contains("network is unreachable"));
     assert!(render::keys(&app).iter().any(|(k, _)| *k == "Enter retry"));
-    assert_eq!(app.config.stt.provider, "groq", "a failed download changes nothing");
-    assert!(matches!(&key_enter(&mut app)[..], [Effect::InstallModel(_)]));
+    assert_eq!(
+        app.config.stt.provider, "groq",
+        "a failed download changes nothing"
+    );
+    assert!(matches!(
+        &key_enter(&mut app)[..],
+        [Effect::InstallModel(_)]
+    ));
     app.install_done(Ok(true));
     // Use it: no key step, straight to the microphone.
     let effects = key_enter(&mut app);
@@ -1320,7 +1354,9 @@ fn unsupported_machine_explains_and_never_installs() {
     key_enter(&mut app);
     let text = screen(&app, 80, 24);
     assert!(text.contains("Not supported yet on Linux"), "{text}");
-    assert!(render::keys(&app).iter().all(|(k, _)| *k != "Enter install"));
+    assert!(render::keys(&app)
+        .iter()
+        .all(|(k, _)| *k != "Enter install"));
     assert!(key_enter(&mut app).is_empty());
     assert!(!on_device_pane(&app));
     assert_eq!(app.config.stt.provider, "groq");
@@ -1334,7 +1370,10 @@ fn api_services_keep_working_while_the_model_is_missing_or_downloading() {
     pick_value(&mut app, xflow_providers::ON_DEVICE);
     key_enter(&mut app);
     assert!(app.on_device_text(false, None).contains("Not installed"));
-    assert!(matches!(&key_enter(&mut app)[..], [Effect::InstallModel(_)]));
+    assert!(matches!(
+        &key_enter(&mut app)[..],
+        [Effect::InstallModel(_)]
+    ));
     key(&mut app, KeyCode::Esc);
     assert!(app.modal.is_none());
     open_provider_setting(&mut app);
