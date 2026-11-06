@@ -91,3 +91,39 @@ fn local_models_loopback_model_listing_keeps_its_existing_meaning() {
     let error: Value = serde_json::from_slice(&conflict.stderr).unwrap();
     assert_eq!(error["exit_code"], 2);
 }
+
+#[cfg(unix)]
+#[test]
+fn local_models_reports_non_utf8_paths_without_panicking() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join(OsString::from_vec(b"home-\xff".to_vec()));
+    for args in [
+        vec!["models", "--on-device"],
+        vec!["models", "--on-device", "--json"],
+    ] {
+        let output = run(&args, &home);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        if args.contains(&"--json") {
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert!(value["host"]["install_path"]
+                .as_str()
+                .unwrap()
+                .contains("home-\u{fffd}"));
+        } else {
+            assert!(String::from_utf8(output.stdout)
+                .unwrap()
+                .contains("home-\u{fffd}"));
+        }
+    }
+    assert!(!home.join("data").exists());
+    assert!(!home.join("config").exists());
+    assert!(!home.join("state").exists());
+}

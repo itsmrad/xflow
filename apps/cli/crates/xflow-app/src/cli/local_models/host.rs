@@ -23,9 +23,9 @@ pub struct Host {
     pub installed_ram_bytes: Option<u64>,
     #[serde(serialize_with = "unknown")]
     pub os_version: Option<String>,
-    #[serde(serialize_with = "unknown")]
+    #[serde(serialize_with = "unknown_path")]
     pub install_path: Option<PathBuf>,
-    #[serde(serialize_with = "unknown")]
+    #[serde(serialize_with = "unknown_path")]
     pub disk_checked_path: Option<PathBuf>,
     #[serde(serialize_with = "unknown")]
     pub available_disk_bytes: Option<u64>,
@@ -42,6 +42,10 @@ fn unknown<T: Serialize, S: serde::Serializer>(value: &Option<T>, s: S) -> Resul
         Some(value) => value.serialize(s),
         None => s.serialize_str("unknown"),
     }
+}
+
+fn unknown_path<S: serde::Serializer>(value: &Option<PathBuf>, s: S) -> Result<S::Ok, S::Error> {
+    unknown(&value.as_ref().map(|path| path.to_string_lossy()), s)
 }
 
 pub fn probe(install_path: Option<PathBuf>) -> Host {
@@ -165,6 +169,24 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_paths_are_displayed_without_losing_native_bytes() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(OsString::from_vec(b"/tmp/host-\xff".to_vec()));
+        let host = Host {
+            install_path: Some(path.clone()),
+            disk_checked_path: Some(path.clone()),
+            ..Host::default()
+        };
+        let json = serde_json::to_value(&host).unwrap();
+        assert_eq!(json["install_path"], "/tmp/host-\u{fffd}");
+        assert_eq!(json["disk_checked_path"], "/tmp/host-\u{fffd}");
+        assert_eq!(host.install_path.as_ref(), Some(&path));
+        assert_eq!(host.disk_checked_path.as_ref(), Some(&path));
+    }
     #[test]
     fn missing_facts_stay_unknown_and_zero_disk_is_known() {
         let mut host = Host::default();
