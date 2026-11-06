@@ -172,8 +172,8 @@ fn malformed_foreign_and_newer_schemas_are_untouched() {
         ),
         (
             "newer",
-            "PRAGMA user_version=2;",
-            ContractError::UnsupportedSchema(2),
+            "PRAGMA user_version=3;",
+            ContractError::UnsupportedSchema(3),
         ),
         (
             "malformed",
@@ -564,7 +564,6 @@ fn search_is_literal_across_scripts_and_pages_stay_bounded() {
         ("\"", "he said \"NEAR\" AND * today"),
         ("*", "he said \"NEAR\" AND * today"),
         ("NEAR", "he said \"NEAR\" AND * today"),
-        ("AND", "he said \"NEAR\" AND * today"),
     ];
     for (term, text) in expect {
         let page = reader.search(term, None).unwrap();
@@ -578,10 +577,184 @@ fn search_is_literal_across_scripts_and_pages_stay_bounded() {
         assert_eq!(page.segments[0].text, text, "term {term:?}");
         assert!(page.next.is_none(), "term {term:?} was not exhausted");
     }
-    let wrong_case = reader.search("oauth", None).unwrap();
-    assert!(wrong_case.segments.is_empty());
-    assert!(wrong_case.next.is_none());
+    // Case folds: "AND" is plain text that also finds the lowercase "and"s.
+    let mut and: Vec<String> = reader
+        .search("AND", None)
+        .unwrap()
+        .segments
+        .into_iter()
+        .map(|s| s.text)
+        .collect();
+    and.sort();
+    assert_eq!(
+        and,
+        [
+            "José Muñoz met 李明 and Søren",
+            "Müller, Алексей, and محمد",
+            "he said \"NEAR\" AND * today",
+            "kubectl rollout and OAuth",
+            "room 42 and port 1024",
+        ]
+    );
+    let folded = reader.search("oauth", None).unwrap();
+    assert_eq!(folded.segments.len(), 1);
+    assert_eq!(folded.segments[0].text, "kubectl rollout and OAuth");
     history_untouched(dir.path());
+}
+
+fn hits(reader: &MeetingReader, term: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = reader.search(term, cursor.as_ref()).unwrap();
+        assert_page(&page);
+        assert!(page.segments.len() <= 20);
+        out.extend(page.segments.into_iter().map(|s| s.text));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return out,
+        }
+    }
+}
+
+#[test]
+fn search_ignores_letter_case_but_not_accents() {
+    let dir = scratch();
+    let store = MeetingStore::at(db_path(dir.path()));
+    let texts = [
+        "Sign in with OAuth today",
+        "PostgreSQL replicas lag",
+        "the useEffect hook re-runs",
+        "el niño llegó",
+        "uma ação rápida",
+        "明日は東京で会いましょう",
+        "हिंदी और English मिलाकर",
+        "قال محمد مرحبا",
+        "李明来了",
+        "he said \"NEAR\" AND * today",
+        "Straße und STRASSE",
+        "İstanbul toplantısı",
+        "Ιστανμπούλ ΟΔΟΣ",
+    ];
+    let segments = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| seg(i as i64, i as i64 * 100, i as i64 * 100 + 50, t))
+        .collect();
+    store
+        .import_json(&meeting("fold", 10, 5_000, segments))
+        .unwrap();
+    let reader = store.reader();
+    for (term, expected) in [
+        ("oauth", "Sign in with OAuth today"),
+        ("OAUTH", "Sign in with OAuth today"),
+        ("postgresql", "PostgreSQL replicas lag"),
+        ("USEEFFECT", "the useEffect hook re-runs"),
+        ("NIÑO", "el niño llegó"),
+        ("AÇÃO", "uma ação rápida"),
+        ("東京", "明日は東京で会いましょう"),
+        ("会い", "明日は東京で会いましょう"),
+        ("हिंदी", "हिंदी और English मिलाकर"),
+        ("कर", "हिंदी और English मिलाकर"),
+        ("محمد", "قال محمد مرحبا"),
+        ("李明", "李明来了"),
+        ("\"", "he said \"NEAR\" AND * today"),
+        ("*", "he said \"NEAR\" AND * today"),
+        ("\"NEAR\" AND *", "he said \"NEAR\" AND * today"),
+        ("near", "he said \"NEAR\" AND * today"),
+        // Exact case always matches, including characters without a simple fold.
+        ("Straße", "Straße und STRASSE"),
+        ("İstanbul", "İstanbul toplantısı"),
+        ("İ", "İstanbul toplantısı"),
+        ("ΟΔΟΣ", "Ιστανμπούλ ΟΔΟΣ"),
+        ("οδοσ", "Ιστανμπούλ ΟΔΟΣ"),
+    ] {
+        assert_eq!(hits(&reader, term), [expected], "term {term:?}");
+    }
+    // Accents are letters, not case: no accent folding.
+    assert!(hits(&reader, "nino").is_empty());
+    assert!(hits(&reader, "acao").is_empty());
+    // No full case folding: "ß" is not "ss" (STRASSE matches only itself).
+    assert_eq!(hits(&reader, "strasse"), ["Straße und STRASSE"]);
+    assert_eq!(hits(&reader, "STRAẞE"), ["Straße und STRASSE"]);
+    // Dotted capital I has no one-character lowercase; record what each path does.
+    println!(
+        "istanbul -> {:?}; i (short) -> {} hits",
+        hits(&reader, "istanbul"),
+        hits(&reader, "i").len()
+    );
+}
+
+/// Where Rust's short-term fold says two letters are the same, the index's
+/// own match must agree, so short and long terms behave alike.
+#[test]
+fn index_fold_agrees_with_the_short_term_fold() {
+    let dir = scratch();
+    let store = MeetingStore::at(db_path(dir.path()));
+    let letters: Vec<char> = (0x41u32..0x250)
+        .chain(0x370..0x400)
+        .chain(0x400..0x530)
+        .filter_map(char::from_u32)
+        .filter(|c| {
+            c.is_alphabetic()
+                && c.to_lowercase().count() == 1
+                && c.to_lowercase().next() != Some(*c)
+        })
+        .collect();
+    let mut stricter = Vec::new();
+    for (n, chunk) in letters.chunks(900).enumerate() {
+        let segments = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, c)| seg(i as i64, i as i64, i as i64 + 1, &format!("q{c}q")))
+            .collect();
+        store
+            .import_json(&meeting(&format!("letters{n}"), 10, 1_000, segments))
+            .unwrap();
+    }
+    let reader = store.reader();
+    for c in &letters {
+        let lower = c.to_lowercase().next().unwrap();
+        let found = hits(&reader, &format!("q{lower}q"));
+        if !found.contains(&format!("q{c}q")) {
+            stricter.push(*c);
+        }
+    }
+    println!(
+        "{} letters checked; index stricter on {stricter:?}",
+        letters.len()
+    );
+    // SQLite's fold table predates these Unicode 7+ letters. Only 1-2
+    // character searches fold them; nothing else may differ.
+    assert_eq!(stricter, ['Ϳ', 'Ԩ', 'Ԫ', 'Ԭ', 'Ԯ']);
+}
+
+#[test]
+fn folded_short_scan_pages_without_skipping() {
+    let dir = scratch();
+    let store = MeetingStore::at(db_path(dir.path()));
+    let segments = (0..300)
+        .map(|i| {
+            seg(
+                i,
+                i * 10,
+                i * 10 + 5,
+                &if i % 3 == 0 {
+                    format!("Ab {i}")
+                } else {
+                    format!("zz {i}")
+                },
+            )
+        })
+        .collect();
+    store
+        .import_json(&meeting("short", 10, 5_000, segments))
+        .unwrap();
+    let reader = store.reader();
+    let short = hits(&reader, "aB");
+    assert_eq!(short.len(), 100);
+    let long = hits(&reader, "AB ");
+    assert_eq!(short, long);
 }
 
 #[test]
@@ -713,7 +886,7 @@ fn reader_cannot_write_and_held_snapshot_defers_cleanup() {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
         let ddl: String = conn
             .query_row(
                 "SELECT sql FROM sqlite_schema WHERE name='metadata'",

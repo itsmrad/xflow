@@ -145,6 +145,38 @@ pub struct Transcript {
     pub language: Option<String>,
 }
 
+/// Text with a provider-reported time range, in ms from the start of the clip.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TimedSpan {
+    pub start_ms: u32,
+    pub end_ms: u32,
+    pub text: String,
+}
+
+/// What the provider actually reported. Nothing finer is ever inferred.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Timing {
+    /// Text only: it lies somewhere in the clip.
+    #[default]
+    TextOnly,
+    /// Provider phrase/segment ranges.
+    Segments(Vec<TimedSpan>),
+    /// Provider word ranges.
+    Words(Vec<TimedSpan>),
+}
+
+#[derive(Clone, Debug)]
+pub struct TimedTranscript {
+    pub transcript: Transcript,
+    pub timing: Timing,
+}
+
+/// Called with the provider id immediately before every request that may be
+/// billed, including a provider's internal retry and failover. An error stops
+/// that request before any audio is sent.
+pub type DispatchHook<'a> = &'a (dyn Fn(&str) -> Result<()> + Send + Sync);
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupMode {
@@ -233,6 +265,20 @@ pub trait SpeechToText: Send + Sync {
         audio: AudioClip,
         options: TranscriptionOptions,
     ) -> Result<Transcript>;
+    /// Meeting path: `hook` sees every dispatch, and provider timings are kept
+    /// when the response has them. Dictation never calls this.
+    async fn transcribe_timed(
+        &self,
+        audio: AudioClip,
+        options: TranscriptionOptions,
+        hook: DispatchHook<'_>,
+    ) -> Result<TimedTranscript> {
+        hook(self.name())?;
+        Ok(TimedTranscript {
+            transcript: self.transcribe(audio, options).await?,
+            timing: Timing::TextOnly,
+        })
+    }
 }
 
 /// Streaming providers finalize before injection; partial text is preview-only.

@@ -97,7 +97,8 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<History>,
     },
-    /// Import, list, search, show, export or delete a private meeting transcript.
+    /// Transcribe meeting audio, or import, list, search, show, export or delete
+    /// a private meeting transcript.
     ///
     /// Every meeting command uses the local database in this process. Import and
     /// delete do not use the daemon. The import file is read here, with a cap.
@@ -105,6 +106,9 @@ pub enum Command {
         #[command(subcommand)]
         action: MeetingCmd,
     },
+    /// Internal: background meeting transcription started by `meeting process`.
+    #[command(hide = true, name = "meeting-worker")]
+    MeetingWorker,
     /// Clear all history (legacy alias for history clear).
     #[command(hide = true)]
     ClearHistory {
@@ -305,6 +309,44 @@ pub enum Format {
 }
 #[derive(Subcommand, Debug)]
 pub enum MeetingCmd {
+    /// Copy WAV audio into private storage and transcribe it into a meeting.
+    ///
+    /// Each file is one source, such as the microphone and the remote side,
+    /// starting at the same moment. Your files are only read. The private copy
+    /// is deleted as each part's text is stored; audio not yet transcribed is
+    /// kept until `retry` succeeds or you delete the meeting, never expired.
+    /// Uses the configured speech-to-text provider, never its backup.
+    Process {
+        /// One or two WAV files, up to 3 hours each.
+        #[arg(required = true, num_args = 1..=2)]
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        title: Option<String>,
+        /// Stay and show progress until transcription ends. Without it the
+        /// command returns once the audio is stored; transcription continues
+        /// in the background even if this terminal closes.
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Transcription progress, audio waiting and its age, and audio storage use.
+    ///
+    /// Restarts background transcription that stopped unexpectedly for
+    /// meetings you already asked to transcribe.
+    Status {
+        /// `store_id:id`; omit for every meeting with audio.
+        id: Option<String>,
+    },
+    /// Recover after a crash, then transcribe waiting audio in the background.
+    ///
+    /// Failed parts get three new attempts. Audio is only sent to a provider
+    /// for meetings you ran this or `process` for.
+    Retry {
+        /// `store_id:id`; omit for every meeting with waiting audio.
+        id: Option<String>,
+        /// Stay and show progress until transcription ends.
+        #[arg(long)]
+        wait: bool,
+    },
     /// Read a versioned JSON transcript into the local meeting database.
     Import { file: PathBuf },
     /// Meetings whose start is in `[since, until)`.
@@ -322,7 +364,7 @@ pub enum MeetingCmd {
         #[arg(long)]
         cursor: Option<String>,
     },
-    /// Case-sensitive literal text search.
+    /// Literal text search. Letter case is ignored, accents are not.
     Search {
         query: String,
         /// JSON `next` cursor from the previous page.
@@ -345,7 +387,8 @@ pub enum MeetingCmd {
         #[arg(long)]
         force: bool,
     },
-    /// Delete one meeting, or retry physical cleanup once.
+    /// Delete one meeting and its audio, cancelling its transcription, or
+    /// retry physical cleanup once.
     Delete {
         /// `store_id:id`. Omit with `--retry` to retry cleanup only.
         id: Option<String>,

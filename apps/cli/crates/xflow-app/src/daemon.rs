@@ -4809,7 +4809,8 @@ mod tests {
             Some("Meet on Tuesday")
         );
     }
-    #[tokio::test]
+    // Measure the async deadline independently of shared CI wall-clock scheduling.
+    #[tokio::test(start_paused = true)]
     async fn a_failed_slow_or_answering_rewrite_leaves_the_selection_and_copies_the_dictation() {
         let answer: Arc<dyn TextTransformer> = Arc::new(RecordingTransformer(
             Mutex::default(),

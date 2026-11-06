@@ -39,6 +39,26 @@ const SCHEMA: &[&str] = &[
     "CREATE TRIGGER segment_delete AFTER DELETE ON segments BEGIN INSERT INTO segment_fts(segment_fts,rowid,text) VALUES ('delete',old.id,old.text); END",
     "CREATE TRIGGER segment_update AFTER UPDATE OF text ON segments BEGIN INSERT INTO segment_fts(segment_fts,rowid,text) VALUES ('delete',old.id,old.text); INSERT INTO segment_fts(rowid,text) VALUES (new.id,new.text); END",
 ];
+/// v2: audio journal, job ledger and segment provenance. Every row cascades
+/// with its meeting, so a deleted meeting leaves nothing to resurrect.
+const SCHEMA_V2: &[&str] = &[
+    "CREATE TABLE captures (meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE, state TEXT NOT NULL, created_ms INTEGER NOT NULL, ended_ms INTEGER, expected_ms INTEGER, reason TEXT, queued INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE capture_sources (meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, idx INTEGER NOT NULL, source_id TEXT NOT NULL, next_seq INTEGER NOT NULL DEFAULT 0, next_sample INTEGER NOT NULL DEFAULT 0, finished INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(meeting_id,idx))",
+    "CREATE TABLE pieces (id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, source_idx INTEGER NOT NULL, seq INTEGER NOT NULL, start_sample INTEGER NOT NULL, samples INTEGER NOT NULL, bytes INTEGER NOT NULL, hash TEXT NOT NULL, state TEXT NOT NULL, created_ms INTEGER NOT NULL, UNIQUE(meeting_id,source_idx,seq))",
+    "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, source_idx INTEGER NOT NULL, win INTEGER NOT NULL, overlap_sample INTEGER NOT NULL, start_sample INTEGER NOT NULL, end_sample INTEGER NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, budget INTEGER NOT NULL DEFAULT 3, not_before_ms INTEGER NOT NULL DEFAULT 0, error TEXT, UNIQUE(meeting_id,source_idx,win))",
+    "CREATE TABLE attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, provider TEXT NOT NULL, state TEXT NOT NULL, started_ms INTEGER NOT NULL, error TEXT)",
+    "CREATE TABLE segment_provenance (segment_id INTEGER PRIMARY KEY REFERENCES segments(id) ON DELETE CASCADE, job_id INTEGER NOT NULL, attempt_id INTEGER NOT NULL, timing TEXT NOT NULL, dedup TEXT NOT NULL, trimmed TEXT, language TEXT)",
+    "CREATE TABLE worker (singleton INTEGER PRIMARY KEY CHECK(singleton=1), pid INTEGER NOT NULL, started_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, state TEXT NOT NULL, error TEXT)",
+    "CREATE INDEX job_state ON jobs(meeting_id,state,start_sample)",
+    "CREATE INDEX attempt_job ON attempts(job_id)",
+    "CREATE INDEX provenance_job ON segment_provenance(job_id)",
+];
+pub(crate) const SCHEMA_VERSION: i64 = 2;
+/// v1 indexed case-sensitively. v2 folds case one character at a time
+/// (SQLite's Unicode table) and keeps accents, so `oauth` finds `OAuth` and
+/// `nino` does not find `niño`.
+const FTS_V1: &str = "CREATE VIRTUAL TABLE segment_fts USING fts5(text, content='segments', content_rowid='id', tokenize='trigram case_sensitive 1')";
+const FTS_V2: &str = "CREATE VIRTUAL TABLE segment_fts USING fts5(text, content='segments', content_rowid='id', tokenize='trigram case_sensitive 0')";
 
 #[derive(Clone, Debug)]
 pub struct MeetingStore {
@@ -159,13 +179,21 @@ impl MeetingStore {
         let mut db = open_writer(&self.path)?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         check_meeting(&tx, meeting)?;
+        // Jobs, attempts and pieces cascade, so no worker or recovery can
+        // commit text or re-import audio for this meeting afterwards.
         tx.execute("DELETE FROM meetings WHERE id=?1", [meeting.id])?;
         tx.execute(
             "UPDATE metadata SET edit_revision=edit_revision+1,cleanup_pending=1",
             [],
         )?;
         tx.commit()?;
-        checkpoint(&db)
+        let audio = super::journal::remove_deleted_audio(&self.path, &meeting.store_id, &db);
+        let status = checkpoint(&db)?;
+        Ok(if audio.is_err() {
+            DeleteStatus::PhysicalCleanupPending
+        } else {
+            status
+        })
     }
 
     /// One bounded attempt; caller schedules any further retry. No sleeping loop.
@@ -176,7 +204,14 @@ impl MeetingStore {
         if !self.path.exists() {
             return Ok(DeleteStatus::PhysicallyCleaned);
         }
-        checkpoint(&open_writer(&self.path)?)
+        let db = open_writer(&self.path)?;
+        let audio = super::journal::remove_deleted_audio(&self.path, &store_id(&db)?, &db);
+        let status = checkpoint(&db)?;
+        Ok(if audio.is_err() {
+            DeleteStatus::PhysicalCleanupPending
+        } else {
+            status
+        })
     }
 
     /// File modes while a connection is open. Sidecars may disappear after it closes.
@@ -337,7 +372,7 @@ fn explain_busy(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
-fn open_writer(path: &Path) -> Result<Connection> {
+pub(crate) fn open_writer(path: &Path) -> Result<Connection> {
     let path = private_path(path, true)?;
     let mut db = Connection::open_with_flags(
         &path,
@@ -354,7 +389,8 @@ fn open_writer(path: &Path) -> Result<Connection> {
         // One immediate transaction creates the schema or refuses a bad file
         // before any writer PRAGMA can rewrite it.
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if validate_schema(&tx, true)? {
+        let version = validate_schema(&tx, true)?;
+        if version == 0 {
             for ddl in SCHEMA {
                 tx.execute_batch(ddl)?;
             }
@@ -366,7 +402,25 @@ fn open_writer(path: &Path) -> Result<Connection> {
                 "INSERT INTO segment_fts(segment_fts,rank) VALUES ('secure-delete',1)",
                 [],
             )?;
-            tx.execute_batch("PRAGMA user_version=1;")?;
+        }
+        // v1 -> v2 in the same transaction: a crash or error leaves v1 as it was.
+        if version < SCHEMA_VERSION {
+            // Rebuild the index from the stored text, which is never touched.
+            // Secure-delete is on, so the old index pages are zeroed.
+            tx.execute_batch("DROP TABLE segment_fts;")?;
+            tx.execute_batch(FTS_V2)?;
+            tx.execute(
+                "INSERT INTO segment_fts(segment_fts,rank) VALUES ('secure-delete',1)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO segment_fts(segment_fts) VALUES ('rebuild')",
+                [],
+            )?;
+            for ddl in SCHEMA_V2 {
+                tx.execute_batch(ddl)?;
+            }
+            tx.execute_batch("PRAGMA user_version=2;")?;
         }
         tx.commit()?;
     }
@@ -390,16 +444,26 @@ fn open_writer(path: &Path) -> Result<Connection> {
     Ok(db)
 }
 
-fn validate_schema(db: &Connection, allow_empty: bool) -> Result<bool> {
+/// Returns the verified version; 0 is an empty file the writer may initialize.
+fn validate_schema(db: &Connection, allow_empty: bool) -> Result<i64> {
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    ensure!(version <= 1, ContractError::UnsupportedSchema(version));
+    ensure!(
+        version <= SCHEMA_VERSION,
+        ContractError::UnsupportedSchema(version)
+    );
     if version == 0 && allow_empty {
         let count: i64 = db.query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get(0))?;
         ensure!(count == 0, ContractError::MalformedStore);
-        return Ok(true);
+        return Ok(0);
     }
-    ensure!(version == 1, ContractError::MalformedStore);
-    for ddl in SCHEMA {
+    ensure!(version >= 1, ContractError::MalformedStore);
+    let (fts, v2): (&str, &[&str]) = if version == 2 {
+        (FTS_V2, SCHEMA_V2)
+    } else {
+        (FTS_V1, &[])
+    };
+    let common = SCHEMA.iter().filter(|ddl| **ddl != FTS_V1);
+    for ddl in common.chain([&fts]).chain(v2) {
         let actual: Option<String> = db
             .query_row("SELECT sql FROM sqlite_schema WHERE sql=?1", [*ddl], |r| {
                 r.get(0)
@@ -433,7 +497,11 @@ fn validate_schema(db: &Connection, allow_empty: bool) -> Result<bool> {
         )
         .optional()?;
     ensure!(secure == Some(1), ContractError::MalformedStore);
-    Ok(false)
+    Ok(version)
+}
+/// Pipeline tables exist (v2). A v1 file stays readable without them.
+pub(crate) fn has_pipeline(db: &Connection) -> Result<bool> {
+    Ok(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? >= 2)
 }
 
 fn private_path(path: &Path, create: bool) -> Result<PathBuf> {
@@ -504,6 +572,11 @@ fn private_sidecars(path: &Path, tighten: bool) -> Result<()> {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+                    // APFS can report nlink 0 while another process's SQLite
+                    // unlinks its journal: the name is already gone.
+                    if meta.nlink() == 0 {
+                        continue;
+                    }
                     ensure!(
                         meta.uid() == unsafe { libc::geteuid() } && meta.nlink() == 1,
                         "unsafe meeting sidecar permissions"
@@ -608,4 +681,104 @@ fn validate_import(bytes: &[u8]) -> Result<MeetingImport> {
         );
     }
     Ok(input)
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    /// An M1 (v1) store exactly as that release created it.
+    fn v1(dir: &Path, blocker: bool) -> PathBuf {
+        let path = dir.join("meetings.db");
+        let db = Connection::open(&path).unwrap();
+        for ddl in SCHEMA {
+            db.execute_batch(ddl).unwrap();
+        }
+        db.execute_batch("INSERT INTO metadata(singleton,store_id) VALUES (1,'00112233445566778899aabbccddeeff');
+            INSERT INTO segment_fts(segment_fts,rank) VALUES ('secure-delete',1);
+            INSERT INTO meetings(import_id,import_hash,import_json,started_at_ms,ended_at_ms,timezone) VALUES ('m1','h',x'7b7d',0,10,'Z');
+            INSERT INTO sources VALUES (1,'mic','{\"id\":\"mic\",\"label\":null,\"epoch\":0,\"provider\":null,\"model\":null}');
+            INSERT INTO segments(meeting_id,source_id,sequence,start_ms,end_ms,text) VALUES (1,'mic',0,0,5,'Sign in with OAuth, niño');
+            INSERT INTO revisions VALUES (1,1,'Sign in with OAuth, niño');
+            PRAGMA user_version=1;").unwrap();
+        if blocker {
+            // Makes the v2 step fail halfway, after the FTS rebuild.
+            db.execute_batch("CREATE TABLE jobs(x);").unwrap();
+        }
+        drop(db);
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+    fn state(path: &Path) -> (i64, String, String, i64) {
+        let db = Connection::open(path).unwrap();
+        (
+            db.query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap(),
+            db.query_row(
+                "SELECT sql FROM sqlite_schema WHERE name='segment_fts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap(),
+            db.query_row("SELECT group_concat(text,'|') FROM segments", [], |r| {
+                r.get(0)
+            })
+            .unwrap(),
+            db.query_row(
+                "SELECT count(*) FROM segment_fts WHERE segment_fts MATCH '\"oauth\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn v1_rebuilds_its_index_case_insensitively_and_keeps_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = v1(dir.path(), false);
+        assert_eq!(state(&path).3, 0, "v1 is case-sensitive");
+        drop(open_writer(&path).unwrap());
+        let (version, fts, text, hits) = state(&path);
+        assert_eq!((version, fts.as_str(), hits), (2, FTS_V2, 1));
+        assert_eq!(text, "Sign in with OAuth, niño");
+        let db = Connection::open(&path).unwrap();
+        let secure: i64 = db
+            .query_row(
+                "SELECT v FROM segment_fts_config WHERE k='secure-delete'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(secure, 1);
+        let revisions: String = db
+            .query_row("SELECT text FROM revisions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(revisions, "Sign in with OAuth, niño");
+        // Reopening is a no-op.
+        drop(open_writer(&path).unwrap());
+        assert_eq!(state(&path), (2, FTS_V2.into(), text, 1));
+    }
+
+    #[test]
+    fn failed_migration_leaves_v1_and_can_be_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = v1(dir.path(), true);
+        let before = state(&path);
+        assert!(open_writer(&path).is_err());
+        assert_eq!(
+            state(&path),
+            before,
+            "rolled back: v1 index and text intact"
+        );
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("DROP TABLE jobs;")
+            .unwrap();
+        drop(open_writer(&path).unwrap());
+        assert_eq!(state(&path).0, 2);
+        assert_eq!(state(&path).3, 1);
+    }
 }

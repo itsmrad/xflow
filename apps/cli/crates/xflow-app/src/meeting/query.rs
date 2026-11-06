@@ -7,7 +7,7 @@ use xflow_core::meeting::*;
 
 const SEGMENT_COLUMNS: &str =
     "s.meeting_id,s.id,s.source_id,s.sequence,s.start_ms,s.end_ms,s.revision,s.text";
-const SUMMARY_COLUMNS: &str = "m.id,m.title,m.started_at_ms,m.ended_at_ms,m.timezone,m.edit_revision,(SELECT count(*) FROM segments WHERE meeting_id=m.id),(SELECT count(*) FROM gaps WHERE meeting_id=m.id)";
+const SUMMARY_COLUMNS: &str = "m.id,m.title,m.started_at_ms,m.ended_at_ms,m.timezone,m.edit_revision,(SELECT count(*) FROM segments WHERE meeting_id=m.id),(SELECT count(*) FROM gaps WHERE meeting_id=m.id),m.import_id LIKE 'audio:%'";
 
 #[derive(Clone, Debug)]
 pub struct MeetingReader {
@@ -170,8 +170,11 @@ impl MeetingReader {
         }
     }
 
-    /// Literal, case-sensitive Unicode substring search; never accepts FTS syntax.
-    /// Short (<3 scalar) terms inspect at most 256 indexed candidates per call.
+    /// Literal Unicode substring search; never accepts FTS syntax. Case folds
+    /// one character at a time and accents count (`NIÑO` finds `niño`, `nino`
+    /// does not). Terms of 3+ scalars use the index's own match, so no row it
+    /// finds is dropped here. Short (<3 scalar) terms inspect at most 256
+    /// candidates per call with `fold`, which follows the same per-character rule.
     pub fn search(&self, query: &str, cursor: Option<&SearchCursor>) -> Result<SearchPage> {
         self.search_limited(query, cursor, MAX_PAGE_SEGMENTS)
     }
@@ -202,6 +205,7 @@ impl MeetingReader {
             } else {(None,0)};
             let snap=snapshot(db,"segments",revision,frozen)?;
             let short=query.chars().count()<3;
+            let folded=fold(query);
             let quoted=format!("\"{}\"",query.replace('"',"\"\""));
             let sql=if short {
                 format!("SELECT {SEGMENT_COLUMNS} FROM segments s WHERE s.id>?1 AND s.id<=?2 ORDER BY s.id LIMIT 256")
@@ -216,7 +220,7 @@ impl MeetingReader {
             while let Some(row)=rows.next()? {
                 let item=segment(row,&identity)?;
                 scanned+=1;
-                if item.text.contains(query) {
+                if !short || fold(&item.text).contains(&folded) {
                     if page.segments.len()==limit {exhausted=false;break;}
                     let id=item.id;
                     page.segments.push(item);
@@ -235,6 +239,23 @@ impl MeetingReader {
             Ok(page)
         })
     }
+}
+/// Per-character lowercase where Unicode maps it to exactly one character;
+/// anything else (`İ`, ligatures) is kept. Folding both sides identically
+/// means an exact-case match always matches.
+pub(crate) fn fold(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_ascii() {
+                return c.to_ascii_lowercase();
+            }
+            let mut lower = c.to_lowercase();
+            match (lower.next(), lower.next()) {
+                (Some(l), None) => l,
+                _ => c,
+            }
+        })
+        .collect()
 }
 fn global_revision(db: &Connection) -> Result<i64> {
     Ok(db.query_row("SELECT edit_revision FROM metadata", [], |r| r.get(0))?)
@@ -300,7 +321,11 @@ fn summary_row(row: &Row<'_>, store: &str) -> rusqlite::Result<MeetingSummary> {
         edit_revision: row.get(5)?,
         segment_count: row.get(6)?,
         gap_count: row.get(7)?,
-        provenance: Provenance::ImportedUnverified,
+        provenance: if row.get(8)? {
+            Provenance::TranscribedAudio
+        } else {
+            Provenance::ImportedUnverified
+        },
         notes: NotesStatus::Absent,
     })
 }

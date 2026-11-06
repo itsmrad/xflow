@@ -165,12 +165,12 @@ fn mixed_script_list_search_and_get_keep_provenance() {
     let literal = box_.run(&["meeting", "search", "\"NEAR\" AND *"]);
     assert!(literal.status.success(), "{}", stderr(&literal));
     assert!(stdout(&literal).contains("NEAR"));
-    let wrong_case = box_.run(&["meeting", "search", "oauth"]);
-    assert!(wrong_case.status.success(), "{}", stderr(&wrong_case));
+    let other_case = box_.run(&["meeting", "search", "oauth"]);
+    assert!(other_case.status.success(), "{}", stderr(&other_case));
     assert!(
-        stdout(&wrong_case).contains("No matches"),
+        stdout(&other_case).contains("OAuth"),
         "{}",
-        stdout(&wrong_case)
+        stdout(&other_case)
     );
 
     let got = box_.run(&["meeting", "get", &label(&meeting)]);
@@ -296,7 +296,7 @@ fn malformed_and_newer_databases_are_left_unchanged() {
 
     fs::remove_file(&db).unwrap();
     let conn = rusqlite::Connection::open(&db).unwrap();
-    conn.pragma_update(None, "user_version", 2).unwrap();
+    conn.pragma_update(None, "user_version", 3).unwrap();
     drop(conn);
     fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
     let newer_bytes = fs::read(&db).unwrap();
