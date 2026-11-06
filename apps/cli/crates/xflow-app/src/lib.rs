@@ -2,6 +2,7 @@ pub mod config_edit;
 #[cfg(unix)]
 pub mod daemon;
 pub mod gsettings;
+pub mod local_models;
 #[cfg(target_os = "macos")]
 mod macos_settings;
 #[cfg(target_os = "macos")]

@@ -104,7 +104,10 @@ pub fn smart_line(config: &Config) -> Option<String> {
 pub async fn missing_keys(config: &Config) -> (KeySource, KeySource) {
     // Custom servers can be anonymous on loopback; their connection check is
     // authoritative. Built-in local servers need no default credential.
-    let stt = if matches!(config.stt.provider.as_str(), "local" | "custom") {
+    let stt = if matches!(
+        config.stt.provider.as_str(),
+        "local" | "custom" | xflow_providers::ON_DEVICE
+    ) {
         KeySource::NotRequired
     } else {
         xflow_providers::key_status(&config.stt.provider, config.stt.api_key_env.as_deref()).await

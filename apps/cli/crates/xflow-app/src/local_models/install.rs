@@ -39,15 +39,15 @@ pub async fn install(
     artifact: &Artifact,
     source: Source<'_>,
     models: &Path,
-    progress: bool,
+    progress: Option<&dyn Fn(u64, u64)>,
 ) -> Result<bool> {
     let target = models.join(MODEL_ID);
     if installed(&target) {
         return Ok(false);
     }
     let stage = staging(models);
-    xflow_app::paths::private_dir(models)?;
-    xflow_app::paths::private_dir(&stage)?;
+    crate::paths::private_dir(models)?;
+    crate::paths::private_dir(&stage)?;
     let staged: u64 = artifact
         .files
         .iter()
@@ -142,7 +142,7 @@ async fn download(
     url: &str,
     partial: &Path,
     file: &File,
-    meter: &mut Meter,
+    meter: &mut Meter<'_>,
 ) -> Result<()> {
     let mut have = std::fs::metadata(partial).map(|m| m.len()).unwrap_or(0);
     if have > file.bytes {
@@ -264,45 +264,37 @@ fn free_bytes(_: &Path) -> Option<u64> {
     None
 }
 
-struct Meter {
+/// Bytes done of the total, reported at most every 250 ms and once at the end.
+struct Meter<'a> {
     total: u64,
     done: u64,
-    started: Instant,
     shown: Option<Instant>,
-    enabled: bool,
+    report: Option<&'a dyn Fn(u64, u64)>,
 }
-impl Meter {
-    fn new(total: u64, enabled: bool) -> Self {
+impl<'a> Meter<'a> {
+    fn new(total: u64, report: Option<&'a dyn Fn(u64, u64)>) -> Self {
         Self {
             total,
             done: 0,
-            started: Instant::now(),
             shown: None,
-            enabled,
+            report,
         }
     }
     fn add(&mut self, bytes: u64) {
         self.done += bytes;
-        if self.enabled
-            && self
+        if let Some(report) = self.report {
+            if self
                 .shown
                 .is_none_or(|t| t.elapsed() >= Duration::from_millis(250))
-        {
-            self.shown = Some(Instant::now());
-            self.print();
+            {
+                self.shown = Some(Instant::now());
+                report(self.done, self.total);
+            }
         }
     }
-    fn print(&self) {
-        let rate = self.done as f64 / self.started.elapsed().as_secs_f64().max(0.001) / 1e6;
-        eprint!(
-            "\r{MODEL_ID}: {} / {} bytes ({rate:.1} MB/s)   ",
-            self.done, self.total
-        );
-    }
     fn finish(&self) {
-        if self.enabled {
-            self.print();
-            eprintln!();
+        if let Some(report) = self.report {
+            report(self.done, self.total);
         }
     }
 }
@@ -441,7 +433,7 @@ mod tests {
         let models = root.path().join("models");
         let server = server(Mode::Normal).await;
         assert!(
-            install(&artifact(), Source::Http(&server.url), &models, false)
+            install(&artifact(), Source::Http(&server.url), &models, None)
                 .await
                 .unwrap()
         );
@@ -451,7 +443,7 @@ mod tests {
         // Already installed: no request at all.
         let before = server.requests.lock().unwrap().len();
         assert!(
-            !install(&artifact(), Source::Http(&server.url), &models, false)
+            !install(&artifact(), Source::Http(&server.url), &models, None)
                 .await
                 .unwrap()
         );
@@ -465,7 +457,7 @@ mod tests {
             let models = root.path().join("models");
             seed_partial(&models, &content()[0].1[..1000]);
             let server = server(mode).await;
-            install(&artifact(), Source::Http(&server.url), &models, false)
+            install(&artifact(), Source::Http(&server.url), &models, None)
                 .await
                 .unwrap();
             assert_eq!(weights(&models), content()[0].1);
@@ -482,7 +474,7 @@ mod tests {
         let models = root.path().join("models");
         seed_partial(&models, &[0xff; 1000]);
         let server = server(Mode::Normal).await;
-        install(&artifact(), Source::Http(&server.url), &models, false)
+        install(&artifact(), Source::Http(&server.url), &models, None)
             .await
             .unwrap();
         assert_eq!(weights(&models), content()[0].1);
@@ -494,7 +486,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let models = root.path().join("models");
             let server = server(mode).await;
-            let error = install(&artifact(), Source::Http(&server.url), &models, false)
+            let error = install(&artifact(), Source::Http(&server.url), &models, None)
                 .await
                 .unwrap_err();
             assert!(format!("{error:#}").contains("verification"), "{error:#}");
@@ -508,13 +500,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let models = root.path().join("models");
         let server = server(Mode::CutOnce(20_000)).await;
-        let error = install(&artifact(), Source::Http(&server.url), &models, false)
+        let error = install(&artifact(), Source::Http(&server.url), &models, None)
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("resume"), "{error:#}");
         assert_eq!(std::fs::metadata(partial(&models)).unwrap().len(), 20_000);
         assert!(!models.join(MODEL_ID).exists());
-        install(&artifact(), Source::Http(&server.url), &models, false)
+        install(&artifact(), Source::Http(&server.url), &models, None)
             .await
             .unwrap();
         assert_eq!(weights(&models), content()[0].1);
@@ -539,9 +531,18 @@ mod tests {
         std::fs::create_dir_all(models.join(MODEL_ID)).unwrap();
         std::fs::write(models.join(MODEL_ID).join("stale"), "x").unwrap();
         assert!(!installed(&models.join(MODEL_ID)));
-        install(&artifact(), Source::Dir(&source), &models, false)
-            .await
-            .unwrap();
+        let last = std::cell::Cell::new((0, 0));
+        install(
+            &artifact(),
+            Source::Dir(&source),
+            &models,
+            Some(&|done, total| last.set((done, total))),
+        )
+        .await
+        .unwrap();
+        // Progress ends at the full size.
+        let total = artifact().download_bytes;
+        assert_eq!(last.get(), (total, total));
         assert_eq!(weights(&models), content()[0].1);
         assert!(!models.join(MODEL_ID).join("stale").exists());
         let wrong = tempfile::tempdir().unwrap();
@@ -550,7 +551,7 @@ mod tests {
             &artifact(),
             Source::Dir(&source),
             &wrong.path().join("m"),
-            false,
+            None,
         )
         .await
         .unwrap_err();

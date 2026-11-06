@@ -297,6 +297,10 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
             ("Esc stop setup", None),
         ],
         Some(Modal::Setup(_)) => vec![("Enter close", None)],
+        Some(Modal::OnDevice { removing: true, .. }) => {
+            vec![("Enter remove", None), ("Esc keep", None)]
+        }
+        Some(Modal::OnDevice { .. }) => on_device_keys(app),
         None => {
             let mut out: Vec<(&'static str, Option<Action>)> = match app.page {
                 Page::Home => vec![
@@ -768,6 +772,7 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
         Modal::Search => 7,
         Modal::Confirm { .. } => 7,
         Modal::Setup(_) => 16,
+        Modal::OnDevice { .. } => 22,
         Modal::Editor(e) if e.picking() => {
             let field = &e.fields[e.focus];
             (field.choices.len() + e.fields.len() + intro_height(&e.intro, 70) as usize + 6).min(24)
@@ -849,7 +854,48 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
         ),
         Modal::Setup(step) => setup(frame, rect, app, *step),
         Modal::Editor(e) => editor(frame, rect, app, e, hits),
+        Modal::OnDevice {
+            setup,
+            removing,
+            error,
+        } => frame.render_widget(
+            Paragraph::new(app.on_device_text(*removing, error.as_deref()))
+                .wrap(Wrap { trim: false })
+                .block(
+                    block(
+                        app,
+                        if *setup {
+                            "Step 2 of 4 · On this Mac (offline)"
+                        } else {
+                            "Speech · On this Mac (offline)"
+                        },
+                    )
+                    .padding(pad),
+                ),
+            rect,
+        ),
     }
+}
+fn on_device_keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
+    use super::on_device::{Job, Next};
+    let mut keys = match app.on_device_next() {
+        Next::Back => vec![("Enter back", None)],
+        Next::Wait => vec![],
+        Next::Install => vec![("Enter install", None)],
+        Next::Retry => vec![("Enter retry", None)],
+        Next::Use => vec![("Enter use it", None)],
+        Next::Done => vec![("Enter done", None)],
+    };
+    if matches!(app.install, Job::Running { .. }) {
+        keys.push(("x cancel", None));
+    }
+    if app.facts.as_ref().is_some_and(|f| f.installed)
+        && matches!(app.install, Job::Idle | Job::Failed(_))
+    {
+        keys.push(("d remove", None));
+    }
+    keys.push(("Esc back", None));
+    keys
 }
 fn setup(frame: &mut Frame, rect: Rect, app: &App, step: Step) {
     let speak = match app.shortcut() {

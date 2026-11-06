@@ -210,12 +210,16 @@ pub fn blurb(id: &str) -> &'static str {
         "fireworks" => "fast open models",
         "ollama" => "runs on this computer",
         "local" => "a speech server on this computer",
+        "on-device" => "private, no key, 25 languages",
         "custom" => "your own server",
         _ => "",
     }
 }
 
 fn provider_name(id: &str) -> String {
+    if id == xflow_providers::ON_DEVICE {
+        return "On this Mac (offline)".into();
+    }
     xflow_providers::stt_providers()
         .iter()
         .chain(xflow_providers::cleanup_providers())
