@@ -161,13 +161,21 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         ),
         header[1],
     );
-    let nav_width = if area.width >= 70 { 18 } else { 14 };
+    // 16 leaves 14 inside the border: " 3  Dictionary" and " 8  Your stats".
+    let nav_width = if area.width >= 70 { 18 } else { 16 };
     let body =
         Layout::horizontal([Constraint::Length(nav_width), Constraint::Min(1)]).split(rows[1]);
+    let selected = app.page.index();
     let items = PAGES
         .iter()
         .enumerate()
-        .map(|(i, page)| ListItem::new(format!(" {}  {}", i + 1, page.title())))
+        .map(|(i, page)| {
+            let mut label = format!(" {}  {}", i + 1, page.title());
+            if i == selected {
+                label.replace_range(..1, ">");
+            }
+            ListItem::new(label)
+        })
         .collect::<Vec<_>>();
     let mut nav = ListState::default().with_selected(Some(app.page.index()));
     frame.render_stateful_widget(
@@ -215,6 +223,17 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         }
         let rect = Rect::new(x + gap, rows[3].y, width, 1);
         frame.render_widget(Paragraph::new(label).style(muted(app)), rect);
+        if let Some(end) = label.find(' ') {
+            let key = &label[..end];
+            if key.len() == 1 || key.len() == 6 || (key.len() <= 5 && !key.starts_with('P')) {
+                let cols = frame.area().width as usize;
+                let start = rect.y as usize * cols + rect.x as usize;
+                let buf = frame.buffer_mut();
+                for cell in start..start + key.chars().count() {
+                    buf.content[cell].modifier.insert(Modifier::BOLD);
+                }
+            }
+        }
         if let Some(action) = action {
             hits.actions.push((rect, action));
         }

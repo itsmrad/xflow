@@ -5,7 +5,7 @@ use super::{
 };
 use crate::config_edit::ConfigFile;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{backend::TestBackend, style::Modifier, Terminal};
 use std::{collections::BTreeMap, path::PathBuf};
 use xflow_core::{
     ipc::{Delivery, HistoryEntry, Request, Response},
@@ -849,4 +849,77 @@ fn save_compares_and_writes_under_the_config_lock() {
     assert!(std::fs::read_to_string(file.path())
         .unwrap()
         .contains("midnight"));
+}
+
+fn app_with(colors: ColorMode) -> (tempfile::TempDir, App) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let file = ConfigFile::load(&path).unwrap();
+    let mut app = App::new(path, colors);
+    app.load(file, None).unwrap();
+    app.now = Some(1790859600 + 120);
+    (dir, app)
+}
+
+#[test]
+fn compact_nav_shows_full_labels_and_keys_are_bold_without_color() {
+    for colors in [ColorMode::TrueColor, ColorMode::Ansi, ColorMode::None] {
+        let (_dir, mut app) = app_with(colors);
+        app.disk = Some(app.file.as_ref().unwrap().to_string());
+        app.connected = true;
+        app.event(Response::status(State::Idle, 0.0));
+        app.page = Page::Home;
+        let mode = match colors {
+            ColorMode::TrueColor => "truecolor",
+            ColorMode::Ansi => "ansi",
+            ColorMode::None => "none",
+        };
+        let text = screen(&app, 40, 16);
+        assert!(
+            text.contains(">1  Home"),
+            "selected page needs a text marker in {mode}:\n{text}"
+        );
+        assert!(
+            text.contains(" 3  Dictionary"),
+            "compact nav clipped Dictionary in {mode}:\n{text}"
+        );
+        assert!(
+            text.contains(" 8  Your stats"),
+            "compact nav clipped Your stats in {mode}:\n{text}"
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                render::draw(frame, &app);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let y = 23;
+        let row: String = (0..80).map(|x| buffer[(x, y)].symbol()).collect();
+        let space = row.find("Space").expect(&row);
+        let dictate = row.find("dictate").expect(&row);
+        assert!(
+            buffer[(space as u16, y)].modifier.contains(Modifier::BOLD),
+            "key should be bold: {row}"
+        );
+        assert!(
+            !buffer[(dictate as u16, y)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "action should not be bold: {row}"
+        );
+        if matches!(colors, ColorMode::None) {
+            let mark = (0..24).find_map(|row| {
+                (0..80).find_map(|x| {
+                    let cell = &buffer[(x, row)];
+                    (cell.symbol() == ">").then_some((cell.fg, cell.bg))
+                })
+            });
+            assert_eq!(
+                mark,
+                Some((ratatui::style::Color::Reset, ratatui::style::Color::Reset)),
+                "NO_COLOR selection must not depend on a painted cell"
+            );
+        }
+    }
 }

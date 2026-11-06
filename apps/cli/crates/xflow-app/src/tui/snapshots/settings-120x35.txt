@@ -5,7 +5,7 @@
 │ 3  Dictionary  ││            Backup provider       None                   ││                                         │
 │ 4  Snippets    ││            Model                 Recommended            ││ Walk through the speech service, key,   │
 │ 5  Styles      ││            API key               Added                  ││ microphone and shortcut again.          │
-│ 6  Settings    ││            Preferred languages   Automatic              ││                                         │
+│>6  Settings    ││            Preferred languages   Automatic              ││                                         │
 │ 7  Pill        ││            Fixed language        Automatic              ││ Enter to open.                          │
 │ 8  Your stats  ││            Microphone            Automatic              ││                                         │
 │ 9  Check-up    ││            Ignore speaker sound  Off                    ││                                         │
