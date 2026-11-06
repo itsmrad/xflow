@@ -172,8 +172,8 @@ fn malformed_foreign_and_newer_schemas_are_untouched() {
         ),
         (
             "newer",
-            "PRAGMA user_version=3;",
-            ContractError::UnsupportedSchema(3),
+            "PRAGMA user_version=4;",
+            ContractError::UnsupportedSchema(4),
         ),
         (
             "malformed",
