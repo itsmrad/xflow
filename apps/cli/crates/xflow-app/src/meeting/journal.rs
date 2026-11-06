@@ -249,7 +249,7 @@ fn write_piece(dir: &Path, name: &str, header: &Header, payload: &[u8]) -> std::
     fault("piece:dirsynced")
 }
 
-fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)

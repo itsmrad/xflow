@@ -706,7 +706,7 @@ pub fn worker(config: &Path) -> Result<()> {
         let mut log = |line: &str| {
             eprintln!(
                 "{} meeting-worker[{}]: {}",
-                transcribe::now_ms(),
+                journal::now_ms(),
                 std::process::id(),
                 meeting::display_text(line)
             );
@@ -733,7 +733,7 @@ fn wait_for(db: &Path, meeting: Option<&MeetingId>, config: &Path, out: &Output)
             db,
             meeting.map(|m| m.id),
             Limits::from_env(),
-            transcribe::now_ms(),
+            journal::now_ms(),
         )
         .map_err(store_err)?;
         let mut sum = jobs::Windows::default();
@@ -811,7 +811,7 @@ fn status(id: Option<&str>, config: &Path, out: &Output) -> Result<()> {
         &db,
         id.as_ref().map(|m| m.id),
         Limits::from_env(),
-        transcribe::now_ms(),
+        journal::now_ms(),
     )
     .map_err(store_err)?;
     if let Some(id) = &id {

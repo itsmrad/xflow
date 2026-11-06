@@ -3,7 +3,8 @@
 //! xflow process (a file lock). Dictation goes first: no meeting request is
 //! sent while the daemon is listening or processing.
 use super::jobs::{self, Accepted, Failed, Job};
-use super::{fault, journal, store::open_writer};
+use super::journal::{self, now_ms};
+use super::{fault, store::open_writer};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -44,12 +45,6 @@ pub fn lock_worker(db_path: &Path, wait: bool) -> Result<Option<WorkerLock>> {
     Ok(Some(WorkerLock(file)))
 }
 
-pub fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
 fn lock(db: &Mutex<Connection>) -> std::sync::MutexGuard<'_, Connection> {
     db.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
