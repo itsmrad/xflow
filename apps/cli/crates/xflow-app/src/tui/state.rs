@@ -2267,107 +2267,108 @@ impl App {
                     fields,
                 );
             }
-            Page::Styles => {
-                let index = (!new).then_some(pos);
-                let style = index.and_then(|i| self.config.styles.get(i));
-                let mut apps: Vec<String> = [
-                    "com.apple.mail",
-                    "com.apple.Notes",
-                    "com.apple.Safari",
-                    "com.google.Chrome",
-                    "com.tinyspeck.slackmacgap",
-                    "com.microsoft.VSCode",
-                    "slack",
-                    "discord",
-                    "telegram",
-                    "code",
-                    "firefox",
-                    "thunderbird",
-                    "org.gnome.Terminal",
-                ]
-                .into_iter()
-                .map(String::from)
-                .collect();
-                apps.extend(self.history.iter().filter_map(|h| h.app_id.clone()));
-                apps.extend(
-                    self.config
-                        .styles
-                        .iter()
-                        .flat_map(|s| s.apps.iter().cloned()),
-                );
-                apps.sort();
-                apps.dedup();
-                let current_apps = style
-                    .map(|s| s.apps.join(", "))
-                    .unwrap_or_else(|| apps[0].clone());
-                let mut modes: Vec<String> = ["inherit", "raw", "light", "polished"]
-                    .map(String::from)
-                    .to_vec();
-                if style.and_then(|s| s.prompt.as_deref()).is_some() {
-                    modes.push("custom".into());
-                }
-                let fields = vec![
-                    Field::pick(
-                        "Name",
-                        style
-                            .map(|s| s.name.clone())
-                            .unwrap_or_else(|| "Chat".into()),
-                        ["Chat", "Email", "Notes", "Code", "Formal"]
-                            .map(String::from)
-                            .to_vec(),
-                        str::to_string,
-                    ),
-                    Field::pick("App", current_apps, apps, |a| {
-                        a.split(", ")
-                            .map(options::app_name)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }),
-                    Field::pick(
-                        "Cleanup",
-                        style
-                            .and_then(|s| s.mode)
-                            .map(mode_label)
-                            .unwrap_or("inherit"),
-                        modes,
-                        |m| {
-                            if m == "inherit" {
-                                "Same as Settings".into()
-                            } else {
-                                value_text("cleanup.mode", m)
-                            }
-                        },
-                    ),
-                    Field::pick(
-                        "Tone",
-                        style.and_then(|s| s.prompt.as_deref()).unwrap_or(""),
-                        [
-                            "",
-                            "Use a friendly conversational tone.",
-                            "Use professional, concise language.",
-                            "Preserve technical terms and code identifiers.",
-                        ]
-                        .map(String::from)
-                        .to_vec(),
-                        |t| {
-                            if t.is_empty() {
-                                "No extra instructions".into()
-                            } else {
-                                t.into()
-                            }
-                        },
-                    ),
-                ];
-                self.edit(
-                    EditTarget::Style(index),
-                    "Style",
-                    "Pick an app and how text written there should sound. The first matching style wins.",
-                    fields,
-                );
-            }
+            Page::Styles => self.open_style((!new).then_some(pos)),
             _ => (),
         }
         vec![]
+    }
+    /// The style editor for `index`, or a new style.
+    fn open_style(&mut self, index: Option<usize>) {
+        let style = index.and_then(|i| self.config.styles.get(i));
+        let mut apps: Vec<String> = [
+            "com.apple.mail",
+            "com.apple.Notes",
+            "com.apple.Safari",
+            "com.google.Chrome",
+            "com.tinyspeck.slackmacgap",
+            "com.microsoft.VSCode",
+            "slack",
+            "discord",
+            "telegram",
+            "code",
+            "firefox",
+            "thunderbird",
+            "org.gnome.Terminal",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        apps.extend(self.history.iter().filter_map(|h| h.app_id.clone()));
+        apps.extend(
+            self.config
+                .styles
+                .iter()
+                .flat_map(|s| s.apps.iter().cloned()),
+        );
+        apps.sort();
+        apps.dedup();
+        let current_apps = style
+            .map(|s| s.apps.join(", "))
+            .unwrap_or_else(|| apps[0].clone());
+        let mut modes: Vec<String> = ["inherit", "raw", "light", "polished"]
+            .map(String::from)
+            .to_vec();
+        if style.and_then(|s| s.prompt.as_deref()).is_some() {
+            modes.push("custom".into());
+        }
+        let fields = vec![
+            Field::pick(
+                "Name",
+                style
+                    .map(|s| s.name.clone())
+                    .unwrap_or_else(|| "Chat".into()),
+                ["Chat", "Email", "Notes", "Code", "Formal"]
+                    .map(String::from)
+                    .to_vec(),
+                str::to_string,
+            ),
+            Field::pick("App", current_apps, apps, |a| {
+                a.split(", ")
+                    .map(options::app_name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }),
+            Field::pick(
+                "Cleanup",
+                style
+                    .and_then(|s| s.mode)
+                    .map(mode_label)
+                    .unwrap_or("inherit"),
+                modes,
+                |m| {
+                    if m == "inherit" {
+                        "Same as Settings".into()
+                    } else {
+                        value_text("cleanup.mode", m)
+                    }
+                },
+            ),
+            Field::pick(
+                "Tone",
+                style.and_then(|s| s.prompt.as_deref()).unwrap_or(""),
+                [
+                    "",
+                    "Use a friendly conversational tone.",
+                    "Use professional, concise language.",
+                    "Preserve technical terms and code identifiers.",
+                ]
+                .map(String::from)
+                .to_vec(),
+                |t| {
+                    if t.is_empty() {
+                        "No extra instructions".into()
+                    } else {
+                        t.into()
+                    }
+                },
+            ),
+        ];
+        self.edit(
+            EditTarget::Style(index),
+            "Style",
+            "Pick an app and how text written there should sound. The first matching style wins.",
+            fields,
+        );
     }
     fn apply_editor(&mut self, editor: &mut Editor) -> Result<Vec<Effect>> {
         // Move secrets directly into a zeroizing payload; never clone them into
