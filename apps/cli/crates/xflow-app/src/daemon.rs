@@ -2787,10 +2787,14 @@ async fn watch_pinned(
                     continue 'watch;
                 }
                 commit_at = None;
-                pending.clear();
                 settled = good.clone();
                 commits.edited = Some(pending_since);
+                let filtered = std::mem::take(&mut pending);
                 if let Err(outcome) = commits.save(original.clone(), good.clone()).await {
+                    // Not asked again this watch; a failed save may still go at its end.
+                    if outcome.starts_with("filtered:") {
+                        commits.done.extend(filtered);
+                    }
                     commits.outcomes.push(outcome);
                 }
             }

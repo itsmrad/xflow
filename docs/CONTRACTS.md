@@ -61,7 +61,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | `last`, `copy_last`, `paste_last` | — | unchanged |
 | `history` | `limit`, `offset` (default 0), `query` (case-insensitive substring) | `history` rows newest first, `total` = matching rows |
 | `history_get` / `history_delete` / `history_copy` / `history_paste` | `id` | `entry` for get; injection outcome for paste |
-| `history_update` | `id`, `text` | replaces the entry text (first text kept as `raw_text`); with `auto_learn`, learns close word corrections (vocabulary only) exactly like a corrected paste; command-mode entries learn nothing. Reply: updated `entry`; `message` = "Added 'X' to your dictionary" when something was learned |
+| `history_update` | `id`, `text` | replaces the entry text (first text kept as `raw_text`); with `auto_learn`, learns close word corrections exactly like a corrected paste (see the tiers in ARCHITECTURE); command-mode entries learn nothing. Reply: updated `entry`; `message` = "Added 'X' to your dictionary" when something was learned |
 | `clear_history` | — | clears persisted rows even with history disabled; also clears the in-memory last result/timings |
 | `retry` | `full` (bool), `delivery` (as `start`), `discard` (bool) | idle only; transcribes the dictation kept by `privacy.keep_failed_audio` again, then cleans up and delivers it to the current focus. Parts already delivered are left out unless `full`; `discard` deletes it instead. Replies `processing`; the final event is a normal session's. Every status and event carries `failed_audio` (created_at, expires_at, audio_ms, partial) while one is kept |
 | `stats` | — | `stats` (sessions, words, audio_ms, today, streak, wpm, latency p50/p95) |
@@ -147,8 +147,9 @@ and requests unchanged, and the delivery adapter always rechecks live focus.
 - `Desktop::focused_text()` — focus context plus the value of the focused editable field, from one
   lookup, for correction learning (text `None` by default; macOS Accessibility only, `None` for
   secure fields and terminals).
-- `learn::{Receipt, corrections, review}` and `DictionaryConfig::{learn, promote, derive, forget,
-  targeting, fingerprint}` — pure correction learning shared by the paste observer and `history_update`.
+- `learn::{Receipt, corrections, review}` and `DictionaryConfig::{adopt, promote, forget,
+  fingerprint}` — pure correction learning shared by the paste observer and `history_update`.
+- `read_field`, `BoundedReader`, `FieldSource`, `ReadGate` — guarded, bounded field reads and their stop protocol.
 - `FieldEvent::{Changed, Focus, Merged}` — `Merged` is a value change folded into the one before it;
   it never schedules a read.
 - `AudioCapture::microphone()` — last successfully opened input and selection notices; default `None`.
