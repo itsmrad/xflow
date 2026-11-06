@@ -461,13 +461,16 @@ pub fn review(
     }
     // Punctuation-only tokens ("->", "=") are not words: they take no part in
     // the alignment and never end up inside a learned term.
-    let tokens = |s| -> Vec<&str> {
+    let raw = |s| -> Vec<&str> {
         str::split_whitespace(s)
-            .map(key)
-            .filter(|w| !w.is_empty())
+            .filter(|w| !key(w).is_empty())
             .collect()
     };
-    let (a, b) = (tokens(original), tokens(corrected));
+    let (ra, rb) = (raw(original), raw(corrected));
+    let (a, b): (Vec<&str>, Vec<&str>) = (
+        ra.iter().map(|w| key(w)).collect(),
+        rb.iter().map(|w| key(w)).collect(),
+    );
     if !similar(original, corrected) {
         return Err("dissimilar");
     }
@@ -487,13 +490,74 @@ pub fn review(
         rejected: "no-edit",
         ..Corrections::default()
     };
-    let (mut i, mut j, mut from, mut to) = (0, 0, 0, 0);
+    // A name fixed in one word is fixed whole: the recapitalized words beside it
+    // ("martin luter king" -> "Martin Luther King") join it, never across
+    // punctuation, so "priyanca. please" -> "Priyanka. Please" stays one word.
+    // Some(true) is such a word; Some(false) a particle ("of", "van") that needs
+    // one beyond it. `edge` is the boundary that must have no punctuation.
+    let capital = |w: &str| w.starts_with(char::is_uppercase);
+    let joins = |p: usize, q: usize, edge: (usize, usize)| -> Option<bool> {
+        let glued = |raw: &[&str], keys: &[&str], e: usize| {
+            raw[e].ends_with(keys[e]) && raw[e + 1].starts_with(keys[e + 1])
+        };
+        if !glued(&ra, &a, edge.0) || !glued(&rb, &b, edge.1) {
+            return None;
+        }
+        let (x, y) = (a[p], b[q]);
+        if x != y && capital(y) && !crate::snap::FUNCTION_WORDS.contains(&la[p].as_str()) {
+            Some(true)
+        } else if x == y && PARTICLES.contains(&x) {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    let (mut i, mut j, mut from, mut to, mut floor) = (0, 0, 0, 0, 0);
     loop {
         let matched = i < a.len() && j < b.len() && la[i] == lb[j];
         if matched || (i == a.len() && j == b.len()) {
+            let mut right = 0;
             if from < i || to < j {
                 match hunk(&a[from..i], &b[to..j]) {
-                    Ok(pairs) => {
+                    Ok(mut pairs) => {
+                        if b[to..j].iter().all(|w| capital(w)) {
+                            let core = j - to;
+                            let (mut left, mut d) = (0, 0);
+                            while from - d > floor && core + d < MAX_NAME_WORDS {
+                                let (p, q) = (from - d - 1, to - d - 1);
+                                let Some(word) = joins(p, q, (p, q)) else {
+                                    break;
+                                };
+                                d += 1;
+                                if word {
+                                    left = d;
+                                }
+                            }
+                            let mut e = 0;
+                            while i + e < a.len()
+                                && j + e < b.len()
+                                && la[i + e] == lb[j + e]
+                                && core + left + e < MAX_NAME_WORDS
+                            {
+                                let (p, q) = (i + e, j + e);
+                                let Some(word) = joins(p, q, (p - 1, q - 1)) else {
+                                    break;
+                                };
+                                e += 1;
+                                if word {
+                                    right = e;
+                                }
+                            }
+                            if left + right > 0 {
+                                match candidate(
+                                    &a[from - left..i + right],
+                                    &b[to - left..j + right],
+                                ) {
+                                    Ok(whole) => pairs = vec![whole],
+                                    Err(_) => right = 0,
+                                }
+                            }
+                        }
                         for c in pairs {
                             // A removed word is not learned back in either direction.
                             if never(&c.to) || never(&c.from) {
@@ -523,6 +587,12 @@ pub fn review(
                     }
                     Err(reason) => found.rejected = reason,
                 }
+                floor = i + right;
+            }
+            if right > 0 {
+                (i, j) = (i + right, j + right);
+                (from, to) = (i, j);
+                continue;
             }
             if !matched {
                 break;
@@ -549,17 +619,33 @@ pub fn review(
 /// shorter start or end of the new text that already matches wins.
 fn hunk(from: &[&str], to: &[&str]) -> Result<Vec<Replacement>, &'static str> {
     let (n, m) = (from.len(), to.len());
+    // A part of the new text that drops letters the dictated words had is not the
+    // fix: "sanfrancisco" -> "San Francisco" is never "Francisco".
+    let drops = |f: &[&str], part: &[&str]| {
+        let heard = letters(&f.concat());
+        distance(&heard, &letters(&part.concat())) > distance(&heard, &letters(&to.concat()))
+    };
     for len in 1..m.min(MAX_HUNK_WORDS + 1) {
         for part in [&to[..len], &to[m - len..]] {
+            if drops(from, part) {
+                continue;
+            }
             if let Ok(c) = candidate(from, part) {
                 return Ok(vec![c]);
             }
         }
     }
     let k = n.min(m);
+    let slice = |f: &[&str], t: &[&str]| {
+        if drops(f, t) {
+            Err("shape")
+        } else {
+            aligned(f, t)
+        }
+    };
     aligned(from, to)
-        .or_else(|e| aligned(&from[..k], &to[..k]).map_err(|_| e))
-        .or_else(|e| aligned(&from[n - k..], &to[m - k..]).map_err(|_| e))
+        .or_else(|e| slice(&from[..k], &to[..k]).map_err(|_| e))
+        .or_else(|e| slice(&from[n - k..], &to[m - k..]).map_err(|_| e))
 }
 /// As many words on each side are compared word for word, so a fix beside
 /// another edit is learned alone: "Priyanca about" -> "Priyanka abouts" is one
@@ -575,9 +661,23 @@ fn aligned(from: &[&str], to: &[&str]) -> Result<Vec<Replacement>, &'static str>
         .zip(to)
         .map(|(f, t)| candidate(&[f], &[t]))
         .collect();
-    if pairs.iter().any(|p| matches!(p, Err("not-close"))) {
-        if let Ok(whole) = candidate(from, to) {
-            return Ok(vec![whole]);
+    // Accents respelled on every word are one term: "creme brulee" -> "crème brûlée".
+    let bare = |s: &str| -> Vec<char> {
+        folded(s)
+            .into_iter()
+            .map(|c| c.0)
+            .filter(|c| unicode_normalization::char::canonical_combining_class(*c) == 0)
+            .collect()
+    };
+    let accents =
+        pairs.iter().all(Result::is_ok) && from.iter().zip(to).all(|(f, t)| bare(f) == bare(t));
+    if accents || pairs.iter().any(|p| matches!(p, Err("not-close"))) {
+        match candidate(from, to) {
+            Ok(whole) => return Ok(vec![whole]),
+            // A word rewritten beside a close one, and not close together: a
+            // rewrite ("will file" -> "I'll archive"), nothing is learned.
+            Err("not-close") if !accents => return Err("not-close"),
+            Err(_) => {}
         }
     }
     let first = pairs.iter().find_map(|p| p.as_ref().err().copied());
@@ -613,9 +713,12 @@ fn attached(from: &str, to: &str, x: &[char], y: &[char]) -> bool {
         return whole || (rest.chars().count() >= 2 && everyday(&rest)) || in_front;
     }
     let joined = to.to_lowercase();
+    let capitals = |s: &str| s.chars().filter(|c| c.is_uppercase()).count();
+    // A join that adds a capital is a term: "post gress" -> "Postgres".
     words.len() > 1
         && x != y
         && !to.contains(' ')
+        && capitals(to) <= capitals(from)
         && words.iter().any(|w| {
             w.chars().count() >= 3
                 && everyday(w)
@@ -637,15 +740,23 @@ fn key(token: &str) -> &str {
 /// every day/everyday) are not.
 fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
     // Four dictated words may make a name of one or two ("Rim pass or car" ->
-    // "Rimpa Sarkar").
+    // "Rimpa Sarkar"); a name may run to four words, heard as many ("New York
+    // Stock Exchange").
     let heard = from.len();
+    let name = name_cased(to);
     if from.is_empty()
         || to.is_empty()
-        || to.len() > MAX_HUNK_WORDS
-        || heard > MAX_HUNK_WORDS + usize::from(to.len() <= 2)
+        || to.len() > MAX_HUNK_WORDS + usize::from(name)
+        || heard > MAX_HUNK_WORDS + usize::from(to.len() <= 2 || to.len() > MAX_HUNK_WORDS)
     {
         return Err("shape");
     }
+    // Word for word, an everyday word may stand where a non-word was heard
+    // ("fors majoor" -> "force majeure"), not where another everyday word was.
+    let regrouped = heard == to.len()
+        && from.iter().zip(to).all(|(f, t)| {
+            !(crate::words::common(&t.to_lowercase()) || common(t)) || uncommon_source(f)
+        });
     // Each word of a multi-word term is a real word: "DevTerms 2", "DevTerms v2"
     // or "Postgres 1" adds a counter or version, not a spelling.
     if to.len() > 1
@@ -672,19 +783,6 @@ fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
             .flat_map(char::to_lowercase)
             .collect()
     };
-    // Digits read as their names, so "kay eights" and "k8s" compare.
-    const DIGITS: [&str; 10] = [
-        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-    ];
-    let letters = |s: &str| -> Vec<char> {
-        s.chars()
-            .flat_map(|c| match c.to_digit(10) {
-                Some(d) => DIGITS[d as usize].chars().collect(),
-                None if c.is_alphabetic() => c.to_lowercase().collect(),
-                None => vec![],
-            })
-            .collect()
-    };
     let (x, y) = (letters(&from), letters(&to));
     // Four words joined letter for letter ("a lot of fun" -> "alotoffun") are a
     // typing choice, not a misrecognition; snap never joins four words either.
@@ -692,7 +790,7 @@ fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
         return Err("shape");
     }
     // At most a third of the letters changed, or the same consonant skeleton.
-    let close = distance(&x, &y) * 3 <= x.len().max(y.len())
+    let close = swapped_distance(&x, &y) * 3 <= x.len().max(y.len())
         || (x.len().min(y.len()) >= 5 && sounds(&x).len() >= 3 && sounds(&x) == sounds(&y));
     let spoken = |name: &str, symbol: char| {
         from.split(' ').any(|w| w.eq_ignore_ascii_case(name)) && to.contains(symbol)
@@ -734,9 +832,12 @@ fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
     } else if x == y && heard > 1 && !to.contains(' ') && joined_plainly(&to, capitals(&from)) {
         // A space deleted between two words. A term shows it was meant: "useEffect".
         Err("merge")
-    } else if x == y && to.split(' ').count() > heard {
+    } else if x == y && to.split(' ').count() > heard && capitals(&to) <= capitals(&from) {
+        // A space put in. A new capital shows a name: "newyork" -> "New York".
         Err("split")
     } else if to.contains(' ')
+        && !name
+        && !regrouped
         && to
             .split(' ')
             .any(|w| crate::words::common(&w.to_lowercase()) || common(w))
@@ -746,6 +847,32 @@ fn candidate(from: &[&str], to: &[&str]) -> Result<Replacement, &'static str> {
     } else {
         Ok(Replacement { from, to })
     }
+}
+/// Lowercase particles inside a name: "Supreme Court of India", "Vincent van Gogh".
+const PARTICLES: [&str; 11] = [
+    "of", "van", "von", "de", "da", "di", "du", "del", "der", "la", "le",
+];
+const MAX_NAME_WORDS: usize = MAX_HUNK_WORDS + 1;
+/// Several words, each capitalized but for particles inside: a name.
+fn name_cased(words: &[&str]) -> bool {
+    let capital = |w: &&str| w.starts_with(char::is_uppercase);
+    words.len() > 1
+        && words.first().is_some_and(capital)
+        && words.last().is_some_and(capital)
+        && words.iter().all(|w| capital(w) || PARTICLES.contains(w))
+}
+/// Lowercase letters, digits read as their names, so "kay eights" and "k8s" compare.
+fn letters(s: &str) -> Vec<char> {
+    const DIGITS: [&str; 10] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ];
+    s.chars()
+        .flat_map(|c| match c.to_digit(10) {
+            Some(d) => DIGITS[d as usize].chars().collect(),
+            None if c.is_alphabetic() => c.to_lowercase().collect(),
+            None => vec![],
+        })
+        .collect()
 }
 /// A joined word with no sign it was meant as a term: no new capital, no symbol.
 fn joined_plainly(to: &str, capitals_before: usize) -> bool {
@@ -764,6 +891,25 @@ pub(crate) fn distance(a: &[char], b: &[char]) -> usize {
             diagonal = row[j + 1];
             row[j + 1] = next;
         }
+    }
+    row[b.len()]
+}
+/// `distance` with two adjacent letters swapped as one edit (optimal string
+/// alignment), so "teh" is one edit from "the".
+fn swapped_distance(a: &[char], b: &[char]) -> usize {
+    let mut before: Vec<usize> = vec![0; b.len() + 1];
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for i in 1..=a.len() {
+        let mut next = vec![i; b.len() + 1];
+        for j in 1..=b.len() {
+            next[j] = (row[j - 1] + usize::from(a[i - 1] != b[j - 1]))
+                .min(row[j] + 1)
+                .min(next[j - 1] + 1);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                next[j] = next[j].min(before[j - 2] + 1);
+            }
+        }
+        before = std::mem::replace(&mut row, next);
     }
     row[b.len()]
 }
@@ -1539,6 +1685,102 @@ mod tests {
             }
             assert!(d.words.is_empty() && d.replacements.is_empty());
         }
+    }
+    /// A name, a phrase, a split or a join is saved whole, with its literal rule
+    /// when the source is uncommon (Tier 1).
+    #[test]
+    fn whole_names_and_phrases_earn_one_word_and_its_rule() {
+        for (original, corrected, from, to) in [
+            (
+                "Fans quote martin luter king daily",
+                "Fans quote Martin Luther King daily",
+                "martin luter king",
+                "Martin Luther King",
+            ),
+            (
+                "the new york stock exchage halted",
+                "the New York Stock Exchange halted",
+                "new york stock exchage",
+                "New York Stock Exchange",
+            ),
+            (
+                "Petitions reach the supreme cort of india slowly",
+                "Petitions reach the Supreme Court of India slowly",
+                "supreme cort of india",
+                "Supreme Court of India",
+            ),
+            // A sentence start is not part of the name.
+            (
+                "the lok sabah met late",
+                "The Lok Sabha met late",
+                "lok sabah",
+                "Lok Sabha",
+            ),
+            (
+                "Dessert was creme brulee again",
+                "Dessert was crème brûlée again",
+                "creme brulee",
+                "crème brûlée",
+            ),
+            (
+                "a fors majoor clause applies",
+                "a force majeure clause applies",
+                "fors majoor",
+                "force majeure",
+            ),
+            (
+                "They flew from sanfrancisco overnight",
+                "They flew from San Francisco overnight",
+                "sanfrancisco",
+                "San Francisco",
+            ),
+            (
+                "Ship it to hongkong",
+                "Ship it to Hong Kong",
+                "hongkong",
+                "Hong Kong",
+            ),
+            (
+                "Point it at post gress first",
+                "Point it at Postgres first",
+                "post gress",
+                "Postgres",
+            ),
+            ("I saw teh dog", "I saw the dog", "teh", "the"),
+            (
+                "Tell me waht happened",
+                "Tell me what happened",
+                "waht",
+                "what",
+            ),
+            ("Ask thier coach", "Ask their coach", "thier", "their"),
+        ] {
+            let mut d = DictionaryConfig::default();
+            let done = adopt(&mut d, original, corrected);
+            assert_eq!(done.added, [to], "{original}");
+            assert_eq!(done.rules, [rule(from, to)], "{original}");
+        }
+        // Common words throughout: the word alone (Tier 2).
+        let mut d = DictionaryConfig::default();
+        let done = adopt(
+            &mut d,
+            "The international monetary found said so",
+            "The International Monetary Fund said so",
+        );
+        assert_eq!(done.added, ["International Monetary Fund"]);
+        assert!(done.rules.is_empty());
+        // Never past punctuation, a plain split or a part that drops heard letters.
+        assert_eq!(
+            learn("I met priyanca. please call", "I met Priyanka. Please call"),
+            pair("priyanca", "Priyanka")
+        );
+        assert!(learn("we land in losangeles soon", "we land in los angeles soon").is_empty());
+        // A word rewritten beside a close one is a rewrite: nothing at all.
+        assert!(learn(
+            "and I will file the copy after lunch",
+            "and I'll archive the scan after lunch"
+        )
+        .is_empty());
     }
     #[test]
     fn several_corrections_all_count_and_aliases_of_one_word_are_kept() {
