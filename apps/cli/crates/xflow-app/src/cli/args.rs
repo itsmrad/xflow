@@ -350,7 +350,7 @@ pub enum MeetingCmd {
         #[arg(long)]
         cursor: Option<String>,
     },
-    /// Case-sensitive literal text search.
+    /// Literal text search. Letter case is ignored, accents are not.
     Search {
         query: String,
         /// JSON `next` cursor from the previous page.

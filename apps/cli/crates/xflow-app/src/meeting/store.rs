@@ -53,6 +53,11 @@ const SCHEMA_V2: &[&str] = &[
     "CREATE INDEX provenance_job ON segment_provenance(job_id)",
 ];
 pub(crate) const SCHEMA_VERSION: i64 = 2;
+/// v1 indexed case-sensitively. v2 folds case one character at a time
+/// (SQLite's Unicode table) and keeps accents, so `oauth` finds `OAuth` and
+/// `nino` does not find `niño`.
+const FTS_V1: &str = "CREATE VIRTUAL TABLE segment_fts USING fts5(text, content='segments', content_rowid='id', tokenize='trigram case_sensitive 1')";
+const FTS_V2: &str = "CREATE VIRTUAL TABLE segment_fts USING fts5(text, content='segments', content_rowid='id', tokenize='trigram case_sensitive 0')";
 
 #[derive(Clone, Debug)]
 pub struct MeetingStore {
@@ -399,6 +404,18 @@ pub(crate) fn open_writer(path: &Path) -> Result<Connection> {
         }
         // v1 -> v2 in the same transaction: a crash or error leaves v1 as it was.
         if version < SCHEMA_VERSION {
+            // Rebuild the index from the stored text, which is never touched.
+            // Secure-delete is on, so the old index pages are zeroed.
+            tx.execute_batch("DROP TABLE segment_fts;")?;
+            tx.execute_batch(FTS_V2)?;
+            tx.execute(
+                "INSERT INTO segment_fts(segment_fts,rank) VALUES ('secure-delete',1)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO segment_fts(segment_fts) VALUES ('rebuild')",
+                [],
+            )?;
             for ddl in SCHEMA_V2 {
                 tx.execute_batch(ddl)?;
             }
@@ -439,8 +456,13 @@ fn validate_schema(db: &Connection, allow_empty: bool) -> Result<i64> {
         return Ok(0);
     }
     ensure!(version >= 1, ContractError::MalformedStore);
-    let v2: &[&str] = if version == 2 { SCHEMA_V2 } else { &[] };
-    for ddl in SCHEMA.iter().chain(v2) {
+    let (fts, v2): (&str, &[&str]) = if version == 2 {
+        (FTS_V2, SCHEMA_V2)
+    } else {
+        (FTS_V1, &[])
+    };
+    let common = SCHEMA.iter().filter(|ddl| **ddl != FTS_V1);
+    for ddl in common.chain([&fts]).chain(v2) {
         let actual: Option<String> = db
             .query_row("SELECT sql FROM sqlite_schema WHERE sql=?1", [*ddl], |r| {
                 r.get(0)
@@ -653,4 +675,104 @@ fn validate_import(bytes: &[u8]) -> Result<MeetingImport> {
         );
     }
     Ok(input)
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    /// An M1 (v1) store exactly as that release created it.
+    fn v1(dir: &Path, blocker: bool) -> PathBuf {
+        let path = dir.join("meetings.db");
+        let db = Connection::open(&path).unwrap();
+        for ddl in SCHEMA {
+            db.execute_batch(ddl).unwrap();
+        }
+        db.execute_batch("INSERT INTO metadata(singleton,store_id) VALUES (1,'00112233445566778899aabbccddeeff');
+            INSERT INTO segment_fts(segment_fts,rank) VALUES ('secure-delete',1);
+            INSERT INTO meetings(import_id,import_hash,import_json,started_at_ms,ended_at_ms,timezone) VALUES ('m1','h',x'7b7d',0,10,'Z');
+            INSERT INTO sources VALUES (1,'mic','{\"id\":\"mic\",\"label\":null,\"epoch\":0,\"provider\":null,\"model\":null}');
+            INSERT INTO segments(meeting_id,source_id,sequence,start_ms,end_ms,text) VALUES (1,'mic',0,0,5,'Sign in with OAuth, niño');
+            INSERT INTO revisions VALUES (1,1,'Sign in with OAuth, niño');
+            PRAGMA user_version=1;").unwrap();
+        if blocker {
+            // Makes the v2 step fail halfway, after the FTS rebuild.
+            db.execute_batch("CREATE TABLE jobs(x);").unwrap();
+        }
+        drop(db);
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+    fn state(path: &Path) -> (i64, String, String, i64) {
+        let db = Connection::open(path).unwrap();
+        (
+            db.query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap(),
+            db.query_row(
+                "SELECT sql FROM sqlite_schema WHERE name='segment_fts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap(),
+            db.query_row("SELECT group_concat(text,'|') FROM segments", [], |r| {
+                r.get(0)
+            })
+            .unwrap(),
+            db.query_row(
+                "SELECT count(*) FROM segment_fts WHERE segment_fts MATCH '\"oauth\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn v1_rebuilds_its_index_case_insensitively_and_keeps_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = v1(dir.path(), false);
+        assert_eq!(state(&path).3, 0, "v1 is case-sensitive");
+        drop(open_writer(&path).unwrap());
+        let (version, fts, text, hits) = state(&path);
+        assert_eq!((version, fts.as_str(), hits), (2, FTS_V2, 1));
+        assert_eq!(text, "Sign in with OAuth, niño");
+        let db = Connection::open(&path).unwrap();
+        let secure: i64 = db
+            .query_row(
+                "SELECT v FROM segment_fts_config WHERE k='secure-delete'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(secure, 1);
+        let revisions: String = db
+            .query_row("SELECT text FROM revisions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(revisions, "Sign in with OAuth, niño");
+        // Reopening is a no-op.
+        drop(open_writer(&path).unwrap());
+        assert_eq!(state(&path), (2, FTS_V2.into(), text, 1));
+    }
+
+    #[test]
+    fn failed_migration_leaves_v1_and_can_be_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = v1(dir.path(), true);
+        let before = state(&path);
+        assert!(open_writer(&path).is_err());
+        assert_eq!(
+            state(&path),
+            before,
+            "rolled back: v1 index and text intact"
+        );
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("DROP TABLE jobs;")
+            .unwrap();
+        drop(open_writer(&path).unwrap());
+        assert_eq!(state(&path).0, 2);
+        assert_eq!(state(&path).3, 1);
+    }
 }
