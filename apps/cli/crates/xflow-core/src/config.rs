@@ -160,7 +160,7 @@ impl HotkeyConfig {
     }
 }
 
-/// Spoken question. Empty provider and model follow cleanup, then groq's fast public model.
+/// Spoken question. Empty settings follow AI, then cleanup, then Groq defaults.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct AskConfig {

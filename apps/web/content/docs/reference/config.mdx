@@ -143,8 +143,8 @@ Overlay look is managed with `xflow overlay`; Linux shortcuts use GNOME settings
 | --- | --- | --- |
 | `ask.enabled` | `true` | hold the chord, speak, release; the answer is shown, never pasted |
 | `ask.key` | `"right_option+right_command"` |  |
-| `ask.provider` | `""` | empty: the cleanup provider, or groq if cleanup is unset |
-| `ask.model` | `""` | empty: that provider's fast catalog default |
+| `ask.provider` | `""` | empty: [ai], then cleanup, then groq |
+| `ask.model` | `""` | empty: AI/cleanup model, then provider default |
 
 ## [[snippets]]
 
@@ -303,8 +303,8 @@ mouse = true
 [ask]
 enabled = true               # hold the chord, speak, release; the answer is shown, never pasted
 key = "right_option+right_command"
-provider = ""                # empty: the cleanup provider, or groq if cleanup is unset
-model = ""                   # empty: that provider's fast catalog default
+provider = ""                # empty: [ai], then cleanup, then groq
+model = ""                   # empty: AI/cleanup model, then provider default
 
 # Voice snippets: say the trigger, get the text.
 # [[snippets]]

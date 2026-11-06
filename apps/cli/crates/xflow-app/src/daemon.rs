@@ -936,6 +936,9 @@ impl Engine {
         if self.reloading {
             bail!("configuration reload is in progress");
         }
+        if mode == Mode::Ask && self.services.chat.is_none() {
+            bail!("Ask is not configured or allowed yet; run xflow ask in a terminal first");
+        }
         if mode == Mode::Command && self.services.transformer.is_none() {
             if self.config.stt.provider == xflow_providers::ON_DEVICE {
                 bail!("Command mode needs a cleanup model, and on-device speech doesn't use one. Switch to an API provider for commands (xflow providers list).");
@@ -3594,7 +3597,7 @@ fn build_chat(config: &Config) -> Option<Arc<dyn ChatProvider>> {
     if !config.ask.enabled {
         return None;
     }
-    match xflow_providers::build_chat(config) {
+    match crate::quick_ai::build(config) {
         Ok(chat) => Some(chat),
         Err(error) => {
             log("warn", &format!("ask unavailable: {error:#}"));

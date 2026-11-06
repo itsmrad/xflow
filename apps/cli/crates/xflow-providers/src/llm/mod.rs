@@ -450,13 +450,17 @@ impl Route {
         overhead: &AtomicU64,
     ) -> Result<(), Failure> {
         let started = Instant::now();
-        let body = match self.wire {
+        let mut body = match self.wire {
             Wire::ChatCompletions => {
                 chat_completions::body(request, model, self.provider == "openrouter")
             }
             Wire::Responses => responses::body(request, model),
             Wire::Messages => messages::body(request, model),
         };
+        if matches!(self.wire, Wire::ChatCompletions) {
+            // Preserve the verified cleanup model's low-latency reasoning settings.
+            super::disable_reasoning(&mut body, &self.provider, model);
+        }
         let builder = self.headers(self.client.post(self.url.clone())).json(&body);
         let builder = self
             .credential

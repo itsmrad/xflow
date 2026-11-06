@@ -322,8 +322,7 @@ pub trait TextTransformer: Send + Sync {
 }
 
 /// One short answer from text. Audio never reaches an implementor.
-/// `stream` sends text deltas in order; the call site stays this trait so a
-/// later gateway client can replace the HTTP one.
+/// `stream` projects the gateway into ordered text deltas without exposing history tools.
 #[async_trait]
 pub trait ChatProvider: Send + Sync {
     fn name(&self) -> &str;

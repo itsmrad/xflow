@@ -17,6 +17,8 @@ pub mod meeting_detection;
 pub mod overlay_pill;
 pub mod paths;
 #[cfg(unix)]
+mod quick_ai;
+#[cfg(unix)]
 mod retry;
 mod speech;
 pub mod store;
