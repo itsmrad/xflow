@@ -277,6 +277,12 @@ fn cap_text(value: &mut Value) {
         value["truncated"] = json!(true);
     }
 }
+/// One validated dictation tool call.
+enum Request {
+    Search(Search),
+    Get(Get),
+}
+const TIMESTAMP: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', h.created_at, 'unixepoch')";
 pub fn call(
     env: &ContextEnv,
     sources: Sources,
@@ -294,7 +300,7 @@ pub fn call(
         return meetings::call(env, sources, name, args);
     }
     // Validate before inspecting private storage, even when sharing is disabled.
-    let search = match name {
+    let request = match name {
         "search_dictations" => {
             let s: Search = serde_json::from_value(args.clone()).map_err(|_| invalid())?;
             if s.query.as_ref().is_some_and(|q| q.chars().count() > 200)
@@ -314,14 +320,14 @@ pub fn call(
                     return Err(invalid());
                 }
             }
-            Some(s)
+            Request::Search(s)
         }
         "get_dictation" => {
             let g: Get = serde_json::from_value(args.clone()).map_err(|_| invalid())?;
             if g.id < 1 {
                 return Err(invalid());
             }
-            None
+            Request::Get(g)
         }
         _ => return Err(ToolError::InvalidParams("Unknown tool")),
     };
@@ -348,111 +354,9 @@ pub fn call(
             "NULL".into()
         }
     };
-    let timestamp = "strftime('%Y-%m-%dT%H:%M:%SZ', h.created_at, 'unixepoch')";
-    let mut structured = if let Some(s) = search {
-        let query = s.query.as_deref().unwrap_or_default().trim();
-        let since = date(&conn, s.since.as_deref())?;
-        let until = date(&conn, s.until.as_deref())?;
-        if since.zip(until).is_some_and(|(a, b)| a > b) {
-            return Err(invalid());
-        }
-        let has_latin = query.chars().any(|c| c.is_ascii_alphabetic() || matches!(c as u32, 0x00c0..=0x024f | 0x1e00..=0x1eff | 0x2c60..=0x2c7f | 0xa720..=0xa7ff | 0xab30..=0xab6f));
-        let terms = query
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| !w.is_empty())
-            .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" AND ");
-        let fts = has_latin && !terms.is_empty() && version >= 4 && conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='history_fts' AND type='table' AND sql LIKE '%USING fts5%')", [], |r| r.get::<_, bool>(0))?
-            && conn.query_row("SELECT EXISTS(SELECT 1 FROM history_fts JOIN history h ON h.id=history_fts.rowid WHERE history_fts MATCH ?1 AND (?2 IS NULL OR h.created_at>=?2) AND (?3 IS NULL OR h.created_at<=?3))", params![&terms,since,until], |r| r.get::<_, bool>(0))?;
-        let mut position = if fts { 0 } else { i64::MAX };
-        if let Some(cursor) = &s.cursor {
-            let (mode, number) = cursor.split_once(':').ok_or_else(invalid)?;
-            if mode != if fts { "f" } else { "k" } {
-                return Err(invalid());
-            }
-            position = i64::from_str_radix(number, 16).map_err(|_| invalid())?;
-            if position < 0 {
-                return Err(invalid());
-            }
-        }
-        let limit = s.limit.unwrap_or(10);
-        let from = if fts {
-            "history h JOIN history_fts ON history_fts.rowid=h.id"
-        } else {
-            "history h"
-        };
-        let condition = if fts {
-            "history_fts MATCH ?1 AND history_fts.rank MATCH 'bm25()'"
-        } else {
-            "h.text LIKE ?1 ESCAPE '\\' AND h.id < ?4"
-        };
-        let order = if fts {
-            // FTS5 ranks before fetching snippets, avoiding text work on every match.
-            "history_fts.rank"
-        } else {
-            "h.id DESC"
-        };
-        let snippet = if fts {
-            "replace(substr(highlight(history_fts,0,char(1),''), max(1,instr(highlight(history_fts,0,char(1),''),char(1))-100), 400),char(1),'')"
-        } else {
-            "substr(h.text, max(1,instr(lower(h.text),lower(?7))-100), 400)"
-        };
-        let sql = format!("SELECT h.id,{timestamp},{},{},{snippet} FROM {from} WHERE {condition} AND (?2 IS NULL OR h.created_at>=?2) AND (?3 IS NULL OR h.created_at<=?3) ORDER BY {order} LIMIT ?5 OFFSET ?6", col("app_id"), col("words"));
-        let mut stmt = conn.prepare(&sql)?;
-        // Numbered parameters keep the LIKE and rank-pagination paths identical.
-        let needle = if fts {
-            terms
-        } else {
-            format!("%{}%", crate::store::escape_like(query))
-        };
-        let mut values: Vec<rusqlite::types::Value> = vec![
-            needle.into(),
-            since.into(),
-            until.into(),
-            position.into(),
-            ((limit + 1) as i64).into(),
-            (if fts { position } else { 0 }).into(),
-        ];
-        if !fts {
-            values.push(query.to_owned().into());
-        }
-        let rows = stmt.query_map(rusqlite::params_from_iter(values), |r| Ok(json!({"id":r.get::<_,i64>(0)?,"created_at":r.get::<_,Option<String>>(1)?,"app":safe(r.get(2)?),"words":r.get::<_,Option<i64>>(3)?,"snippet":neutralize(&r.get::<_,String>(4)?).chars().take(300).collect::<String>()})))?;
-        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
-        let more = items.len() > limit;
-        items.truncate(limit);
-        let mut result = json!({"items":items});
-        let mut trimmed = false;
-        while output_size(&result) > RESULT_BYTES - 1024 {
-            result["items"].as_array_mut().expect("items array").pop();
-            trimmed = true;
-        }
-        if more || trimmed {
-            let items = result["items"].as_array().expect("items array");
-            if let Some(last) = items.last() {
-                result["next_cursor"] = json!(if fts {
-                    format!("f:{:x}", position + items.len() as i64)
-                } else {
-                    format!("k:{:x}", last["id"].as_i64().expect("integer id"))
-                });
-            }
-        }
-        if trimmed {
-            result["truncated"] = json!(true);
-        }
-        result
-    } else {
-        let id = args["id"].as_i64().ok_or_else(invalid)?;
-        let sql = format!(
-            "SELECT h.id,{timestamp},{},{},{},substr(h.text,1,20001),length(h.text)>20000 FROM history h WHERE h.id=?1",
-            col("app_id"),
-            col("language"),
-            col("duration_ms")
-        );
-        conn.query_row(&sql, params![id], |r| {
-            let text = neutralize(&r.get::<_,String>(5)?);
-            Ok(json!({"id":r.get::<_,i64>(0)?,"created_at":r.get::<_,Option<String>>(1)?,"app":safe(r.get(2)?),"language":safe(r.get(3)?),"duration_ms":r.get::<_,Option<i64>>(4)?,"text":text.chars().take(20000).collect::<String>(),"truncated":r.get::<_,bool>(6)? || text.chars().count()>20000}))
-        }).optional()?.unwrap_or_else(|| json!({"items":[],"notice":"Dictation not found"}))
+    let mut structured = match request {
+        Request::Search(s) => search(&conn, version, &col, s)?,
+        Request::Get(g) => get(&conn, &col, g.id)?,
     };
     if structured.get("text").is_some() {
         cap_text(&mut structured);
@@ -464,6 +368,117 @@ pub fn call(
             .map(str::to_owned),
         structured,
     })
+}
+
+fn search(
+    conn: &Connection,
+    version: i64,
+    col: &impl Fn(&str) -> String,
+    s: Search,
+) -> Result<Value, ToolError> {
+    let query = s.query.as_deref().unwrap_or_default().trim();
+    let since = date(conn, s.since.as_deref())?;
+    let until = date(conn, s.until.as_deref())?;
+    if since.zip(until).is_some_and(|(a, b)| a > b) {
+        return Err(invalid());
+    }
+    let has_latin = query.chars().any(|c| c.is_ascii_alphabetic() || matches!(c as u32, 0x00c0..=0x024f | 0x1e00..=0x1eff | 0x2c60..=0x2c7f | 0xa720..=0xa7ff | 0xab30..=0xab6f));
+    let terms = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let fts = has_latin && !terms.is_empty() && version >= 4 && conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='history_fts' AND type='table' AND sql LIKE '%USING fts5%')", [], |r| r.get::<_, bool>(0))?
+        && conn.query_row("SELECT EXISTS(SELECT 1 FROM history_fts JOIN history h ON h.id=history_fts.rowid WHERE history_fts MATCH ?1 AND (?2 IS NULL OR h.created_at>=?2) AND (?3 IS NULL OR h.created_at<=?3))", params![&terms,since,until], |r| r.get::<_, bool>(0))?;
+    let mut position = if fts { 0 } else { i64::MAX };
+    if let Some(cursor) = &s.cursor {
+        let (mode, number) = cursor.split_once(':').ok_or_else(invalid)?;
+        if mode != if fts { "f" } else { "k" } {
+            return Err(invalid());
+        }
+        position = i64::from_str_radix(number, 16).map_err(|_| invalid())?;
+        if position < 0 {
+            return Err(invalid());
+        }
+    }
+    let limit = s.limit.unwrap_or(10);
+    let from = if fts {
+        "history h JOIN history_fts ON history_fts.rowid=h.id"
+    } else {
+        "history h"
+    };
+    let condition = if fts {
+        "history_fts MATCH ?1 AND history_fts.rank MATCH 'bm25()'"
+    } else {
+        "h.text LIKE ?1 ESCAPE '\\' AND h.id < ?4"
+    };
+    let order = if fts {
+        // FTS5 ranks before fetching snippets, avoiding text work on every match.
+        "history_fts.rank"
+    } else {
+        "h.id DESC"
+    };
+    let snippet = if fts {
+        "replace(substr(highlight(history_fts,0,char(1),''), max(1,instr(highlight(history_fts,0,char(1),''),char(1))-100), 400),char(1),'')"
+    } else {
+        "substr(h.text, max(1,instr(lower(h.text),lower(?7))-100), 400)"
+    };
+    let sql = format!("SELECT h.id,{TIMESTAMP},{},{},{snippet} FROM {from} WHERE {condition} AND (?2 IS NULL OR h.created_at>=?2) AND (?3 IS NULL OR h.created_at<=?3) ORDER BY {order} LIMIT ?5 OFFSET ?6", col("app_id"), col("words"));
+    let mut stmt = conn.prepare(&sql)?;
+    // Numbered parameters keep the LIKE and rank-pagination paths identical.
+    let needle = if fts {
+        terms
+    } else {
+        format!("%{}%", crate::store::escape_like(query))
+    };
+    let mut values: Vec<rusqlite::types::Value> = vec![
+        needle.into(),
+        since.into(),
+        until.into(),
+        position.into(),
+        ((limit + 1) as i64).into(),
+        (if fts { position } else { 0 }).into(),
+    ];
+    if !fts {
+        values.push(query.to_owned().into());
+    }
+    let rows = stmt.query_map(rusqlite::params_from_iter(values), |r| Ok(json!({"id":r.get::<_,i64>(0)?,"created_at":r.get::<_,Option<String>>(1)?,"app":safe(r.get(2)?),"words":r.get::<_,Option<i64>>(3)?,"snippet":neutralize(&r.get::<_,String>(4)?).chars().take(300).collect::<String>()})))?;
+    let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+    let more = items.len() > limit;
+    items.truncate(limit);
+    let mut result = json!({"items":items});
+    let mut trimmed = false;
+    while output_size(&result) > RESULT_BYTES - 1024 {
+        result["items"].as_array_mut().expect("items array").pop();
+        trimmed = true;
+    }
+    if more || trimmed {
+        let items = result["items"].as_array().expect("items array");
+        if let Some(last) = items.last() {
+            result["next_cursor"] = json!(if fts {
+                format!("f:{:x}", position + items.len() as i64)
+            } else {
+                format!("k:{:x}", last["id"].as_i64().expect("integer id"))
+            });
+        }
+    }
+    if trimmed {
+        result["truncated"] = json!(true);
+    }
+    Ok(result)
+}
+fn get(conn: &Connection, col: &impl Fn(&str) -> String, id: i64) -> Result<Value, ToolError> {
+    let sql = format!(
+        "SELECT h.id,{TIMESTAMP},{},{},{},substr(h.text,1,20001),length(h.text)>20000 FROM history h WHERE h.id=?1",
+        col("app_id"),
+        col("language"),
+        col("duration_ms")
+    );
+    Ok(conn.query_row(&sql, params![id], |r| {
+        let text = neutralize(&r.get::<_,String>(5)?);
+        Ok(json!({"id":r.get::<_,i64>(0)?,"created_at":r.get::<_,Option<String>>(1)?,"app":safe(r.get(2)?),"language":safe(r.get(3)?),"duration_ms":r.get::<_,Option<i64>>(4)?,"text":text.chars().take(20000).collect::<String>(),"truncated":r.get::<_,bool>(6)? || text.chars().count()>20000}))
+    }).optional()?.unwrap_or_else(|| json!({"items":[],"notice":"Dictation not found"})))
 }
 
 #[cfg(test)]
