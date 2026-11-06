@@ -252,8 +252,11 @@ def chat(columns, rows):
             key(b"-")
             # Command letters are typing, and the first send asks.
             key("quit? 日本語 private-question\r".encode())
-            shown(b"Allow it?")
+            shown(b"Allow")  # Painted with cursor moves over blank cells.
             assert process.poll() is None, "typing q quit"
+            key(b"y", 0.1)  # Straight after Enter: ignored, nothing is sent.
+            assert not requests and "consented" not in config.read_text(), "early y answered consent"
+            drain(0.6)
             key(b"y", 0.6)
             shown(b"finished-answer")
             assert "consented" in config.read_text() and "private-question" not in config.read_text()

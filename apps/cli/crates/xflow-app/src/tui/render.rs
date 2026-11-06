@@ -349,7 +349,7 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
             vec![("Enter remove", None), ("Esc keep", None)]
         }
         Some(Modal::OnDevice { .. }) => on_device_keys(app),
-        Some(Modal::ChatConsent(_)) => vec![("y allow", None), ("n or Esc don't send", None)],
+        Some(Modal::ChatConsent { .. }) => vec![("y allow", None), ("n or Esc don't send", None)],
         None if app.page == Page::Chat && app.chat_ready() => chat_view::keys(app),
         None => {
             let mut out: Vec<(&'static str, Option<Action>)> = match app.page {
@@ -873,7 +873,7 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
         Modal::Help => 23,
         Modal::Palette { .. } => 20,
         Modal::Search => 7,
-        Modal::Confirm { .. } | Modal::ChatConsent(_) => 8,
+        Modal::Confirm { .. } | Modal::ChatConsent { .. } => 8,
         Modal::Setup(_) => 16,
         Modal::OnDevice { .. } => 22,
         Modal::Editor(e) if e.picking() => {
@@ -959,7 +959,7 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
                 .block(block(app, "Are you sure?").padding(pad)),
             rect,
         ),
-        Modal::ChatConsent(name) => frame.render_widget(
+        Modal::ChatConsent { name, .. } => frame.render_widget(
             Paragraph::new(App::chat_consent_text(name))
                 .wrap(Wrap { trim: false })
                 .block(block(app, "Share your dictations?").padding(pad)),

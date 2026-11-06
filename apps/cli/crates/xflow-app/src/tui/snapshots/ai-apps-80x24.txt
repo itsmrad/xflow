@@ -10,7 +10,7 @@
 │ 8  Your stats  │╭ Details ───────────────────────────────────────────────────╮
 │ 9  Check-up    ││ Sharing · Dictation history is off. Enter to turn it on.   │
 │>0  AI apps     ││                                                            │
-│                ││ When you ask about it, matching text is sent to that app's │
+│ -  Chat        ││ When you ask about it, matching text is sent to that app's │
 │                ││ AI provider. One switch for every AI app.                  │
 │                ││                                                            │
 │                ││                                                            │

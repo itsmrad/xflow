@@ -1,5 +1,5 @@
 use super::{
-    chat::{wrap, Entry},
+    chat::{wrap, Entry, CONSENT_GUARD},
     render,
     runtime::{dispatch, drive_turn, handle, Update},
     state::{App, EditTarget, Effect, Modal, Page},
@@ -56,6 +56,21 @@ fn send(app: &mut App, text: &str) -> super::chat::Turn {
         Some(Effect::ChatTurn(run)) => run.turn,
         _ => panic!("nothing was sent"),
     }
+}
+/// Puts the open consent modal `age` past its opening, or just-opened when `None`.
+fn age_consent(app: &mut App, age: Option<Duration>) {
+    let Some(Modal::ChatConsent { opened_at, .. }) = &mut app.modal else {
+        panic!("consent modal");
+    };
+    // A future instant has zero elapsed time however slow the machine is.
+    *opened_at = match age {
+        Some(age) => Instant::now().checked_sub(age).unwrap(),
+        None => Instant::now() + Duration::from_secs(60),
+    };
+}
+/// The user has had time to read the consent modal.
+fn settle(app: &mut App) {
+    age_consent(app, Some(CONSENT_GUARD));
 }
 fn text_event(app: &mut App, id: u64, text: &str) {
     let mut redraw = true;
@@ -239,7 +254,8 @@ fn consent_yes_saves_through_the_config_path_and_is_not_asked_again() {
     app.set("ai.provider", "openrouter").unwrap();
     typed(&mut app, "question");
     assert!(press(&mut app, KeyCode::Enter).is_empty());
-    let Some(Modal::ChatConsent(name)) = &app.modal else {
+    settle(&mut app);
+    let Some(Modal::ChatConsent { name, .. }) = &app.modal else {
         panic!("first send asks");
     };
     assert_eq!(name, "OpenRouter");
@@ -262,6 +278,44 @@ fn consent_yes_saves_through_the_config_path_and_is_not_asked_again() {
     assert!(app.modal.is_none());
 }
 #[test]
+fn keys_typed_right_after_enter_cannot_answer_consent() {
+    let (_dir, mut app) = blank();
+    app.set("ai.provider", "openrouter").unwrap();
+    typed(&mut app, "question");
+    press(&mut app, KeyCode::Enter);
+    let Some(Modal::ChatConsent { opened_at, .. }) = &app.modal else {
+        panic!("first send asks");
+    };
+    assert!(
+        opened_at.elapsed() < Duration::from_secs(60),
+        "stamped on opening"
+    );
+    age_consent(&mut app, None);
+    for early in [
+        KeyCode::Char('y'),
+        KeyCode::Char('Y'),
+        KeyCode::Char('n'),
+        KeyCode::Enter,
+        KeyCode::Esc,
+    ] {
+        assert!(press(&mut app, early).is_empty(), "{early:?}");
+        assert!(
+            matches!(app.modal, Some(Modal::ChatConsent { .. })),
+            "{early:?}"
+        );
+    }
+    assert!(!app.chat.running());
+    assert!(app.config.ai.consented.is_empty());
+    assert_eq!(app.chat.input, "question");
+    // Once the guard has passed, the same key answers.
+    settle(&mut app);
+    assert!(matches!(
+        press(&mut app, KeyCode::Char('y'))[..],
+        [Effect::ChatTurn(_)]
+    ));
+    assert_eq!(app.config.ai.consented, ["openrouter"]);
+}
+#[test]
 fn consent_no_sends_nothing_and_keeps_the_question() {
     let (_dir, mut app) = blank();
     app.set("ai.provider", "anthropic").unwrap();
@@ -273,10 +327,11 @@ fn consent_no_sends_nothing_and_keeps_the_question() {
         KeyCode::Enter,
     ] {
         press(&mut app, KeyCode::Enter);
-        assert!(matches!(app.modal, Some(Modal::ChatConsent(_))));
+        settle(&mut app);
+        assert!(matches!(app.modal, Some(Modal::ChatConsent { .. })));
         assert!(press(&mut app, KeyCode::Char('z')).is_empty());
         assert!(ctrl(&mut app, 'y').is_empty());
-        assert!(matches!(app.modal, Some(Modal::ChatConsent(_))));
+        assert!(matches!(app.modal, Some(Modal::ChatConsent { .. })));
         assert!(press(&mut app, no).is_empty());
         assert!(app.modal.is_none());
         assert!(!app.chat.running());
@@ -293,9 +348,10 @@ fn consent_waits_while_a_save_holds_the_file() {
     app.set("ai.provider", "openai").unwrap();
     typed(&mut app, "question");
     press(&mut app, KeyCode::Enter);
+    settle(&mut app);
     app.saving = true;
     assert!(press(&mut app, KeyCode::Char('y')).is_empty());
-    assert!(matches!(app.modal, Some(Modal::ChatConsent(_))));
+    assert!(matches!(app.modal, Some(Modal::ChatConsent { .. })));
     app.saving = false;
     assert!(matches!(
         press(&mut app, KeyCode::Char('y'))[..],
@@ -318,7 +374,7 @@ fn offline_refuses_cloud_providers_inline_before_asking_anything() {
     // A local server stays allowed.
     app.set("ai.provider", "custom").unwrap();
     press(&mut app, KeyCode::Enter);
-    assert!(matches!(app.modal, Some(Modal::ChatConsent(_))));
+    assert!(matches!(app.modal, Some(Modal::ChatConsent { .. })));
 }
 #[test]
 fn with_history_off_the_page_says_so_and_chat_works_without_transcripts() {
@@ -811,7 +867,10 @@ fn tiny_terminals_never_panic_and_never_offer_a_letter_to_quit() {
     }
     assert!(screen(&app, 20, 12).contains("Ctrl+C"));
     press(&mut app, KeyCode::Esc);
-    let modal = Modal::ChatConsent("A provider with a long name".into());
+    let modal = Modal::ChatConsent {
+        name: "A provider with a long name".into(),
+        opened_at: Instant::now(),
+    };
     app.modal = Some(modal);
     for (width, height) in sizes {
         screen(&app, width, height);

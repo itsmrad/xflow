@@ -359,7 +359,10 @@ pub enum Modal {
         error: Option<String>,
     },
     /// The provider a first send would share transcripts with.
-    ChatConsent(String),
+    ChatConsent {
+        name: String,
+        opened_at: Instant,
+    },
 }
 pub struct App {
     pub page: Page,
@@ -1291,8 +1294,9 @@ impl App {
                 _ => (),
             },
             // Like `xflow ask`, only an explicit yes shares anything.
-            Modal::ChatConsent(_) if key.modifiers.contains(KeyModifiers::CONTROL) => (),
-            Modal::ChatConsent(_) => match key.code {
+            Modal::ChatConsent { opened_at, .. } if opened_at.elapsed() < chat::CONSENT_GUARD => (),
+            Modal::ChatConsent { .. } if key.modifiers.contains(KeyModifiers::CONTROL) => (),
+            Modal::ChatConsent { .. } => match key.code {
                 KeyCode::Char('y' | 'Y') if self.saving || self.file.is_none() => {
                     self.toast = Some("One moment — saving your last change.".into());
                 }

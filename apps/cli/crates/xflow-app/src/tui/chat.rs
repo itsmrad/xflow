@@ -8,7 +8,11 @@ use crate::chat::{consent_text, TurnEvent, MAX_QUESTION_BYTES};
 use anyhow::{bail, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
-use std::{cell::RefCell, path::PathBuf, time::Duration};
+use std::{
+    cell::RefCell,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use xflow_core::config::{AiConfig, Config};
@@ -23,6 +27,8 @@ use zeroize::Zeroizing;
 pub const FRAME: Duration = Duration::from_millis(34);
 /// A paste over this is refused whole; the send limit is `MAX_QUESTION_BYTES`.
 const INPUT_BYTES: usize = 1024 * 1024;
+/// A key this soon after the consent modal opens was aimed at the input, not the modal.
+pub const CONSENT_GUARD: Duration = Duration::from_millis(500);
 const LOCAL: &str = "custom";
 const LOCAL_ENDPOINT: &str = "http://127.0.0.1:11434/v1/chat/completions";
 const RETRY: &str = "Ctrl+R retries.";
@@ -735,7 +741,10 @@ impl App {
             Out::Cancel => vec![Effect::ChatCancel],
             Out::Leave => self.action(super::state::Action::Back),
             Out::Consent => {
-                self.modal = Some(Modal::ChatConsent(ctx.name.clone()));
+                self.modal = Some(Modal::ChatConsent {
+                    name: ctx.name.clone(),
+                    opened_at: Instant::now(),
+                });
                 vec![]
             }
             Out::Send(turn) => vec![Effect::ChatTurn(Box::new(ChatRun {
