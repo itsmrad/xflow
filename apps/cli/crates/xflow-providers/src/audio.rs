@@ -167,9 +167,9 @@ fn wav(samples: &[f32]) -> Result<Vec<u8>> {
     bytes.extend_from_slice(&16u16.to_le_bytes());
     bytes.extend_from_slice(b"data");
     bytes.extend_from_slice(&size.to_le_bytes());
-    for &sample in samples {
-        let pcm = pcm16(sample);
-        bytes.extend_from_slice(&pcm.to_le_bytes());
+    bytes.resize(size as usize + 44, 0);
+    for (&sample, output) in samples.iter().zip(bytes[44..].as_chunks_mut::<2>().0) {
+        output.copy_from_slice(&pcm16(sample).to_le_bytes());
     }
     Ok(bytes)
 }
