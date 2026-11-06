@@ -5,7 +5,7 @@ pub(crate) const RATE: u32 = 16_000;
 /// Downmix, low-pass and resample. Polyphase windowed sinc avoids per-sample trig.
 /// ponytail: a fixed 96-tap Blackman filter targets dictation (passband <7 kHz);
 /// increase taps or use a DSP library if music-quality conversion is required.
-pub(crate) fn mono16(audio: &AudioClip) -> Result<Vec<f32>> {
+pub(crate) fn mono16(audio: &AudioClip) -> Result<std::borrow::Cow<'_, [f32]>> {
     let channels = usize::from(audio.channels);
     if channels == 0
         || channels > 32
@@ -36,7 +36,7 @@ pub(crate) fn mono16(audio: &AudioClip) -> Result<Vec<f32>> {
                 .into()
         };
     if audio.sample_rate == RATE {
-        return Ok(mono.into_owned());
+        return Ok(mono);
     }
     fn gcd(mut a: u32, mut b: u32) -> u32 {
         while b != 0 {
@@ -106,12 +106,12 @@ pub(crate) fn mono16(audio: &AudioClip) -> Result<Vec<f32>> {
         }
         out.push((sum / weight).clamp(-1.0, 1.0));
     }
-    Ok(out)
+    Ok(out.into())
 }
 /// The 16 kHz mono clip every upload is encoded from; encoding it again is a copy.
 pub fn upload_audio(audio: &AudioClip) -> Result<AudioClip> {
     Ok(AudioClip {
-        samples: mono16(audio)?,
+        samples: mono16(audio)?.into_owned(),
         sample_rate: RATE,
         channels: 1,
     })
@@ -223,8 +223,10 @@ mod tests {
     #[test]
     fn length_amplitude_and_alias_rejection() {
         for rate in [44100, 48000, 96000] {
-            let low = mono16(&tone(rate, 1000.0)).unwrap();
-            let high = mono16(&tone(rate, 12000.0)).unwrap();
+            let low_clip = tone(rate, 1000.0);
+            let low = mono16(&low_clip).unwrap();
+            let high_clip = tone(rate, 12000.0);
+            let high = mono16(&high_clip).unwrap();
             assert_eq!(low.len(), 16000);
             assert!((rms(&low[100..15900]) - 0.35355).abs() < 0.005);
             assert!(rms(&high[100..15900]) < 0.003, "alias at {rate}");
@@ -238,6 +240,30 @@ mod tests {
                 .iter()
                 .all(|s| (s - 0.25).abs() < 0.00001));
         }
+    }
+    #[test]
+    fn native_rate_borrows_only_unmodified_mono() {
+        let mut clip = AudioClip {
+            samples: vec![-1.0, -0.25, 0.0, 0.25, 1.0],
+            sample_rate: RATE,
+            channels: 1,
+        };
+        assert!(matches!(
+            mono16(&clip).unwrap(),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        let upload = upload_audio(&clip).unwrap();
+        assert_eq!(upload.samples, clip.samples);
+        assert_ne!(upload.samples.as_ptr(), clip.samples.as_ptr());
+        clip.samples[0] = -2.0;
+        assert!(matches!(mono16(&clip).unwrap(), std::borrow::Cow::Owned(_)));
+        assert_eq!(mono16(&clip).unwrap()[0], -1.0);
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            clip.samples[0] = invalid;
+            assert!(mono16(&clip).is_err());
+        }
+        drop(clip);
+        assert_eq!(upload.samples[0], -1.0);
     }
     #[test]
     fn flac_is_smaller_and_pcm_lossless() {

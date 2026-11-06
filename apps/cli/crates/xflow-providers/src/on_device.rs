@@ -318,7 +318,7 @@ fn pcm(audio: &AudioClip) -> Result<Vec<u8>> {
     }
     // A quick tap: trailing silence turns it into an empty or short transcript, not an error.
     if samples.len() < MIN_SAMPLES {
-        samples.resize(MIN_SAMPLES, 0.0);
+        samples.to_mut().resize(MIN_SAMPLES, 0.0);
     }
     Ok(samples
         .iter()
