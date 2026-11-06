@@ -2067,14 +2067,18 @@ impl Engine {
                             }
                         }
                         Ok(HotkeyAction::Start | HotkeyAction::AskStart) if !desktop_ops.is_empty() => self.reset_hotkeys(),
-                        Ok(HotkeyAction::Dismiss) if !self.active() => {
-                            // The passive tap already delivered Esc. This only drops a finished answer.
-                            let _ = self.desktop_events.send(DesktopEvent {
-                                state: State::Idle,
-                                level: 0.0,
-                                message: None,
-                                mode: Mode::Ask,
-                            });
+                        Ok(HotkeyAction::Dismiss) => {
+                            // After release the key machine is idle, but the provider may still be busy.
+                            if self.active() || self.opening.is_some() {
+                                let _ = self.handle(Request::Cancel, &completion_tx).await;
+                            } else {
+                                let _ = self.desktop_events.send(DesktopEvent {
+                                    state: State::Idle,
+                                    level: 0.0,
+                                    message: None,
+                                    mode: Mode::Ask,
+                                });
+                            }
                         }
                         Ok(action @ (HotkeyAction::AskStart | HotkeyAction::AskStop)) => {
                             // Ask is never quiet and never injected. Dictation Start stays Inject below.
@@ -4554,10 +4558,10 @@ mod tests {
         let release = Arc::new(Notify::new());
         let options = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = mpsc::channel(8);
-        let (events, _) = broadcast::channel(32);
+        let (events, mut observed) = broadcast::channel(32);
         let (desktop_events, _) = broadcast::channel(32);
         let store = Store::open(std::path::Path::new("unused"), false, 5).unwrap();
-        let engine = Engine::new(
+        let mut engine = Engine::new(
             Config::default(),
             Services {
                 audio: audio.clone(),
@@ -4574,6 +4578,8 @@ mod tests {
             events,
             desktop_events,
         );
+        let (keys, key_events) = mpsc::channel(8);
+        engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
         let task = tokio::spawn(engine.run(rx));
         assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
         assert!(!ask(&tx, Request::start()).await.ok);
@@ -4581,7 +4587,9 @@ mod tests {
         called.notified().await;
         assert_eq!(ask(&tx, Request::Status).await.state, State::Processing);
         assert!(!ask(&tx, Request::Reload).await.ok);
-        assert_eq!(ask(&tx, Request::Cancel).await.state, State::Idle);
+        keys.send(HotkeyAction::Dismiss).await.unwrap();
+        hotkey_state(&mut observed, State::Idle).await;
+        assert_eq!(ask(&tx, Request::Status).await.state, State::Idle);
         release.notify_one();
         assert!(ask(&tx, Request::Last).await.text.is_none());
         assert!(!audio.0.load(Ordering::SeqCst));
