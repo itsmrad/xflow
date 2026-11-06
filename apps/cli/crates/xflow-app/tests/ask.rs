@@ -422,3 +422,56 @@ fn gateway_owns_a_single_ask_command() {
         1
     );
 }
+
+#[test]
+fn installed_claude_gets_synthetic_context_on_stdin_and_no_prompt_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let bins = root.join("bin");
+    std::fs::create_dir(&bins).unwrap();
+    let path = bins.join("claude");
+    std::fs::write(&path, r##"#!/bin/sh
+if [ "$1" = '--help' ]; then
+  echo '--safe-mode --tools --strict-mcp-config --no-session-persistence --include-partial-messages'
+  exit 0
+fi
+for arg in "$@"; do
+  case "$arg" in *Kubernetes*|*Priya*|*नमस्ते*) exit 19;; esac
+done
+prompt=$(/bin/cat)
+case "$prompt" in *Kubernetes*Priya*) ;; *) exit 20;; esac
+printf '%s\n' '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"Priya chose Kubernetes. नमस्ते"}}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"Priya chose Kubernetes. नमस्ते"}'
+"##).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    seed(root, &["Priya chose Kubernetes for the prototype."]);
+    write_config(root, "[ai]\nprovider = \"claude-code\"\n");
+    let result = command(root)
+        .env("PATH", &bins)
+        .args(["ask", "What did Priya choose for Kubernetes?", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let out = String::from_utf8(result.stdout).unwrap();
+    assert_eq!(out.matches("Priya chose Kubernetes.").count(), 1);
+    assert!(out.contains("नमस्ते"));
+}
+#[test]
+fn saved_dictation_consent_does_not_authorize_meetings() {
+    let dir = tempfile::tempdir().unwrap();
+    write_config(
+        dir.path(),
+        "[ai]\nprovider = \"claude-code\"\nconsented = [\"claude-code\"]\n",
+    );
+    let out = command(dir.path())
+        .args(["ask", "What did we decide?", "--sources", "meetings"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not allowed to receive"));
+}

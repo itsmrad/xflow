@@ -5,9 +5,9 @@
 │ 3  Dictionary  ││  Anthropic                   Key saved                     │
 │ 4  Snippets    ││  OpenRouter                  Key from your environment     │
 │ 5  Styles      ││  Local (on this computer)    No key needed                 │
-│ 6  Settings    ││                                                            │
-│ 7  Pill        ││                                                            │
-│ 8  Your stats  ││                                                            │
+│ 6  Settings    ││  Claude Code                 Checking installed CLI…       │
+│ 7  Pill        ││  Codex (isolation unverified)Checking installed CLI…       │
+│ 8  Your stats  ││  Cursor (isolation unverified)Checking installed CLI…      │
 │ 9  Check-up    ││                                                            │
 │ 0  AI apps     ││                                                            │
 │>-  Chat        ││                                                            │

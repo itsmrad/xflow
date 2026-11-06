@@ -1,0 +1,53 @@
+---
+title: Installed AI CLIs
+description: Opt-in chat through an installed CLI, with explicit transcript consent.
+---
+
+`xflow ask --provider claude-code "What did Priya decide?"` uses your installed
+Claude Code CLI and its own login. Xflow never reads or copies CLI credentials.
+No API key is requested. Your CLI's authentication method determines billing.
+This provider is opt-in; Xflow does not install or log in to a CLI for you.
+
+Claude Code must support `--safe-mode`, tools-off streaming, strict MCP
+configuration and disabled session persistence. Xflow checks help before sending
+anything. Customizations and built-in tools are disabled. Context comes from
+bounded local searches; this integration does not attach MCP or fetch entire
+meeting transcripts. Automatic managed settings are controlled by the CLI, and
+this is not an operating-system filesystem sandbox.
+
+`codex` and `cursor` appear in setup and can be selected explicitly, but currently
+refuse chat launches because their stdin and host-access isolation have not been
+verified. Use Claude Code or an API provider until those boundaries are verified.
+
+Select transcript sources explicitly:
+
+```sh
+xflow ask --provider claude-code --sources dictations "What did I say about PostgreSQL?"
+xflow ask --provider claude-code --sources meetings --yes "What did the team decide?"
+xflow ask --provider claude-code --sources both --yes "What changed about Kubernetes?"
+xflow ask --provider claude-code --no-context "Explain OAuth briefly"
+```
+
+`--yes` grants consent for this invocation. Saved dictation consent never grants
+meeting consent. Meeting searches require affirmative consent each run. Explicit
+meeting selection disables fallbacks for that turn so saved provider consent
+cannot share meeting excerpts with another provider.
+
+In the TUI Chat screen, select the CLI under provider setup, choose a model
+(optional for Claude Code), and press **Ctrl+S** to cycle dictations, meetings,
+both or neither. Switching sources clears the model's prior context. Meeting
+selection requires a new consent confirmation each turn. Local server setup
+continues to clear cloud fallbacks.
+
+Questions and excerpts go to the child through stdin, never command arguments.
+Each invocation uses a private temporary working directory. Cancel terminates
+the owned process group, escalates to a kill after two seconds and reaps the
+child. Xflow bounds and drains both output pipes and does not save CLI output.
+The CLI may retain its own logs, caches, telemetry or sessions despite
+no-session flags. Transcript excerpts leave your computer only after consent;
+`privacy.offline` refuses all CLI providers before any subprocess starts.
+
+Harness-primary fallback is not implemented. CLI startup checks and process-group
+cleanup add latency. CLI format changes produce a fixed, sanitized error instead
+of showing raw diagnostics or account identities. Login status in setup is
+probed with a short deadline in the background.

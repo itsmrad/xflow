@@ -1,5 +1,5 @@
  xflow  ·  Chat                                                    ○ Not set up
-╭────────────────╮╭ Chat · OpenRouter · openai/gpt-oss-120b ───────────────────╮
+╭────────────────╮╭ Chat · OpenRouter · dictations (Ctrl+S) · openai/gpt-oss-12╮
 │ 1  Home        ││ › What did I decide about the kubernetes migration?        │
 │ 2  History     ││ · Searched dictations for 'kubernetes': sent to OpenRouter │
 │ 3  Dictionary  ││                                                            │

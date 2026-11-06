@@ -198,7 +198,7 @@ pub enum Effect {
     RemoveModel,
     ChatTurn(Box<chat::ChatRun>),
     ChatCancel,
-    ChatKeys,
+    ChatKeys(bool),
 }
 /// A step still waiting this long likely faces an old, switched-on xflowd row.
 const STALE_AFTER: Duration = Duration::from_secs(10);
@@ -1050,7 +1050,7 @@ impl App {
             // Pick up edits made elsewhere (CLI, editor) before showing values.
             Page::Settings if !self.dirty && !self.saving => vec![Effect::Load(self.path.clone())],
             Page::Settings => vec![Effect::KeyStatus(self.config.clone())],
-            Page::Chat if !self.chat_ready() => vec![Effect::ChatKeys],
+            Page::Chat if !self.chat_ready() => vec![Effect::ChatKeys(self.config.privacy.offline)],
             Page::Chat => vec![],
             Page::Overlay => vec![Effect::Overlay],
             Page::Doctor => vec![

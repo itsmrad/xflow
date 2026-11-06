@@ -462,7 +462,7 @@ fn setup_lists_the_catalog_with_key_state_and_saves_key_and_model() {
     app.page = Page::Home;
     assert!(matches!(
         press(&mut app, KeyCode::Char('-'))[..],
-        [Effect::ChatKeys]
+        [Effect::ChatKeys(false)]
     ));
     assert_eq!(app.page, Page::Chat);
     handle(
@@ -1166,4 +1166,20 @@ async fn streaming_stays_within_the_draw_budget() {
     assert!(rate <= 30.0, "{rate} redraws a second");
     assert!(frames.len() > 10, "frames were drawn");
     assert!(!app.chat.running());
+}
+
+#[test]
+fn meetings_need_new_consent_even_with_saved_provider_consent() {
+    let (_dir, mut app) = ready();
+    ctrl(&mut app, 's');
+    typed(&mut app, "What did Priya decide in the meeting?");
+    assert!(press(&mut app, KeyCode::Enter).is_empty());
+    assert!(matches!(app.modal, Some(Modal::ChatConsent { .. })));
+    settle(&mut app);
+    let effect = press(&mut app, KeyCode::Char('y')).pop().unwrap();
+    let Effect::ChatTurn(run) = effect else {
+        panic!("turn")
+    };
+    assert!(run.turn.meetings);
+    assert!(!run.turn.dictations);
 }
