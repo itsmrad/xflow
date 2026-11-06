@@ -754,7 +754,7 @@ const MAX_RULES: usize = 100;
 pub const MAX_SEEN: usize = 32;
 
 /// What one reviewed correction changed.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Adopted {
     /// Newly saved words, each once.
     pub added: Vec<String>,
@@ -765,7 +765,82 @@ pub struct Adopted {
     /// A rule was earned but a cap or a conflict refused it; the word still counts.
     pub refused: bool,
 }
+impl Adopted {
+    /// What of this is still earned by `kept`, the corrections staying saved.
+    pub fn keeping(&self, kept: &[Replacement]) -> Self {
+        let targeted = |word: &String| {
+            kept.iter()
+                .any(|c| c.to.to_lowercase() == word.to_lowercase())
+        };
+        Self {
+            added: self.added.iter().filter(|w| targeted(w)).cloned().collect(),
+            rules: self
+                .rules
+                .iter()
+                .filter(|r| kept.iter().any(|c| same_pair(c, r)))
+                .cloned()
+                .collect(),
+            promoted: self
+                .promoted
+                .iter()
+                .filter(|w| targeted(w))
+                .cloned()
+                .collect(),
+            refused: false,
+        }
+    }
+}
+/// The same correction, however its case was stored.
+pub fn same_pair(a: &Replacement, b: &Replacement) -> bool {
+    a.from.to_lowercase() == b.from.to_lowercase() && a.to.to_lowercase() == b.to.to_lowercase()
+}
+/// Of the corrections a watch already saved, those the field no longer shows as
+/// saved: edited again at the same words (`now`, what it shows now, has another
+/// correction of them), or taken back (the dictated words are there again and the
+/// saved ones are not). A correction merely edited away, by a rewrite or a
+/// deletion, stays: nothing says its spelling was wrong.
+pub fn superseded(saved: &[Replacement], now: &[Replacement], span: &str) -> Vec<Replacement> {
+    let lower = |s: &str| -> Vec<String> {
+        crate::text::words(s)
+            .iter()
+            .map(|w| w.text.to_lowercase())
+            .collect()
+    };
+    let shown = lower(span);
+    saved
+        .iter()
+        .filter(|d| {
+            if now.iter().any(|c| same_pair(c, d)) {
+                return false;
+            }
+            let from = lower(&d.from);
+            now.iter()
+                .any(|c| lower(&c.from).iter().any(|w| from.contains(w)))
+                || (from.iter().all(|w| shown.contains(w))
+                    && !lower(&d.to).iter().all(|w| shown.contains(w)))
+        })
+        .cloned()
+        .collect()
+}
 impl DictionaryConfig {
+    /// Apply again what an earlier save did, without judging it again.
+    pub fn replay(&mut self, adopted: &Adopted) {
+        for word in &adopted.promoted {
+            if let Some(i) = self.words.iter().position(|w| w == word) {
+                let word = self.words.remove(i);
+                self.words.insert(0, word);
+            }
+        }
+        for word in &adopted.added {
+            if !self.words.contains(word) {
+                self.words.insert(0, word.clone());
+            }
+            if !self.learned.contains(word) {
+                self.learned.push(word.clone());
+            }
+        }
+        self.replacements.extend(adopted.rules.iter().cloned());
+    }
     /// Save what a reviewed correction earned, by tier:
     /// 1. An uncommon source (see `uncommon_source`) and a close spelling: the
     ///    word and the literal rule at once, so the next dictation is right
@@ -1772,6 +1847,63 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_saved_correction_is_superseded_only_at_its_own_words() {
+        let saved = [rule("kubernetis", "Kubernete"), rule("Zorblax", "Zorblex")];
+        let check =
+            |span: &str| superseded(&saved, &pending("use kubernetis and Zorblax", span), span);
+        // Unchanged.
+        assert!(check("use Kubernete and Zorblex").is_empty());
+        // Edited again at the same words.
+        assert_eq!(check("use Kubernetes and Zorblex"), [saved[0].clone()]);
+        // Taken back.
+        assert_eq!(check("use kubernetis and Zorblex"), [saved[0].clone()]);
+        assert_eq!(check("use kubernetis and Zorblax"), saved);
+        // Deleted or rewritten away: nothing says the spelling was wrong.
+        assert!(check("use and Zorblex").is_empty());
+        assert!(check("something else entirely").is_empty());
+        // Phrases overlap on any word.
+        let saved = [rule("Rimpas", "Rimpa")];
+        let now = pending("Rimpas or Kar call", "Rimpa Sarkar call");
+        assert_eq!(superseded(&saved, &now, "Rimpa Sarkar call"), saved);
+        // Case does not make it another correction.
+        assert!(same_pair(
+            &rule("cloud", "Claude"),
+            &rule("Cloud", "claude")
+        ));
+    }
+    #[test]
+    fn replaying_what_stays_saved_reproduces_it() {
+        let mut d = known(&["Base"]);
+        let mut seen = vec![];
+        let a = d.adopt(
+            &review("ask Veronika", "ask Veronica", &d).unwrap(),
+            &mut seen,
+        );
+        let b = d.adopt(
+            &review("ask Zorblax", "ask Zorblex", &d).unwrap(),
+            &mut seen,
+        );
+        let kept = [rule("Zorblax", "Zorblex")];
+        let mut rebuilt = known(&["Base"]);
+        rebuilt.replay(&a.keeping(&kept));
+        rebuilt.replay(&b.keeping(&kept));
+        assert_eq!(rebuilt.words, ["Zorblex", "Base"]);
+        assert_eq!(rebuilt.learned, ["Zorblex"]);
+        assert_eq!(rebuilt.replacements, kept);
+        // An alias keeps a word its sibling also earned.
+        let adopted = Adopted {
+            added: vec!["Kubernetes".into()],
+            rules: vec![
+                rule("Kubernetis", "Kubernetes"),
+                rule("Kuberntes", "Kubernetes"),
+            ],
+            ..Adopted::default()
+        };
+        let kept = adopted.keeping(&[rule("Kuberntes", "Kubernetes")]);
+        assert_eq!(kept.added, ["Kubernetes"]);
+        assert_eq!(kept.rules, [rule("Kuberntes", "Kubernetes")]);
+    }
     #[test]
     fn deleting_a_word_takes_every_rule_that_writes_it_and_says_how_many() {
         let mut dictionary = known(&["Rimpa Sarkar"]);
