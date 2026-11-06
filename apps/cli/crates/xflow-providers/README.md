@@ -22,6 +22,7 @@ contracts, not account availability or cloud transcription quality.
 | `deepinfra` | `openai/whisper-large-v3-turbo` | OpenAI multipart | [API reference](https://docs.deepinfra.com/api-reference/audio/openai-audio-transcriptions); documented |
 | `custom` | Explicit model | OpenAI multipart by default | Explicit endpoint required; compatibility depends on server |
 | `local` | `Systran/faster-whisper-small` | OpenAI multipart, no key | [Speaches](https://speaches.ai/); default http://127.0.0.1:8000/v1/audio/transcriptions |
+| `on-device` | `parakeet-tdt-0.6b-v3` | `xflow-stt-coreml` helper over stdin/stdout ([protocol](../../../../tools/local-stt/PROTOCOL.md)), no network | Apple Silicon macOS 14+; model installed by `xflow models install`; no fallback, cleanup or retry |
 
 DeepInfra replaces Fireworks STT, which was
 [deprecated on 2026-06-10](https://docs.fireworks.ai/updates/changelog).

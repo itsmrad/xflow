@@ -399,6 +399,39 @@ impl std::fmt::Display for ConfigFile {
     }
 }
 
+/// Switch `[stt]` to on-device speech. The whole API section is saved in
+/// `on_device.previous_api`; keys, cleanup and styles stay stored but unused.
+pub fn use_on_device(file: &mut ConfigFile) -> Result<()> {
+    use xflow_providers::on_device::{LANGUAGES, ON_DEVICE};
+    let stt = file.config()?.stt;
+    if stt.provider == ON_DEVICE {
+        return Ok(());
+    }
+    let saved = stt.language.iter().chain(&stt.languages);
+    if let Some(tag) = saved
+        .into_iter()
+        .find(|t| !LANGUAGES.contains(&t.split('-').next().unwrap_or("")))
+    {
+        bail!("On-device speech does not support your saved language preference ({tag}); it covers 25 European languages and not Hindi or Japanese. Keep your current provider, or clear stt.language and stt.languages first.");
+    }
+    file.set_typed("on_device.previous_api", &stt)?;
+    let local = xflow_core::config::SttConfig {
+        provider: ON_DEVICE.into(),
+        timeout_secs: stt.timeout_secs,
+        ..Default::default()
+    };
+    file.set_typed("stt", &local)
+}
+
+/// Leave on-device speech: restore the saved API section (defaults if none) and
+/// drop the snapshot. Returns it so the caller can apply a newly chosen provider.
+pub fn leave_on_device(file: &mut ConfigFile) -> Result<xflow_core::config::SttConfig> {
+    let stt = file.config()?.on_device.previous_api.unwrap_or_default();
+    file.set_typed("stt", &stt)?;
+    file.unset("on_device.previous_api")?;
+    Ok(stt)
+}
+
 fn parse(doc: &DocumentMut) -> Result<Config> {
     let config: Config = toml::from_str(&doc.to_string())?;
     config.validate()?;
@@ -434,6 +467,11 @@ fn put(doc: &mut DocumentMut, key: &str, item: Item) -> Result<()> {
     match (table.get_mut(leaf), item) {
         // Keep the existing trailing comment and spacing when replacing a scalar.
         (Some(Item::Value(old)), Item::Value(mut new)) => {
+            *new.decor_mut() = old.decor().clone();
+            *old = new;
+        }
+        // And the comments above a replaced table (`[stt]` on a provider switch).
+        (Some(Item::Table(old)), Item::Table(mut new)) => {
             *new.decor_mut() = old.decor().clone();
             *old = new;
         }
@@ -892,5 +930,82 @@ mod preferred_language_tests {
             Config::load(&path).unwrap().stt.language.as_deref(),
             Some("fr")
         );
+    }
+}
+
+#[cfg(test)]
+mod on_device_tests {
+    use super::*;
+    use xflow_providers::ON_DEVICE;
+
+    const API: &str = "# my settings\n[stt]\nprovider = \"custom\" # self-hosted\nendpoint = \"https://stt.example.com/v1/audio/transcriptions\"\nmodel = \"whisper-x\"\nprotocol = \"openai\"\napi_key_env = \"MY_STT_KEY\"\nfallback = [\"openai\"]\nlanguages = [\"en\", \"fr\"]\nvocabulary = [\"xflow\"]\ndomain_hints = false\ntimeout_secs = 45\n\n[cleanup]\nmode = \"light\"\nprovider = \"openai\"\n\n[[styles]]\nname = \"chat\"\napps = [\"Slack\"]\nmode = \"polished\"\n\n[dictionary]\nwords = [\"Kubernetes\"]\n";
+
+    fn file(text: &str) -> (tempfile::TempDir, ConfigFile) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        let file = ConfigFile::load(&path).unwrap();
+        (dir, file)
+    }
+
+    #[test]
+    fn api_route_survives_a_round_trip_through_on_device() {
+        let (_dir, mut file) = file(API);
+        let before = file.config().unwrap();
+        use_on_device(&mut file).unwrap();
+        let local = file.config().unwrap();
+        assert_eq!(local.stt.provider, ON_DEVICE);
+        assert!(local.stt.fallback.is_empty() && local.stt.languages.is_empty());
+        assert_eq!(local.on_device.previous_api.as_ref(), Some(&before.stt));
+        // Cleanup and styles stay stored, dormant.
+        assert_eq!(local.cleanup, before.cleanup);
+        assert_eq!(local.styles, before.styles);
+        // Switching again changes nothing.
+        use_on_device(&mut file).unwrap();
+        assert_eq!(file.config().unwrap(), local);
+        let restored = leave_on_device(&mut file).unwrap();
+        assert_eq!(restored, before.stt);
+        let after = file.config().unwrap();
+        assert_eq!(after.stt, before.stt);
+        assert_eq!(after.on_device.previous_api, None);
+        assert_eq!(after.dictionary, before.dictionary);
+        assert!(file.to_string().contains("# my settings"));
+    }
+
+    #[test]
+    fn unsupported_saved_language_blocks_switching_and_changes_nothing() {
+        for (text, tag) in [
+            ("[stt]\nlanguages = [\"hi\", \"en\"]\n", "hi"),
+            ("[stt]\nlanguage = \"ja\"\n", "ja"),
+        ] {
+            let (_dir, mut file) = file(text);
+            let before = file.to_string();
+            let error = use_on_device(&mut file).unwrap_err().to_string();
+            assert!(error.contains(tag) && error.contains("Hindi"), "{error}");
+            assert_eq!(file.to_string(), before);
+        }
+    }
+
+    #[test]
+    fn a_dictionary_word_saved_meanwhile_is_kept_by_the_switch() {
+        let (dir, _stale) = file("[stt]\nprovider = \"groq\"\n[dictionary]\nwords = [\"one\"]\n");
+        let path = dir.path().join("config.toml");
+        // The daemon's learner saves a word after the CLI first read the file.
+        {
+            let _lock = lock(&path).unwrap();
+            let mut learner = ConfigFile::load(&path).unwrap();
+            learner
+                .set("dictionary.words", "[\"one\", \"two\"]")
+                .unwrap();
+            learner.save().unwrap();
+        }
+        // The switch re-reads under the lock, as `providers use` does.
+        let _lock = lock(&path).unwrap();
+        let mut file = ConfigFile::load(&path).unwrap();
+        use_on_device(&mut file).unwrap();
+        file.save().unwrap();
+        let saved = Config::load(&path).unwrap();
+        assert_eq!(saved.stt.provider, ON_DEVICE);
+        assert_eq!(saved.dictionary.words, ["one", "two"]);
     }
 }

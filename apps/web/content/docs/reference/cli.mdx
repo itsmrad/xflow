@@ -31,7 +31,7 @@ Commands:
   history      Browse, search and export local dictation history
   config       Inspect or edit validated, comment-preserving TOML configuration
   providers    List providers, inspect capabilities and select a default
-  models       List provider models, or inspect the offline on-device model catalog and hardware
+  models       List provider models, inspect the on-device model and hardware, or install/remove it
   key          Manage provider credentials in OS credential storage; a custom cleanup endpoint uses the `cleanup` entry
   dictionary   Manage vocabulary and text replacements
   snippets     Manage spoken shortcuts that expand to saved text
@@ -717,19 +717,66 @@ Options:
 
 ## xflow models
 
-List provider models, or inspect the offline on-device model catalog and hardware
+List provider models, inspect the on-device model and hardware, or install/remove it
 
 ```text
-List provider models, or inspect the offline on-device model catalog and hardware
+List provider models, inspect the on-device model and hardware, or install/remove it
 
 Usage: xflow models [OPTIONS] [PROVIDER]
+       xflow models <COMMAND>
+
+Commands:
+  install  Download the pinned on-device model files (or copy them with --from) and verify them
+  remove   Delete the installed on-device model and any partial download
+  help     Print this message or the help of the given subcommand(s)
 
 Arguments:
   [PROVIDER]
 
 Options:
       --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
       --on-device      Report on-device model requirements and host facts without installing or selecting a model
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow models install
+
+Download the pinned on-device model files (or copy them with --from) and verify them
+
+```text
+Download the pinned on-device model files (or copy them with --from) and verify them
+
+Usage: xflow models install [OPTIONS] <MODEL>
+
+Arguments:
+  <MODEL>
+
+Options:
+      --from <DIR>     Copy from a local directory with the same files instead of downloading
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow models remove
+
+Delete the installed on-device model and any partial download
+
+```text
+Delete the installed on-device model and any partial download
+
+Usage: xflow models remove [OPTIONS] <MODEL>
+
+Arguments:
+  <MODEL>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
   -q, --quiet          Suppress confirmations; requested data and errors remain visible
       --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
       --config <PATH>  Read/write an alternate configuration file

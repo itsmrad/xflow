@@ -2768,6 +2768,11 @@ fn native_services(old: &Config, config: &Config, services: Services) -> Result<
     })
 }
 pub(crate) fn build_transformer(config: &Config) -> Result<Option<Arc<dyn TextTransformer>>> {
+    // Local only: on-device speech builds no cleanup model, so no style cleanup, command
+    // or selection rewrite and no warmup reaches the network. Dictionary rules still run.
+    if config.stt.provider == xflow_providers::ON_DEVICE {
+        return Ok(None);
+    }
     let mut cleanup = config.cleanup.clone();
     if cleanup.mode == CleanupMode::Raw
         && (cleanup.provider.is_some()
