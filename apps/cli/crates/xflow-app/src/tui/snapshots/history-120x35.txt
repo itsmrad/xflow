@@ -32,4 +32,4 @@
 │                ││                                                         ││                                         │
 ╰────────────────╯╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────╯
 
- ↑↓ move · Enter options · / search · Esc back · Tab next page · ? help · q quit
+ / search · Enter options · ↑↓ move · Esc back · Tab next page · ? help · q quit

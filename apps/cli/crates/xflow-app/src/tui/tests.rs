@@ -116,6 +116,111 @@ fn stale_history_responses_never_replace_current_search() {
     app.response(response, Tag::History(1));
     assert!(app.history.is_empty());
 }
+
+#[test]
+fn history_keeps_selection_details_and_mouse_rows_at_short_heights() {
+    let (_dir, mut app) = populated();
+    app.page = Page::History;
+    app.history = [
+        "Ada: ship it.",
+        "Kubernetes, PostgreSQL, useEffect, git rebase, OAuth and kubectl: check the deployment before Friday at 14:30.",
+        "Priya और José: कल API deploy करना है, फिर tests चलाओ।",
+        "A very long application name with several words and a short dictation",
+        "Mei: ready.",
+    ].into_iter().enumerate().map(|(i, text)| HistoryEntry {
+        id: i as i64,
+        text: text.into(),
+        app_id: Some("A deliberately long editor application name".into()),
+        ..app.history[0].clone()
+    }).collect();
+    app.total = app.history.len() as u64;
+    let fixture = app.history.clone();
+    let capture = std::env::var_os("XFLOW_HISTORY_CAPTURES").map(PathBuf::from);
+    for (theme, mode) in [
+        ("midnight", ColorMode::TrueColor),
+        ("paper", ColorMode::TrueColor),
+        ("none", ColorMode::None),
+    ] {
+        app.theme = Theme::resolve(
+            if theme == "none" { "paper" } else { theme },
+            &BTreeMap::new(),
+            mode,
+        )
+        .unwrap();
+        for (width, height) in [(120, 32), (80, 24), (40, 16)] {
+            for selected in 0..app.history.len() {
+                app.selected[Page::History.index()] = selected;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut hits = render::HitMap::default();
+                terminal.draw(|f| hits = render::draw(f, &app)).unwrap();
+                let text = screen(&app, width, height);
+                if let Some(root) = &capture {
+                    std::fs::create_dir_all(root).unwrap();
+                    std::fs::write(
+                        root.join(format!("{width}x{height}-{theme}-{selected}.txt")),
+                        &text,
+                    )
+                    .unwrap();
+                }
+                assert!(text.contains("Details"), "{text}");
+                assert!(text.contains("Enter options"), "{text}");
+                assert!(text.contains("/ search"), "{text}");
+                assert!(
+                    hits.rows.iter().any(|(_, i)| *i == selected),
+                    "selected row disappeared: {text}"
+                );
+                for (rect, index) in &hits.rows {
+                    assert!(*index < app.history.len());
+                    for y in rect.y..rect.bottom() {
+                        assert!(
+                            !terminal.backend().buffer()[(rect.x, y)]
+                                .symbol()
+                                .contains('─'),
+                            "hit region covers border"
+                        );
+                    }
+                }
+                assert!(terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .any(|cell| cell.modifier.contains(Modifier::REVERSED)));
+            }
+            app.history.clear();
+            app.query = "unmatched".into();
+            let text = screen(&app, width, height);
+            assert!(text.contains("Nothing matches"), "{text}");
+            if let Some(root) = &capture {
+                std::fs::write(
+                    root.join(format!("{width}x{height}-{theme}-no-match.txt")),
+                    &text,
+                )
+                .unwrap();
+            }
+            app.query.clear();
+            assert!(screen(&app, width, height).contains("No dictations yet"));
+            app.history = fixture.clone();
+        }
+    }
+    let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+    let start = std::time::Instant::now();
+    for i in 0..30 {
+        let (width, height) = [(120, 32), (80, 24), (40, 16)][i % 3];
+        terminal
+            .resize(ratatui::layout::Rect::new(0, 0, width, height))
+            .unwrap();
+        terminal
+            .draw(|f| {
+                render::draw(f, &app);
+            })
+            .unwrap();
+    }
+    eprintln!(
+        "History resize/redraw: {:?} per frame (30 TestBackend draws)",
+        start.elapsed() / 30
+    );
+}
 #[test]
 fn validation_and_quit_preserve_unsaved_edits() {
     let (_dir, mut app) = app();
