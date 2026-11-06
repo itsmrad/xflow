@@ -869,8 +869,10 @@ mod tests {
             "right_option+a",
         ] {
             assert!(modifier_chord(key).is_none(), "{key}");
-            let mut bad = AskConfig::default();
-            bad.key = key.into();
+            let bad = AskConfig {
+                key: key.into(),
+                ..AskConfig::default()
+            };
             assert!(bad.validate().is_err(), "{key}");
         }
     }
