@@ -24,6 +24,8 @@ pub use stt::{
 };
 mod audio;
 mod catalog;
+pub mod on_device;
+pub use on_device::ON_DEVICE;
 pub mod keystore;
 #[cfg(all(not(test), target_os = "macos"))]
 mod macos_keychain;
@@ -627,6 +629,9 @@ pub fn migrate_keychain(foreground: Option<&dyn Fn()>) -> Result<Vec<String>> {
     Ok(left)
 }
 pub async fn key_status(provider: &str, api_key_env: Option<&str>) -> KeySource {
+    if provider == ON_DEVICE {
+        return KeySource::NotRequired;
+    }
     if validate_provider(provider).is_err() {
         return KeySource::Missing;
     }

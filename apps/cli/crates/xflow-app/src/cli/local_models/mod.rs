@@ -1,9 +1,11 @@
 mod host;
+mod install;
 
-use super::{output, Output, Result};
+use super::{args, ipc, output, Error, Output, Result};
 use host::Host;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use xflow_providers::on_device;
 
 #[derive(Deserialize)]
 struct Requirements {
@@ -65,8 +67,12 @@ fn fit(host: &Host, requirements: &Requirements) -> Fit {
     }
     warnings.push("Total system memory needed by local transcription has not been qualified. No smooth-fit or speed estimate is available.".into());
     Fit {
+        readiness: if hardware == HardwareEligible && on_device::SUPPORTED && ready() {
+            "ready"
+        } else {
+            "not_ready"
+        },
         hardware,
-        readiness: "not_ready",
         memory_fit: "unverified",
         reason,
         warnings,
@@ -96,11 +102,108 @@ fn compare_accuracy(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
 }
 
+fn requirements() -> Requirements {
+    serde_json::from_value(catalog()["models"][0]["requirements"].clone())
+        .expect("catalog requirements")
+}
+fn artifact() -> install::Artifact {
+    serde_json::from_value(catalog()["models"][0]["artifact"].clone()).expect("catalog artifact")
+}
+fn installed() -> bool {
+    on_device::model_dir().is_ok_and(|dir| on_device::installed(&dir))
+}
+/// Installed, and the helper is where xflow looks for it.
+fn ready() -> bool {
+    installed() && on_device::helper_path().is_ok()
+}
+
+/// Refuse to select on-device speech this machine cannot run or has not installed.
+pub fn ready_to_use() -> Result<()> {
+    let hardware = fit(&host::probe(None), &requirements()).hardware;
+    if !on_device::SUPPORTED || matches!(hardware, Compatibility::Incompatible) {
+        return Err(Error::new(
+            1,
+            on_device::UNSUPPORTED,
+            "Keep an API provider: xflow providers list",
+        ));
+    }
+    if !installed() {
+        return Err(Error::new(
+            1,
+            "The on-device model is not installed",
+            format!("Run xflow models install {}", on_device::MODEL_ID),
+        ));
+    }
+    Ok(())
+}
+
+pub fn manage(action: &args::ModelAction, out: &Output) -> Result<()> {
+    let (args::ModelAction::Install { model, .. } | args::ModelAction::Remove { model }) = action;
+    if model != on_device::MODEL_ID {
+        return Err(Error::new(
+            2,
+            format!("Unknown on-device model: {model}"),
+            format!("The available model is {}", on_device::MODEL_ID),
+        ));
+    }
+    let models = on_device::models_dir().map_err(Error::config)?;
+    match action {
+        args::ModelAction::Install { from, .. } => {
+            if !on_device::SUPPORTED {
+                return Err(Error::new(
+                    1,
+                    on_device::UNSUPPORTED,
+                    "Keep an API provider: xflow providers list",
+                ));
+            }
+            let artifact = artifact();
+            let source = match from {
+                Some(dir) => install::Source::Dir(dir),
+                None => install::Source::Http(install::BASE_URL),
+            };
+            let progress = !out.json && !out.quiet;
+            let fresh = ipc::block_on(async {
+                install::install(&artifact, source, &models, progress)
+                    .await
+                    .map_err(|e| {
+                        Error::new(1, format!("{e:#}"), "Run the same command again to resume")
+                    })
+            })?;
+            let dir = models.join(on_device::MODEL_ID);
+            out.data(
+                &json!({"model":model,"installed":true,"path":dir.to_string_lossy(),"changed":fresh}),
+                &if fresh {
+                    format!("Installed {model} in {}. Use it: xflow providers use on-device", dir.display())
+                } else {
+                    format!("{model} is already installed")
+                },
+            )?;
+        }
+        args::ModelAction::Remove { .. } => {
+            let removed = install::remove(&models).map_err(Error::config)?;
+            out.data(
+                &json!({"model":model,"removed":removed}),
+                &if removed {
+                    format!("Removed {model}; keys, settings and history are unchanged")
+                } else {
+                    format!("{model} is not installed")
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn report(host: &Host) -> Value {
     let catalog = catalog();
     let requirements = serde_json::from_value(catalog["models"][0]["requirements"].clone())
         .expect("catalog requirements");
-    json!({"schema_version":1,"host":host,"catalog":catalog,"fit":fit(host, &requirements)})
+    let model_dir = on_device::model_dir().ok();
+    let helper = on_device::helper_path();
+    json!({"schema_version":1,"host":host,"catalog":catalog,"fit":fit(host, &requirements),
+        "install":{"installed":installed(),
+            "model_dir":model_dir.map(|p| p.to_string_lossy().into_owned()),
+            "helper":helper.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|e| format!("{e:#}"))}})
 }
 
 fn human(report: &Value) -> String {
@@ -139,9 +242,10 @@ fn human(report: &Value) -> String {
         .map(|l| format!("{} ({})", display(&l["name"]), display(&l["code"])))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("Local model catalog (bundled, offline)\n{}\n\n{} [{}]\nStatus: not ready; {}\nHardware: {}\nMemory fit: unverified\nLanguages (25): {}\n{}\nLicense: {} — {}\n{}\n{}\nSource: {}\nAccuracy: NVIDIA base-model English average WER 6.34%, Open ASR Leaderboard.\nDatasets: {}. Punctuation and capitalization removed.\nSource checked: {}; evaluation date: unknown.\n{}\nComparable converted-runtime accuracy: unknown (unknown scores sort last).\nAccuracy source: {}\nDownload: {} bytes (model files only). {}\nRequirements: macOS 14+, Apple Silicon; RAM requirement unknown.\n{}\nDisk allowance: {} bytes. {}\nArtifact: {} @ {}\n{}\nPlanned runtime: {} @ {} ({}, not installed)\nRuntime license: {}\nWarnings:\n{}\nNo model selection, installation or transcription is available here.\n",
+    format!("Local model catalog (bundled, offline)\n{}\n\n{} [{}]\nStatus: {}; {}\nInstalled: {}\nHelper: {}\nHardware: {}\nMemory fit: unverified\nLanguages (25): {}\n{}\nLicense: {} — {}\n{}\n{}\nSource: {}\nAccuracy: NVIDIA base-model English average WER 6.34%, Open ASR Leaderboard.\nDatasets: {}. Punctuation and capitalization removed.\nSource checked: {}; evaluation date: unknown.\n{}\nComparable converted-runtime accuracy: unknown (unknown scores sort last).\nAccuracy source: {}\nDownload: {} bytes (model files only). {}\nRequirements: macOS 14+, Apple Silicon; RAM requirement unknown.\n{}\nDisk allowance: {} bytes. {}\nArtifact: {} @ {}\n{}\nPlanned runtime: {} @ {} ({}, not installed)\nRuntime license: {}\nWarnings:\n{}\nInstall: xflow models install {} [--from DIR]. Use: xflow providers use on-device\n",
         output::table(&["HOST", "VALUE"], &rows), display(&model["name"]), display(&model["id"]),
-        display(&report["fit"]["reason"]), display(&report["fit"]["hardware"]), languages,
+        display(&report["fit"]["readiness"]).replace('_', " "), display(&report["fit"]["reason"]),
+        if report["install"]["installed"] == true { "yes" } else { "no" }, display(&report["install"]["helper"]), display(&report["fit"]["hardware"]), languages,
         display(&model["language_warning"]), display(&model["license"]["id"]), display(&model["license"]["url"]),
         display(&model["license"]["attribution"]), display(&model["license"]["modifications"]), display(&model["license"]["source"]),
         model["accuracy"]["datasets"].as_array().unwrap().iter().map(display).collect::<Vec<_>>().join(", "),
@@ -150,19 +254,11 @@ fn human(report: &Value) -> String {
         model["requirements"]["advisory_free_disk_bytes"], display(&model["requirements"]["disk_note"]),
         display(&model["artifact"]["repository"]), display(&model["artifact"]["revision"]), display(&model["artifact"]["variant"]),
         display(&model["planned_runtime"]["name"]), display(&model["planned_runtime"]["revision"]), display(&model["planned_runtime"]["license"]), display(&model["planned_runtime"]["license_source"]),
-        report["fit"]["warnings"].as_array().unwrap().iter().map(|s| format!("- {}", display(s))).collect::<Vec<_>>().join("\n"))
+        report["fit"]["warnings"].as_array().unwrap().iter().map(|s| format!("- {}", display(s))).collect::<Vec<_>>().join("\n"), display(&model["id"]))
 }
 
 pub fn run(out: &Output) -> Result<()> {
-    let install_path = xflow_app::paths::data_dir().ok().and_then(|p| {
-        if p.is_absolute() {
-            Some(p.join("models"))
-        } else {
-            std::env::current_dir()
-                .ok()
-                .map(|cwd| cwd.join(p).join("models"))
-        }
-    });
+    let install_path = on_device::model_dir().ok();
     let report = report(&host::probe(install_path));
     out.data(&report, &human(&report))?;
     Ok(())
@@ -257,6 +353,14 @@ mod tests {
             ]
         );
         assert!(!languages.contains(&"hi") && !languages.contains(&"ja"));
+        assert_eq!(languages, on_device::LANGUAGES);
+        assert_eq!(
+            on_device::model_dir().unwrap(),
+            std::path::absolute(xflow_app::paths::data_dir().unwrap())
+                .unwrap()
+                .join("models")
+                .join(on_device::MODEL_ID)
+        );
         assert_eq!(
             model["artifact"]["revision"],
             "7dd20fe6b1797d35f5e3307e8b1732d9a178edfe"

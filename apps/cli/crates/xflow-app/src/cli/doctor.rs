@@ -131,7 +131,9 @@ fn checks(
         ));
     }
     if let Ok(config) = config {
-        let mut detail = if config.privacy.offline {
+        let mut detail = if config.stt.provider == xflow_providers::ON_DEVICE {
+            "On-device transcription: audio stays on this Mac; no cleanup model is used"
+        } else if config.privacy.offline {
             "Offline endpoint guard enabled"
         } else {
             "Cloud transcription uploads audio to the configured provider"
@@ -349,10 +351,26 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
             Ok(String::new())
         };
         checks.push(microphone_check(used, next));
-        let known = super::provider::info(&cfg.stt.provider);
+        let known = super::provider::info(&cfg.stt.provider).map(drop);
+        let on_device = cfg.stt.provider == xflow_providers::ON_DEVICE;
+        if on_device {
+            // Finds the helper and the installed marker; never loads the model.
+            let ready =
+                super::ipc::block_on(async { Ok(xflow_providers::on_device::check().await) })?;
+            checks.push(check(
+                "on-device speech",
+                ready.is_ok(),
+                true,
+                match ready {
+                    Ok(report) => report.detail,
+                    Err(error) => format!("{error:#}"),
+                },
+                "Run xflow models install parakeet-tdt-0.6b-v3, or xflow providers use <provider>",
+            ));
+        }
         checks.push(check(
             "provider",
-            known.is_ok(),
+            known.is_ok() || on_device,
             true,
             cfg.stt.provider.clone(),
             "Run xflow providers list and xflow providers use <provider>",
