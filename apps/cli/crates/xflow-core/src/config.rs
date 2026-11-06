@@ -45,6 +45,7 @@ pub struct Config {
     pub ai: AiConfig,
     /// Ask before recording recognized calls. No audio is captured by detection.
     pub meetings: MeetingConfig,
+    pub ask: AskConfig,
     /// Spoken trigger phrase -> inserted text.
     pub snippets: Vec<Snippet>,
     /// Per-app cleanup styles; the first style whose `apps` matches wins.
@@ -79,6 +80,31 @@ pub const HOTKEY_KEYS: &[&str] = &[
     "f19",
 ];
 pub const HOTKEY_ALLOWED: &str = "fn, right_option, left_option, right_command, right_control, right_shift, caps_lock, f13..f19, or a chord such as ctrl+alt+space (ctrl/alt/shift/cmd + a-z, 0-9, space, tab, enter, escape, backspace, f1..f20)";
+
+/// Modifiers that can form an ask chord. Two distinct names, nothing else.
+pub const NAMED_MODIFIERS: &[&str] = &[
+    "right_option",
+    "right_command",
+    "right_control",
+    "right_shift",
+    "left_option",
+    "fn",
+];
+
+/// `right_option+right_command` → the two names, in order. None when it is not that shape.
+pub fn modifier_chord(key: &str) -> Option<[&str; 2]> {
+    let mut parts = key.split('+');
+    let a = parts.next()?;
+    let b = parts.next()?;
+    if parts.next().is_some() || a == b {
+        return None;
+    }
+    if NAMED_MODIFIERS.contains(&a) && NAMED_MODIFIERS.contains(&b) {
+        Some([a, b])
+    } else {
+        None
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -129,6 +155,44 @@ impl HotkeyConfig {
         }
         if !(1..=2000).contains(&self.hold_threshold_ms) {
             bail!("hotkey.hold_threshold_ms must be 1..2000");
+        }
+        Ok(())
+    }
+}
+
+/// Spoken question. Empty settings follow AI, then cleanup, then Groq defaults.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AskConfig {
+    pub enabled: bool,
+    /// Two distinct named modifiers. Hold to ask; release to send.
+    pub key: String,
+    pub provider: String,
+    pub model: String,
+}
+impl Default for AskConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            key: "right_option+right_command".into(),
+            provider: String::new(),
+            model: String::new(),
+        }
+    }
+}
+impl AskConfig {
+    pub fn validate(&self) -> Result<()> {
+        if modifier_chord(&self.key).is_none() {
+            bail!(
+                "invalid ask.key {:?}; use two distinct modifiers from {}",
+                self.key,
+                NAMED_MODIFIERS.join(", ")
+            );
+        }
+        for (field, value) in [("ask.provider", &self.provider), ("ask.model", &self.model)] {
+            if value.len() > 256 || value.chars().any(char::is_control) {
+                bail!("invalid {field}");
+            }
         }
         Ok(())
     }
@@ -572,6 +636,7 @@ impl Config {
         .validate_languages()
         .context("invalid on_device.languages")?;
         self.hotkey.validate()?;
+        self.ask.validate()?;
         if !(1..=MAX_RECORDING_SECS).contains(&self.recording.max_seconds) {
             bail!("recording.max_seconds must be 1..{MAX_RECORDING_SECS}");
         }
@@ -783,6 +848,33 @@ mod tests {
         config.double_tap_ms = 500;
         config.hold_threshold_ms = 2001;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn ask_chord_is_two_distinct_named_modifiers() {
+        let ask = AskConfig::default();
+        ask.validate().unwrap();
+        assert_eq!(
+            modifier_chord(&ask.key),
+            Some(["right_option", "right_command"])
+        );
+        assert_eq!(
+            modifier_chord("fn+left_option"),
+            Some(["fn", "left_option"])
+        );
+        for key in [
+            "fn",
+            "right_option+right_option",
+            "ctrl+alt+space",
+            "right_option+a",
+        ] {
+            assert!(modifier_chord(key).is_none(), "{key}");
+            let bad = AskConfig {
+                key: key.into(),
+                ..AskConfig::default()
+            };
+            assert!(bad.validate().is_err(), "{key}");
+        }
     }
 
     #[test]

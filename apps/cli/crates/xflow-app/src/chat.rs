@@ -457,7 +457,12 @@ pub async fn run_turn(
         .collect();
     let mut request = ChatRequest {
         model: env.model.clone(),
-        system: system_prompt(),
+        system: if sources.dictations || sources.meetings {
+            system_prompt()
+        } else {
+            "Answer the user's question briefly. No transcript history or tools are available."
+                .into()
+        },
         messages: history.clone(),
         tools: vec![],
         max_output_tokens: env.max_output_tokens,

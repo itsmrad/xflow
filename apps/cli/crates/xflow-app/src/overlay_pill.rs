@@ -13,7 +13,7 @@ use xflow_core::{DesktopEvent, State};
 
 mod native;
 
-const MAX_EVENT_BYTES: usize = 192;
+const MAX_EVENT_BYTES: usize = 8192;
 /// A notice frame: at most four saved words of at most 40 characters.
 const MAX_NOTICE_BYTES: usize = 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
@@ -102,7 +102,7 @@ impl Notices {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PillEvent {
     state: State,
@@ -117,6 +117,11 @@ struct PillEvent {
     /// The only thing shown after release: a short red failure pill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     alert: Option<Alert>,
+    /// A spoken question. The helper stays up and draws `text` in the same panel.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    ask: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
 }
 
 /// Failures the user must act on; a paste, an asked-for copy or a discard is silent.
@@ -130,8 +135,24 @@ enum Alert {
     Record,
 }
 
+/// How long a finished answer stays readable: about fifteen characters a second, never under eight.
+pub(crate) fn answer_hold_secs(text: &str) -> f64 {
+    (text.chars().count() as f64 / 15.0).max(8.0)
+}
+
+fn pill_text(message: &str) -> String {
+    const MAX: usize = 4000;
+    if message.len() <= MAX {
+        return message.to_owned();
+    }
+    let mut end = MAX;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &message[..end])
+}
 impl PillEvent {
-    fn active(self) -> bool {
+    fn active(&self) -> bool {
         matches!(self.state, State::Listening | State::Processing)
     }
 
@@ -150,6 +171,12 @@ impl PillEvent {
             hands_free: message.starts_with(HANDS_FREE),
             no_signal: listening && message.contains(NO_SIGNAL),
             ends_soon: listening && message.contains(ENDS_SOON),
+            ask: event.mode == xflow_core::Mode::Ask,
+            text: (event.mode == xflow_core::Mode::Ask
+                && matches!(event.state, State::Processing | State::Success))
+            .then_some(message)
+            .filter(|text| !text.is_empty())
+            .map(pill_text),
             alert: match event.state {
                 State::Idle if message == crate::speech::NOT_CAUGHT => Some(Alert::NoSpeech),
                 State::Success if message.starts_with(COPIED) => Some(Alert::Copied),
@@ -165,22 +192,25 @@ impl PillEvent {
 /// Spawn this future with a dedicated desktop-event subscription. Failures are
 /// deliberately isolated from recording; no helper, timer or AppKit exists at idle.
 /// The pill shows while listening and collapses on release; afterwards only a
-/// session's failure brings it back, briefly. A saved correction's notice is a
-/// separate short-lived helper (see `Notices`), never waited on here. Its ordinary
-/// exit is reaped by the select below; a kill is reaped in the background.
+/// session's failure brings it back, briefly. A finished ask answer stays up on
+/// its own timer instead. A saved correction's notice is a
+/// separate short-lived helper (see `Notices`), never waited on here.
 pub async fn run(
     mut events: broadcast::Receiver<DesktopEvent>,
     mut notices: watch::Receiver<Option<LearnNotice>>,
     config: std::path::PathBuf,
 ) {
     let mut helper: Option<Child> = None;
+    // The helper is holding a finished answer and exits on its own timer. Do not use `close`:
+    // that reaps a notice in four seconds, which is shorter than this hold.
+    let mut answer = false;
     // None outside a session; Some(true) once it reached Processing.
     let mut session: Option<bool> = None;
     let mut state = Notices::default();
     let mut notice: Option<Child> = None;
     let mut notices_open = true;
     loop {
-        tokio::select! {
+        let steps = tokio::select! {
             event = events.recv() => {
                 let event = match event {
                     Ok(event) => PillEvent::from_desktop(event, session == Some(true)),
@@ -191,7 +221,9 @@ pub async fn run(
                     State::Listening => {
                         if session.is_none() {
                             session = Some(false);
-                            // Retry only on the next session, not on every microphone-level event.
+                            // Only the transition: level frames repeat at 25 Hz.
+                            // A new hotkey replaces the answer. The old helper is killed on drop.
+                            answer = false;
                             helper = spawn(&config).ok();
                         }
                         if let Some(child) = &mut helper {
@@ -199,20 +231,62 @@ pub async fn run(
                                 close(&mut helper, false).await;
                             }
                         }
+                        Vec::new()
+                    }
+                    State::Processing if event.ask => {
+                        session = Some(true);
+                        if answer {
+                            answer = false;
+                            helper.take();
+                        }
+                        if helper.is_none() {
+                            helper = spawn(&config).ok();
+                        }
+                        if let Some(child) = &mut helper {
+                            if send(child, event).await.is_err() {
+                                close(&mut helper, false).await;
+                            }
+                        }
+                        Vec::new()
                     }
                     State::Processing => {
                         session = Some(true);
+                        answer = false;
                         close(&mut helper, false).await;
+                        Vec::new()
                     }
                     _ => {
-                        let alert = session.take().is_some() && event.alert.is_some();
-                        if alert && helper.is_none() {
-                            helper = spawn(&config).ok();
+                        let ask_done = event.ask && event.text.is_some();
+                        let had_session = session.take().is_some();
+                        if ask_done && had_session {
+                            if helper.is_none() {
+                                helper = spawn(&config).ok();
+                            }
+                            if let Some(child) = helper.as_mut() {
+                                if send(child, event).await.is_err() {
+                                    answer = false;
+                                    close(&mut helper, false).await;
+                                } else {
+                                    // Stdin stays open so the helper can run out its own hold.
+                                    answer = true;
+                                }
+                            }
+                        } else if answer && !event.active() && event.text.is_none() {
+                            // Esc. Dropping the child kills it; the key was not eaten.
+                            answer = false;
+                            helper.take();
+                        } else {
+                            answer = false;
+                            let alert = had_session && event.alert.is_some();
+                            if alert && helper.is_none() {
+                                helper = spawn(&config).ok();
+                            }
+                            if let Some(child) = helper.as_mut().filter(|_| alert) {
+                                let _ = send(child, event).await;
+                            }
+                            close(&mut helper, alert).await;
                         }
-                        if let Some(child) = helper.as_mut().filter(|_| alert) {
-                            let _ = send(child, event).await;
-                        }
-                        close(&mut helper, alert).await;
+                        Vec::new()
                     }
                 }
             }
@@ -221,23 +295,30 @@ pub async fn run(
                     notices_open = false;
                     continue;
                 }
-                let step = Step::Latest(current(&mut notices));
-                for action in state.step(step) {
-                    if let Some(mut child) = notice.take() {
-                        // Never waited on: dropped children are reaped in the background.
-                        let _ = child.start_kill();
-                    }
-                    if let Action::Show(shown) = action {
-                        notice = show(&config, &shown).await;
-                        if notice.is_none() {
-                            state.step(Step::Exited);
-                        }
-                    }
-                }
+                vec![Step::Latest(current(&mut notices))]
             }
             _ = async { notice.as_mut().unwrap().wait().await }, if notice.is_some() => {
                 notice = None;
-                state.step(Step::Exited);
+                vec![Step::Exited]
+            }
+            _ = async { helper.as_mut().unwrap().wait().await }, if answer => {
+                helper = None;
+                answer = false;
+                Vec::new()
+            }
+        };
+        for step in steps {
+            for action in state.step(step) {
+                if let Some(mut child) = notice.take() {
+                    // Never waited on: dropped children are reaped in the background.
+                    let _ = child.start_kill();
+                }
+                if let Action::Show(shown) = action {
+                    notice = show(&config, &shown).await;
+                    if notice.is_none() {
+                        state.step(Step::Exited);
+                    }
+                }
             }
         }
     }
@@ -459,7 +540,7 @@ mod tests {
         };
         let mut stalled = false;
         for _ in 0..4096 {
-            if send(&mut child, event).await.is_err() {
+            if send(&mut child, event.clone()).await.is_err() {
                 stalled = true;
                 break;
             }
@@ -470,6 +551,13 @@ mod tests {
             .unwrap();
         assert!(stalled, "an unread pipe must stop accepting events");
         assert!(helper.is_none());
+    }
+
+    #[test]
+    fn answer_hold_is_at_least_eight_seconds_and_grows_with_length() {
+        assert_eq!(answer_hold_secs(""), 8.0);
+        assert_eq!(answer_hold_secs("short"), 8.0);
+        assert_eq!(answer_hold_secs(&"a".repeat(300)), 20.0);
     }
 
     #[test]
@@ -680,6 +768,7 @@ mod tests {
             no_signal: true,
             ends_soon: true,
             alert: Some(Alert::NoSpeech),
+            ..PillEvent::default()
         };
         let frame = format!("{}\n", serde_json::to_string(&all).unwrap());
         let read = read_event(&mut std::io::Cursor::new(frame))

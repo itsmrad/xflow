@@ -26,14 +26,14 @@ use tokio::{
 };
 pub use xflow_core::ipc::Command;
 use xflow_core::{
-    config::{Config, DictionaryConfig, HotkeyConfig, Replacement},
+    config::{AskConfig, Config, DictionaryConfig, HotkeyConfig, Replacement},
     ipc::{
         CleanupOutcome, Delivery, FailedAudio, Grant, HistoryEntry, Learning, Permissions, Request,
         Response, Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     },
-    log, AppContext, AudioCapture, AudioClip, CleanupMode, Desktop, DesktopEvent, FieldEvent,
-    GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText, State, TextTransformer,
-    Transcript, TranscriptionOptions, TransformRequest,
+    log, privacy_line, AppContext, AudioCapture, AudioClip, ChatProvider, CleanupMode, Desktop,
+    DesktopEvent, FieldEvent, GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText,
+    State, TextTransformer, Transcript, TranscriptionOptions, TransformRequest,
 };
 
 #[cfg(debug_assertions)]
@@ -194,11 +194,12 @@ pub struct Services {
     pub desktop: Arc<dyn Desktop>,
     pub stt: Arc<dyn SpeechToText>,
     pub transformer: Option<Arc<dyn TextTransformer>>,
+    pub chat: Option<Arc<dyn ChatProvider>>,
 }
 // Injectable so reload tests never construct real desktop/audio/provider services.
 type ReloadFactory = Arc<dyn Fn(&Config, &Config, Services) -> Result<Services> + Send + Sync>;
 type HotkeyFactory =
-    Arc<dyn Fn(&HotkeyConfig) -> Result<Option<Box<dyn GlobalHotkeys>>> + Send + Sync>;
+    Arc<dyn Fn(&HotkeyConfig, &AskConfig) -> Result<Option<Box<dyn GlobalHotkeys>>> + Send + Sync>;
 pub struct Engine {
     config: Config,
     services: Services,
@@ -693,9 +694,12 @@ impl Engine {
                     let services = factory(&old, &config, services)?;
                     // Recreate the tap only when its config changed or it is missing (e.g. permission granted since).
                     let hotkeys = hotkey_factory
-                        .filter(|_| old.hotkey != config.hotkey || retry_hotkeys)
+                        .filter(|_| {
+                            old.hotkey != config.hotkey || old.ask != config.ask || retry_hotkeys
+                        })
                         .map(|factory| {
-                            factory(&config.hotkey).map_err(|e| bounded_message(&format!("{e:#}")))
+                            factory(&config.hotkey, &config.ask)
+                                .map_err(|e| bounded_message(&format!("{e:#}")))
                         });
                     let store = if store.settings()
                         == (config.privacy.history, config.privacy.history_limit)
@@ -828,9 +832,13 @@ impl Engine {
             return;
         };
         self.rearming = true;
-        let (config, tx) = (self.config.hotkey.clone(), completion.clone());
+        let (hotkey, ask, tx) = (
+            self.config.hotkey.clone(),
+            self.config.ask.clone(),
+            completion.clone(),
+        );
         tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(move || factory(&config))
+            let result = tokio::task::spawn_blocking(move || factory(&hotkey, &ask))
                 .await
                 .unwrap_or_else(|e| Err(e.into()))
                 .map_err(|e| bounded_message(&format!("{e:#}")));
@@ -927,6 +935,9 @@ impl Engine {
         }
         if self.reloading {
             bail!("configuration reload is in progress");
+        }
+        if mode == Mode::Ask && self.services.chat.is_none() {
+            bail!("Ask is not configured or allowed yet; run xflow ask in a terminal first");
         }
         if mode == Mode::Command && self.services.transformer.is_none() {
             if self.config.stt.provider == xflow_providers::ON_DEVICE {
@@ -1282,6 +1293,7 @@ impl Engine {
     ) {
         let services = self.services.clone();
         let config = self.config.clone();
+        let (ask_events, ask_desktop) = (self.events.clone(), self.desktop_events.clone());
         let domain = self.domain_hints();
         let store = self.store.clone();
         let generation = self.generation;
@@ -1440,6 +1452,48 @@ impl Engine {
                 );
                 // The dictation ended with "scratch that" (#75): nothing is cleaned or pasted.
                 let discarded = backtrack == xflow_core::backtrack::Outcome::Discarded;
+                if session_mode == Mode::Ask && !discarded {
+                    let text = stream_ask(
+                        services.chat.clone(),
+                        &local,
+                        &provider,
+                        &ask_events,
+                        &ask_desktop,
+                    )
+                    .await?;
+                    validate_last_frame(&text)?;
+                    let entry = HistoryEntry {
+                        text: text.clone(),
+                        provider: provider.clone(),
+                        model: model.clone(),
+                        raw_text: Some(local.clone()),
+                        app_id: target.app_id.clone(),
+                        language: language.or(config.stt.language.clone()),
+                        duration_ms: Some(timings.audio_ms as u64),
+                        mode: Mode::Ask,
+                        ..HistoryEntry::default()
+                    };
+                    let entry = match store.append_current(entry, epoch, generation).await {
+                        Ok(entry) => entry,
+                        Err(_) => {
+                            add_warning(&mut warning, "History save failed; transcript available via last");
+                            None
+                        }
+                    };
+                    return Ok(Some(Processed {
+                        rewrite: false,
+                        copy: false,
+                        provider,
+                        model,
+                        text,
+                        around: None,
+                        target,
+                        entry,
+                        timings,
+                        stopped,
+                        warning,
+                    }));
+                }
                 let style = xflow_core::text::style(&config, target.app_id.as_deref());
                 let mode = style.and_then(|s| s.mode).unwrap_or(config.cleanup.mode);
                 let instructions = style
@@ -1793,6 +1847,14 @@ impl Engine {
         Ok(Some(self.status()))
     }
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>) {
+        if self.config.ask.enabled {
+            if let Some(chat) = self.services.chat.clone() {
+                // Same rule as STT warm: no prompt, errors ignored. Not on the dictation path.
+                tokio::spawn(async move {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), chat.warm()).await;
+                });
+            }
+        }
         let (completion_tx, mut completion_rx) = mpsc::channel(8);
         let mut levels = tokio::time::interval(Duration::from_millis(40));
         levels.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1934,11 +1996,13 @@ impl Engine {
                                         tokio::spawn(observe(ticket, finalized, learner, self.learning.clone()));
                                     }
                                 }
+                                let answer = (self.mode == Mode::Ask).then(|| processed.text.clone());
                                 self.state = State::Success; self.message = message; let mut r = self.status();
                                 r.text = Some(processed.text); r.injection = outcome; r.entry = processed.entry; r.timings = Some(processed.timings);
                                 fit_final(&mut r);
                                 // Pills alert only on a failed paste, never on an asked-for copy.
-                                let _ = self.desktop_events.send(DesktopEvent { state: self.state, level: 0.0, message: self.message.clone().filter(|_| self.delivery == Delivery::Inject), mode: self.mode });
+                                // An ask answer is the panel text; it is not an injection.
+                                let _ = self.desktop_events.send(DesktopEvent { state: self.state, level: 0.0, message: answer.or_else(|| self.message.clone().filter(|_| self.delivery == Delivery::Inject)), mode: self.mode });
                                 let _ = self.events.send(r);
                             }
                             Err(e) => self.set_state(State::Error, Some(format!("{INJECTION_FAILED}: {e}; transcript available via last"))),
@@ -1967,7 +2031,8 @@ impl Engine {
                 _ = async {}, if pending.is_some() => {
                     let mut processed = pending.take().unwrap();
                     if self.state != State::Processing { continue; }
-                    let generation = self.generation; let delivery = self.delivery; let desktop = self.services.desktop.clone(); let store = self.store.clone(); let tx = completion_tx.clone();
+                    // Ask never writes into the focused app, including IPC and retry requests.
+                    let generation = self.generation; let delivery = if self.mode == Mode::Ask { Delivery::None } else { self.delivery }; let desktop = self.services.desktop.clone(); let store = self.store.clone(); let tx = completion_tx.clone();
                     let recent = (self.config.privacy.history && self.config.stt.domain_hints).then(|| self.recent.clone());
                     // Only a dictation that may be learned from pays for a watch.
                     let observed = self.mode == Mode::Dictation && !processed.rewrite && self.config.dictionary.auto_learn && self.config_path.is_some();
@@ -2004,7 +2069,29 @@ impl Engine {
                                 self.publish();
                             }
                         }
-                        Ok(HotkeyAction::Start) if !desktop_ops.is_empty() => self.reset_hotkeys(),
+                        Ok(HotkeyAction::Start | HotkeyAction::AskStart) if !desktop_ops.is_empty() => self.reset_hotkeys(),
+                        Ok(HotkeyAction::Dismiss) => {
+                            // After release the key machine is idle, but the provider may still be busy.
+                            if self.active() || self.opening.is_some() {
+                                let _ = self.handle(Request::Cancel, &completion_tx).await;
+                            } else {
+                                let _ = self.desktop_events.send(DesktopEvent {
+                                    state: State::Idle,
+                                    level: 0.0,
+                                    message: None,
+                                    mode: Mode::Ask,
+                                });
+                            }
+                        }
+                        Ok(action @ (HotkeyAction::AskStart | HotkeyAction::AskStop)) => {
+                            // Ask is never quiet and never injected. Dictation Start stays Inject below.
+                            self.quiet = false;
+                            let request = match action {
+                                HotkeyAction::AskStart => Request::Start { mode: Mode::Ask, context: None, t0_us: Some(monotonic_us()), delivery: Delivery::None, hold: false },
+                                _ => Request::Stop,
+                            };
+                            if self.handle(request, &completion_tx).await.is_err() { self.reset_hotkeys(); }
+                        }
                         Ok(action @ (HotkeyAction::Start | HotkeyAction::Stop | HotkeyAction::Cancel)) => {
                             // Capture starts at once; the cue and pill wait for Reveal, so a
                             // lone tap or a Fn+key shortcut shows and plays nothing.
@@ -3470,6 +3557,7 @@ fn native_services(old: &Config, config: &Config, services: Services) -> Result<
             desktop,
             stt,
             transformer,
+            chat: build_chat(config),
         });
     }
     let audio = if old.recording != config.recording {
@@ -3483,6 +3571,7 @@ fn native_services(old: &Config, config: &Config, services: Services) -> Result<
         desktop: Arc::new(xflow_platform::NativeDesktop::new(&config.injection)),
         stt,
         transformer,
+        chat: build_chat(config),
     })
 }
 pub(crate) fn build_transformer(config: &Config) -> Result<Option<Arc<dyn TextTransformer>>> {
@@ -3504,6 +3593,18 @@ pub(crate) fn build_transformer(config: &Config) -> Result<Option<Arc<dyn TextTr
     }
     xflow_providers::build_transformer(&cleanup, config.privacy.offline)
 }
+fn build_chat(config: &Config) -> Option<Arc<dyn ChatProvider>> {
+    if !config.ask.enabled {
+        return None;
+    }
+    match crate::quick_ai::build(config) {
+        Ok(chat) => Some(chat),
+        Err(error) => {
+            log("warn", &format!("ask unavailable: {error:#}"));
+            None
+        }
+    }
+}
 
 fn audio_duration(audio: &AudioClip) -> Result<u32> {
     if audio.sample_rate == 0 || audio.channels == 0 {
@@ -3514,6 +3615,55 @@ fn audio_duration(audio: &AudioClip) -> Result<u32> {
             / audio.sample_rate as u64)
             .min(u32::MAX as u64) as u32,
     )
+}
+/// Streams the answer, then appends the privacy line. Audio stays with STT.
+async fn stream_ask(
+    chat: Option<Arc<dyn ChatProvider>>,
+    transcript: &str,
+    stt: &str,
+    events: &broadcast::Sender<Response>,
+    desktop: &broadcast::Sender<DesktopEvent>,
+) -> Result<String> {
+    let Some(chat) = chat else {
+        bail!("ask has no chat provider");
+    };
+    let target = chat.target();
+    let (tx, mut rx) = mpsc::channel::<String>(32);
+    let publish = |text: &str| {
+        let _ = desktop.send(DesktopEvent {
+            state: State::Processing,
+            level: 0.0,
+            message: Some(text.to_owned()),
+            mode: Mode::Ask,
+        });
+        let mut frame = Response::status(State::Processing, 0.0);
+        frame.text = Some(text.to_owned());
+        frame.message = Some(text.to_owned());
+        frame.mode = Some(Mode::Ask);
+        let _ = events.send(frame);
+    };
+    let receive = async {
+        let mut answer = String::new();
+        while let Some(delta) = rx.recv().await {
+            if answer.len().saturating_add(delta.len()) > 32 * 1024 {
+                bail!("ask answer exceeds 32 KiB safety limit");
+            }
+            answer.push_str(&delta);
+            publish(&answer);
+        }
+        Ok::<_, anyhow::Error>(answer)
+    };
+    // Cancellation drops both futures; no detached provider or harness keeps running.
+    let (_, mut answer) = tokio::try_join!(chat.stream(transcript, tx), receive)?;
+    if answer.trim().is_empty() {
+        bail!("ask returned no text");
+    }
+    if !answer.ends_with('\n') {
+        answer.push('\n');
+    }
+    answer.push_str(&privacy_line(stt, &target));
+    publish(&answer);
+    Ok(answer)
 }
 async fn transcribe_segment(
     stt: &dyn SpeechToText,
@@ -3767,6 +3917,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
             log("warn", "desktop bridge unavailable; CLI remains usable");
         }
     });
+    let chat = build_chat(&config);
     let mut engine = Engine::new(
         config,
         Services {
@@ -3774,6 +3925,7 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
             desktop,
             stt,
             transformer,
+            chat,
         },
         store,
         events_tx.clone(),
@@ -3799,21 +3951,26 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
             }
             // Nothing is asked here (a prompt mid-install is a surprise): grants are
             // requested only when onboarding or Check-up sends Allow.
-            engine.hotkeys_blind = !permissions.events() && engine.config.hotkey.enabled;
+            engine.hotkeys_blind = !permissions.events()
+                && (engine.config.hotkey.enabled || engine.config.ask.enabled);
             engine.permission_probe = Some(xflow_platform::permissions);
             engine.permission_request = Some(xflow_platform::request_access);
             engine.permissions = Some(permissions);
-            let factory: HotkeyFactory = Arc::new(|config| {
-                if config.enabled {
+            let factory: HotkeyFactory = Arc::new(|hotkey, ask| {
+                if hotkey.enabled || ask.enabled {
                     Ok(Some(Box::new(xflow_platform::MacHotkeys::new(
-                        config.clone(),
+                        hotkey, ask,
                     )?)))
                 } else {
                     Ok(None)
                 }
             });
-            let (create, initial) = (factory.clone(), engine.config.hotkey.clone());
-            let created = tokio::task::spawn_blocking(move || create(&initial)).await;
+            let (create, hotkey, ask) = (
+                factory.clone(),
+                engine.config.hotkey.clone(),
+                engine.config.ask.clone(),
+            );
+            let created = tokio::task::spawn_blocking(move || create(&hotkey, &ask)).await;
             match created.unwrap_or_else(|e| Err(e.into())) {
                 Ok(hotkeys) => engine.hotkeys = hotkeys,
                 Err(error) => {
@@ -4174,6 +4331,121 @@ mod tests {
         .await
         .unwrap()
     }
+    struct WordsChat;
+    #[async_trait]
+    impl ChatProvider for WordsChat {
+        fn name(&self) -> &str {
+            "fixture-chat"
+        }
+        fn model(&self) -> &str {
+            "test-model"
+        }
+        async fn stream(&self, _: &str, tx: mpsc::Sender<String>) -> Result<()> {
+            tx.send("Yes. ".into()).await.ok();
+            tx.send("Ready.".into()).await.ok();
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn canceling_an_ask_drops_the_provider_future() {
+        struct WaitingChat(Arc<Notify>, Arc<AtomicBool>);
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        #[async_trait]
+        impl ChatProvider for WaitingChat {
+            fn name(&self) -> &str {
+                "waiting"
+            }
+            async fn stream(&self, _: &str, _tx: mpsc::Sender<String>) -> Result<()> {
+                let _guard = Dropped(self.1.clone());
+                self.0.notify_one();
+                std::future::pending().await
+            }
+        }
+        let started = Arc::new(Notify::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let chat = Arc::new(WaitingChat(started.clone(), dropped.clone()));
+        let (events, _) = broadcast::channel(8);
+        let (desktop, _) = broadcast::channel(8);
+        let task = tokio::spawn(async move {
+            stream_ask(
+                Some(chat),
+                "Explain PostgreSQL indexes",
+                "fixture",
+                &events,
+                &desktop,
+            )
+            .await
+        });
+        started.notified().await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+    #[tokio::test]
+    async fn ask_completion_streams_the_answer_and_does_not_inject() {
+        for delivery in [Delivery::Inject, Delivery::Clipboard, Delivery::None] {
+            let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
+            let (mut engine, tx, rx, mut events, _) = fixture(
+                Config::default(),
+                desktop.clone(),
+                Store::open(std::path::Path::new("unused"), false, 5).unwrap(),
+            );
+            engine.services.chat = Some(Arc::new(WordsChat));
+            let task = tokio::spawn(engine.run(rx));
+            assert!(
+                ask(
+                    &tx,
+                    Request::Start {
+                        mode: Mode::Ask,
+                        context: None,
+                        t0_us: None,
+                        delivery,
+                        hold: false,
+                    },
+                )
+                .await
+                .ok
+            );
+            assert!(ask(&tx, Request::Stop).await.ok);
+            let mut saw_partial = false;
+            let done = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let event = events.recv().await.unwrap();
+                    if event
+                        .text
+                        .as_deref()
+                        .is_some_and(|text| text.contains("Yes.") && !text.contains("Ready"))
+                    {
+                        saw_partial = true;
+                    }
+                    if event.state == State::Success {
+                        return event;
+                    }
+                    assert_ne!(event.state, State::Error, "{:?}", event.message);
+                }
+            })
+            .await
+            .unwrap();
+            assert!(
+                saw_partial,
+                "the first text delta is published before the rest"
+            );
+            let text = done.text.unwrap();
+            assert!(text.contains("Yes. Ready."));
+            assert!(text.contains(
+                "Heard by fixture. Answered by fixture-chat test-model. Audio is not stored."
+            ));
+            assert_eq!(done.injection, None);
+            assert_eq!(desktop.0.load(Ordering::SeqCst), 0);
+            drop(tx);
+            let _ = task.await;
+        }
+    }
     #[tokio::test]
     async fn hotkeys_drive_capture_and_reload_keeps_old_adapter_on_failure() {
         let temp = tempfile::tempdir().unwrap();
@@ -4194,6 +4466,7 @@ mod tests {
                 audio: audio.clone(),
                 desktop: desktop.clone(),
                 transformer: None,
+                chat: None,
                 stt: Arc::new(FakeStt {
                     called: called.clone(),
                     release: Arc::new(Notify::new()),
@@ -4210,7 +4483,7 @@ mod tests {
         engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
         let (new_keys, new_events) = mpsc::channel(8);
         let new_events = Mutex::new(Some(new_events));
-        engine.hotkey_factory = Some(Arc::new(move |config| {
+        engine.hotkey_factory = Some(Arc::new(move |config, _ask| {
             if config.key == "caps_lock" {
                 bail!("fixture permission failure");
             }
@@ -4288,10 +4561,10 @@ mod tests {
         let release = Arc::new(Notify::new());
         let options = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = mpsc::channel(8);
-        let (events, _) = broadcast::channel(32);
+        let (events, mut observed) = broadcast::channel(32);
         let (desktop_events, _) = broadcast::channel(32);
         let store = Store::open(std::path::Path::new("unused"), false, 5).unwrap();
-        let engine = Engine::new(
+        let mut engine = Engine::new(
             Config::default(),
             Services {
                 audio: audio.clone(),
@@ -4302,11 +4575,14 @@ mod tests {
                     options,
                 }),
                 transformer: None,
+                chat: None,
             },
             store,
             events,
             desktop_events,
         );
+        let (keys, key_events) = mpsc::channel(8);
+        engine.hotkeys = Some(Box::new(FakeHotkeys(key_events)));
         let task = tokio::spawn(engine.run(rx));
         assert_eq!(ask(&tx, Request::start()).await.state, State::Listening);
         assert!(!ask(&tx, Request::start()).await.ok);
@@ -4314,7 +4590,9 @@ mod tests {
         called.notified().await;
         assert_eq!(ask(&tx, Request::Status).await.state, State::Processing);
         assert!(!ask(&tx, Request::Reload).await.ok);
-        assert_eq!(ask(&tx, Request::Cancel).await.state, State::Idle);
+        keys.send(HotkeyAction::Dismiss).await.unwrap();
+        hotkey_state(&mut observed, State::Idle).await;
+        assert_eq!(ask(&tx, Request::Status).await.state, State::Idle);
         release.notify_one();
         assert!(ask(&tx, Request::Last).await.text.is_none());
         assert!(!audio.0.load(Ordering::SeqCst));
@@ -4348,6 +4626,7 @@ mod tests {
                     options: options.clone(),
                 }),
                 transformer: Some(Arc::new(FailingCleanup)),
+                chat: None,
             },
             store,
             events,
@@ -4423,6 +4702,7 @@ mod tests {
                     options: Arc::new(Mutex::new(Vec::new())),
                 }),
                 transformer: None,
+                chat: None,
             },
             Store::open(std::path::Path::new("unused"), false, 5).unwrap(),
             events,
@@ -4470,6 +4750,7 @@ mod tests {
                     options: Arc::new(Mutex::new(Vec::new())),
                 }),
                 transformer: None,
+                chat: None,
             },
             Store::open(&dir.path().join("db"), true, 5).unwrap(),
             events,
@@ -5029,6 +5310,7 @@ mod tests {
                     text: "um post gres is ready",
                 }),
                 transformer: None,
+                chat: None,
             },
             store,
             events,
@@ -5290,7 +5572,7 @@ mod tests {
         let (new_keys, new_events) = mpsc::channel(4);
         let new_events = Mutex::new(Some(new_events));
         let count = created.clone();
-        engine.hotkey_factory = Some(Arc::new(move |_| {
+        engine.hotkey_factory = Some(Arc::new(move |_, _| {
             count.fetch_add(1, Ordering::SeqCst);
             Ok(Some(Box::new(FakeHotkeys(
                 new_events.lock().unwrap().take().context("created twice")?,

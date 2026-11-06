@@ -493,6 +493,7 @@ fn entry_from_row(row: &Row) -> rusqlite::Result<HistoryEntry> {
         latency_ms: row.get::<_, Option<i64>>(9)?.map(|v| v.max(0) as u64),
         mode: match row.get_ref(10)?.as_str()? {
             "command" => Mode::Command,
+            "ask" => Mode::Ask,
             _ => Mode::Dictation,
         },
         cleanup: row
@@ -506,6 +507,7 @@ fn mode_name(mode: Mode) -> &'static str {
     match mode {
         Mode::Dictation => "dictation",
         Mode::Command => "command",
+        Mode::Ask => "ask",
     }
 }
 
