@@ -392,12 +392,32 @@ pub fn meter(level: f32, width: usize) -> String {
     let filled = (level * width as f32).round() as usize;
     glyph("█", "#").repeat(filled) + &glyph("░", "-").repeat(width - filled)
 }
+/// Short bodies keep the status word and a Last dictation row; a settled body stays 8 + 6.
+fn home_bands(height: u16, listening: bool) -> (u16, u16) {
+    const STATUS: u16 = 8;
+    const SETUP: u16 = 6;
+    const LAST: u16 = 3;
+    if height >= STATUS + SETUP + LAST {
+        return (STATUS, SETUP);
+    }
+    let mut status = 3.min(height);
+    let mut left = height - status;
+    let last = LAST.min(left);
+    left -= last;
+    let setup = if left >= 3 { left.min(SETUP) } else { 0 };
+    let spare = left - setup;
+    let cap = if listening { STATUS } else { 6 };
+    status += spare.min(cap.saturating_sub(status));
+    (status, setup)
+}
 fn home(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
     let theme = app.theme;
+    let listening = app.connected && app.status.state == State::Listening;
+    let (status_h, setup_h) = home_bands(area.height, listening);
     let rows = Layout::vertical([
-        Constraint::Length(8),
-        Constraint::Length(6),
-        Constraint::Min(3),
+        Constraint::Length(status_h),
+        Constraint::Length(setup_h),
+        Constraint::Length(area.height.saturating_sub(status_h.saturating_add(setup_h))),
     ])
     .split(area);
     let (icon, word, hint, error) = status(app);
@@ -413,30 +433,42 @@ fn home(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
             h.min(inner.height.saturating_sub(y)),
         )
     };
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!("  {icon}  {}", word.to_uppercase()),
-            app.theme.base().fg(color).add_modifier(Modifier::BOLD),
-        )),
-        Rect::new(inner.x, inner.y + 1, inner.width, 1),
-    );
-    frame.render_widget(
-        Paragraph::new(hint)
-            .style(muted(app))
-            .wrap(Wrap { trim: true }),
-        indent(2, 2),
-    );
-    if app.connected && app.status.state == State::Listening {
-        let levels = app.levels.iter().copied().collect::<Vec<_>>();
+    // The full card keeps a blank row above the word. A short card starts at the top.
+    let word_y = u16::from(inner.height >= 6);
+    if inner.height > word_y {
         frame.render_widget(
-            Sparkline::default()
-                .data(&levels)
-                .max(100)
-                .style(accent(app)),
-            indent(4, 2),
+            Paragraph::new(Span::styled(
+                format!("  {icon}  {}", word.to_uppercase()),
+                app.theme.base().fg(color).add_modifier(Modifier::BOLD),
+            )),
+            Rect::new(inner.x, inner.y + word_y, inner.width, 1),
         );
     }
-    if app.needs_setup() {
+    let hint_y = word_y + 1;
+    let hint_h = inner.height.saturating_sub(hint_y).min(2);
+    if hint_h > 0 {
+        frame.render_widget(
+            Paragraph::new(hint)
+                .style(muted(app))
+                .wrap(Wrap { trim: true }),
+            indent(hint_y, hint_h),
+        );
+    }
+    if listening {
+        let spark_y = hint_y + hint_h;
+        let spark_h = inner.height.saturating_sub(spark_y).min(2);
+        if spark_h > 0 {
+            let levels = app.levels.iter().copied().collect::<Vec<_>>();
+            frame.render_widget(
+                Sparkline::default()
+                    .data(&levels)
+                    .max(100)
+                    .style(accent(app)),
+                indent(spark_y, spark_h),
+            );
+        }
+    }
+    if setup_h > 0 && app.needs_setup() {
         panel(
             frame,
             rows[1],
@@ -445,7 +477,7 @@ fn home(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
             app,
         );
         hits.actions.push((rows[1], Action::Setup));
-    } else {
+    } else if setup_h > 0 {
         let model = app
             .status
             .model
