@@ -93,6 +93,7 @@ type MutRef = *mut c_void;
 extern "C" {
     static kCFRunLoopDefaultMode: MutRef;
     fn CFEqual(a: Ref, b: Ref) -> bool;
+    fn CFStringGetCharacters(value: Ref, range: CFRange, buffer: *mut u16);
     fn CFRetain(value: MutRef) -> MutRef;
     fn CFRunLoopGetCurrent() -> MutRef;
     fn CFRunLoopAddSource(runloop: MutRef, source: MutRef, mode: MutRef);
@@ -114,6 +115,8 @@ pub(super) struct Reader {
     app: Shared,
     element: Shared,
     window: Shared,
+    /// Ghostty has no range bounds and counts in characters; see `ghostty_end`.
+    ghostty: bool,
 }
 fn retain(value: &Owned) -> Owned {
     Owned(unsafe { CFRetain(value.0 as MutRef) } as Ref)
@@ -132,7 +135,11 @@ impl Reader {
         if focus.secure || !super::is_terminal(focus.context.app_id.as_deref()) {
             return None;
         }
-        Self::pinned(focus.element.as_ref()?, focus.window.as_ref()?).filter(|r| r.pid == focus.pid)
+        let mut reader = Self::pinned(focus.element.as_ref()?, focus.window.as_ref()?)
+            .filter(|r| r.pid == focus.pid)?;
+        Arc::get_mut(&mut reader)?.ghostty =
+            focus.context.app_id.as_deref() == Some("com.mitchellh.ghostty");
+        Some(reader)
     }
     fn pinned(element: &Owned, window: &Owned) -> Option<Arc<Self>> {
         let mut pid = 0;
@@ -148,6 +155,7 @@ impl Reader {
             app: Shared(app),
             element: Shared(retain(element)),
             window: Shared(retain(window)),
+            ghostty: false,
         }))
     }
     pub(super) fn same(&self, f: &Focus) -> bool {
@@ -179,14 +187,79 @@ impl xflow_core::replay::VisibleScreen for Reader {
     }
     fn visible_range(&self) -> Option<(usize, usize)> {
         let r = named_range(&self.element.0, "AXVisibleCharacterRange")?;
+        if self.ghostty {
+            // Its range is in characters; the text is UTF-16. Find the real end.
+            return (r.location == 0)
+                .then(|| ghostty_end(&self.element.0, r.length as usize))
+                .flatten()
+                .map(|end| (0, end));
+        }
         Some((r.location as usize, r.length as usize))
     }
     fn in_viewport(&self, start: usize, len: usize) -> bool {
+        if self.ghostty {
+            // No bounds API (ghostty-org/ghostty#9932). Only a short tail of the
+            // last written rows is read instead, twice; see `max_tail`.
+            return len > 0 && len <= GHOSTTY_TAIL_UTF16 && start.checked_add(len).is_some();
+        }
         self.tail_in_viewport(start, len).is_some()
     }
     fn range(&self, start: usize, len: usize) -> Option<String> {
-        string_range(&self.element.0, start, len)
+        screen_range(&self.element.0, start, len)
     }
+    fn max_tail(&self) -> usize {
+        if self.ghostty {
+            GHOSTTY_TAIL_UTF16
+        } else {
+            xflow_core::replay::MAX_CONFIRM_UTF16
+        }
+    }
+    fn align(&self, start: usize, end: usize) -> Option<usize> {
+        if !self.ghostty {
+            return Some(start);
+        }
+        // Ghostty can only cut at character boundaries.
+        (start..end.min(start + BOUNDARY_SPAN)).find(|&p| boundary(&self.element.0, p))
+    }
+    fn reread_after(&self) -> Option<Duration> {
+        // Ghostty caches its screen text for 500 ms.
+        self.ghostty.then_some(GHOSTTY_REREAD)
+    }
+}
+/// Ghostty's tail cap, UTF-16 units: the last written rows only.
+const GHOSTTY_TAIL_UTF16: usize = 2_048;
+const GHOSTTY_REREAD: Duration = Duration::from_millis(550);
+/// Longer than any character's UTF-16 length a terminal cell can hold.
+const BOUNDARY_SPAN: usize = 64;
+/// Ghostty's text may be longer in UTF-16 than its character count `chars`.
+/// The end is the last offset where an empty range can be cut, with none in the
+/// next `BOUNDARY_SPAN` units. None when that cannot be shown.
+fn ghostty_end(element: &Owned, chars: usize) -> Option<usize> {
+    last_boundary(chars, |p| boundary(element, p))
+}
+fn last_boundary(chars: usize, boundary: impl Fn(usize) -> bool) -> Option<usize> {
+    let limit = chars.checked_add(xflow_core::replay::MAX_CONFIRM_UTF16)?;
+    let mut last = None;
+    for p in chars..=limit {
+        if boundary(p) {
+            last = Some(p);
+        } else if p - last.unwrap_or(chars) >= BOUNDARY_SPAN {
+            return last;
+        }
+    }
+    None
+}
+/// Whether an empty range can be cut at `at` (a character boundary within the text).
+fn boundary(element: &Owned, at: usize) -> bool {
+    let Ok(location) = isize::try_from(at) else {
+        return false;
+    };
+    let range = CFRange {
+        location,
+        length: 0,
+    };
+    parameterized(element, "AXStringForRange", &range)
+        .is_some_and(|v| unsafe { CFGetTypeID(v.0) == super::CFStringGetTypeID() })
 }
 impl Reader {
     fn tail_in_viewport(&self, start: usize, len: usize) -> Option<()> {
@@ -474,6 +547,39 @@ fn string_range(element: &Owned, start: usize, len: usize) -> Option<String> {
     }
     let value = cf_text(value.0)?;
     (value.encode_utf16().count() == len).then_some(value)
+}
+/// A terminal's text as UTF-16. Cells a full-screen app skipped come back as
+/// U+0000 (iTerm2); they show as blanks, so compare them as spaces.
+fn screen_range(element: &Owned, start: usize, len: usize) -> Option<String> {
+    if len == 0 || len > xflow_core::replay::MAX_CONFIRM_UTF16 {
+        return None;
+    }
+    let range = CFRange {
+        location: isize::try_from(start).ok()?,
+        length: isize::try_from(len).ok()?,
+    };
+    let value = parameterized(element, "AXStringForRange", &range)?;
+    if unsafe {
+        CFGetTypeID(value.0) != super::CFStringGetTypeID()
+            || super::CFStringGetLength(value.0) != range.length
+    } {
+        return None;
+    }
+    let mut units = vec![0_u16; len];
+    let all = CFRange {
+        location: 0,
+        length: range.length,
+    };
+    unsafe { CFStringGetCharacters(value.0, all, units.as_mut_ptr()) };
+    String::from_utf16(&nul_as_space(units)).ok()
+}
+fn nul_as_space(mut units: Vec<u16>) -> Vec<u16> {
+    for unit in &mut units {
+        if *unit == 0 {
+            *unit = u16::from(b' ');
+        }
+    }
+    units
 }
 fn parameterized(element: &Owned, name: &str, range: &CFRange) -> Option<Owned> {
     let parameter =
@@ -776,6 +882,34 @@ unsafe extern "C" fn leave_callback(_: Ref, _: Ref, notification: Ref, context: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn skipped_cells_read_as_spaces_and_the_ghostty_end_is_exact() {
+        let units: Vec<u16> = "❯\0Kubernetes\0\0ok".encode_utf16().collect();
+        assert_eq!(
+            String::from_utf16(&nul_as_space(units)).unwrap(),
+            "❯ Kubernetes  ok"
+        );
+        // "नमस्ते ok": 4 characters short of its UTF-16 length; boundaries only.
+        let text = "नमस्ते ok";
+        let len = text.encode_utf16().count();
+        let marks: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| text[..i].encode_utf16().count())
+            .chain([len])
+            .collect();
+        let chars = text.chars().count() - 2;
+        assert_eq!(last_boundary(chars, |p| marks.contains(&p)), Some(len));
+        // No boundary anywhere near: abstain rather than walk the whole tail.
+        let probes = Cell::new(0);
+        assert_eq!(
+            last_boundary(10, |_| {
+                probes.set(probes.get() + 1);
+                false
+            }),
+            None
+        );
+        assert!(probes.get() <= BOUNDARY_SPAN + 1);
+    }
     #[test]
     fn visible_bounds_reject_scrollback_and_unknown_geometry() {
         let frame = Rect {

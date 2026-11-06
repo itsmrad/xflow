@@ -7962,6 +7962,93 @@ mod tests {
         drop(dir);
         learned
     }
+    /// A terminal whose bounded tail also holds unrelated text.
+    struct TailScreen(String);
+    impl xflow_core::replay::VisibleScreen for TailScreen {
+        fn safe(&self) -> bool {
+            true
+        }
+        fn visible_range(&self) -> Option<(usize, usize)> {
+            Some((0, self.0.encode_utf16().count()))
+        }
+        fn in_viewport(&self, _: usize, _: usize) -> bool {
+            true
+        }
+        fn range(&self, start: usize, len: usize) -> Option<String> {
+            let units: Vec<u16> = self.0.encode_utf16().collect();
+            String::from_utf16(units.get(start..start + len)?).ok()
+        }
+        fn retry_gap(&self) -> Duration {
+            Duration::ZERO
+        }
+    }
+    struct ScreenReplay(
+        mpsc::UnboundedReceiver<xflow_core::replay::ReplayIn>,
+        TailScreen,
+    );
+    #[async_trait]
+    impl xflow_core::replay::KeyReplay for ScreenReplay {
+        async fn next(&mut self) -> Option<xflow_core::replay::ReplayIn> {
+            self.0.recv().await
+        }
+        async fn confirm(
+            &mut self,
+            original: &str,
+            corrected: &str,
+        ) -> std::result::Result<(), &'static str> {
+            xflow_core::replay::confirm(&self.1, original, corrected)
+        }
+    }
+    #[tokio::test]
+    async fn nothing_from_the_read_tail_reaches_the_dictionary_or_the_outcomes() {
+        use xflow_core::replay::{Key, ReplayIn};
+        let secret = "TOKEN=ghp_tailsecret_7781";
+        let original = "use kubernetis";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (finalize, finalized) = oneshot::channel();
+        let (completion, _saves) = mpsc::channel(4);
+        let learning = Arc::new(std::sync::Mutex::new(Learning::default()));
+        let screen = TailScreen(format!("$ export {secret}\n$ use Kubernetes"));
+        let ticket = xflow_core::DeliveryTicket {
+            field: Box::new(IdleField),
+            receipt: xflow_core::learn::Receipt::new(original, original, Some(14)).unwrap(),
+            keys: Some(Box::new(ScreenReplay(rx, screen))),
+        };
+        let task = tokio::spawn(observe(
+            Some(ticket),
+            finalized,
+            test_learner(path.clone(), completion, Arc::new(AtomicU64::new(0))),
+            learning.clone(),
+        ));
+        for _ in 0.."kubernetis".chars().count() {
+            tx.send(replay_key(Key::Backspace)).unwrap();
+        }
+        for c in "Kubernetes".chars() {
+            tx.send(replay_key(Key::Insert(c.to_string()))).unwrap();
+        }
+        tx.send(replay_key(Key::LineStart)).unwrap();
+        tx.send(ReplayIn::Leave).unwrap();
+        task.await.unwrap();
+        drop(finalize);
+        let learned = { lock(&learning).clone() };
+        let saved = std::fs::read_to_string(&path).unwrap_or_default();
+        assert_eq!(
+            learned.outcomes.get("learned").copied(),
+            Some(1),
+            "{:?}",
+            learned.outcomes
+        );
+        assert!(saved.contains("Kubernetes"), "{saved}");
+        for leak in ["ghp_tailsecret", "export", "TOKEN"] {
+            assert!(!saved.contains(leak), "dictionary holds tail text: {saved}");
+            assert!(
+                learned.outcomes.keys().all(|o| !o.contains(leak)),
+                "outcome tags (the only logged text) hold tail text"
+            );
+        }
+    }
     fn replay_key(key: xflow_core::replay::Key) -> xflow_core::replay::ReplayIn {
         xflow_core::replay::ReplayIn::Key(key)
     }
