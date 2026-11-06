@@ -20,18 +20,20 @@ fn init_sqlite() {
 }
 
 struct Sandbox {
-    root: tempfile::TempDir,
+    _root: tempfile::TempDir,
+    /// Canonical path. macOS `/tmp` is a symlink, and `SQLITE_OPEN_NOFOLLOW` rejects it.
+    home: PathBuf,
 }
 
 impl Sandbox {
     fn new() -> Self {
         init_sqlite();
-        Self {
-            root: tempfile::tempdir().unwrap(),
-        }
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().canonicalize().unwrap();
+        Self { _root: root, home }
     }
     fn home(&self) -> &Path {
-        self.root.path()
+        &self.home
     }
     fn db(&self) -> PathBuf {
         self.home().join("data/xflow/meetings.db")
@@ -643,4 +645,253 @@ fn delete_with_a_held_snapshot_keeps_a_concurrent_import() {
     }
     assert!(present(&box_, "during-hold"));
     healthy(&box_);
+}
+
+#[test]
+fn export_refuses_to_replace_the_database() {
+    let box_ = Sandbox::new();
+    let meeting = import_at(
+        &box_.db(),
+        &meeting_json("keep", 1_700_000_000_000, 1_000, 1, "kept"),
+    );
+    let before = fs::read(box_.db()).unwrap();
+    let id = label(&meeting);
+    let direct = box_.run(&[
+        "meeting",
+        "export",
+        &id,
+        "--output",
+        box_.db().to_str().unwrap(),
+        "--force",
+    ]);
+    assert!(!direct.status.success(), "{}", stdout(&direct));
+    assert!(
+        stderr(&direct).contains("meeting or history database"),
+        "{}",
+        stderr(&direct)
+    );
+    assert_eq!(fs::read(box_.db()).unwrap(), before);
+
+    let spelled = box_.home().join("data/xflow/../xflow/meetings.db");
+    let spelled = box_.run(&[
+        "meeting",
+        "export",
+        &id,
+        "--output",
+        spelled.to_str().unwrap(),
+        "--force",
+    ]);
+    assert!(!spelled.status.success(), "{}", stdout(&spelled));
+    assert!(
+        stderr(&spelled).contains("meeting or history database"),
+        "{}",
+        stderr(&spelled)
+    );
+    assert_eq!(fs::read(box_.db()).unwrap(), before);
+
+    let alias = box_.home().join("alias.db");
+    fs::hard_link(box_.db(), &alias).unwrap();
+    let linked = box_.run(&[
+        "meeting",
+        "export",
+        &id,
+        "--output",
+        alias.to_str().unwrap(),
+        "--force",
+    ]);
+    assert!(!linked.status.success(), "{}", stderr(&linked));
+    assert!(
+        stderr(&linked).contains("meeting or history database"),
+        "{}",
+        stderr(&linked)
+    );
+    assert_eq!(fs::read(box_.db()).unwrap(), before);
+    fs::remove_file(&alias).unwrap();
+
+    let history = box_.home().join("data/xflow/history.db");
+    fs::write(&history, b"history-sentinel").unwrap();
+    let history_export = box_.run(&[
+        "meeting",
+        "export",
+        &id,
+        "--output",
+        history.to_str().unwrap(),
+        "--force",
+    ]);
+    assert!(
+        !history_export.status.success(),
+        "{}",
+        stdout(&history_export)
+    );
+    assert_eq!(fs::read(&history).unwrap(), b"history-sentinel");
+    assert_eq!(fs::read(box_.db()).unwrap(), before);
+    assert!(box_.run(&["meeting", "list"]).status.success());
+}
+
+#[test]
+fn export_leaves_a_preexisting_file_byte_identical() {
+    let box_ = Sandbox::new();
+    let meeting = import_at(
+        &box_.db(),
+        &meeting_json("prior", 1_700_000_000_000, 1_000, 1, "prior"),
+    );
+    let dest = box_.home().join("already.txt");
+    let original = b"other process successfully saved this";
+    fs::write(&dest, original).unwrap();
+    let output = box_.run(&[
+        "meeting",
+        "export",
+        &label(&meeting),
+        "--output",
+        dest.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("pass --force"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(fs::read(&dest).unwrap(), original);
+}
+
+#[test]
+fn json_export_keeps_multiline_text() {
+    let box_ = Sandbox::new();
+    let text = "line one\n\tline two\u{1b}";
+    let source = "mic\troom";
+    let bytes = serde_json::to_vec(&json!({
+        "schema_version": 1,
+        "import_id": "lines",
+        "provenance": "imported_unverified",
+        "started_at_ms": 1_700_000_000_000i64,
+        "ended_at_ms": 1_700_000_001_000i64,
+        "timezone": "Z",
+        "sources": [{"id": source, "epoch": 1}],
+        "segments": [{
+            "source_id": source,
+            "sequence": 0,
+            "range": {"start_ms": 0, "end_ms": 500},
+            "text": text,
+        }],
+        "gaps": [],
+    }))
+    .unwrap();
+    let meeting = import_at(&box_.db(), &bytes);
+    let json_path = box_.home().join("lines.json");
+    let exported = box_.run(&[
+        "meeting",
+        "export",
+        &label(&meeting),
+        "--format",
+        "json",
+        "--output",
+        json_path.to_str().unwrap(),
+    ]);
+    assert!(exported.status.success(), "{}", stderr(&exported));
+    let parsed: Value = serde_json::from_slice(&fs::read(&json_path).unwrap()).unwrap();
+    assert_eq!(parsed["segments"][0]["text"], text);
+    assert_eq!(parsed["segments"][0]["source_id"], source);
+    assert_eq!(parsed["sources"][0]["id"], source);
+
+    let text_path = box_.home().join("lines.txt");
+    let plain = box_.run(&[
+        "meeting",
+        "export",
+        &label(&meeting),
+        "--format",
+        "text",
+        "--output",
+        text_path.to_str().unwrap(),
+    ]);
+    assert!(plain.status.success(), "{}", stderr(&plain));
+    let plain_bytes = fs::read(&text_path).unwrap();
+    assert!(!plain_bytes.contains(&0x1b));
+    assert!(!plain_bytes.contains(&b'\t'));
+    assert!(String::from_utf8(plain_bytes)
+        .unwrap()
+        .contains("line one  line two"));
+
+    let md_path = box_.home().join("lines.md");
+    let markdown = box_.run(&[
+        "meeting",
+        "export",
+        &label(&meeting),
+        "--format",
+        "md",
+        "--output",
+        md_path.to_str().unwrap(),
+    ]);
+    assert!(markdown.status.success(), "{}", stderr(&markdown));
+    let markdown_bytes = fs::read(&md_path).unwrap();
+    assert!(!markdown_bytes.contains(&0x1b));
+    assert!(!markdown_bytes.contains(&b'\t'));
+}
+
+#[test]
+fn export_to_a_bare_filename_uses_the_current_directory() {
+    let box_ = Sandbox::new();
+    let meeting = import_at(
+        &box_.db(),
+        &meeting_json("bare", 1_700_000_000_000, 1_000, 1, "bare name"),
+    );
+    let output = box_
+        .xflow()
+        .current_dir(box_.home())
+        .args([
+            "meeting",
+            "export",
+            &label(&meeting),
+            "--output",
+            "notes.json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(box_.home().join("notes.json").is_file());
+}
+
+#[test]
+fn import_and_list_work_through_a_symlinked_data_directory() {
+    let box_ = Sandbox::new();
+    let real = box_.home().join("real-data");
+    fs::create_dir_all(&real).unwrap();
+    let link = box_.home().join("linked-data");
+    symlink(&real, &link).unwrap();
+    let file = box_.home().join("via-link.json");
+    fs::write(
+        &file,
+        meeting_json("via-link", 1_700_000_000_000, 1_000, 1, "through a link"),
+    )
+    .unwrap();
+    let imported = box_
+        .xflow()
+        .env("XDG_DATA_HOME", &link)
+        .args(["meeting", "import", "--json", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(imported.status.success(), "{}", stderr(&imported));
+    let listed = box_
+        .xflow()
+        .env("XDG_DATA_HOME", &link)
+        .args(["meeting", "list"])
+        .output()
+        .unwrap();
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    assert!(
+        !stdout(&listed).contains("No meetings"),
+        "{}",
+        stdout(&listed)
+    );
+    let found = box_
+        .xflow()
+        .env("XDG_DATA_HOME", &link)
+        .args(["meeting", "search", "through a link"])
+        .output()
+        .unwrap();
+    assert!(found.status.success(), "{}", stderr(&found));
+    assert!(
+        stdout(&found).contains("through a link"),
+        "{}",
+        stdout(&found)
+    );
 }

@@ -71,6 +71,10 @@ fn export_inner(
     force: bool,
     mut on_page: impl FnMut(u32),
 ) -> Result<()> {
+    ensure!(
+        !replaces_store(dest)?,
+        "export cannot replace the meeting or history database"
+    );
     if let Ok(meta) = std::fs::symlink_metadata(dest) {
         ensure!(
             !meta.file_type().is_symlink(),
@@ -79,10 +83,11 @@ fn export_inner(
         ensure!(force, "export already exists; pass --force to replace it");
         ensure!(meta.is_file(), "export path is not a file");
     }
-    let parent = dest
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .context("export path needs a parent directory")?;
+    // A bare filename has an empty parent and means the current directory.
+    let parent = match dest.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
     let parent_meta = std::fs::symlink_metadata(parent).context("export directory")?;
     ensure!(
         parent_meta.is_dir() && !parent_meta.file_type().is_symlink(),
@@ -150,33 +155,34 @@ fn export_inner(
 fn render(format: ExportFormat, status: &MeetingStatus, segments: &[Segment]) -> Result<String> {
     match format {
         ExportFormat::Json => {
+            // Serde escapes control bytes. The strings themselves stay original.
             let view = JsonExport {
                 meeting: status.summary.meeting.clone(),
-                title: status.summary.title.as_deref().map(display_text),
+                title: status.summary.title.clone(),
                 provenance: "imported_unverified",
                 notes: "absent",
-                timezone: display_text(&status.summary.timezone),
+                timezone: status.summary.timezone.clone(),
                 started_at_ms: status.summary.started_at_ms,
                 ended_at_ms: status.summary.ended_at_ms,
                 sources: status
                     .sources
                     .iter()
                     .map(|s| JsonSource {
-                        id: display_text(&s.id),
-                        label: s.label.as_deref().map(display_text),
+                        id: s.id.clone(),
+                        label: s.label.clone(),
                         epoch: s.epoch,
-                        provider: s.provider.as_deref().map(display_text),
-                        model: s.model.as_deref().map(display_text),
+                        provider: s.provider.clone(),
+                        model: s.model.clone(),
                     })
                     .collect(),
                 gaps: status
                     .gaps
                     .iter()
                     .map(|g| JsonGap {
-                        source_id: display_text(&g.source_id),
+                        source_id: g.source_id.clone(),
                         start_ms: g.range.start_ms,
                         end_ms: g.range.end_ms,
-                        reason: display_text(&g.reason),
+                        reason: g.reason.clone(),
                     })
                     .collect(),
                 segments: segments.iter().map(json_segment).collect(),
@@ -315,12 +321,12 @@ fn source_stamp(segment: &Segment, markdown: bool) -> String {
 fn json_segment(segment: &Segment) -> JsonSegment {
     JsonSegment {
         id: segment.id,
-        source_id: display_text(&segment.source_id),
+        source_id: segment.source_id.clone(),
         sequence: segment.sequence,
         start_ms: segment.range.start_ms,
         end_ms: segment.range.end_ms,
         revision: segment.revision,
-        text: display_text(&segment.text),
+        text: segment.text.clone(),
     }
 }
 
@@ -331,6 +337,80 @@ fn clock(ms: i64) -> String {
     let seconds = (ms % 60_000) / 1_000;
     let millis = ms % 1_000;
     format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
+}
+
+/// Meeting and history databases, including sidecars, by real path and inode.
+fn replaces_store(dest: &Path) -> Result<bool> {
+    let data = crate::paths::data_dir()?;
+    for name in ["meetings.db", "history.db"] {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            if same_place(dest, &data.join(format!("{name}{suffix}"))) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn same_place(dest: &Path, protected: &Path) -> bool {
+    if let (Some(dest), Some(protected)) = (logical_path(dest), logical_path(protected)) {
+        if dest == protected {
+            return true;
+        }
+    }
+    match (file_id(dest), file_id(protected)) {
+        (Some(dest), Some(protected)) => dest == protected,
+        _ => false,
+    }
+}
+
+fn logical_path(path: &Path) -> Option<PathBuf> {
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return Some(real);
+    }
+    let name = path.file_name()?;
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    Some(parent.canonicalize().ok()?.join(name))
+}
+
+fn file_id(path: &Path) -> Option<(u64, u64)> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
+    }
+}
+
+fn publish(temp: &Path, dest: &Path, force: bool) -> Result<()> {
+    if force {
+        return std::fs::rename(temp, dest).map_err(Into::into);
+    }
+    match std::fs::hard_link(temp, dest) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            anyhow::bail!("export already exists; pass --force to replace it")
+        }
+        Err(error) if link_unsupported(&error) => anyhow::bail!(
+            "this filesystem does not support hard links, so the export was not written ({error})"
+        ),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn link_unsupported(error: &std::io::Error) -> bool {
+    let Some(code) = error.raw_os_error() else {
+        return false;
+    };
+    code == libc::EXDEV || code == libc::EOPNOTSUPP || code == libc::ENOTSUP
 }
 
 fn write_private(parent: &Path, dest: &Path, force: bool, body: &[u8]) -> Result<()> {
@@ -370,14 +450,11 @@ fn write_private(parent: &Path, dest: &Path, force: bool, body: &[u8]) -> Result
         let _ = std::fs::remove_file(&temp);
         return Err(error);
     }
-    if !force && dest.exists() {
+    if let Err(error) = publish(&temp, dest, force) {
         let _ = std::fs::remove_file(&temp);
-        anyhow::bail!("export already exists; pass --force to replace it");
+        return Err(error);
     }
-    if let Err(error) = std::fs::rename(&temp, dest) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(error.into());
-    }
+    let _ = std::fs::remove_file(&temp);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
