@@ -58,19 +58,19 @@ impl Store {
         }
         Ok(store)
     }
-    /// Builds MCP's search index off the history connection and startup path.
+    /// Builds MCP's search index off the startup path, serialized with history writes.
     pub async fn upgrade_search_index(&self) -> Result<()> {
         if !self.enabled {
             return Ok(());
         }
-        let path = self.path.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut connection = open_connection(Some(&path))?;
+        self.run(move |connection| {
             let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             if version == 4 {
                 return Ok(());
             }
-            // ponytail: one transaction holds the write lock through rebuild; batch backfill if it ever loses history rows.
+            // Use the store queue: a second connection can invalidate a correction's
+            // read snapshot, and a long rebuild can exceed its busy timeout.
+            // shortcut: history operations wait for the rebuild; batch it if large histories need lower latency.
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let version: i64 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             if version == 4 {
@@ -98,7 +98,7 @@ impl Store {
             tx.commit()?;
             Ok(())
         })
-        .await?
+        .await
     }
     /// The same database file with new privacy settings (config reload).
     pub fn reopen(&self, enabled: bool, limit: usize) -> Result<Self> {
@@ -244,7 +244,9 @@ impl Store {
             return Ok(None);
         }
         self.run(move |conn| {
-            let tx = conn.transaction()?;
+            // Reads before writing, so it must wait for the write lock up front: a deferred
+            // read-then-write fails at once if the index upgrade commits in between.
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let old: Option<String> = tx
                 .query_row("SELECT text FROM history WHERE id = ?1", [id], |row| {
                     row.get(0)
@@ -736,6 +738,54 @@ mod tests {
         pruned.clear().await.unwrap();
         assert!(matches(&pruned, "fourth").is_empty());
         check_fts(&pruned);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn search_upgrade_serializes_with_a_history_correction() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db"), true, 10).unwrap();
+        let saved = store
+            .append(entry("before correction"))
+            .await
+            .unwrap()
+            .unwrap();
+        let (reading, read_started) = tokio::sync::oneshot::channel();
+        let (continue_write, writing) = std::sync::mpsc::channel();
+        let correcting = store.clone();
+        let correction = tokio::spawn(async move {
+            correcting
+                .run(move |conn| {
+                    // Reproduce the old read-then-write correction while an upgrade starts.
+                    let tx = conn.transaction()?;
+                    tx.query_row("SELECT text FROM history WHERE id=?1", [saved.id], |r| {
+                        r.get::<_, String>(0)
+                    })?;
+                    reading.send(()).unwrap();
+                    writing.recv().unwrap();
+                    tx.execute(
+                        "UPDATE history SET text='after correction' WHERE id=?1",
+                        [saved.id],
+                    )?;
+                    tx.commit()?;
+                    Ok(())
+                })
+                .await
+        });
+        read_started.await.unwrap();
+        let upgrading = store.clone();
+        let mut upgrade = tokio::spawn(async move { upgrading.upgrade_search_index().await });
+        // A second connection completes here and invalidates the correction's
+        // snapshot. The store queue instead waits until that correction commits.
+        let early = tokio::time::timeout(std::time::Duration::from_millis(100), &mut upgrade).await;
+        continue_write.send(()).unwrap();
+        correction.await.unwrap().unwrap();
+        match early {
+            Ok(result) => result.unwrap().unwrap(),
+            Err(_) => upgrade.await.unwrap().unwrap(),
+        }
+        assert_eq!(matches(&store, "after"), [saved.id]);
+        assert!(matches(&store, "before").is_empty());
+        check_fts(&store);
     }
 
     async fn privacy_store(path: &Path, token: &str) -> Store {
