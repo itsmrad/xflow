@@ -426,6 +426,27 @@ fn history_corrections_and_removed_learned_words_feed_learning() {
     assert_eq!(app.config.dictionary.words, ["Ratatui"]);
     assert!(app.config.dictionary.learned.is_empty());
     assert_eq!(app.config.dictionary.never_learn, ["xflow"]);
+    // Its rules go with it, and the app says how many.
+    app.set("dictionary.words", r#"["Veronica", "Ratatui"]"#)
+        .unwrap();
+    app.set("dictionary.learned", r#"["Veronica"]"#).unwrap();
+    app.set(
+        "dictionary.replacements",
+        r#"[{ from = "Veronika", to = "Veronica" }, { from = "gonna", to = "going to" }]"#,
+    )
+    .unwrap();
+    app.selected[Page::Dictionary.index()] = 2;
+    key_enter(&mut app);
+    key(&mut app, KeyCode::Down);
+    key_enter(&mut app);
+    key_enter(&mut app);
+    assert_eq!(app.config.dictionary.words, ["Ratatui"]);
+    assert_eq!(app.config.dictionary.replacements.len(), 1);
+    assert_eq!(app.config.dictionary.replacements[0].from, "gonna");
+    assert!(app
+        .toast
+        .as_deref()
+        .is_some_and(|t| t.contains("1 correction rule")));
 }
 #[test]
 fn lists_work_with_arrows_enter_and_esc_only() {
