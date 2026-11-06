@@ -924,6 +924,94 @@ fn compact_nav_shows_full_labels_and_keys_are_bold_without_color() {
     }
 }
 
+fn home_sample(colors: ColorMode, transcript: &str) -> (tempfile::TempDir, App) {
+    let (dir, mut app) = app_with(colors);
+    app.disk = Some(app.file.as_ref().unwrap().to_string());
+    app.connected = true;
+    app.event(Response {
+        text: Some(transcript.into()),
+        provider: Some("groq".into()),
+        model: Some("whisper-large-v3-turbo".into()),
+        ..Response::status(State::Success, 0.0)
+    });
+    (dir, app)
+}
+
+#[test]
+fn short_home_keeps_the_dictation_and_the_status_word() {
+    let long = "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu. The rest of this dictation keeps going so a short window cannot show the ending omega.";
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../.reports/ui/home");
+    std::fs::create_dir_all(&root).unwrap();
+    for (width, height) in [(40u16, 16u16), (80, 24), (120, 35)] {
+        for (mode, colors) in [("color", ColorMode::TrueColor), ("none", ColorMode::None)] {
+            for (len, transcript) in [
+                ("short", "The best ideas start with a conversation."),
+                ("long", long),
+            ] {
+                let (_dir, app) = home_sample(colors, transcript);
+                let text = screen(&app, width, height);
+                std::fs::write(
+                    root.join(format!("{width}x{height}-{mode}-{len}.txt")),
+                    &text,
+                )
+                .unwrap();
+                assert!(
+                    text.contains("DONE"),
+                    "{mode} {width}x{height} {len}:\n{text}"
+                );
+                assert!(
+                    text.contains("✓") || text.contains("v  DONE"),
+                    "status icon missing:\n{text}"
+                );
+                assert!(text.contains("Last dictation"), "{text}");
+                assert!(text.contains("Shortcut"), "{text}");
+                assert!(text.contains("Groq"), "{text}");
+                assert!(text.contains("Microphone"), "{text}");
+                if len == "short" {
+                    assert!(text.contains("The best ideas"), "{text}");
+                } else {
+                    assert!(text.contains("Alpha"), "{text}");
+                    if (width, height) == (40, 16) {
+                        assert!(!text.contains("omega"), "{text}");
+                    }
+                }
+            }
+        }
+    }
+    let (_dir, app) = home_sample(ColorMode::None, "The best ideas start with a conversation.");
+    let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+    terminal
+        .draw(|frame| {
+            render::draw(frame, &app);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let done = (0..16u16).find_map(|y| {
+        (0..37u16).find_map(|x| {
+            let word: String = (0..4).map(|i| buffer[(x + i, y)].symbol()).collect();
+            (word == "DONE").then_some((x, y))
+        })
+    });
+    let (x, y) = done.expect("DONE");
+    for i in 0..4 {
+        let cell = &buffer[(x + i, y)];
+        assert!(
+            cell.modifier.contains(Modifier::BOLD),
+            "status word should be bold"
+        );
+        assert_eq!(cell.fg, ratatui::style::Color::Reset);
+    }
+    assert_ne!(buffer[(x - 3, y)].symbol(), " ", "status icon");
+    let (_dir, mut listening) = home_sample(
+        ColorMode::TrueColor,
+        "The best ideas start with a conversation.",
+    );
+    listening.event(Response::status(State::Listening, 0.4));
+    let text = screen(&listening, 80, 19);
+    assert!(text.contains("LISTENING"), "{text}");
+    assert!(text.contains("Last dictation"), "{text}");
+}
+
 fn ai_status(sharing: bool) -> super::ai_apps::Status {
     use super::ai_apps::{ClientStatus, Registration};
     let clients = crate::mcp::setup::CLIENTS
