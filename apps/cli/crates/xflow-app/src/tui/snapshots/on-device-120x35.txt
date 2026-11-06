@@ -11,7 +11,7 @@
 │ 9  Check-up    ││ Ch│ Download: 484 MB                                                         │                     │
 │ 0  AI apps     ││ Pr│ Languages (25): Bulgarian, Croatian, Czech, Danish, Dutch, English,      │                     │
 │ -  Chat        ││   │ Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian,   │                     │
-│                ││   │ Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak,      │                     │
+│ =  Meetings    ││   │ Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak,      │                     │
 │                │╰───│ Slovenian, Spanish, Swedish, Ukrainian                                   │─────────────────────╯
 │                │╭ La│ Not supported: Hindi, Hindi-English mixtures and Japanese are            │─────────────────────╮
 │                ││ No│ unsupported.                                                             │                     │

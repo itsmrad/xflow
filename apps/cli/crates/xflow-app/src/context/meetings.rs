@@ -288,11 +288,19 @@ pub(super) fn call(
         };
         json!({"segments":segments,"gaps":gaps,"window":covered,"next_cursor":next,"provenance":"imported_unverified"})
     } else {
-        let status = reader
-            .status(&notes.expect("notes arguments").meeting_id)
-            .map_err(storage)?;
-        match status.summary.notes {
-            NotesStatus::Absent => json!({"items":[],"notice":"no notes for this meeting yet"}),
+        let id = notes.expect("notes arguments").meeting_id;
+        match reader.notes(&id).map_err(storage)? {
+            None => json!({"items":[],"notice":"no notes for this meeting yet"}),
+            Some(mut notes) => {
+                let mut omitted = 0;
+                while serde_json::to_vec(&notes).map_err(|_| invalid())?.len() > 16 * 1024 {
+                    if notes.claims.pop().is_none() {
+                        break;
+                    }
+                    omitted += 1;
+                }
+                json!({"notes":notes,"omitted_claims":omitted,"notice":if omitted>0 {Some("Notes excerpt; use xflow meeting notes for all claims")} else {None}})
+            }
         }
     };
     // Cursor strings are machine state, never display text.

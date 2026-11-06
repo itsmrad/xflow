@@ -11,7 +11,7 @@
 │ 9  Check-up    ││  Zed                   Not found · add by hand          ││                                         │
 │>0  AI apps     ││  LM Studio             Not found · add by hand          ││                                         │
 │ -  Chat        ││  Windsurf              Not found · add by hand          ││                                         │
-│                ││  ChatGPT               Use Codex                        ││                                         │
+│ =  Meetings    ││  ChatGPT               Use Codex                        ││                                         │
 │                ││                                                         ││                                         │
 │                ││                                                         ││                                         │
 │                ││                                                         ││                                         │

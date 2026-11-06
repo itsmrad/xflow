@@ -1,0 +1,38 @@
+[
+  {
+    "language": "en",
+    "source": "https://object.pouta.csc.fi/OPUS-TED2020/v1/mono/en.txt.gz",
+    "text": "In the mid-16th century, Italians were captivated by a type of male singer whose incredible range contained notes previously thought impossible for adult men. However,",
+    "source_note": "Short verbatim excerpt from OPUS TED2020 spoken-talk transcript/translation; segment times in test are synthetic."
+  },
+  {
+    "language": "hi",
+    "source": "https://object.pouta.csc.fi/OPUS-TED2020/v1/mono/hi.txt.gz",
+    "text": "लेकिन अगर आप धार्मिक विचारधारा अपनायेंगे तो ऐसा नही होगा. धर्म एक और काम करता है, और वो है समय व्यवस्था.",
+    "source_note": "Short verbatim excerpt from OPUS TED2020 spoken-talk transcript/translation; segment times in test are synthetic."
+  },
+  {
+    "language": "es",
+    "source": "https://object.pouta.csc.fi/OPUS-TED2020/v1/mono/es.txt.gz",
+    "text": "A mediados del siglo XVI, los italianos fueron cautivados por el canto de un tipo de voz masculina que desplegaba un increíble registro de notas,",
+    "source_note": "Short verbatim excerpt from OPUS TED2020 spoken-talk transcript/translation; segment times in test are synthetic."
+  },
+  {
+    "language": "pt",
+    "source": "https://object.pouta.csc.fi/OPUS-TED2020/v1/mono/pt.txt.gz",
+    "text": "Em meados do século XVI, os italianos eram cativados por um tipo de cantores masculinos com um registo incrível de notas que se julgavam impossíveis",
+    "source_note": "Short verbatim excerpt from OPUS TED2020 spoken-talk transcript/translation; segment times in test are synthetic."
+  },
+  {
+    "language": "ja",
+    "source": "https://object.pouta.csc.fi/OPUS-TED2020/v1/mono/ja.txt.gz",
+    "text": "16世紀半ば イタリア人はあるタイプの男性歌手に 魅了されていました 彼らの声域",
+    "source_note": "Short verbatim excerpt from OPUS TED2020 spoken-talk transcript/translation; segment times in test are synthetic."
+  },
+  {
+    "language": "hinglish",
+    "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12329218/",
+    "source_note": "Singh, Singh and Kadyan, HiACC (2025), CC BY 4.0, section 3.2, verbatim read-speech transcript example; test timing synthetic.",
+    "text": "so चिंटू और राजू ने अपने bags में कुछ snacks और पानी pack किया और गुफा की तरफ चल दिए"
+  }
+]

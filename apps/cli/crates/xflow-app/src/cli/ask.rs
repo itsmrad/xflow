@@ -89,7 +89,7 @@ fn explain(provider: &str, error: &LlmError) -> Error {
         },
     )
 }
-fn consent(path: &Path, ai: &AiConfig, args: &Ask) -> Result<()> {
+pub(super) fn consent(path: &Path, ai: &AiConfig, args: &Ask) -> Result<()> {
     if args.no_context
         || args.sources == "none"
         || args.yes

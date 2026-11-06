@@ -125,6 +125,7 @@ pub struct Turn {
     pub history: Vec<Message>,
     pub dictations: bool,
     pub meetings: bool,
+    pub meeting: Option<xflow_core::meeting::MeetingId>,
 }
 pub struct ChatRun {
     pub turn: Turn,
@@ -366,6 +367,7 @@ impl Chat {
             history: self.history.clone(),
             dictations: ctx.history && matches!(self.source, 0 | 2),
             meetings: matches!(self.source, 1 | 2),
+            meeting: None,
         })
     }
     fn cancel(&mut self) -> Out {
@@ -377,6 +379,12 @@ impl Chat {
             format!("Interrupted before any answer. {RETRY}")
         }));
         Out::Cancel
+    }
+    pub(super) fn meeting_chat(&mut self) {
+        self.new_chat();
+        self.input.clear();
+        self.cursor = 0;
+        self.source = 1;
     }
     /// The typed input survives; everything else is gone.
     fn new_chat(&mut self) -> Out {
@@ -781,17 +789,34 @@ impl App {
                 });
                 vec![]
             }
-            Out::Send(turn) => vec![Effect::ChatTurn(Box::new(ChatRun {
-                turn,
-                model: ctx.model.clone(),
-                ai: self.config.ai.clone(),
-                offline: self.config.privacy.offline,
-                path: self.path.clone(),
-            }))],
+            Out::Send(mut turn) => {
+                turn.meeting = self.ask_meeting.clone().filter(|_| turn.meetings);
+                if turn.meeting.is_some() {
+                    turn.dictations = false;
+                }
+                vec![Effect::ChatTurn(Box::new(ChatRun {
+                    turn,
+                    model: ctx.model.clone(),
+                    ai: self.config.ai.clone(),
+                    offline: self.config.privacy.offline,
+                    path: self.path.clone(),
+                }))]
+            }
         }
     }
     /// Yes stages `ai.consented`, which the runtime saves like any other choice.
     pub fn chat_consent(&mut self, yes: bool) -> Vec<Effect> {
+        if let Some(id) = self.pending_notes.take() {
+            return if yes {
+                vec![Effect::Meetings(super::meetings::Job::Generate(
+                    id,
+                    self.path.clone(),
+                ))]
+            } else {
+                vec![]
+            };
+        }
+
         if yes && self.chat.source == 0 {
             let mut consented = self.config.ai.consented.clone();
             consented.push(self.config.ai.provider.clone());

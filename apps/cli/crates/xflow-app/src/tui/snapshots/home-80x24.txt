@@ -11,7 +11,7 @@
 │ 9  Check-up    ││ Shortcut    Fn (Globe) — hold to talk, double-tap for hand │
 │ 0  AI apps     ││ Speech      Groq · Whisper Large v3 Turbo                  │
 │ -  Chat        ││ Formatting  Off — exact words                              │
-│                ││ Microphone  Automatic                                      │
+│ =  Meetings    ││ Microphone  Automatic                                      │
 │                │╰────────────────────────────────────────────────────────────╯
 │                │╭ Last dictation ────────────────────────────────────────────╮
 │                ││ The best ideas start with a conversation.                  │

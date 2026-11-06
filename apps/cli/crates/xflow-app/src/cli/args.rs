@@ -326,6 +326,25 @@ pub enum Format {
 }
 #[derive(Subcommand, Debug)]
 pub enum MeetingCmd {
+    /// Read saved cited notes, or generate them through your AI gateway.
+    Notes {
+        id: String,
+        #[arg(long)]
+        generate: bool,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Ask about one meeting using the shared read-only context tools.
+    Ask {
+        id: String,
+        question: String,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Add a meeting-only literal spelling correction (case sensitive).
+    Term { from: String, to: String },
+    /// Apply meeting terms atomically, preserving transcript revisions.
+    ApplyTerms { id: String },
     /// Copy WAV audio into private storage and transcribe it into a meeting.
     ///
     /// Each file is one source, such as the microphone and the remote side,

@@ -633,19 +633,23 @@ Every meeting command uses the local database in this process. Import and delete
 Usage: xflow meeting [OPTIONS] <COMMAND>
 
 Commands:
-  process  Copy WAV audio into private storage and transcribe it into a meeting
-  status   Transcription progress, audio waiting and its age, and audio storage use
-  retry    Recover after a crash, then transcribe waiting audio in the background
-  import   Read a versioned JSON transcript into the local meeting database
-  list     Meetings whose start is in `[since, until)`
-  search   Literal text search. Letter case is ignored, accents are not
-  get      One meeting: provenance, sources, gaps and notes
-  export   Write JSON, Markdown or timestamped text for one frozen snapshot
-  record   Record a live meeting: your microphone (shared with dictation) and one app's audio, such as Zoom, Teams, Chime or the browser running Meet
-  stop     Stop the meeting being recorded and transcribe it
-  delete   Delete one meeting and its audio, cancelling its transcription, or retry physical cleanup once
-  detect   Watch for a Zoom, Google Meet, Microsoft Teams or Amazon Chime call and print each decision (app name and decision only) until interrupted
-  help     Print this message or the help of the given subcommand(s)
+  notes        Read saved cited notes, or generate them through your AI gateway
+  ask          Ask about one meeting using the shared read-only context tools
+  term         Add a meeting-only literal spelling correction (case sensitive)
+  apply-terms  Apply meeting terms atomically, preserving transcript revisions
+  process      Copy WAV audio into private storage and transcribe it into a meeting
+  status       Transcription progress, audio waiting and its age, and audio storage use
+  retry        Recover after a crash, then transcribe waiting audio in the background
+  import       Read a versioned JSON transcript into the local meeting database
+  list         Meetings whose start is in `[since, until)`
+  search       Literal text search. Letter case is ignored, accents are not
+  get          One meeting: provenance, sources, gaps and notes
+  export       Write JSON, Markdown or timestamped text for one frozen snapshot
+  record       Record a live meeting: your microphone (shared with dictation) and one app's audio, such as Zoom, Teams, Chime or the browser running Meet
+  stop         Stop the meeting being recorded and transcribe it
+  delete       Delete one meeting and its audio, cancelling its transcription, or retry physical cleanup once
+  detect       Watch for a Zoom, Google Meet, Microsoft Teams or Amazon Chime call and print each decision (app name and decision only) until interrupted
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -665,6 +669,91 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+```
+
+### xflow meeting notes
+
+Read saved cited notes, or generate them through your AI gateway
+
+```text
+Read saved cited notes, or generate them through your AI gateway
+
+Usage: xflow meeting notes [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --generate
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --yes
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow meeting ask
+
+Ask about one meeting using the shared read-only context tools
+
+```text
+Ask about one meeting using the shared read-only context tools
+
+Usage: xflow meeting ask [OPTIONS] <ID> <QUESTION>
+
+Arguments:
+  <ID>
+  <QUESTION>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+      --yes
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow meeting term
+
+Add a meeting-only literal spelling correction (case sensitive)
+
+```text
+Add a meeting-only literal spelling correction (case sensitive)
+
+Usage: xflow meeting term [OPTIONS] <FROM> <TO>
+
+Arguments:
+  <FROM>
+  <TO>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
+```
+
+### xflow meeting apply-terms
+
+Apply meeting terms atomically, preserving transcript revisions
+
+```text
+Apply meeting terms atomically, preserving transcript revisions
+
+Usage: xflow meeting apply-terms [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
 ```
 
 ### xflow meeting process

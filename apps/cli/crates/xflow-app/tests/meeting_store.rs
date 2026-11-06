@@ -172,8 +172,8 @@ fn malformed_foreign_and_newer_schemas_are_untouched() {
         ),
         (
             "newer",
-            "PRAGMA user_version=3;",
-            ContractError::UnsupportedSchema(3),
+            "PRAGMA user_version=4;",
+            ContractError::UnsupportedSchema(4),
         ),
         (
             "malformed",
@@ -886,7 +886,7 @@ fn reader_cannot_write_and_held_snapshot_defers_cleanup() {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         let ddl: String = conn
             .query_row(
                 "SELECT sql FROM sqlite_schema WHERE name='metadata'",

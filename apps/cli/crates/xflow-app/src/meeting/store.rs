@@ -53,7 +53,11 @@ const SCHEMA_V2: &[&str] = &[
     "CREATE INDEX attempt_job ON attempts(job_id)",
     "CREATE INDEX provenance_job ON segment_provenance(job_id)",
 ];
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_V3: &[&str] = &[
+    "CREATE TABLE notes (meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE, snapshot TEXT NOT NULL, json TEXT NOT NULL)",
+    "CREATE TABLE meeting_terms (term TEXT PRIMARY KEY, replacement TEXT NOT NULL)",
+];
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 /// v1 indexed case-sensitively. v2 folds case one character at a time
 /// (SQLite's Unicode table) and keeps accents, so `oauth` finds `OAuth` and
 /// `nino` does not find `niño`.
@@ -279,7 +283,7 @@ fn checkpoint(db: &Connection) -> Result<DeleteStatus> {
     })
 }
 
-fn invalidate(db: &Connection, meeting: i64) -> Result<()> {
+pub(crate) fn invalidate(db: &Connection, meeting: i64) -> Result<()> {
     db.execute(
         "UPDATE meetings SET edit_revision=edit_revision+1 WHERE id=?1",
         [meeting],
@@ -404,7 +408,7 @@ pub(crate) fn open_writer(path: &Path) -> Result<Connection> {
             )?;
         }
         // v1 -> v2 in the same transaction: a crash or error leaves v1 as it was.
-        if version < SCHEMA_VERSION {
+        if version < 2 {
             // Rebuild the index from the stored text, which is never touched.
             // Secure-delete is on, so the old index pages are zeroed.
             tx.execute_batch("DROP TABLE segment_fts;")?;
@@ -421,6 +425,12 @@ pub(crate) fn open_writer(path: &Path) -> Result<Connection> {
                 tx.execute_batch(ddl)?;
             }
             tx.execute_batch("PRAGMA user_version=2;")?;
+        }
+        if version < 3 {
+            for ddl in SCHEMA_V3 {
+                tx.execute_batch(ddl)?;
+            }
+            tx.execute_batch("PRAGMA user_version=3;")?;
         }
         tx.commit()?;
     }
@@ -457,13 +467,17 @@ fn validate_schema(db: &Connection, allow_empty: bool) -> Result<i64> {
         return Ok(0);
     }
     ensure!(version >= 1, ContractError::MalformedStore);
-    let (fts, v2): (&str, &[&str]) = if version == 2 {
+    let (fts, v2): (&str, &[&str]) = if version >= 2 {
         (FTS_V2, SCHEMA_V2)
     } else {
         (FTS_V1, &[])
     };
     let common = SCHEMA.iter().filter(|ddl| **ddl != FTS_V1);
-    for ddl in common.chain([&fts]).chain(v2) {
+    for ddl in common
+        .chain([&fts])
+        .chain(v2)
+        .chain(if version >= 3 { SCHEMA_V3 } else { &[] })
+    {
         let actual: Option<String> = db
             .query_row("SELECT sql FROM sqlite_schema WHERE sql=?1", [*ddl], |r| {
                 r.get(0)
@@ -742,7 +756,7 @@ mod migration_tests {
         assert_eq!(state(&path).3, 0, "v1 is case-sensitive");
         drop(open_writer(&path).unwrap());
         let (version, fts, text, hits) = state(&path);
-        assert_eq!((version, fts.as_str(), hits), (2, FTS_V2, 1));
+        assert_eq!((version, fts.as_str(), hits), (3, FTS_V2, 1));
         assert_eq!(text, "Sign in with OAuth, niño");
         let db = Connection::open(&path).unwrap();
         let secure: i64 = db
@@ -759,7 +773,7 @@ mod migration_tests {
         assert_eq!(revisions, "Sign in with OAuth, niño");
         // Reopening is a no-op.
         drop(open_writer(&path).unwrap());
-        assert_eq!(state(&path), (2, FTS_V2.into(), text, 1));
+        assert_eq!(state(&path), (3, FTS_V2.into(), text, 1));
     }
 
     #[test]
@@ -778,7 +792,7 @@ mod migration_tests {
             .execute_batch("DROP TABLE jobs;")
             .unwrap();
         drop(open_writer(&path).unwrap());
-        assert_eq!(state(&path).0, 2);
+        assert_eq!(state(&path).0, 3);
         assert_eq!(state(&path).3, 1);
     }
 }

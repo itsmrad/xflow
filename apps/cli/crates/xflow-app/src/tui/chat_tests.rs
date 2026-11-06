@@ -604,7 +604,7 @@ fn command_letters_are_typing_on_a_ready_chat_page() {
     assert_eq!(app.page, Page::Chat);
     // Getting away and quitting still work.
     press(&mut app, KeyCode::Tab);
-    assert_eq!(app.page, Page::Home);
+    assert_eq!(app.page, Page::Meetings);
     press(&mut app, KeyCode::BackTab);
     assert_eq!(app.page, Page::Chat);
     ctrl(&mut app, 'p');
@@ -1182,4 +1182,78 @@ fn meetings_need_new_consent_even_with_saved_provider_consent() {
     };
     assert!(run.turn.meetings);
     assert!(!run.turn.dictations);
+}
+
+#[test]
+fn meeting_ask_cancels_and_rejects_old_turns_across_provider_changes() {
+    let (_dir, mut app) = ready();
+    let old = send(&mut app, "private dictation question");
+    app.set("ai.provider", "openai").unwrap();
+    app.set("ai.consented", r#"["openrouter","openai"]"#)
+        .unwrap();
+    let meeting = xflow_core::meeting::MeetingId {
+        store_id: "a".repeat(32),
+        id: 1,
+    };
+    app.page = Page::Meetings;
+    app.meetings
+        .apply(super::meetings::Done::Notes(meeting.clone(), None));
+    let effects = super::meetings::choose(&mut app, 0);
+    assert!(matches!(effects.first(), Some(Effect::ChatCancel)));
+    assert!(press(&mut app, KeyCode::Enter).is_empty());
+    settle(&mut app);
+    let Some(Effect::ChatTurn(run)) = press(&mut app, KeyCode::Char('y')).pop() else {
+        panic!("meeting turn")
+    };
+    assert!(run.turn.id > old.id);
+    assert_eq!(run.turn.meeting, Some(meeting));
+    assert!(!run.turn.dictations);
+    assert!(run.turn.history.is_empty());
+    text_event(&mut app, old.id, "old private transcript");
+    done(
+        &mut app,
+        old.id,
+        Ok(Stop::End),
+        vec![Message::User("old private transcript".into())],
+    );
+    assert!(
+        app.chat.running(),
+        "stale completion cannot finish the new turn"
+    );
+    assert!(!rows_text(&app, 80, 24).contains("old private transcript"));
+    done(
+        &mut app,
+        run.turn.id,
+        Ok(Stop::End),
+        vec![Message::User("meeting context".into())],
+    );
+    typed(&mut app, "next question");
+    assert!(press(&mut app, KeyCode::Enter).is_empty());
+    settle(&mut app);
+    let Some(Effect::ChatTurn(followup)) = press(&mut app, KeyCode::Char('y')).pop() else {
+        panic!("meeting consent")
+    };
+    assert_eq!(
+        followup.turn.history,
+        vec![Message::User("meeting context".into())]
+    );
+}
+
+#[test]
+fn notes_generation_requires_fresh_meeting_consent_even_for_saved_provider() {
+    let (_dir, mut app) = ready();
+    let id = xflow_core::meeting::MeetingId {
+        store_id: "a".repeat(32),
+        id: 1,
+    };
+    app.page = Page::Meetings;
+    app.meetings.apply(super::meetings::Done::Notes(id, None));
+    assert!(super::meetings::choose(&mut app, 1).is_empty());
+    assert!(matches!(app.modal, Some(Modal::ChatConsent { .. })));
+    assert!(app.chat_consent(false).is_empty());
+    assert!(super::meetings::choose(&mut app, 1).is_empty());
+    assert!(matches!(
+        app.chat_consent(true).as_slice(),
+        [Effect::Meetings(super::meetings::Job::Generate(..))]
+    ));
 }

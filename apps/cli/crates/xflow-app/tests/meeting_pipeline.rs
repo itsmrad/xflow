@@ -617,7 +617,7 @@ fn v1_database_migrates_on_first_pipeline_use() {
     )
     .unwrap();
     let imported = MeetingStore::at(db.clone()).import_json(&fixture).unwrap();
-    assert_eq!(sql(&db, "PRAGMA user_version"), 2);
+    assert_eq!(sql(&db, "PRAGMA user_version"), 3);
     let summary = MeetingReader::at(db.clone())
         .status(&imported.meeting)
         .unwrap();

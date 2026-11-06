@@ -22,6 +22,45 @@ pub fn run(
     out: &Output,
 ) -> Result<()> {
     match action {
+        args::MeetingCmd::Notes { id, generate, yes } => {
+            notes(id, *generate, *yes, &config()?, out)
+        }
+        args::MeetingCmd::Ask { id, question, yes } => {
+            let id = parse_id(id)?;
+            let question = format!(
+                "For only meeting {} answer with segment/revision citations. Question: {}",
+                serde_json::to_string(&id)?,
+                question
+            );
+            super::ask::run(
+                &config()?,
+                &args::Ask {
+                    question: Some(question),
+                    provider: None,
+                    model: None,
+                    timing: false,
+                    no_context: false,
+                    sources: "meetings".into(),
+                    yes: *yes,
+                },
+                out,
+            )
+        }
+        args::MeetingCmd::Term { from, to } => {
+            MeetingStore::new()
+                .and_then(|s| s.set_term(from, to))
+                .map_err(store_err)?;
+            out.confirm("Meeting term saved (dictation unchanged)")?;
+            Ok(())
+        }
+        args::MeetingCmd::ApplyTerms { id } => {
+            let changed = MeetingStore::new()
+                .and_then(|s| s.apply_terms(&parse_id(id).map_err(|e| anyhow::anyhow!("{e}"))?))
+                .map_err(store_err)?;
+            out.text(&format!("{changed} meeting segments corrected"))?;
+            Ok(())
+        }
+
         args::MeetingCmd::Process { files, title, wait } => {
             process(files, title.as_deref(), &config()?, *wait, out)
         }
@@ -140,7 +179,7 @@ fn list(
                         .unwrap_or_default(),
                     m.segment_count.to_string(),
                     m.gap_count.to_string(),
-                    "absent".into(),
+                    format!("{:?}", m.notes).to_lowercase(),
                 ]
             })
             .collect::<Vec<_>>();
@@ -206,13 +245,14 @@ fn get(id: &str, out: &Output) -> Result<()> {
         .map(meeting::display_text)
         .unwrap_or_else(|| "Untitled meeting".into());
     out.text(&format!(
-        "{title}\nid: {}:{}\nprovenance: {}\nnotes: absent\ntimezone: {}\nstarted_ms: {}\nended_ms: {}\nsegments: {}\ngaps: {}",
+        "{title}\nid: {}:{}\nprovenance: {}\nnotes: {}\ntimezone: {}\nstarted_ms: {}\nended_ms: {}\nsegments: {}\ngaps: {}",
         status.summary.meeting.store_id,
         status.summary.meeting.id,
         match status.summary.provenance {
             Provenance::ImportedUnverified => "imported_unverified",
             Provenance::TranscribedAudio => "transcribed_audio",
         },
+        format!("{:?}",status.summary.notes).to_lowercase(),
         meeting::display_text(&status.summary.timezone),
         status.summary.started_at_ms,
         status.summary.ended_at_ms,
@@ -1057,6 +1097,77 @@ fn store_err(error: anyhow::Error) -> Error {
     } else {
         Error::new(1, error.to_string(), "Run xflow meeting --help")
     }
+}
+
+fn notes(id: &str, generate: bool, yes: bool, path: &Path, out: &Output) -> Result<()> {
+    let id = parse_id(id)?;
+    let store = MeetingStore::new().map_err(store_err)?;
+    let notes = if generate {
+        let cfg = super::config::load(path)?.config().map_err(Error::config)?;
+        let mut route = cfg.ai.clone();
+        route.fallback.clear();
+        let (ai, gateway) = xflow_providers::llm::build_provider_with_cleanup(
+            &route,
+            &cfg.cleanup,
+            cfg.privacy.offline,
+        )
+        .map_err(|e| store_err(e.into()))?;
+        super::ask::consent(
+            path,
+            &ai,
+            &args::Ask {
+                question: None,
+                provider: None,
+                model: None,
+                timing: false,
+                no_context: false,
+                sources: "meetings".into(),
+                yes,
+            },
+        )?;
+        let model = ai
+            .model
+            .clone()
+            .or_else(|| {
+                xflow_providers::find_provider(xflow_providers::ProviderKind::Chat, &ai.provider)
+                    .map(|p| p.default_model.into())
+            })
+            .unwrap_or_default();
+        Some(ipc::block_on(async {
+            tokio::select! {
+                result=meeting::notes::generate(&store,&id,&gateway,&model,ai.max_context_tokens)=>result.map_err(store_err),
+                _=tokio::signal::ctrl_c()=>Err(store_err(anyhow::anyhow!("Cancelled; previous notes kept"))),
+            }
+        })?)
+    } else {
+        store.reader().notes(&id).map_err(store_err)?
+    };
+    match notes {
+        Some(notes) if out.json => out.data(&notes, "")?,
+        Some(notes) => {
+            out.text("Generated notes — verify claims against citations. Gaps and imported labels may be unverified.")?;
+            for c in notes.claims {
+                out.text(&format!(
+                    "{}: {} [segment {} revision {}] {}",
+                    c.kind,
+                    meeting::display_text(&c.text),
+                    c.segment_id,
+                    c.revision,
+                    meeting::display_text(&c.quote)
+                ))?;
+            }
+            for g in notes.gaps {
+                out.text(&format!(
+                    "Gap {}–{}: {}",
+                    g.range.start_ms,
+                    g.range.end_ms,
+                    meeting::display_text(&g.reason)
+                ))?;
+            }
+        }
+        None => out.text("No current notes. Run xflow meeting notes ID --generate")?,
+    }
+    Ok(())
 }
 
 #[cfg(test)]

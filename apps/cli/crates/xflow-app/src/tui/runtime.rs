@@ -74,6 +74,7 @@ pub(super) enum Update {
     ChatEvent(u64, TurnEvent),
     ChatDone(u64, Result<Stop, LlmError>, Vec<Message>),
     ChatKeys(Vec<(String, KeySource)>),
+    Meetings(Result<super::meetings::Done>),
 }
 
 fn restore() {
@@ -323,6 +324,10 @@ pub(super) fn handle(app: &mut App, update: Update, redraw: &mut bool) -> Vec<Ef
             app.chat.finish(id, result, history, &ctx);
         }
         Update::ChatKeys(keys) => app.chat.keys = keys,
+        Update::Meetings(result) => match result {
+            Ok(done) => app.meetings.apply(done),
+            Err(e) => app.toast = Some(format!("Meeting: {e}")),
+        },
         Update::Loaded(result) => match result.and_then(|(file, disk)| app.load(file, disk)) {
             Ok(()) => {
                 effects.push(Effect::KeyStatus(app.config.clone()));
@@ -548,6 +553,9 @@ pub(super) fn dispatch(
                     }
                     Err(e) => Update::Reply(tag, Err(e)),
                 },
+                Effect::Meetings(job) => {
+                    Update::Meetings(blocking(move || super::meetings::run(job)).await)
+                }
                 Effect::Load(path) => Update::Loaded(
                     blocking(move || {
                         let disk = read_optional(&path)?;
@@ -728,10 +736,20 @@ pub(super) async fn drive_turn(
         mut history,
         dictations,
         meetings,
+        meeting,
     } = turn;
+    let question = if let Some(id) = &meeting {
+        format!(
+            "For only meeting {} answer with segment/revision citations. Question: {}",
+            serde_json::to_string(id).unwrap_or_default(),
+            question
+        )
+    } else {
+        question
+    };
     let sources = Sources {
         dictations,
-        meetings,
+        meetings: meetings || meeting.is_some(),
     };
     let (events, mut rx) = mpsc::channel(64);
     let run = async {

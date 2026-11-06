@@ -123,6 +123,7 @@ pub struct TranscriptPage {
 #[serde(rename_all = "snake_case")]
 pub enum NotesStatus {
     Absent,
+    Generated,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeetingSummary {
