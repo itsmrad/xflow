@@ -163,6 +163,7 @@ start stop toggle cancel
 status watch listen transcribe
 last copy paste        copy-last / paste-last remain aliases
 history                list search show copy paste delete edit export clear
+meeting                import list search get export delete
 config                 path show get set unset edit validate reset
 providers              list info test use
 models                 [provider]

@@ -1454,3 +1454,105 @@ async fn read_only_config_listings_do_not_create_a_lock_beside_the_target() {
     assert!(!managed.join("config.toml.lock").exists());
     daemon.stop_process().await;
 }
+
+#[tokio::test]
+async fn meeting_commands_do_not_open_the_daemon_database() {
+    let mock = MockStt::start(vec![Plan::success("fixture transcript")]).await;
+    let mut daemon = Daemon::spawn(&mock.endpoint, "voice", true);
+    daemon.ready().await;
+    let meetings = daemon.root.path().join("data/xflow/meetings.db");
+    let history = daemon.root.path().join("data/xflow/history.db");
+    assert!(!meetings.exists(), "daemon created meetings.db at startup");
+    let history_before = fs::read(&history).ok();
+    let before = daemon.request(json!({"command":"status"})).await;
+    assert!(before.ok && before.state == State::Idle);
+    assert!(daemon.history().await.history.is_empty());
+
+    let pid = daemon.child.id();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let opened = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watch_stop = stop.clone();
+    let watch_opened = opened.clone();
+    let watcher = std::thread::spawn(move || {
+        while !watch_stop.load(std::sync::atomic::Ordering::Relaxed) {
+            if daemon_sees_meetings(pid) {
+                watch_opened.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            std::thread::yield_now();
+        }
+    });
+
+    let file = daemon.root.path().join("mixed.json");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/meeting-notes/mixed-script.json"),
+        &file,
+    )
+    .unwrap();
+    let imported = json_ok(
+        &xflow(
+            &daemon,
+            &["meeting", "import", "--json", file.to_str().unwrap()],
+        )
+        .await,
+    );
+    assert_eq!(imported["already_present"], false);
+    let id = format!(
+        "{}:{}",
+        imported["meeting"]["store_id"].as_str().unwrap(),
+        imported["meeting"]["id"]
+    );
+    let found = json_ok(&xflow(&daemon, &["meeting", "search", "--json", "東京"]).await);
+    assert!(found["segments"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("東京"));
+    let removed = json_ok(&xflow(&daemon, &["meeting", "delete", "--json", &id]).await);
+    assert_eq!(removed["delete_status"], "physically_cleaned");
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    watcher.join().unwrap();
+    assert!(
+        !opened.load(std::sync::atomic::Ordering::Relaxed),
+        "xflowd opened meetings.db"
+    );
+
+    let after = daemon.request(json!({"command":"status"})).await;
+    assert!(after.ok && after.state == State::Idle);
+    assert!(daemon.history().await.history.is_empty());
+    assert_eq!(fs::read(&history).ok(), history_before);
+
+    let mut events = daemon.events().await;
+    dictate(&daemon, &mut events).await;
+    assert_eq!(
+        fs::read_to_string(daemon.sink()).unwrap(),
+        "fixture transcript"
+    );
+    assert_eq!(daemon.history().await.history[0].text, "fixture transcript");
+    daemon.stop_process().await;
+}
+
+fn daemon_sees_meetings(pid: u32) -> bool {
+    let proc = PathBuf::from(format!("/proc/{pid}"));
+    let mut names = Vec::new();
+    if let Ok(entries) = fs::read_dir(proc.join("fd")) {
+        for entry in entries.flatten() {
+            if let Ok(target) = fs::read_link(entry.path()) {
+                names.push(target.to_string_lossy().into_owned());
+            }
+        }
+    }
+    if let Ok(maps) = fs::read_to_string(proc.join("maps")) {
+        names.push(maps);
+    }
+    names.iter().any(|name| name.contains("meetings.db"))
+}
+
+fn json_ok(output: &std::process::Output) -> Value {
+    assert!(
+        output.status.success(),
+        "exit {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}

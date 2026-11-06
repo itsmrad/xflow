@@ -5,6 +5,7 @@ mod ipc;
 #[cfg(target_os = "macos")]
 mod launchd;
 mod local_models;
+mod meeting;
 mod output;
 mod provider;
 mod setup;
@@ -247,6 +248,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
             ipc::block_on(async { xflow_app::tui::run(None).await.map_err(Into::into) })
         }
         Command::History { page, action } => ipc::history(page, action.as_ref(), out),
+        Command::Meeting { action } => meeting::run(action, out),
         Command::ClearHistory { yes } => {
             config::confirm(*yes, "Delete all dictation history?")?;
             out.response(&ipc::request(&Request::ClearHistory)?)?;

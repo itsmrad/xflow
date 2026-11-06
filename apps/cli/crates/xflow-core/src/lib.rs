@@ -11,6 +11,7 @@ pub mod hints;
 pub mod ipc;
 pub mod learn;
 pub mod lists;
+pub mod meeting;
 pub mod snap;
 pub mod text;
 pub mod title;
