@@ -301,13 +301,16 @@ fn stopped(error: anyhow::Error) -> anyhow::Error {
         )
     }
 }
+/// The helper rejects clips under 300 ms (FluidAudio's minimum) as `bad_audio`.
+const MIN_SAMPLES: usize = 4_800;
 fn pcm(audio: &AudioClip) -> Result<Vec<u8>> {
-    let samples = audio::mono16(audio)?;
-    if samples.is_empty() || samples.len() > MAX_SAMPLES {
-        return Err(fail(
-            "bad_audio",
-            "audio is empty or longer than 20 minutes",
-        ));
+    let mut samples = audio::mono16(audio)?;
+    if samples.len() > MAX_SAMPLES {
+        return Err(fail("bad_audio", "audio is longer than 20 minutes"));
+    }
+    // A quick tap: trailing silence turns it into an empty or short transcript, not an error.
+    if samples.len() < MIN_SAMPLES {
+        samples.resize(MIN_SAMPLES, 0.0);
     }
     Ok(samples
         .iter()
@@ -510,6 +513,20 @@ mod tests {
             .unwrap();
         assert_eq!(fake.log().matches("pid ").count(), 1);
     }
+    #[tokio::test]
+    async fn clips_under_300_ms_are_padded_with_silence() {
+        let fake = Fake::new("ok");
+        let engine = fake.engine();
+        for seconds in [0.01, 0.29] {
+            let text = engine
+                .transcribe(clip(seconds), Default::default())
+                .await
+                .unwrap()
+                .text;
+            assert!(text.starts_with(&format!("bytes={}", 2 * MIN_SAMPLES)), "{text}");
+        }
+    }
+
     #[tokio::test]
     async fn crash_mid_request_is_typed_and_the_next_request_restarts_once() {
         let fake = Fake::new("crash_first");

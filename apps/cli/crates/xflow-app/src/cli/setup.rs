@@ -11,6 +11,16 @@ pub fn run(path: &Path, options: &args::Setup, out: &Output) -> Result<()> {
             "Use xflow setup --yes --provider groq --model whisper-large-v3-turbo",
         ));
     }
+    if options.provider.as_deref() == Some(xflow_providers::ON_DEVICE) {
+        return Err(Error::new(
+            2,
+            "On this Mac (offline) is chosen with its own commands",
+            format!(
+                "Run xflow models install {}, then xflow providers use on-device (or choose it in xflow setup)",
+                xflow_providers::on_device::MODEL_ID
+            ),
+        ));
+    }
     let quiet = Output {
         json: false,
         quiet: true,
