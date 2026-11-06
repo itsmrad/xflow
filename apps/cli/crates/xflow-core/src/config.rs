@@ -496,7 +496,7 @@ impl Default for UiConfig {
 pub struct AiConfig {
     pub provider: String,
     pub model: Option<String>,
-    /// Full endpoint URL for `provider = "custom"`; loopback only.
+    /// Endpoint for `custom` (loopback only) or `openai-compatible` (HTTPS or loopback).
     pub endpoint: Option<String>,
     /// Tried only before the first output, and only once consented.
     pub fallback: Vec<String>,

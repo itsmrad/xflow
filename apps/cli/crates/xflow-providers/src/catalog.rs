@@ -258,6 +258,18 @@ static CLEANUP: &[ProviderInfo] = &[
 static CHAT: &[ProviderInfo] = &[
     row!(
         Chat,
+        "groq",
+        "Groq",
+        "https://api.groq.com/openai/v1/chat/completions",
+        Some("GROQ_API_KEY"),
+        "https://console.groq.com/keys",
+        "https://console.groq.com/docs/models",
+        false,
+        false,
+        [("openai/gpt-oss-20b", "GPT-OSS 20B", "Fast Chat Completions")]
+    ),
+    row!(
+        Chat,
         "openai",
         "OpenAI",
         "https://api.openai.com/v1/responses",

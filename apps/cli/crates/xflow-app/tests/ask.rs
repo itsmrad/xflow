@@ -386,3 +386,39 @@ fn a_closed_pipe_ends_quietly() {
         text(&out.stderr)
     );
 }
+
+#[test]
+fn cleanup_default_still_requires_consent_and_uses_only_chat_prompt() {
+    let d = tempfile::tempdir().unwrap();
+    let (url, rx) = answering(&["cleanup model answer"]);
+    let config = format!("[cleanup]\nprovider = \"groq\"\nendpoint = \"{url}\"\nmodel = \"fast-model\"\nprompt = \"CLEANUP_ONLY_DO_NOT_SEND\"\n");
+    write_config(d.path(), &config);
+    let refused = run(command(d.path()).args(["ask", "question"]));
+    assert!(!refused.status.success());
+    assert!(text(&refused.stderr).contains("--yes"));
+    assert!(rx.try_recv().is_err());
+    let allowed = run(command(d.path())
+        .env("GROQ_API_KEY", "synthetic-not-a-key")
+        .args(["ask", "--yes", "question"]));
+    assert!(allowed.status.success(), "{}", text(&allowed.stderr));
+    let body = rx.recv().unwrap();
+    assert_eq!(body["model"], "fast-model");
+    assert_eq!(body["stream"], true);
+    assert!(!body.to_string().contains("CLEANUP_ONLY_DO_NOT_SEND"));
+    assert!(!std::fs::read_to_string(config_path(d.path()))
+        .unwrap()
+        .contains("consented"));
+}
+#[test]
+fn gateway_owns_a_single_ask_command() {
+    let d = tempfile::tempdir().unwrap();
+    let output = run(command(d.path()).arg("--help"));
+    assert!(output.status.success());
+    assert_eq!(
+        text(&output.stdout)
+            .lines()
+            .filter(|line| line.trim_start().starts_with("ask "))
+            .count(),
+        1
+    );
+}

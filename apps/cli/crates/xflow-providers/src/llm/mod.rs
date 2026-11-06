@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
-use xflow_core::config::AiConfig;
+use xflow_core::config::{AiConfig, CleanupConfig};
 
 const CONNECT: Duration = Duration::from_secs(5);
 const FIRST_BYTE: Duration = Duration::from_secs(30);
@@ -322,6 +322,31 @@ impl Route {
     ) -> Result<Self, LlmError> {
         let invalid = |text: &str| LlmError::Provider(text.to_owned());
         let client = client_with(TOTAL, CONNECT).map_err(|e| invalid(&e.to_string()))?;
+        if id == "openai-compatible" {
+            let url = chat_endpoint(
+                endpoint_override
+                    .ok_or_else(|| invalid("provider openai-compatible needs ai.endpoint"))?,
+                offline,
+            )?;
+            let local = is_loopback(&url);
+            return Ok(Self {
+                provider: id.into(),
+                wire: Wire::ChatCompletions,
+                url,
+                model: model
+                    .filter(|m| !m.trim().is_empty())
+                    .ok_or_else(|| invalid("provider openai-compatible needs ai.model"))?
+                    .to_owned(),
+                credential: Credentials::new(
+                    "cleanup",
+                    (!local).then(|| "XFLOW_AI_API_KEY".into()),
+                    local,
+                    false,
+                )
+                .map_err(credential_error)?,
+                client,
+            });
+        }
         if id == "custom" {
             let url = endpoint_override
                 .and_then(|value| endpoint(value, offline).ok())
@@ -345,7 +370,7 @@ impl Route {
         }
         let info = find_provider(ProviderKind::Chat, id).ok_or_else(|| {
             LlmError::Provider(format!(
-                "unknown AI provider {id:?}; use openai, anthropic, openrouter or custom"
+                "unknown AI provider {id:?}; use openai, anthropic, groq, openrouter, openai-compatible or custom"
             ))
         })?;
         if endpoint_override.is_some() {
@@ -681,12 +706,16 @@ impl ChatProvider for Gateway {
 /// `config.provider` and its fallbacks. A fallback receives the same transcript
 /// excerpts, so it needs saved consent of its own; offline, it is left out.
 pub fn build_provider(config: &AiConfig, offline: bool) -> Result<Gateway, LlmError> {
-    let mut routes = vec![Route::build(
+    let route = Route::build(
         &config.provider,
         config.endpoint.as_deref(),
         config.model.as_deref(),
         offline,
-    )?];
+    )?;
+    gateway(config, route, offline)
+}
+fn gateway(config: &AiConfig, route: Route, offline: bool) -> Result<Gateway, LlmError> {
+    let mut routes = vec![route];
     for id in &config.fallback {
         if *id == config.provider || !config.consented.contains(id) {
             continue;
@@ -701,4 +730,103 @@ pub fn build_provider(config: &AiConfig, offline: bool) -> Result<Gateway, LlmEr
         routes,
         overhead_us: AtomicU64::new(0),
     })
+}
+
+/// Use explicit AI settings, or reuse cleanup's Chat Completions connection.
+/// Returned config identifies the actual destination for consent/model selection;
+/// this helper never grants transcript consent. Call it again rather than rebuilding
+/// the returned config: OpenAI cleanup uses Chat Completions, explicit AI uses Responses.
+pub fn build_provider_with_cleanup(
+    config: &AiConfig,
+    cleanup: &CleanupConfig,
+    offline: bool,
+) -> Result<(AiConfig, Gateway), LlmError> {
+    if !config.provider.is_empty() {
+        return build_provider(config, offline).map(|gateway| (config.clone(), gateway));
+    }
+    if cleanup.provider.is_none() && cleanup.endpoint.is_none() {
+        return Err(LlmError::Provider("xflow ask is not set up: run xflow key set groq, then set ai.provider or cleanup.provider".into()));
+    }
+    if cleanup.provider.as_deref() == Some("gemini") {
+        return Err(LlmError::Provider(
+            "Gemini cleanup is not Chat Completions; configure ai.provider for ask".into(),
+        ));
+    }
+    let mut cleanup = cleanup.clone();
+    if config.model.is_some() {
+        cleanup.model.clone_from(&config.model);
+    }
+    if config.endpoint.is_some() {
+        cleanup.endpoint.clone_from(&config.endpoint);
+    }
+    let resolved = super::HttpTransformer::new(&cleanup, offline).map_err(|error| {
+        if offline {
+            LlmError::Offline
+        } else {
+            credential_error(error)
+        }
+    })?;
+    if resolved.provider == "gemini" {
+        return Err(LlmError::Provider(
+            "Gemini cleanup is not Chat Completions; configure ai.provider for ask".into(),
+        ));
+    }
+    let local = is_loopback(&resolved.endpoint);
+    let canonical = super::cleanup_providers().iter().any(|info| {
+        info.id == resolved.provider
+            && Url::parse(info.endpoint).ok().is_some_and(|url| {
+                url.host_str()
+                    .is_some_and(|host| super::is_canonical_host(&resolved.endpoint, host))
+            })
+    });
+    let mut credential = resolved.credential;
+    // Never forward stored cleanup credentials to endpoint overrides, or any key to loopback.
+    credential.allow_store = canonical && !local;
+    if local {
+        credential.env = None;
+        credential.allow_anonymous = true;
+    } else if !canonical && credential.env.is_none() {
+        return Err(LlmError::Provider(
+            "a custom remote cleanup endpoint needs an explicit cleanup.api_key_env".into(),
+        ));
+    }
+    let id = if local {
+        "custom"
+    } else if canonical {
+        &resolved.provider
+    } else {
+        "openai-compatible"
+    };
+    let route = Route {
+        provider: id.into(),
+        wire: Wire::ChatCompletions,
+        url: chat_endpoint(resolved.endpoint.as_str(), offline)?,
+        model: resolved.model,
+        credential,
+        client: client_with(TOTAL, CONNECT).map_err(credential_error)?,
+    };
+    let mut selected = config.clone();
+    selected.provider = route.provider.clone();
+    selected.model = Some(route.model.clone());
+    selected.endpoint = Some(route.url.to_string());
+    gateway(&selected, route, offline).map(|gateway| (selected, gateway))
+}
+fn chat_endpoint(value: &str, offline: bool) -> Result<Url, LlmError> {
+    let mut url = endpoint(value, offline).map_err(|error| {
+        if offline {
+            LlmError::Offline
+        } else {
+            credential_error(error)
+        }
+    })?;
+    let path = url.path().trim_end_matches('/');
+    let path = if path.ends_with("/chat/completions") {
+        path.to_owned()
+    } else if path.is_empty() {
+        "/v1/chat/completions".into()
+    } else {
+        format!("{path}/chat/completions")
+    };
+    url.set_path(&path);
+    Ok(url)
 }

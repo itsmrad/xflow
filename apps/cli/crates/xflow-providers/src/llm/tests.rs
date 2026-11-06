@@ -1298,3 +1298,168 @@ fn gateway_overhead() {
         overheads[RUNS - 1]
     );
 }
+
+#[test]
+fn quick_default_reuses_groq_route_and_key_identity_without_consent() {
+    let cleanup = CleanupConfig {
+        provider: Some("groq".into()),
+        model: Some("chosen".into()),
+        ..Default::default()
+    };
+    let (selected, gateway) =
+        build_provider_with_cleanup(&AiConfig::default(), &cleanup, false).unwrap();
+    let route = &gateway.routes[0];
+    assert_eq!(selected.provider, "groq");
+    assert!(selected.consented.is_empty());
+    assert_eq!(
+        route.url.as_str(),
+        "https://api.groq.com/openai/v1/chat/completions"
+    );
+    assert_eq!(route.model, "chosen");
+    assert_eq!(route.wire, Wire::ChatCompletions);
+    assert_eq!(route.credential.provider, "groq");
+    assert_eq!(route.credential.env.as_deref(), Some("GROQ_API_KEY"));
+    assert!(route.credential.allow_store);
+    let direct = build_provider(&ai("groq"), false).unwrap();
+    assert_eq!(
+        direct.routes[0].credential.provider,
+        route.credential.provider
+    );
+    assert_eq!(direct.routes[0].wire, route.wire);
+    let config = AiConfig {
+        model: Some("ai-override".into()),
+        ..Default::default()
+    };
+    let (selected, _) = build_provider_with_cleanup(&config, &cleanup, false).unwrap();
+    assert_eq!(selected.model.as_deref(), Some("ai-override"));
+}
+#[test]
+fn quick_default_explicit_ai_wins_and_non_chat_cleanup_is_rejected() {
+    let cleanup = CleanupConfig {
+        provider: Some("gemini".into()),
+        ..Default::default()
+    };
+    let (selected, gateway) = build_provider_with_cleanup(&ai("openai"), &cleanup, false).unwrap();
+    assert_eq!(selected.provider, "openai");
+    assert_eq!(gateway.routes[0].wire, Wire::Responses);
+    let error = build_provider_with_cleanup(&AiConfig::default(), &cleanup, false)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("not Chat Completions"));
+    assert!(
+        build_provider_with_cleanup(&AiConfig::default(), &CleanupConfig::default(), false)
+            .is_err()
+    );
+    let cleanup = CleanupConfig {
+        provider: Some("openai".into()),
+        ..Default::default()
+    };
+    let (_, gateway) = build_provider_with_cleanup(&AiConfig::default(), &cleanup, false).unwrap();
+    assert_eq!(gateway.routes[0].wire, Wire::ChatCompletions);
+}
+#[test]
+fn quick_default_compatible_base_and_full_urls_preserve_security() {
+    for (input, path) in [
+        ("https://example.invalid", "/v1/chat/completions"),
+        (
+            "https://example.invalid/api/v1/",
+            "/api/v1/chat/completions",
+        ),
+        (
+            "https://example.invalid/api/v1/chat/completions",
+            "/api/v1/chat/completions",
+        ),
+    ] {
+        let config = AiConfig {
+            endpoint: Some(input.into()),
+            model: Some("m".into()),
+            ..ai("openai-compatible")
+        };
+        let gateway = build_provider(&config, false).unwrap();
+        let route = &gateway.routes[0];
+        assert_eq!(route.url.path(), path);
+        assert_eq!(route.credential.env.as_deref(), Some("XFLOW_AI_API_KEY"));
+        assert!(!route.credential.allow_store);
+        assert!(!route.credential.allow_anonymous);
+        assert_eq!(build_provider(&config, true).err(), Some(LlmError::Offline));
+    }
+    for url in [
+        "http://example.invalid",
+        "https://user:secret@example.invalid",
+        "https://example.invalid?key=secret",
+        "https://example.invalid/#secret",
+    ] {
+        let config = AiConfig {
+            endpoint: Some(url.into()),
+            model: Some("m".into()),
+            ..ai("openai-compatible")
+        };
+        assert!(build_provider(&config, false).is_err());
+    }
+    // Local setup still means a literal loopback endpoint, never a remote custom host.
+    let cleanup = CleanupConfig {
+        provider: Some("custom".into()),
+        endpoint: Some("https://example.invalid/v1".into()),
+        model: Some("m".into()),
+        ..Default::default()
+    };
+    assert!(build_provider_with_cleanup(&AiConfig::default(), &cleanup, false).is_err());
+}
+#[tokio::test]
+async fn quick_default_override_never_uses_stored_provider_key() {
+    let mut cleanup = CleanupConfig {
+        provider: Some("groq".into()),
+        endpoint: Some("https://example.invalid/v1".into()),
+        ..Default::default()
+    };
+    assert!(build_provider_with_cleanup(&AiConfig::default(), &cleanup, false).is_err());
+    cleanup.api_key_env = "XFLOW_TEST_QUICK_MISSING_CUSTOM_KEY".into();
+    let (selected, gateway) =
+        build_provider_with_cleanup(&AiConfig::default(), &cleanup, false).unwrap();
+    assert_eq!(selected.provider, "openai-compatible");
+    let credential = &gateway.routes[0].credential;
+    assert!(!credential.allow_store);
+    assert_eq!(
+        credential.env.as_deref(),
+        Some("XFLOW_TEST_QUICK_MISSING_CUSTOM_KEY")
+    );
+    assert!(credential.header_for(Auth::Bearer).await.is_err());
+    // Provider-less custom remote settings also cannot fall back to the cleanup keystore entry.
+    cleanup.provider = None;
+    cleanup.model = Some("m".into());
+    let (_, gateway) = build_provider_with_cleanup(&AiConfig::default(), &cleanup, false).unwrap();
+    assert!(!gateway.routes[0].credential.allow_store);
+}
+#[tokio::test]
+async fn quick_default_loopback_is_anonymous_even_with_cleanup_key_configured() {
+    let fixture = serve(vec![ok(vec![sse("data: [DONE]\n\n")])]).await;
+    let cleanup = CleanupConfig {
+        provider: Some("groq".into()),
+        endpoint: Some(fixture.url.clone()),
+        api_key_env: "GROQ_API_KEY".into(),
+        ..Default::default()
+    };
+    let (selected, gateway) =
+        build_provider_with_cleanup(&AiConfig::default(), &cleanup, true).unwrap();
+    assert_eq!(selected.provider, "custom");
+    assert!(selected.consented.is_empty());
+    assert!(!gateway.routes[0].credential.allow_store);
+    assert!(gateway.routes[0].credential.env.is_none());
+    let (result, _) = run(&gateway, &request()).await;
+    result.unwrap();
+    assert!(!fixture.requests.lock().unwrap()[0]
+        .to_ascii_lowercase()
+        .contains("authorization:"));
+    let explicit = AiConfig {
+        endpoint: Some(fixture.url),
+        model: Some("m".into()),
+        ..ai("openai-compatible")
+    };
+    let gateway = build_provider(&explicit, true).unwrap();
+    assert!(gateway.routes[0]
+        .credential
+        .header_for(Auth::Bearer)
+        .await
+        .unwrap()
+        .is_none());
+}

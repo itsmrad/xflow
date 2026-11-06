@@ -16,7 +16,7 @@ use xflow_app::{
 use xflow_core::config::AiConfig;
 use xflow_providers::{
     find_provider,
-    llm::{build_provider, Event, LlmError, Stop},
+    llm::{build_provider_with_cleanup, Event, LlmError, Stop},
     ProviderKind,
 };
 
@@ -72,6 +72,8 @@ fn explain(provider: &str, error: &LlmError) -> Error {
             LlmError::Auth => format!(
                 "{provider} rejected the API key: run xflow key set {provider}{key_url}"
             ),
+            LlmError::NotLoggedIn if provider == "openai-compatible" =>
+                "No API key: set XFLOW_AI_API_KEY for explicit openai-compatible, or the cleanup.api_key_env variable for cleanup defaults".into(),
             LlmError::NotLoggedIn => format!(
                 "No API key for {provider}: run xflow key set {provider}{key_url}"
             ),
@@ -225,15 +227,17 @@ pub fn run(path: &Path, args: &Ask, out: &Output) -> Result<()> {
     let offline = cfg.privacy.offline;
     let budget = cfg.ai.max_context_tokens;
     let ai = selection(cfg.ai, args);
-    if ai.provider.is_empty() {
-        return Err(fail(
-            4,
-            "xflow ask is not set up: run xflow key set openai, then xflow config set ai.provider openai",
-        ));
+    if ai.provider.is_empty() && cfg.cleanup.provider.is_none() && cfg.cleanup.endpoint.is_none() {
+        return Err(fail(4, "xflow ask is not set up: run xflow key set groq, then set ai.provider or cleanup.provider"));
     }
+    let label = if ai.provider.is_empty() {
+        cfg.cleanup.provider.as_deref().unwrap_or("cleanup")
+    } else {
+        &ai.provider
+    };
+    let (ai, gateway) =
+        build_provider_with_cleanup(&ai, &cfg.cleanup, offline).map_err(|e| explain(label, &e))?;
     let provider = ai.provider.clone();
-    // Offline refuses before anyone is asked about anything.
-    let gateway = build_provider(&ai, offline).map_err(|e| explain(&provider, &e))?;
     consent(path, &ai, args)?;
     if !out.quiet && !out.json {
         for id in &ai.fallback {
