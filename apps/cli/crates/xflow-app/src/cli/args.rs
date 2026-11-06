@@ -106,6 +106,9 @@ pub enum Command {
         #[command(subcommand)]
         action: MeetingCmd,
     },
+    /// Internal: background meeting transcription started by `meeting process`.
+    #[command(hide = true, name = "meeting-worker")]
+    MeetingWorker,
     /// Clear all history (legacy alias for history clear).
     #[command(hide = true)]
     ClearHistory {
@@ -319,19 +322,30 @@ pub enum MeetingCmd {
         files: Vec<PathBuf>,
         #[arg(long)]
         title: Option<String>,
+        /// Stay and show progress until transcription ends. Without it the
+        /// command returns once the audio is stored; transcription continues
+        /// in the background even if this terminal closes.
+        #[arg(long)]
+        wait: bool,
     },
     /// Transcription progress, audio waiting and its age, and audio storage use.
+    ///
+    /// Restarts background transcription that stopped unexpectedly for
+    /// meetings you already asked to transcribe.
     Status {
         /// `store_id:id`; omit for every meeting with audio.
         id: Option<String>,
     },
-    /// Recover after a crash, then transcribe waiting audio.
+    /// Recover after a crash, then transcribe waiting audio in the background.
     ///
-    /// Failed parts get three new attempts. Nothing is sent to a provider
-    /// until you run this or `process`.
+    /// Failed parts get three new attempts. Audio is only sent to a provider
+    /// for meetings you ran this or `process` for.
     Retry {
         /// `store_id:id`; omit for every meeting with waiting audio.
         id: Option<String>,
+        /// Stay and show progress until transcription ends.
+        #[arg(long)]
+        wait: bool,
     },
     /// Read a versioned JSON transcript into the local meeting database.
     Import { file: PathBuf },

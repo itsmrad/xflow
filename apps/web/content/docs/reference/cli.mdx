@@ -31,7 +31,7 @@ Commands:
   paste        Insert the last transcript into the focused app [alias: paste-last]
   retry        Transcribe the failed dictation kept by privacy.keep_failed_audio again and print it
   history      Browse, search and export local dictation history
-  meeting      Import, list, search, show, export or delete a private meeting transcript
+  meeting      Transcribe meeting audio, or import, list, search, show, export or delete a private meeting transcript
   config       Inspect or edit validated, comment-preserving TOML configuration
   providers    List providers, inspect capabilities and select a default
   models       List provider models, inspect the on-device model and hardware, or install/remove it
@@ -622,27 +622,144 @@ Options:
 
 ## xflow meeting
 
-Import, list, search, show, export or delete a private meeting transcript.
+Transcribe meeting audio, or import, list, search, show, export or delete a private meeting transcript.
 
 ```text
-Import, list, search, show, export or delete a private meeting transcript.
+Transcribe meeting audio, or import, list, search, show, export or delete a private meeting transcript.
 
 Every meeting command uses the local database in this process. Import and delete do not use the daemon. The import file is read here, with a cap.
 
 Usage: xflow meeting [OPTIONS] <COMMAND>
 
 Commands:
-  import  Read a versioned JSON transcript into the local meeting database
-  list    Meetings whose start is in `[since, until)`
-  search  Case-sensitive literal text search
-  get     One meeting: provenance, sources, gaps and notes
-  export  Write JSON, Markdown or timestamped text for one frozen snapshot
-  delete  Delete one meeting, or retry physical cleanup once
-  help    Print this message or the help of the given subcommand(s)
+  process  Copy WAV audio into private storage and transcribe it into a meeting
+  status   Transcription progress, audio waiting and its age, and audio storage use
+  retry    Recover after a crash, then transcribe waiting audio in the background
+  import   Read a versioned JSON transcript into the local meeting database
+  list     Meetings whose start is in `[since, until)`
+  search   Literal text search. Letter case is ignored, accents are not
+  get      One meeting: provenance, sources, gaps and notes
+  export   Write JSON, Markdown or timestamped text for one frozen snapshot
+  delete   Delete one meeting and its audio, cancelling its transcription, or retry physical cleanup once
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
       --json
           Emit machine-readable JSON (watch emits one object per event)
+
+  -q, --quiet
+          Suppress confirmations; requested data and errors remain visible
+
+      --color <COLOR>
+          Control colour in human output
+
+          [default: auto]
+          [possible values: auto, always, never]
+
+      --config <PATH>
+          Read/write an alternate configuration file
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### xflow meeting process
+
+Copy WAV audio into private storage and transcribe it into a meeting.
+
+```text
+Copy WAV audio into private storage and transcribe it into a meeting.
+
+Each file is one source, such as the microphone and the remote side, starting at the same moment. Your files are only read. The private copy is deleted as each part's text is stored; audio not yet transcribed is kept until `retry` succeeds or you delete the meeting, never expired. Uses the configured speech-to-text provider, never its backup.
+
+Usage: xflow meeting process [OPTIONS] <FILES>...
+
+Arguments:
+  <FILES>...
+          One or two WAV files, up to 3 hours each
+
+Options:
+      --json
+          Emit machine-readable JSON (watch emits one object per event)
+
+      --title <TITLE>
+
+
+  -q, --quiet
+          Suppress confirmations; requested data and errors remain visible
+
+      --wait
+          Stay and show progress until transcription ends. Without it the command returns once the audio is stored; transcription continues in the background even if this terminal closes
+
+      --color <COLOR>
+          Control colour in human output
+
+          [default: auto]
+          [possible values: auto, always, never]
+
+      --config <PATH>
+          Read/write an alternate configuration file
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### xflow meeting status
+
+Transcription progress, audio waiting and its age, and audio storage use.
+
+```text
+Transcription progress, audio waiting and its age, and audio storage use.
+
+Restarts background transcription that stopped unexpectedly for meetings you already asked to transcribe.
+
+Usage: xflow meeting status [OPTIONS] [ID]
+
+Arguments:
+  [ID]
+          `store_id:id`; omit for every meeting with audio
+
+Options:
+      --json
+          Emit machine-readable JSON (watch emits one object per event)
+
+  -q, --quiet
+          Suppress confirmations; requested data and errors remain visible
+
+      --color <COLOR>
+          Control colour in human output
+
+          [default: auto]
+          [possible values: auto, always, never]
+
+      --config <PATH>
+          Read/write an alternate configuration file
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### xflow meeting retry
+
+Recover after a crash, then transcribe waiting audio in the background.
+
+```text
+Recover after a crash, then transcribe waiting audio in the background.
+
+Failed parts get three new attempts. Audio is only sent to a provider for meetings you ran this or `process` for.
+
+Usage: xflow meeting retry [OPTIONS] [ID]
+
+Arguments:
+  [ID]
+          `store_id:id`; omit for every meeting with waiting audio
+
+Options:
+      --json
+          Emit machine-readable JSON (watch emits one object per event)
+
+      --wait
+          Stay and show progress until transcription ends
 
   -q, --quiet
           Suppress confirmations; requested data and errors remain visible
@@ -703,10 +820,10 @@ Options:
 
 ### xflow meeting search
 
-Case-sensitive literal text search
+Literal text search. Letter case is ignored, accents are not
 
 ```text
-Case-sensitive literal text search
+Literal text search. Letter case is ignored, accents are not
 
 Usage: xflow meeting search [OPTIONS] <QUERY>
 
@@ -767,10 +884,10 @@ Options:
 
 ### xflow meeting delete
 
-Delete one meeting, or retry physical cleanup once
+Delete one meeting and its audio, cancelling its transcription, or retry physical cleanup once
 
 ```text
-Delete one meeting, or retry physical cleanup once
+Delete one meeting and its audio, cancelling its transcription, or retry physical cleanup once
 
 Usage: xflow meeting delete [OPTIONS] [ID]
 

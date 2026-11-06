@@ -42,12 +42,13 @@ const SCHEMA: &[&str] = &[
 /// v2: audio journal, job ledger and segment provenance. Every row cascades
 /// with its meeting, so a deleted meeting leaves nothing to resurrect.
 const SCHEMA_V2: &[&str] = &[
-    "CREATE TABLE captures (meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE, state TEXT NOT NULL, created_ms INTEGER NOT NULL, ended_ms INTEGER, expected_ms INTEGER, reason TEXT)",
+    "CREATE TABLE captures (meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE, state TEXT NOT NULL, created_ms INTEGER NOT NULL, ended_ms INTEGER, expected_ms INTEGER, reason TEXT, queued INTEGER NOT NULL DEFAULT 0)",
     "CREATE TABLE capture_sources (meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, idx INTEGER NOT NULL, source_id TEXT NOT NULL, next_seq INTEGER NOT NULL DEFAULT 0, next_sample INTEGER NOT NULL DEFAULT 0, finished INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(meeting_id,idx))",
     "CREATE TABLE pieces (id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, source_idx INTEGER NOT NULL, seq INTEGER NOT NULL, start_sample INTEGER NOT NULL, samples INTEGER NOT NULL, bytes INTEGER NOT NULL, hash TEXT NOT NULL, state TEXT NOT NULL, created_ms INTEGER NOT NULL, UNIQUE(meeting_id,source_idx,seq))",
     "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, source_idx INTEGER NOT NULL, win INTEGER NOT NULL, overlap_sample INTEGER NOT NULL, start_sample INTEGER NOT NULL, end_sample INTEGER NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, budget INTEGER NOT NULL DEFAULT 3, not_before_ms INTEGER NOT NULL DEFAULT 0, error TEXT, UNIQUE(meeting_id,source_idx,win))",
     "CREATE TABLE attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, provider TEXT NOT NULL, state TEXT NOT NULL, started_ms INTEGER NOT NULL, error TEXT)",
     "CREATE TABLE segment_provenance (segment_id INTEGER PRIMARY KEY REFERENCES segments(id) ON DELETE CASCADE, job_id INTEGER NOT NULL, attempt_id INTEGER NOT NULL, timing TEXT NOT NULL, dedup TEXT NOT NULL, trimmed TEXT, language TEXT)",
+    "CREATE TABLE worker (singleton INTEGER PRIMARY KEY CHECK(singleton=1), pid INTEGER NOT NULL, started_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, state TEXT NOT NULL, error TEXT)",
     "CREATE INDEX job_state ON jobs(meeting_id,state,start_sample)",
     "CREATE INDEX attempt_job ON attempts(job_id)",
     "CREATE INDEX provenance_job ON segment_provenance(job_id)",

@@ -1143,10 +1143,8 @@ async fn preferred_languages_assembly_async_constrains_set() {
     std::env::remove_var(env);
 }
 
-pub(super) fn recorder() -> (
-    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    impl Fn(&str) -> Result<()> + Send + Sync,
-) {
+type Seen = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+pub(super) fn recorder() -> (Seen, impl Fn(&str) -> Result<()> + Send + Sync) {
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = seen.clone();
     (seen, move |provider: &str| {

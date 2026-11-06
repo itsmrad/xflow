@@ -282,6 +282,22 @@ pub fn reopen(db_path: &Path, meeting: Option<i64>) -> Result<usize> {
         [meeting],
     )?)
 }
+/// Queues meetings for the background worker: an explicit user request.
+pub fn queue(db_path: &Path, meeting: Option<i64>) -> Result<usize> {
+    let db = open_writer(db_path)?;
+    Ok(db.execute(
+        "UPDATE captures SET queued=1 WHERE (?1 IS NULL OR meeting_id=?1) AND EXISTS(SELECT 1 FROM jobs j WHERE j.meeting_id=captures.meeting_id AND j.state IN ('pending','waiting'))",
+        [meeting],
+    )?)
+}
+/// Queued meetings the worker can make progress on.
+pub fn queued_meetings(db: &Connection) -> Result<Vec<i64>> {
+    let mut statement = db.prepare("SELECT c.meeting_id FROM captures c WHERE c.queued=1 AND EXISTS(SELECT 1 FROM jobs j WHERE j.meeting_id=c.meeting_id AND j.state IN ('pending','waiting') AND j.attempts<j.budget) ORDER BY c.meeting_id")?;
+    let rows = statement
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<i64>>>()?;
+    Ok(rows)
+}
 /// Meetings with open jobs, oldest first.
 pub fn open_meetings(db_path: &Path, meeting: Option<i64>) -> Result<Vec<i64>> {
     let db = open_writer(db_path)?;
@@ -554,8 +570,18 @@ pub struct MeetingPipeline {
     pub last_error: Option<String>,
     pub warnings: Vec<String>,
 }
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct WorkerStatus {
+    pub running: bool,
+    pub state: Option<String>,
+    pub error: Option<String>,
+    pub updated_ms: Option<i64>,
+    /// Queued meetings that still have work; a stopped worker should restart.
+    pub queued: usize,
+}
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PipelineStatus {
+    pub worker: WorkerStatus,
     pub meetings: Vec<MeetingPipeline>,
     pub audio_bytes: u64,
     pub limit_bytes: u64,
@@ -575,6 +601,10 @@ pub fn status(
     let db = open_reader(db_path)?;
     let store = store_id(&db)?;
     let mut status = PipelineStatus {
+        worker: WorkerStatus {
+            running: super::transcribe::worker_running(db_path),
+            ..Default::default()
+        },
         meetings: Vec::new(),
         audio_bytes: 0,
         limit_bytes: limits.global_bytes,
@@ -583,6 +613,22 @@ pub fn status(
     };
     if !has_pipeline(&db)? {
         return Ok(status);
+    }
+    if let Some((state, error, updated)) = db
+        .query_row("SELECT state,error,updated_ms FROM worker", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .optional()?
+    {
+        status.worker.state = Some(state);
+        status.worker.error = error;
+        status.worker.updated_ms = Some(updated);
+    }
+    status.worker.queued = queued_meetings(&db)?.len();
+    if let Some(error) = &status.worker.error {
+        status
+            .warnings
+            .push(format!("background transcription: {error}"));
     }
     status.audio_bytes = journal::usage(&db, &journal::spool_root(db_path), None)?;
     if status.audio_bytes >= limits.global_bytes / 5 * 4 {

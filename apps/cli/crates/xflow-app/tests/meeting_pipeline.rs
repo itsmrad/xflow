@@ -142,6 +142,7 @@ fn capture(db: &Path, seconds: &[usize]) -> MeetingId {
             title: Some("Pipeline test".into()),
             labels: seconds.iter().map(|_| "fixture.wav".into()).collect(),
             expected_ms: Some(*seconds.iter().max().unwrap() as i64 * 1000),
+            queued: false,
         },
         limits(),
     )
@@ -537,6 +538,7 @@ async fn quotas_refuse_or_stop_visibly_and_never_delete() {
             title: None,
             labels: vec!["x.wav".into()],
             expected_ms: Some(15_000),
+            queued: false,
         },
         tight,
     );
@@ -550,6 +552,7 @@ async fn quotas_refuse_or_stop_visibly_and_never_delete() {
             title: None,
             labels: vec!["mic".into()],
             expected_ms: None,
+            queued: false,
         },
         Limits {
             global_bytes: piece * 5,
@@ -695,6 +698,7 @@ async fn accelerated_three_hours_of_paired_audio() {
                 title: Some("3 h synthetic".into()),
                 labels: vec!["mic".into(), "remote".into()],
                 expected_ms: Some(3 * 3_600_000),
+                queued: false,
             },
             limits(),
         )
@@ -773,10 +777,74 @@ async fn accelerated_three_hours_of_paired_audio() {
     assert_eq!(report.failed, 0);
     assert_eq!(sql(&s.db, "SELECT count(*) FROM segments"), 720);
     assert_eq!(sql(&s.db, "SELECT count(*) FROM pieces"), 0);
+    assert_eq!(
+        sql(&s.db, "SELECT count(*) FROM gaps"),
+        0,
+        "no overlap was deleted early"
+    );
     assert!(audio_files(&s.db).is_empty());
     println!(
         "ACCELERATED 3h two-source: wall {:.1}s, {rss}, PCM bytes streamed {written}, max retained pieces {max_pieces}, requests {}",
         wall.as_secs_f64(),
         stub.requests.load(Ordering::SeqCst)
     );
+}
+
+/// Live capture: window 1 is accepted before window 2 exists. Its last piece
+/// is window 2's overlap and must survive until window 2 is accepted.
+#[tokio::test]
+async fn overlap_survives_while_capture_is_still_running() {
+    let s = scratch();
+    let stub = stub(|n, _| ok(&format!("live {n}")));
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["mic".into()],
+            expected_ms: None,
+            queued: true,
+        },
+        limits(),
+    )
+    .unwrap();
+    let meeting = capture.id();
+    capture.push(0, &samples(0, 0, 480_000)).unwrap();
+    let stt = provider(&stub.url, 5);
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let report = transcribe::run(
+        &s.db,
+        &[meeting.id],
+        stt.as_ref(),
+        || async { false },
+        rx,
+        &mut |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.accepted, 1);
+    let left: Vec<String> = audio_files(&s.db)
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        left,
+        ["s0-000005.pcm"],
+        "the 25-30 s piece is window 2's overlap"
+    );
+    capture.push(0, &samples(0, 480_000, 160_000)).unwrap();
+    capture.finish().unwrap();
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    transcribe::run(
+        &s.db,
+        &[meeting.id],
+        stt.as_ref(),
+        || async { false },
+        rx,
+        &mut |_| {},
+    )
+    .await
+    .unwrap();
+    assert!(audio_files(&s.db).is_empty());
+    assert_eq!(sql(&s.db, "SELECT count(*) FROM gaps"), 0);
+    assert_eq!(texts(&s.db, &meeting).len(), 2);
 }

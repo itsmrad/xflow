@@ -253,6 +253,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
         }
         Command::History { page, action } => ipc::history(page, action.as_ref(), out),
         Command::Meeting { action } => meeting::run(action, || path(cli), out),
+        Command::MeetingWorker => meeting::worker(&path(cli)?),
         Command::ClearHistory { yes } => {
             config::confirm(*yes, "Delete all dictation history?")?;
             out.response(&ipc::request(&Request::ClearHistory)?)?;

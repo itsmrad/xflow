@@ -22,13 +22,13 @@ pub fn run(
     out: &Output,
 ) -> Result<()> {
     match action {
-        args::MeetingCmd::Process { files, title } => {
-            process(files, title.as_deref(), &config()?, out)
+        args::MeetingCmd::Process { files, title, wait } => {
+            process(files, title.as_deref(), &config()?, *wait, out)
         }
-        args::MeetingCmd::Status { id } => status(id.as_deref(), out),
-        args::MeetingCmd::Retry { id } => {
+        args::MeetingCmd::Status { id } => status(id.as_deref(), &config()?, out),
+        args::MeetingCmd::Retry { id, wait } => {
             let id = id.as_deref().map(parse_id).transpose()?;
-            transcribe(id.as_ref(), &config()?, true, out)
+            retry(id.as_ref(), &config()?, *wait, out)
         }
         args::MeetingCmd::Import { file } => import(file, out),
         args::MeetingCmd::List {
@@ -382,7 +382,13 @@ impl Input {
     }
 }
 
-fn process(files: &[PathBuf], title: Option<&str>, config: &Path, out: &Output) -> Result<()> {
+fn process(
+    files: &[PathBuf],
+    title: Option<&str>,
+    config: &Path,
+    wait: bool,
+    out: &Output,
+) -> Result<()> {
     if let Some(title) = title {
         if title.is_empty() || title.len() > 256 {
             return Err(usage("Title must be 1 to 256 bytes"));
@@ -399,6 +405,7 @@ fn process(files: &[PathBuf], title: Option<&str>, config: &Path, out: &Output) 
             title: title.map(str::to_owned),
             labels: inputs.iter().map(|i| i.label.clone()).collect(),
             expected_ms: inputs.iter().map(|i| i.duration_ms).max(),
+            queued: true,
         },
         Limits::from_env(),
     )
@@ -445,12 +452,9 @@ fn process(files: &[PathBuf], title: Option<&str>, config: &Path, out: &Output) 
         )
     })?;
     if !out.json && !out.quiet {
-        eprintln!(
-            "xflow: meeting {}:{} stored privately; transcribing",
-            id.store_id, id.id
-        );
+        eprintln!("xflow: meeting {}:{} stored privately", id.store_id, id.id);
     }
-    let transcribed = transcribe(Some(&id), config, false, out);
+    let transcribed = start(Some(&id), config, wait, out);
     match problem {
         Some((_, reason)) if transcribed.is_ok() => Err(Error::new(
             1,
@@ -494,113 +498,226 @@ async fn dictation_busy() -> bool {
     )
 }
 
-fn transcribe(
-    meeting: Option<&MeetingId>,
-    config: &Path,
-    reopen: bool,
-    out: &Output,
-) -> Result<()> {
+fn retry(meeting: Option<&MeetingId>, config: &Path, wait: bool, out: &Output) -> Result<()> {
     let db = db_path()?;
     if !db.exists() {
         out.text("Nothing waiting for transcription")?;
         return Ok(());
     }
     if let Some(id) = meeting {
-        // Validates the store id before anything else.
+        // Validates the store id before anything changes.
         MeetingReader::at(db.clone())
             .status(id)
             .map_err(store_err)?;
     }
-    let lock = match transcribe::lock_worker(&db, false).map_err(store_err)? {
-        Some(lock) => lock,
-        None => {
-            eprintln!("xflow: another xflow meeting command is transcribing; waiting for it");
-            transcribe::lock_worker(&db, true)
-                .map_err(store_err)?
-                .ok_or_else(|| Error::new(1, "Could not lock the meeting worker", ""))?
+    // Local recovery only when no worker holds the lock (a worker recovers
+    // when it starts). It never contacts a provider.
+    if let Some(lock) = transcribe::lock_worker(&db, false).map_err(store_err)? {
+        let recovered = journal::recover(&db).map_err(store_err)?;
+        drop(lock);
+        if recovered != journal::Recovery::default() && !out.quiet && !out.json {
+            eprintln!(
+                "xflow: recovered meeting audio: {} piece(s) kept, {} torn, {} quarantined, {} missing, {} interrupted capture(s), {} unanswered request(s) counted",
+                recovered.imported, recovered.torn, recovered.quarantined, recovered.missing, recovered.interrupted, recovered.ambiguous
+            );
         }
-    };
-    let recovered = journal::recover(&db).map_err(store_err)?;
-    if recovered != journal::Recovery::default() && !out.quiet {
-        eprintln!(
-            "xflow: recovered meeting audio: {} piece(s) kept, {} torn, {} quarantined, {} missing, {} interrupted capture(s), {} unanswered request(s) counted",
-            recovered.imported, recovered.torn, recovered.quarantined, recovered.missing, recovered.interrupted, recovered.ambiguous
-        );
     }
-    if reopen {
-        jobs::reopen(&db, meeting.map(|m| m.id)).map_err(store_err)?;
-    }
-    let meetings = jobs::open_meetings(&db, meeting.map(|m| m.id)).map_err(store_err)?;
-    if meetings.is_empty() {
+    jobs::reopen(&db, meeting.map(|m| m.id)).map_err(store_err)?;
+    start(meeting, config, wait, out)
+}
+
+/// Queues the meetings and makes sure the background worker runs. With
+/// `wait`, follows progress until nothing queued is open.
+fn start(meeting: Option<&MeetingId>, config: &Path, wait: bool, out: &Output) -> Result<()> {
+    let db = db_path()?;
+    if jobs::queue(&db, meeting.map(|m| m.id)).map_err(store_err)? == 0 {
         out.text("Nothing waiting for transcription")?;
         return Ok(());
     }
-    let stt = meeting_stt(config)?;
-    let (tx, rx) = tokio::sync::watch::channel(false);
-    let verbose = !out.json && !out.quiet;
-    let report = ipc::block_on(async {
+    // Fail early and visibly on a broken provider; the worker would only record it.
+    meeting_stt(config)?;
+    start_worker(&db, config)?;
+    if !wait {
+        let target = meeting
+            .map(|m| format!(" {}:{}", m.store_id, m.id))
+            .unwrap_or_default();
+        if out.json {
+            out.text(&serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "message": "transcribing in the background",
+                "meeting": meeting,
+            }))?)?;
+        } else {
+            out.text(&format!(
+                "transcribing in the background; see xflow meeting status{target}"
+            ))?;
+        }
+        return Ok(());
+    }
+    wait_for(&db, meeting, config, out)
+}
+
+/// Starts `xflow meeting-worker` in its own session, ignoring SIGHUP, with
+/// no terminal and no pipe to this process. A running worker makes this a no-op.
+fn start_worker(db: &Path, config: &Path) -> Result<bool> {
+    if transcribe::worker_running(db) {
+        return Ok(false);
+    }
+    let root = journal::spool_root(db);
+    paths::private_dir(&root).map_err(store_err)?;
+    let log_path = root.join("worker.log");
+    if std::fs::symlink_metadata(&log_path).is_ok_and(|m| m.len() > 1 << 20) {
+        let _ = std::fs::remove_file(&log_path);
+    }
+    let log = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&log_path)?
+    };
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command
+        .arg("--config")
+        .arg(config)
+        .arg("meeting-worker")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(log);
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            libc::signal(libc::SIGHUP, libc::SIG_IGN);
+            Ok(())
+        });
+    }
+    command.spawn().map_err(|e| {
+        Error::new(
+            1,
+            format!("Could not start background transcription: {e}"),
+            "Run xflow meeting retry",
+        )
+    })?;
+    Ok(true)
+}
+
+/// The detached worker. Its stderr is a private log with no transcript text.
+pub fn worker(config: &Path) -> Result<()> {
+    let db = db_path()?;
+    if !db.exists() {
+        return Ok(());
+    }
+    ipc::block_on(async {
+        let (tx, rx) = tokio::sync::watch::channel(false);
         tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
+            use tokio::signal::unix::{signal, SignalKind};
+            if let Ok(mut term) = signal(SignalKind::terminate()) {
+                term.recv().await;
                 let _ = tx.send(true);
             }
         });
-        let mut progress = |line: &str| {
-            if verbose {
-                eprintln!("xflow: {}", meeting::display_text(line));
-            }
+        let mut log = |line: &str| {
+            eprintln!(
+                "{} meeting-worker[{}]: {}",
+                transcribe::now_ms(),
+                std::process::id(),
+                meeting::display_text(line)
+            );
         };
-        transcribe::run(
+        transcribe::work(
             &db,
-            &meetings,
-            stt.as_ref(),
+            || meeting_stt(config).map_err(|e| anyhow::anyhow!(e.message)),
             dictation_busy,
             rx,
-            &mut progress,
+            &mut log,
         )
         .await
         .map_err(store_err)
-    })?;
-    drop(lock);
-    if out.json {
-        out.text(&serde_json::to_string(&serde_json::json!({
-            "ok": report.failed == 0 && report.waiting == 0 && report.unavailable.is_none() && !report.cancelled,
-            "report": report,
-            "meetings": meetings,
-        }))?)?;
-    } else {
-        out.text(&format!(
-            "transcribed {} part(s) ({} without speech); {} failed, {} waiting",
-            report.accepted, report.empty, report.failed, report.waiting
-        ))?;
-    }
-    if report.cancelled {
-        return Err(Error::new(
-            130,
-            "Cancelled; untranscribed audio is kept",
-            "Run xflow meeting retry to continue",
-        ));
-    }
-    if let Some(reason) = report.unavailable {
-        return Err(Error::new(
-            5,
-            format!(
-                "Speech-to-text is unavailable: {}. Nothing was sent; the audio is kept.",
-                meeting::display_text(&reason)
-            ),
-            "Start or fix the provider, then run xflow meeting retry",
-        ));
-    }
-    if report.failed > 0 || report.waiting > 0 {
-        return Err(Error::new(
-            1,
-            "Some audio is not transcribed yet; it is kept",
-            "Run xflow meeting status, then xflow meeting retry",
-        ));
-    }
-    Ok(())
+    })
 }
 
-fn status(id: Option<&str>, out: &Output) -> Result<()> {
+fn wait_for(db: &Path, meeting: Option<&MeetingId>, config: &Path, out: &Output) -> Result<()> {
+    let verbose = !out.json && !out.quiet;
+    let started = std::time::Instant::now();
+    let mut shown = (-1, -1);
+    let mut restarts = 0;
+    loop {
+        let status = jobs::status(
+            db,
+            meeting.map(|m| m.id),
+            Limits::from_env(),
+            transcribe::now_ms(),
+        )
+        .map_err(store_err)?;
+        let mut sum = jobs::Windows::default();
+        for m in &status.meetings {
+            sum.total += m.windows.total;
+            sum.accepted += m.windows.accepted;
+            sum.empty += m.windows.empty;
+            sum.failed += m.windows.failed;
+            sum.pending += m.windows.pending;
+            sum.waiting += m.windows.waiting;
+        }
+        if verbose && (sum.accepted, sum.total) != shown {
+            shown = (sum.accepted, sum.total);
+            eprintln!(
+                "xflow: transcribed {} of {} part(s)",
+                sum.accepted, sum.total
+            );
+        }
+        let open = if meeting.is_some() {
+            sum.pending + sum.waiting
+        } else {
+            status.worker.queued as i64
+        };
+        if open == 0 {
+            if out.json {
+                out.text(&serde_json::to_string(&serde_json::json!({
+                    "ok": sum.failed == 0,
+                    "windows": sum,
+                }))?)?;
+            } else {
+                out.text(&format!(
+                    "transcribed {} part(s) ({} without speech); {} failed",
+                    sum.accepted, sum.empty, sum.failed
+                ))?;
+            }
+            if sum.failed > 0 {
+                return Err(Error::new(
+                    1,
+                    "Some audio could not be transcribed; it is kept",
+                    "Run xflow meeting status, then xflow meeting retry",
+                ));
+            }
+            return Ok(());
+        }
+        if !status.worker.running && started.elapsed() > Duration::from_secs(3) {
+            if matches!(status.worker.state.as_deref(), Some("stopped" | "failed")) || restarts >= 3
+            {
+                return Err(Error::new(
+                    5,
+                    format!(
+                        "Background transcription stopped: {}",
+                        meeting::display_text(
+                            status.worker.error.as_deref().unwrap_or("unknown reason")
+                        )
+                    ),
+                    "The audio is kept. Fix the cause, then run xflow meeting retry",
+                ));
+            }
+            restarts += 1;
+            start_worker(db, config)?;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
+fn status(id: Option<&str>, config: &Path, out: &Output) -> Result<()> {
     let id = id.map(parse_id).transpose()?;
     let db = db_path()?;
     if !db.exists() {
@@ -618,9 +735,30 @@ fn status(id: Option<&str>, out: &Output) -> Result<()> {
             return Err(store_err(ContractError::NotFound.into()));
         }
     }
+    // Queued work whose worker died (crash, reboot): continue it. This only
+    // resumes what the user already asked to transcribe.
+    let mut status = status;
+    if status.worker.queued > 0 && !status.worker.running && start_worker(&db, config)? {
+        status.worker.running = true;
+        status.worker.state = Some("restarted".into());
+    }
     if out.json {
         return Ok(out.data(&status, "")?);
     }
+    out.text(&format!(
+        "background transcription: {}{}",
+        if status.worker.running {
+            "running"
+        } else {
+            "not running"
+        },
+        status
+            .worker
+            .state
+            .as_deref()
+            .map(|s| format!(" (last state {s})"))
+            .unwrap_or_default()
+    ))?;
     out.text(&format!(
         "meeting audio: {} MiB of {} MiB",
         status.audio_bytes.div_ceil(1 << 20),

@@ -213,3 +213,140 @@ fn abandon(db: &Connection, job: &Job) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
+
+/// Takes the worker lock, retrying briefly so a `status` probe never makes a
+/// fresh worker give up. `None`: another worker really is running.
+fn acquire(db_path: &Path) -> Result<Option<WorkerLock>> {
+    for _ in 0..40 {
+        if let Some(lock) = lock_worker(db_path, false)? {
+            return Ok(Some(lock));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(None)
+}
+/// Whether a worker holds the lock. Never blocks; the kernel drops a dead
+/// worker's lock, so a crash can never look like a running worker.
+pub fn worker_running(db_path: &Path) -> bool {
+    let Ok(file) = File::open(journal::spool_root(db_path).join("worker.lock")) else {
+        return false;
+    };
+    match fs2::FileExt::try_lock_shared(&file) {
+        Ok(()) => {
+            let _ = fs2::FileExt::unlock(&file);
+            false
+        }
+        Err(_) => true,
+    }
+}
+fn set_worker(db_path: &Path, state: &str, error: Option<&str>) -> Result<()> {
+    let db = open_writer(db_path)?;
+    let now = now_ms();
+    db.execute(
+        "INSERT INTO worker(singleton,pid,started_ms,updated_ms,state,error) VALUES (1,?1,?2,?2,?3,?4)
+         ON CONFLICT(singleton) DO UPDATE SET pid=?1,updated_ms=?2,state=?3,error=?4,
+         started_ms=CASE WHEN ?3='running' AND state!='running' THEN ?2 ELSE started_ms END",
+        rusqlite::params![std::process::id(), now, state, error],
+    )?;
+    Ok(())
+}
+
+/// The background worker: one per store, for queued meetings only. It ends
+/// when nothing queued can progress; errors are recorded for `status`.
+pub async fn work<S, B, F>(
+    db_path: &Path,
+    stt: S,
+    busy: B,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    log: &mut (dyn FnMut(&str) + Send),
+) -> Result<()>
+where
+    S: Fn() -> Result<std::sync::Arc<dyn SpeechToText>>,
+    B: Fn() -> F,
+    F: Future<Output = bool>,
+{
+    let Some(mut lock) = acquire(db_path)? else {
+        log("another meeting worker is running; nothing to do");
+        return Ok(());
+    };
+    set_worker(db_path, "running", None)?;
+    let recovered = journal::recover(db_path)?;
+    if recovered != journal::Recovery::default() {
+        log(&format!("recovered: {recovered:?}"));
+    }
+    let mut provider = None;
+    loop {
+        let meetings = jobs::queued_meetings(&open_writer(db_path)?)?;
+        if meetings.is_empty() {
+            set_worker(db_path, "idle", None)?;
+            drop(lock);
+            // A request committed while this worker was finishing is not stranded.
+            if jobs::queued_meetings(&open_writer(db_path)?)?.is_empty() {
+                return Ok(());
+            }
+            match acquire(db_path)? {
+                Some(again) => lock = again,
+                None => return Ok(()),
+            }
+            set_worker(db_path, "running", None)?;
+            continue;
+        }
+        let stt = match &provider {
+            Some(stt) => std::sync::Arc::clone(stt),
+            None => match stt() {
+                Ok(stt) => {
+                    provider = Some(std::sync::Arc::clone(&stt));
+                    stt
+                }
+                Err(error) => {
+                    let message = format!("speech-to-text unavailable: {error:#}; audio kept");
+                    log(&message);
+                    set_worker(db_path, "stopped", Some(&message))?;
+                    return Ok(());
+                }
+            },
+        };
+        let report = match run(db_path, &meetings, stt.as_ref(), &busy, cancel.clone(), log).await {
+            Ok(report) => report,
+            Err(error) => {
+                let message = format!("{error:#}");
+                log(&message);
+                let _ = set_worker(db_path, "failed", Some(&message));
+                return Err(error);
+            }
+        };
+        log(&format!(
+            "accepted {} ({} empty), failed {}, waiting {}, dropped {}",
+            report.accepted, report.empty, report.failed, report.waiting, report.dropped
+        ));
+        if report.cancelled {
+            set_worker(db_path, "stopped", Some("stopped by a signal; audio kept"))?;
+            return Ok(());
+        }
+        if let Some(reason) = &report.unavailable {
+            let message = format!("speech-to-text unavailable; nothing was sent: {reason}");
+            set_worker(db_path, "stopped", Some(&message))?;
+            return Ok(());
+        }
+        if report.failed > 0 {
+            set_worker(
+                db_path,
+                "running",
+                Some(&format!(
+                    "{} part(s) failed after 3 attempts; audio kept for `xflow meeting retry`",
+                    report.failed
+                )),
+            )?;
+        }
+        if let Some(at) = report.next_retry_ms {
+            let pause = Duration::from_millis((at - now_ms()).clamp(0, 3_600_000) as u64 + 50);
+            tokio::select! {
+                _ = tokio::time::sleep(pause) => {}
+                _ = cancel.changed() => {
+                    set_worker(db_path, "stopped", Some("stopped by a signal; audio kept"))?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+}

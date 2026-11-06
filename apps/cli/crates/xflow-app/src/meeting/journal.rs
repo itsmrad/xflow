@@ -320,6 +320,9 @@ pub struct CaptureSpec {
     pub labels: Vec<String>,
     /// Known total length (file input); `None` for live audio.
     pub expected_ms: Option<i64>,
+    /// The user asked for transcription: the background worker may send
+    /// this meeting's audio to the provider. Recovery never sets it.
+    pub queued: bool,
 }
 
 struct SourceBuf {
@@ -442,8 +445,8 @@ impl Capture {
             });
         }
         tx.execute(
-            "INSERT INTO captures(meeting_id,state,created_ms,expected_ms) VALUES (?1,'capturing',?2,?3)",
-            params![meeting, now, spec.expected_ms],
+            "INSERT INTO captures(meeting_id,state,created_ms,expected_ms,queued) VALUES (?1,'capturing',?2,?3,?4)",
+            params![meeting, now, spec.expected_ms, spec.queued],
         )?;
         tx.commit()?;
         let dir = meeting_dir(&root, &store, meeting);
@@ -774,8 +777,9 @@ fn plan_jobs(
     }
 }
 
-/// Pieces whose every dependent job is accepted or abandoned, including the
-/// next window that reads its last 2 s. Run inside the accepting transaction.
+/// Pieces whose every dependent job is accepted or abandoned. While a source
+/// is still capturing, a piece reaching into the next window's 2 s overlap
+/// waits for that window. Run inside the accepting transaction.
 pub(crate) fn release_pieces(db: &Connection, meeting: i64) -> Result<usize> {
     const OVERLAPS: &str = "j.meeting_id=pieces.meeting_id AND j.source_idx=pieces.source_idx AND j.overlap_sample<pieces.start_sample+pieces.samples AND j.end_sample>pieces.start_sample";
     Ok(db.execute(&format!(
@@ -783,7 +787,7 @@ pub(crate) fn release_pieces(db: &Connection, meeting: i64) -> Result<usize> {
          AND EXISTS (SELECT 1 FROM jobs j WHERE {OVERLAPS})
          AND NOT EXISTS (SELECT 1 FROM jobs j WHERE {OVERLAPS} AND j.state NOT IN ('accepted','abandoned'))
          AND (EXISTS (SELECT 1 FROM capture_sources c WHERE c.meeting_id=pieces.meeting_id AND c.idx=pieces.source_idx AND c.finished=1)
-              OR EXISTS (SELECT 1 FROM jobs j WHERE j.meeting_id=pieces.meeting_id AND j.source_idx=pieces.source_idx AND j.start_sample>=pieces.start_sample+pieces.samples))"),
+              OR pieces.start_sample+pieces.samples<=(SELECT (MAX(j.win)+1)*{WINDOW_SAMPLES}-{OVERLAP_SAMPLES} FROM jobs j WHERE j.meeting_id=pieces.meeting_id AND j.source_idx=pieces.source_idx))"),
         [meeting])?)
 }
 
@@ -941,7 +945,7 @@ pub(crate) fn load_window(
         match valid {
             Some(payload) => {
                 present += 1;
-                for (i, pair) in payload.chunks_exact(2).enumerate() {
+                for (i, pair) in payload.as_chunks::<2>().0.iter().enumerate() {
                     let at = start + i as i64;
                     if (from..to).contains(&at) {
                         samples[(at - from) as usize] =
@@ -1028,6 +1032,12 @@ pub fn recover(db_path: &Path) -> Result<Recovery> {
     let root = spool_root(db_path);
     report.ambiguous = db.execute(
         "UPDATE attempts SET state='ambiguous',error='the process ended before the reply was recorded' WHERE state='reserved'",
+        [],
+    )?;
+    // A crash right after the last reservation leaves an open job with no
+    // attempts left; it is failed (audio kept) instead of being stuck.
+    db.execute(
+        "UPDATE jobs SET state='failed',error='all attempts used; the last reply was never recorded' WHERE state IN ('pending','waiting') AND attempts>=budget",
         [],
     )?;
     let _ = remove_deleted_audio(db_path, &store, &db);

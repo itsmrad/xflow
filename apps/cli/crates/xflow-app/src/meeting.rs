@@ -33,7 +33,7 @@ pub fn contract_message(error: &ContractError) -> String {
     }
 }
 
-/// Test-support builds only: `XFLOW_MEETING_FAULT=point=N=kill|enospc|eio,...`
+/// Test-support builds only: `XFLOW_MEETING_FAULT=point=N=kill|enospc|eio|eacces,...`
 /// fails or SIGKILLs this process the Nth time it reaches `point`.
 #[cfg(feature = "test-support")]
 pub(crate) fn fault(point: &str) -> std::io::Result<()> {
@@ -64,6 +64,7 @@ pub(crate) fn fault(point: &str) -> std::io::Result<()> {
             },
             "enospc" => return Err(std::io::Error::from_raw_os_error(libc::ENOSPC)),
             "eio" => return Err(std::io::Error::from_raw_os_error(libc::EIO)),
+            "eacces" => return Err(std::io::Error::from_raw_os_error(libc::EACCES)),
             _ => {}
         }
     }

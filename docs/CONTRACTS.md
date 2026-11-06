@@ -73,6 +73,8 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 
 Meeting import, list, search, get, export and delete are local SQLite in the `xflow` process. They are not daemon requests and they are not on D-Bus. `PROTOCOL_VERSION` stays 3.
 
+`xflow meeting process` copies audio into the private journal and queues it; `xflow meeting-worker` (internal, started detached by `process`, `retry` or `status`) transcribes queued meetings. Exactly one worker runs per store, guarded by an exclusive `flock` on `meeting-audio/worker.lock`. Its stderr goes to a private `meeting-audio/worker.log` without transcript text, and its state is in the `worker` table shown by `status`. The daemon is not involved.
+
 `HistoryEntry` adds model, raw_text, app_id, language, duration_ms, latency_ms, mode, and `cleanup` (`applied`, `skipped`, `rejected`, `slow`, `failed` or `discarded`; absent when cleanup was off; history schema v3). `Timings` carries
 hotkey_ms, open_ms, audio_ms, stt_ms, cleanup_ms, inject_ms, total_ms. All new response fields are
 optional on the wire. macOS permission checks run in xflowd and refresh on explicit
