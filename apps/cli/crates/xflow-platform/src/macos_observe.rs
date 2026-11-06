@@ -7,14 +7,17 @@
 use super::{
     cf_text, focus_waiting, search_or_address, text_reads_allowed, AXUIElementCreateApplication,
     AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementSetMessagingTimeout,
-    AccessibilityGuard, CFGetTypeID, Focus, Owned, Ref,
+    AccessibilityGuard, CFGetTypeID, CFRelease, Focus, Owned, Ref,
 };
 use async_trait::async_trait;
 use std::{
     cell::Cell,
     ffi::c_void,
     ptr,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -60,6 +63,8 @@ extern "C" {
     fn CFRunLoopAddSource(runloop: MutRef, source: MutRef, mode: MutRef);
     fn CFRunLoopRemoveSource(runloop: MutRef, source: MutRef, mode: MutRef);
     fn CFRunLoopRunInMode(mode: MutRef, seconds: f64, return_after_source: bool) -> i32;
+    fn CFRunLoopStop(runloop: MutRef);
+    fn CFRunLoopWakeUp(runloop: MutRef);
 }
 
 /// CF and AX references are thread-safe; Owned is only !Send for its raw pointer.
@@ -191,6 +196,8 @@ pub(super) struct Watch {
     gate: Arc<ReadGate>,
     events: mpsc::Receiver<FieldEvent>,
     observer: Option<thread::JoinHandle<()>>,
+    /// The observer's run loop while it runs, to wake it for a stop.
+    runloop: Arc<AtomicUsize>,
     /// Chromium's accessibility stays on for the watch; restored on its thread.
     accessibility: Arc<Mutex<Option<AccessibilityGuard<Owned>>>>,
 }
@@ -201,12 +208,18 @@ pub(super) fn arm(source: Arc<Reader>) -> Watch {
     let gate = Arc::new(ReadGate::default());
     let accessibility = Arc::new(Mutex::new(None));
     let (tx, events) = mpsc::channel(32);
-    let (r, g, kept) = (source.clone(), gate.clone(), accessibility.clone());
+    let runloop = Arc::new(AtomicUsize::new(0));
+    let (r, g, kept, wake) = (
+        source.clone(),
+        gate.clone(),
+        accessibility.clone(),
+        runloop.clone(),
+    );
     let observer = thread::Builder::new()
         .name("xflow-observe".into())
         .stack_size(256 * 1024)
         .spawn(move || unsafe {
-            if !observing(&r, &g, tx) {
+            if !observing(&r, &g, tx, &wake) {
                 g.unsupported.store(true, Ordering::Release);
             }
             let held: Option<AccessibilityGuard<Owned>> =
@@ -223,6 +236,7 @@ pub(super) fn arm(source: Arc<Reader>) -> Watch {
         gate,
         events,
         observer,
+        runloop,
         accessibility,
     }
 }
@@ -231,6 +245,7 @@ unsafe fn observing(
     r: &Arc<Reader>,
     gate: &Arc<ReadGate>,
     events: mpsc::Sender<FieldEvent>,
+    wake: &AtomicUsize,
 ) -> bool {
     let mut observer = ptr::null();
     if AXObserverCreate(r.pid, callback, &mut observer) != 0 {
@@ -271,13 +286,16 @@ unsafe fn observing(
     let source = AXObserverGetRunLoopSource(observer.0) as MutRef;
     let runloop = CFRunLoopGetCurrent();
     CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
-    // Sleeps in the run loop, waking at least every 20 ms to see a stop.
-    loop {
-        if gate.stop.load(Ordering::Acquire)
-            || CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true) == 1
-        {
-            break;
-        }
+    // No polling: asleep until a notification or `wake`. The long timeout only
+    // bounds a stop that slipped in just before the run loop went to sleep.
+    CFRetain(runloop);
+    wake.store(runloop as usize, Ordering::Release);
+    while !gate.stop.load(Ordering::Acquire)
+        && CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, true) != 1
+    {}
+    let retained = wake.swap(0, Ordering::AcqRel) as MutRef;
+    if !retained.is_null() {
+        CFRelease(retained as Ref);
     }
     CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
     true
@@ -356,6 +374,19 @@ fn string_range(element: &Owned, start: usize, len: usize) -> Option<String> {
     (value.encode_utf16().count() == len).then_some(value)
 }
 impl Watch {
+    /// Close the gate and wake the observer's run loop to notice.
+    fn signal_stop(&self) {
+        self.gate.stop.store(true, Ordering::Release);
+        // Taken, so the thread's own release cannot race this use.
+        let runloop = self.runloop.swap(0, Ordering::AcqRel) as MutRef;
+        if !runloop.is_null() {
+            unsafe {
+                CFRunLoopStop(runloop);
+                CFRunLoopWakeUp(runloop);
+                CFRelease(runloop as Ref);
+            }
+        }
+    }
     /// Keep Chromium's accessibility on until this watch ends.
     pub(super) fn hold(&self, accessibility: Option<AccessibilityGuard<Owned>>) {
         if let Ok(mut held) = self.accessibility.lock() {
@@ -480,6 +511,7 @@ impl FieldWatch for Watch {
     }
     async fn stop(&mut self) {
         self.reader.stop().await;
+        self.signal_stop();
         if let Some(observer) = self.observer.take() {
             let _ = tokio::task::spawn_blocking(move || observer.join()).await;
         }
@@ -487,7 +519,7 @@ impl FieldWatch for Watch {
 }
 impl Drop for Watch {
     fn drop(&mut self) {
-        self.gate.stop.store(true, Ordering::Release);
+        self.signal_stop();
     }
 }
 
