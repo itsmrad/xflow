@@ -63,7 +63,7 @@ private func writeFrame(_ object: [String: Any]) throws {
     try output.write(contentsOf: Data(bytes: &headerLen, count: 4))
     try output.write(contentsOf: header)
     try output.write(contentsOf: Data(bytes: &payloadLen, count: 4))
-    try output.synchronize()
+    // No synchronize(): fsync on a pipe fails with EINVAL, and pipe writes are unbuffered.
 }
 
 private func whole(_ value: Any?) -> Double? {
