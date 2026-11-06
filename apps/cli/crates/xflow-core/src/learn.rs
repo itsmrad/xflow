@@ -72,10 +72,12 @@ impl Receipt {
             .char_indices()
             .nth(ANCHOR_CHARS)
             .map_or(after.len(), |(i, _)| i)];
+        // Only blank around it (an empty contenteditable reads "\n"): the field's edge.
+        let edge = |anchor: &str| if anchor.trim().is_empty() { "" } else { anchor }.to_owned();
         Some(Self {
-            before: before.into(),
+            before: edge(before),
             inserted: field[start..end].into(),
-            after: after.into(),
+            after: edge(after),
             near: (start, end),
         })
     }
@@ -171,8 +173,7 @@ impl Receipt {
     /// The field's own text of a delivery: what the app made of the text just
     /// sent, typography and a dropped trailing space included. Not an edit.
     pub fn delivered(&self, span: &str) -> bool {
-        let keys =
-            |s: &str| -> Vec<char> { folded(s.trim_end()).into_iter().map(|c| c.0).collect() };
+        let keys = |s: &str| -> Vec<char> { folded(s.trim()).into_iter().map(|c| c.0).collect() };
         keys(&self.inserted) == keys(span)
     }
     /// The span the app shows for the text sent becomes the baseline.
@@ -1927,6 +1928,16 @@ mod delivery_tests {
         assert!(r.whole_field());
         assert_eq!(r.corrected("Hi Veronica "), Some("Hi Veronica "));
         assert_eq!(r.corrected("lunch at noon anyone"), None);
+    }
+    /// An empty contenteditable reads as a lone newline; the paste then has no
+    /// real neighbour, and a fixed last word must not lose the span.
+    #[test]
+    fn blank_context_is_the_field_edge() {
+        let r = Receipt::delivery("\n", (0, 0), "Hi Veronika ").unwrap();
+        assert!(r.whole_field());
+        assert!(r.delivered("Hi Veronika\u{a0}"));
+        assert_eq!(r.corrected("Hi Veronica\u{a0}"), Some("Hi Veronica\u{a0}"));
+        assert!(r.editing("Hi Ver", "Hi Veronika "));
     }
     /// A repeated anchor only resolves exactly where the span last sat.
     #[test]
