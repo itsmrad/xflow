@@ -350,7 +350,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
 /// Print the meeting detector's decisions until Ctrl-C; app names only.
 fn detect_meetings(out: &Output) -> Result<()> {
     let (events, mut decided) = tokio::sync::mpsc::unbounded_channel();
-    let observer = xflow_platform::meeting::observe(move |event| {
+    let _observer = xflow_platform::meeting::observe(move |event| {
         let _ = events.send(event);
     })?;
     if !out.json && !out.quiet {
@@ -358,7 +358,7 @@ fn detect_meetings(out: &Output) -> Result<()> {
             "Watching for Zoom, Google Meet, Microsoft Teams and Amazon Chime calls. Ctrl-C stops."
         );
     }
-    let result = ipc::block_on(async {
+    ipc::block_on(async {
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => return Ok(()),
@@ -371,7 +371,5 @@ fn detect_meetings(out: &Output) -> Result<()> {
                 }
             }
         }
-    });
-    drop(observer);
-    result
+    })
 }

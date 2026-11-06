@@ -348,11 +348,10 @@ pub fn observe(mut on_event: impl FnMut(Event) + Send + 'static) -> Result<Obser
             }
             drop(listeners);
         })
-        .map_err(|error| {
+        .inspect_err(|_| {
             *WAKE
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-            error
         })?;
     Ok(Observer {
         stop,
