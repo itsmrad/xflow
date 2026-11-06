@@ -1165,11 +1165,15 @@ impl MacDesktop {
             };
             // Field text stays only in the ticket's receipt from here on.
             drop(before);
+            // Arm before posting: stamped delivery keys are ignored, user edits are not lost.
+            let ticket = ticket.or_else(|| {
+                observe
+                    .then(|| terminal_keys(&current, &text_owned))
+                    .flatten()
+            });
             if let Err(e) = send_keys(&text_owned, action == Decision::Type) {
                 return drop(reply.send(Err(e)));
             }
-            // Armed after the paste keys, so our own Cmd-V is not replayed.
-            let ticket = ticket.or_else(|| terminal_keys(&current, &text_owned));
             if action == Decision::Type {
                 return drop(reply.send(Ok((action, false, ticket))));
             }
@@ -1209,21 +1213,26 @@ impl MacDesktop {
 fn terminal_keys(focus: &Focus, text: &str) -> Option<xflow_core::DeliveryTicket> {
     if focus.pid <= 0
         || focus.secure
-        || !terminal_context(&focus.context)
+        || !matches!(
+            focus.context.app_id.as_deref(),
+            Some("com.apple.Terminal" | "com.googlecode.iterm2" | "com.mitchellh.ghostty")
+        )
         || crate::macos_hotkey::secure_input()
     {
         return None;
     }
+    let screen = observe::Reader::terminal(focus)?;
     let feed = crate::macos_hotkey::subscribe(focus.pid)?;
-    let departure = focus
-        .window
-        .as_ref()
-        .and_then(|window| observe::departure(focus.pid, window));
+    let departure = Some(observe::departure(focus.pid, focus.window.as_ref()?)?);
     let receipt = xflow_core::learn::Receipt::new(text, text, Some(text.encode_utf16().count()))?;
     Some(xflow_core::DeliveryTicket {
         field: Box::new(QuietField),
         receipt,
-        keys: Some(Box::new(TerminalKeys { feed, departure })),
+        keys: Some(Box::new(TerminalKeys {
+            feed,
+            departure,
+            screen,
+        })),
     })
 }
 struct QuietField;
@@ -1245,18 +1254,25 @@ impl FieldWatch for QuietField {
 struct TerminalKeys {
     feed: crate::macos_hotkey::KeyFeed,
     departure: Option<observe::Departure>,
+    screen: std::sync::Arc<observe::Reader>,
 }
 #[async_trait]
 impl xflow_core::replay::KeyReplay for TerminalKeys {
     async fn next(&mut self) -> Option<xflow_core::replay::ReplayIn> {
         use xflow_core::replay::ReplayIn;
         loop {
+            if crate::macos_hotkey::secure_input() {
+                return Some(ReplayIn::Secure);
+            }
             if self.feed.missed() {
                 return Some(ReplayIn::Missed);
             }
-            let TerminalKeys { feed, departure } = self;
+            let TerminalKeys {
+                feed, departure, ..
+            } = self;
             let raw = tokio::select! {
                 biased;
+                _ = tokio::time::sleep(Duration::from_millis(50)) => continue,
                 leave = async {
                     match departure.as_mut() {
                         Some(departure) => departure.events.recv().await,
@@ -1266,9 +1282,8 @@ impl xflow_core::replay::KeyReplay for TerminalKeys {
                     if leave.is_some() {
                         return Some(ReplayIn::Leave);
                     }
-                    // The focus watch ended. Keep the keys.
-                    *departure = None;
-                    continue;
+                    // Lost coverage cannot prove that this is still the same window.
+                    return Some(ReplayIn::Missed);
                 }
                 raw = feed.rx.recv() => raw,
             };
@@ -1277,6 +1292,31 @@ impl xflow_core::replay::KeyReplay for TerminalKeys {
             }
             return raw.map(crate::macos_hotkey::decode);
         }
+    }
+    async fn confirm(&mut self, original: &str, corrected: &str) -> Result<(), &'static str> {
+        if crate::macos_hotkey::secure_input() {
+            return Err("secure");
+        }
+        if !self.feed.settled() {
+            return Err("abstain");
+        }
+        let (screen, original, corrected) = (
+            self.screen.clone(),
+            original.to_owned(),
+            corrected.to_owned(),
+        );
+        let confirmed = tokio::task::spawn_blocking(move || {
+            xflow_core::replay::confirm(&*screen, &original, &corrected)
+        })
+        .await
+        .unwrap_or(Err("visible-read"));
+        if crate::macos_hotkey::secure_input() {
+            return Err("secure");
+        }
+        if !self.feed.settled() {
+            return Err("abstain");
+        }
+        confirmed
     }
     fn stop(&mut self) {
         self.feed.stop();

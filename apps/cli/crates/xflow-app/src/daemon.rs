@@ -2586,21 +2586,22 @@ async fn watch_replay(
                 if end.is_err() {
                     break Err(None);
                 }
-                break replay_settle(&original, &editor, since, Moment::Leave(since.elapsed()), &mut commits).await;
+                break replay_settle(&mut *keys, &original, &editor, since, Moment::Leave(since.elapsed()), &mut commits).await;
             }
             _ = sleep_until(deadline) => {
-                break replay_settle(&original, &editor, since, Moment::Leave(since.elapsed()), &mut commits).await;
+                break replay_settle(&mut *keys, &original, &editor, since, Moment::Leave(since.elapsed()), &mut commits).await;
             }
             incoming = keys.next() => match incoming {
                 None | Some(ReplayIn::Missed) => break Err(Some("abstain")),
                 Some(ReplayIn::Secure) => break Err(Some("secure")),
                 Some(ReplayIn::Leave) => {
-                    break replay_settle(&original, &editor, since, Moment::Leave(since.elapsed()), &mut commits).await;
+                    break replay_settle(&mut *keys, &original, &editor, since, Moment::Leave(since.elapsed()), &mut commits).await;
                 }
                 Some(ReplayIn::Key(key)) => match editor.apply(key) {
                     Applied::Stop => break Err(Some("abstain")),
                     Applied::Submit => {
-                        break replay_settle(&original, &editor, since, Moment::Submit, &mut commits).await;
+                        // A listen-only tap cannot read before Return reaches the app.
+                        break Err(Some("safe-miss:send"));
                     }
                     Applied::Edit { changed } => {
                         if changed {
@@ -2615,7 +2616,9 @@ async fn watch_replay(
                 match xflow_core::replay::verdict(&original, editor.text().unwrap_or(""), editor.caret_utf16(), Moment::Quiet(quiet)) {
                     Verdict::Save => {
                         commit_at = None;
-                        let _ = replay_settle(&original, &editor, since, Moment::Quiet(quiet), &mut commits).await;
+                        if let Err(reason) = replay_settle(&mut *keys, &original, &editor, since, Moment::Quiet(quiet), &mut commits).await {
+                            break Err(reason);
+                        }
                     }
                     Verdict::Recheck => commit_at = Some(Instant::now() + COMMIT_RECHECK),
                     Verdict::Wait | Verdict::Drop(_) => commit_at = None,
@@ -2628,6 +2631,7 @@ async fn watch_replay(
     result
 }
 async fn replay_settle(
+    keys: &mut dyn xflow_core::replay::KeyReplay,
     original: &str,
     editor: &xflow_core::replay::Line,
     since: tokio::time::Instant,
@@ -2641,6 +2645,7 @@ async fn replay_settle(
     let text = text.to_owned();
     match verdict(original, &text, editor.caret_utf16(), moment) {
         Verdict::Save => {
+            keys.confirm(original, &text).await.map_err(Some)?;
             if let Some(commits) = commits.as_deref_mut() {
                 commits.edited = Some(since);
                 let _ = commits.save(original.to_owned(), text.clone()).await;
@@ -7592,11 +7597,17 @@ mod tests {
             true
         }
     }
-    struct Script(mpsc::UnboundedReceiver<xflow_core::replay::ReplayIn>);
+    struct Script(
+        mpsc::UnboundedReceiver<xflow_core::replay::ReplayIn>,
+        std::result::Result<(), &'static str>,
+    );
     #[async_trait]
     impl xflow_core::replay::KeyReplay for Script {
         async fn next(&mut self) -> Option<xflow_core::replay::ReplayIn> {
             self.0.recv().await
+        }
+        async fn confirm(&mut self, _: &str, _: &str) -> std::result::Result<(), &'static str> {
+            self.1
         }
         fn stop(&mut self) {}
     }
@@ -7612,7 +7623,7 @@ mod tests {
         let ticket = xflow_core::DeliveryTicket {
             field: Box::new(IdleField),
             receipt: xflow_core::learn::Receipt::new(original, original, Some(end)).unwrap(),
-            keys: Some(Box::new(Script(rx))),
+            keys: Some(Box::new(Script(rx, Ok(())))),
         };
         let task = tokio::spawn(observe(
             Some(ticket),
@@ -7634,7 +7645,7 @@ mod tests {
         xflow_core::replay::ReplayIn::Key(key)
     }
     #[tokio::test]
-    async fn terminal_replay_learns_a_submitted_correction() {
+    async fn terminal_replay_send_abstains_without_a_pre_delivery_read() {
         use xflow_core::replay::Key;
         let mut keys = Vec::new();
         for _ in 0.."kubernetis".chars().count() {
@@ -7645,8 +7656,44 @@ mod tests {
         }
         keys.push(replay_key(Key::Submit));
         let learning = replay_watch("use kubernetis", keys).await;
-        assert_eq!(learning.outcomes.get("learned").copied(), Some(1));
-        assert!(!learning.outcomes.contains_key("abstain"));
+        assert_eq!(learning.outcomes.get("safe-miss:send").copied(), Some(1));
+        assert!(!learning.outcomes.contains_key("learned"));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn terminal_quiet_timer_requires_fresh_confirmation() {
+        use xflow_core::replay::{Key, ReplayIn};
+        for confirmation in [
+            Ok(()),
+            Err("secure"),
+            Err("unconfirmed"),
+            Err("visible-read"),
+        ] {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let (_finish, finalized) = oneshot::channel();
+            let watch = tokio::spawn(watch_replay(
+                Box::new(Script(rx, confirmation)),
+                "git rebsae".into(),
+                finalized,
+                None,
+            ));
+            for _ in 0..6 {
+                tx.send(replay_key(Key::Backspace)).unwrap();
+            }
+            tx.send(replay_key(Key::Insert("rebase".into()))).unwrap();
+            tx.send(replay_key(Key::LineStart)).unwrap();
+            // Let the watch apply all keys, then advance past the quiet timer.
+            for _ in 0..4 {
+                tokio::task::yield_now().await;
+            }
+            tokio::time::advance(Duration::from_millis(2_100)).await;
+            tokio::task::yield_now().await;
+            tx.send(ReplayIn::Leave).ok();
+            let result = watch.await.unwrap();
+            match confirmation {
+                Ok(()) => assert_eq!(result, Ok(("git rebsae".into(), "git rebase".into()))),
+                Err(reason) => assert_eq!(result, Err(Some(reason))),
+            }
+        }
     }
     #[tokio::test]
     async fn terminal_replay_abstain_secure_and_a_short_word_save_nothing() {

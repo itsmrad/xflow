@@ -7,7 +7,7 @@ use std::{
     ffi::{c_char, c_void},
     ptr,
     sync::{
-        atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -216,18 +216,21 @@ static TAP_UP: AtomicBool = AtomicBool::new(false);
 static SELF_PID: AtomicI32 = AtomicI32::new(0);
 struct ReplayBus {
     pid: AtomicI32,
+    generation: AtomicU64,
+    until_ms: AtomicU64,
     tx: Mutex<Option<mpsc::Sender<RawEvent>>>,
     missed: AtomicBool,
 }
 static BUS: ReplayBus = ReplayBus {
     pid: AtomicI32::new(0),
+    generation: AtomicU64::new(0),
+    until_ms: AtomicU64::new(0),
     tx: Mutex::new(None),
     missed: AtomicBool::new(false),
 };
 const RAW_KEY: u8 = 0;
 const RAW_MOUSE: u8 = 1;
 const RAW_OTHER: u8 = 2;
-const RAW_SECURE: u8 = 3;
 const RAW_ABSTAIN: u8 = 4;
 #[derive(Clone, Copy)]
 pub(crate) struct RawEvent {
@@ -239,18 +242,25 @@ pub(crate) struct RawEvent {
 }
 pub(crate) struct KeyFeed {
     pub rx: mpsc::Receiver<RawEvent>,
+    generation: u64,
 }
 impl KeyFeed {
     pub(crate) fn missed(&self) -> bool {
-        BUS.missed.swap(false, Ordering::AcqRel)
+        self.generation != BUS.generation.load(Ordering::Acquire)
+            || BUS.pid.load(Ordering::Acquire) == 0
+            || BUS.missed.load(Ordering::Acquire)
+            || now_ms() >= BUS.until_ms.load(Ordering::Acquire)
     }
     pub(crate) fn stop(&self) {
-        disarm();
+        disarm(Some(self.generation));
+    }
+    pub(crate) fn settled(&self) -> bool {
+        !self.missed() && self.rx.is_empty()
     }
 }
 impl Drop for KeyFeed {
     fn drop(&mut self) {
-        disarm();
+        disarm(Some(self.generation));
     }
 }
 /// `IsSecureEventInputEnabled`, loaded on first use. Carbon stays out of the
@@ -279,12 +289,14 @@ fn secure_fn() -> Option<unsafe extern "C" fn() -> u8> {
         SLOT.store(if ptr == 0 { 1 } else { ptr }, Ordering::Release);
     });
     match SLOT.load(Ordering::Acquire) {
-        ptr if ptr > 1 => Some(unsafe { std::mem::transmute(ptr) }),
+        ptr if ptr > 1 => {
+            Some(unsafe { std::mem::transmute::<usize, unsafe extern "C" fn() -> u8>(ptr) })
+        }
         _ => None,
     }
 }
 pub(crate) fn secure_input() -> bool {
-    secure_fn().is_some_and(|is_on| unsafe { is_on() != 0 })
+    secure_fn().is_none_or(|is_on| unsafe { is_on() != 0 })
 }
 /// Listen for keys aimed at `pid` until [`disarm`]. None when the tap is down
 /// or a watch is already listening.
@@ -300,12 +312,17 @@ pub(crate) fn subscribe(pid: i32) -> Option<KeyFeed> {
     *slot = Some(tx);
     BUS.missed.store(false, Ordering::Release);
     SELF_PID.store(std::process::id() as i32, Ordering::Relaxed);
+    BUS.until_ms.store(now_ms() + 60_000, Ordering::Release);
+    let generation = BUS.generation.fetch_add(1, Ordering::AcqRel) + 1;
     BUS.pid.store(pid, Ordering::Release);
     drop(slot);
-    Some(KeyFeed { rx })
+    Some(KeyFeed { rx, generation })
 }
-fn disarm() {
+fn disarm(generation: Option<u64>) {
     let mut slot = BUS.tx.lock().unwrap_or_else(|poison| poison.into_inner());
+    if generation.is_some_and(|g| g != BUS.generation.load(Ordering::Acquire)) {
+        return;
+    }
     BUS.pid.store(0, Ordering::Release);
     *slot = None;
     BUS.missed.store(false, Ordering::Release);
@@ -318,6 +335,11 @@ fn enqueue(raw: RawEvent) {
         return;
     };
     if BUS.pid.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    if now_ms() >= BUS.until_ms.load(Ordering::Acquire) {
+        BUS.pid.store(0, Ordering::Release);
+        BUS.missed.store(true, Ordering::Release);
         return;
     }
     let Some(tx) = slot.as_ref() else {
@@ -348,23 +370,18 @@ fn note_replay(kind: u32, event: Ref) {
         units: [0; 8],
         len: 0,
     };
-    if secure_input() {
-        raw.class = RAW_SECURE;
+    let target = unsafe { CGEventGetIntegerValueField(event, TARGET_PID) } as i32;
+    let mouse = matches!(kind, LEFT_DOWN | RIGHT_DOWN | OTHER_DOWN);
+    if mouse {
+        raw.class = RAW_MOUSE;
         enqueue(raw);
         return;
     }
-    let target = unsafe { CGEventGetIntegerValueField(event, TARGET_PID) } as i32;
-    let mouse = matches!(kind, LEFT_DOWN | RIGHT_DOWN | OTHER_DOWN);
-    if target != BUS.pid.load(Ordering::Acquire) {
+    if target > 0 && target != BUS.pid.load(Ordering::Acquire) {
         if mouse || kind == KEY_DOWN {
             raw.class = RAW_OTHER;
             enqueue(raw);
         }
-        return;
-    }
-    if mouse {
-        raw.class = RAW_MOUSE;
-        enqueue(raw);
         return;
     }
     if kind != KEY_DOWN {
@@ -387,7 +404,6 @@ pub(crate) fn decode(raw: RawEvent) -> ReplayIn {
     match raw.class {
         RAW_MOUSE | RAW_ABSTAIN => return ReplayIn::Key(Key::Abstain),
         RAW_OTHER => return ReplayIn::Leave,
-        RAW_SECURE => return ReplayIn::Secure,
         _ => {}
     }
     let text = String::from_utf16(&raw.units[..raw.len as usize]).unwrap_or_default();
@@ -454,6 +470,9 @@ fn kind_of(code: u16) -> Kind {
 unsafe extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, context: Ref) -> Ref {
     let context = &mut *(context as *mut TapContext);
     if kind == u32::MAX || kind == u32::MAX - 1 {
+        if BUS.pid.load(Ordering::Acquire) != 0 {
+            BUS.missed.store(true, Ordering::Release);
+        }
         // Disabled by timeout/user input: re-enable. A key still physically held
         // keeps its hold; only a key-up we never saw resets the gesture.
         CGEventTapEnable(context.tap, true);
@@ -594,7 +613,7 @@ impl MacHotkeys {
                     CFRelease(handles.1 as Ref);
                 }
                 TAP_UP.store(false, Ordering::Release);
-                disarm();
+                disarm(None);
                 CFMachPortInvalidate(tap);
                 CFRunLoopRemoveSource(runloop, source, kCFRunLoopDefaultMode);
                 CFRelease(source);
@@ -672,7 +691,7 @@ impl GlobalHotkeys for MacHotkeys {
 impl Drop for MacHotkeys {
     fn drop(&mut self) {
         TAP_UP.store(false, Ordering::Release);
-        disarm();
+        disarm(None);
         unsafe {
             CFMachPortInvalidate(self.tap as Ref);
             CFRunLoopStop(self.runloop as Ref);
@@ -691,6 +710,62 @@ impl Drop for MacHotkeys {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replay_decodes_keys_and_refuses_mouse_invalid_unicode_and_unknown_keys() {
+        let raw = RawEvent {
+            class: RAW_KEY,
+            keycode: 123,
+            flags: ALT,
+            units: [0; 8],
+            len: 0,
+        };
+        assert_eq!(decode(raw), ReplayIn::Key(Key::WordLeft));
+        assert_eq!(
+            decode(RawEvent {
+                keycode: 124,
+                flags: 0,
+                ..raw
+            }),
+            ReplayIn::Key(Key::Right)
+        );
+        assert_eq!(
+            decode(RawEvent {
+                keycode: 36,
+                flags: 0,
+                ..raw
+            }),
+            ReplayIn::Key(Key::Submit)
+        );
+        for class in [RAW_MOUSE, RAW_ABSTAIN] {
+            assert_eq!(
+                decode(RawEvent { class, ..raw }),
+                ReplayIn::Key(Key::Abstain)
+            );
+        }
+        assert_eq!(
+            decode(RawEvent {
+                class: RAW_OTHER,
+                ..raw
+            }),
+            ReplayIn::Leave
+        );
+        assert_eq!(
+            decode(RawEvent {
+                units: [0xd800; 8],
+                len: 1,
+                ..raw
+            }),
+            ReplayIn::Key(Key::Abstain)
+        );
+        assert_eq!(
+            decode(RawEvent {
+                keycode: 255,
+                flags: 0,
+                ..raw
+            }),
+            ReplayIn::Key(Key::Abstain)
+        );
+    }
     #[test]
     fn named_and_chord_bindings_are_distinct() {
         assert_eq!(Binding::parse("fn").flag, FN);

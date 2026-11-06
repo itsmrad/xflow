@@ -1,8 +1,9 @@
 //! Replay a terminal line from the keys pressed after a paste.
 //!
 //! The line is the pasted text and the cursor starts at its end. A paste leaves
-//! the cursor there, and the terminal buffer is not read: scrollback can hold
-//! secrets. Keystrokes exist only inside this value and are cleared by [`Line::stop`].
+//! the cursor there. This is only a proposal: before saving, a separate guarded
+//! visible-screen read must confirm it. Scrollback is never requested.
+//! Keystrokes exist only inside this value and are cleared by [`Line::stop`].
 //!
 //! These are not modeled, and tracking stops instead of guessing: vi-mode,
 //! wrapped or multi-line prompts, a line editor that rewrites the buffer
@@ -13,9 +14,8 @@
 //! A command that would move or delete past the start of the paste stops
 //! tracking: text before the paste was never seen.
 //!
-//! No Accessibility read of the terminal is done here. A bounded
-//! `AXStringForRange` check would still be a text read, and Ghostty and TUIs
-//! do not expose one.
+//! Confirmation requests only AXVisibleCharacterRange via AXStringForRange;
+//! unavailable, ambiguous or stale text saves nothing.
 
 use crate::learn::{
     caret_on, complete_on_caret, pending, word_at, COMMIT_ON_WORD_MS, COMMIT_QUIET_MS,
@@ -28,8 +28,68 @@ use std::time::Duration;
 #[async_trait]
 pub trait KeyReplay: Send {
     async fn next(&mut self) -> Option<ReplayIn>;
+    /// A fresh, guarded visible-screen read must confirm every proposed save.
+    async fn confirm(&mut self, _original: &str, _corrected: &str) -> Result<(), &'static str> {
+        Err("unconfirmed")
+    }
     /// Drop anything still queued and stop listening.
     fn stop(&mut self) {}
+}
+
+/// Only the visible range is exposed; there is no whole-value fallback.
+pub trait VisibleScreen {
+    fn safe(&self) -> bool;
+    fn visible_range(&self) -> Option<(usize, usize)>;
+    fn range(&self, start: usize, len: usize) -> Option<String>;
+}
+
+pub const MAX_VISIBLE_UTF16: usize = 16_384;
+
+/// Read once, compare in memory, then drop the visible text. Errors are tags only.
+pub fn confirm(
+    screen: &impl VisibleScreen,
+    original: &str,
+    corrected: &str,
+) -> Result<(), &'static str> {
+    if original.is_empty()
+        || corrected.is_empty()
+        || original == corrected
+        || original.chars().any(char::is_control)
+        || corrected.chars().any(char::is_control)
+        || ["[Pasted text", "[Pasted Content"]
+            .iter()
+            .any(|s| corrected.contains(s))
+    {
+        return Err("unconfirmed");
+    }
+    if !screen.safe() {
+        return Err("unsafe-screen");
+    }
+    let (start, len) = screen.visible_range().ok_or("visible-range")?;
+    if len == 0 || len > MAX_VISIBLE_UTF16 || start.checked_add(len).is_none() {
+        return Err("visible-bound");
+    }
+    if !screen.safe() {
+        return Err("unsafe-screen");
+    }
+    let visible = screen.range(start, len).ok_or("visible-read")?;
+    if !screen.safe() || screen.visible_range() != Some((start, len)) {
+        return Err("unsafe-screen");
+    }
+    if visible.encode_utf16().count() != len {
+        return Err("visible-count");
+    }
+    let unique = visible
+        .char_indices()
+        .filter(|(i, _)| visible[*i..].starts_with(corrected))
+        .take(2)
+        .count()
+        == 1;
+    if unique && !visible.contains(original) {
+        Ok(())
+    } else {
+        Err("unconfirmed")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,10 +192,17 @@ pub struct Line {
 impl Line {
     /// Cursor at the end of `pasted`.
     pub fn new(pasted: &str) -> Self {
+        let live = !pasted.is_empty()
+            && pasted.encode_utf16().count() <= MAX_VISIBLE_UTF16
+            && !pasted.chars().any(char::is_control);
         Self {
-            cursor: pasted.len(),
-            text: pasted.to_owned(),
-            live: true,
+            cursor: if live { pasted.len() } else { 0 },
+            text: if live {
+                pasted.to_owned()
+            } else {
+                String::new()
+            },
+            live,
         }
     }
 
@@ -190,7 +257,9 @@ impl Line {
     }
 
     fn insert(&mut self, s: &str) -> Applied {
-        if s.chars().any(char::is_control) {
+        if s.chars().any(char::is_control)
+            || self.text.encode_utf16().count() + s.encode_utf16().count() > MAX_VISIBLE_UTF16
+        {
             return self.halt();
         }
         self.text.insert_str(self.cursor, s);
@@ -465,7 +534,148 @@ mod tests {
     use super::*;
     use crate::config::{DictionaryConfig, Replacement};
     use crate::learn::{review, Adopted};
+    use std::cell::Cell;
     use Kind::*;
+
+    struct Screen {
+        text: Option<String>,
+        len: usize,
+        reads: Cell<usize>,
+        secure: Cell<bool>,
+        secure_during_read: bool,
+    }
+    impl Screen {
+        fn new(text: &str) -> Self {
+            Self {
+                text: Some(text.into()),
+                len: text.encode_utf16().count(),
+                reads: Cell::new(0),
+                secure: Cell::new(false),
+                secure_during_read: false,
+            }
+        }
+    }
+    impl VisibleScreen for Screen {
+        fn safe(&self) -> bool {
+            !self.secure.get()
+        }
+        fn visible_range(&self) -> Option<(usize, usize)> {
+            Some((500_000, self.len))
+        }
+        fn range(&self, start: usize, len: usize) -> Option<String> {
+            assert_eq!(
+                (start, len),
+                (500_000, self.len),
+                "only the visible range, not scrollback"
+            );
+            self.reads.set(self.reads.get() + 1);
+            if self.secure_during_read {
+                self.secure.set(true);
+            }
+            self.text.clone()
+        }
+    }
+    #[test]
+    fn visible_confirmation_is_unique_literal_and_bounded() {
+        let cases = [
+            (
+                "kubectl rolaut status deployment/api",
+                "kubectl rollout status deployment/api",
+                "$ kubectl rollout status deployment/api",
+                true,
+            ),
+            (
+                "git rebsae origin/main",
+                "git rebase origin/main",
+                "$ git rebase origin/main\n$ git rebase origin/main",
+                false,
+            ),
+            (
+                "Aisha fixed Postgress",
+                "Aisha fixed PostgreSQL",
+                "Aisha fixed Postgress\nAisha fixed PostgreSQL",
+                false,
+            ),
+            (
+                "Kal Kubernetis deploy karna",
+                "Kal Kubernetes deploy karna",
+                "❯ [Pasted text #1 +4 lines]",
+                false,
+            ),
+            (
+                "ask Claud to review",
+                "ask Claude to review",
+                "ask Claude\nto review",
+                false,
+            ),
+            (
+                "use kubernetis",
+                "use Kubernetes",
+                "use kuberneKubernetes",
+                false,
+            ),
+            (
+                "Priyanca approved OAuth",
+                "Priyanka approved OAuth",
+                "❯ Priyanka approved OAuth",
+                true,
+            ),
+            (
+                "post gres",
+                "[Pasted Content 900 chars]",
+                "[Pasted Content 900 chars]",
+                false,
+            ),
+        ];
+        for (original, corrected, visible, expected) in cases {
+            let screen = Screen::new(visible);
+            assert_eq!(confirm(&screen, original, corrected).is_ok(), expected);
+            assert!(screen.reads.get() <= 1);
+        }
+        let mut screen = Screen::new("José fixed useEffect");
+        screen.len = MAX_VISIBLE_UTF16 + 1;
+        assert_eq!(
+            confirm(&screen, "Jose fixed useEffect", "José fixed useEffect"),
+            Err("visible-bound")
+        );
+        assert_eq!(screen.reads.get(), 0);
+        screen.len = 10;
+        assert_eq!(
+            confirm(&screen, "Jose fixed useEffect", "José fixed useEffect"),
+            Err("visible-count")
+        );
+        screen.text = None;
+        assert_eq!(
+            confirm(&screen, "Jose fixed useEffect", "José fixed useEffect"),
+            Err("visible-read")
+        );
+    }
+    #[test]
+    fn secure_input_before_or_during_confirmation_never_confirms() {
+        let original = "check Postgress";
+        let corrected = "check PostgreSQL";
+        let mut screen = Screen::new(corrected);
+        // The watch was armed while safe; secure input turns on during the quiet period.
+        screen.secure.set(true);
+        assert_eq!(confirm(&screen, original, corrected), Err("unsafe-screen"));
+        assert_eq!(screen.reads.get(), 0);
+        screen.secure.set(false);
+        screen.secure_during_read = true;
+        assert_eq!(confirm(&screen, original, corrected), Err("unsafe-screen"));
+        assert_eq!(screen.reads.get(), 1);
+    }
+    #[test]
+    fn multiline_and_oversized_models_abstain() {
+        for pasted in [
+            "git rebase\nkubectl rollout".to_owned(),
+            "a".repeat(MAX_VISIBLE_UTF16 + 1),
+            String::new(),
+        ] {
+            assert!(Line::new(&pasted).text().is_none());
+        }
+        let mut line = Line::new(&"a".repeat(MAX_VISIBLE_UTF16));
+        assert_eq!(line.apply(Key::Insert("x".into())), Applied::Stop);
+    }
 
     fn plain() -> Mods {
         Mods {
