@@ -3,6 +3,7 @@ pub mod context;
 #[cfg(unix)]
 pub mod daemon;
 pub mod gsettings;
+pub mod local_models;
 #[cfg(target_os = "macos")]
 mod macos_settings;
 pub mod mcp;

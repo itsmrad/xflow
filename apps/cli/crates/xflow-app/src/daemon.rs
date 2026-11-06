@@ -907,6 +907,9 @@ impl Engine {
             bail!("configuration reload is in progress");
         }
         if mode == Mode::Command && self.services.transformer.is_none() {
+            if self.config.stt.provider == xflow_providers::ON_DEVICE {
+                bail!("Command mode needs a cleanup model, and on-device speech doesn't use one. Switch to an API provider for commands (xflow providers list).");
+            }
             bail!("command mode requires a configured cleanup provider");
         }
         let (audio, tx) = (self.services.audio.clone(), completion.clone());
@@ -2768,6 +2771,11 @@ fn native_services(old: &Config, config: &Config, services: Services) -> Result<
     })
 }
 pub(crate) fn build_transformer(config: &Config) -> Result<Option<Arc<dyn TextTransformer>>> {
+    // Local only: on-device speech builds no cleanup model, so no style cleanup, command
+    // or selection rewrite and no warmup reaches the network. Dictionary rules still run.
+    if config.stt.provider == xflow_providers::ON_DEVICE {
+        return Ok(None);
+    }
     let mut cleanup = config.cleanup.clone();
     if cleanup.mode == CleanupMode::Raw
         && (cleanup.provider.is_some()
@@ -7736,6 +7744,38 @@ mod tests {
         let stop = ask(&tx, Request::Stop).await;
         assert_eq!(stop.state, State::Idle);
         assert!(stop.message.unwrap().contains("too short"));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn command_in_on_device_mode_says_to_switch_to_an_api_provider() {
+        let mut config = Config::default();
+        config.stt.provider = xflow_providers::ON_DEVICE.into();
+        let (engine, tx, rx, _, calls) = fixture(
+            config,
+            Arc::new(RecordingDesktop::default()),
+            Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
+        );
+        let task = tokio::spawn(engine.run(rx));
+        let reply = ask(
+            &tx,
+            Request::Start {
+                mode: Mode::Command,
+                context: None,
+                t0_us: None,
+                delivery: Delivery::Inject,
+                hold: false,
+            },
+        )
+        .await;
+        assert!(!reply.ok);
+        let message = reply.message.unwrap_or_default();
+        assert!(
+            message.contains("needs a cleanup model") && message.contains("API provider"),
+            "{message}"
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();

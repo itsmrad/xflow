@@ -4,8 +4,9 @@ use std::{
     io::{IsTerminal, Read},
     path::Path,
 };
+use xflow_app::config_edit;
 use xflow_core::config::{Config, SttConfig};
-use xflow_providers::{KeySource, ProviderInfo, ProviderKind};
+use xflow_providers::{KeySource, ProviderInfo, ProviderKind, ON_DEVICE};
 
 pub fn info(id: &str) -> Result<&'static ProviderInfo> {
     xflow_providers::find_provider(ProviderKind::Stt, id).ok_or_else(|| {
@@ -35,6 +36,12 @@ fn value(p: &ProviderInfo) -> serde_json::Value {
         "models":p.models.iter().map(|m| serde_json::json!({"id":m.id,"label":m.label,"note":m.note})).collect::<Vec<_>>(),
         "env_var":p.env_var,"key_url":p.key_url,"docs_url":p.docs_url,"language":p.language,"vocabulary":p.vocabulary,"local":p.local,"language_sets":xflow_providers::language_capability(&SttConfig {provider:p.id.into(),..SttConfig::default()}).unwrap_or("depends on server/model")})
 }
+fn on_device_stt() -> SttConfig {
+    SttConfig {
+        provider: ON_DEVICE.into(),
+        ..SttConfig::default()
+    }
+}
 /// Switching presets must not retain another provider's endpoint, model or credential override.
 pub fn select(stt: &mut SttConfig, id: &str, model: Option<&str>) -> Result<()> {
     info(id)?;
@@ -57,34 +64,63 @@ pub fn run(path: &Path, action: Option<&args::Providers>, out: &Output) -> Resul
     match action.unwrap_or(&List) {
         List => {
             let providers = xflow_providers::stt_providers();
+            let on_device = cfg.stt.provider == ON_DEVICE;
             if out.json {
-                out.data(
-                    &providers
-                        .iter()
-                        .map(|p| {
-                            let mut v = value(p);
-                            v["current"] = (p.id == cfg.stt.provider).into();
-                            v
-                        })
-                        .collect::<Vec<_>>(),
-                    "",
-                )?;
+                let mut rows: Vec<_> = providers
+                    .iter()
+                    .map(|p| {
+                        let mut v = value(p);
+                        v["current"] = (p.id == cfg.stt.provider).into();
+                        v
+                    })
+                    .collect();
+                let model = xflow_providers::on_device::MODEL_ID;
+                rows.push(serde_json::json!({"id":ON_DEVICE,"name":"On-device (Apple Silicon)","endpoint":"","default_model":model,
+                    "models":[{"id":model,"label":"Parakeet TDT 0.6B v3","note":"Install with xflow models install; runs on this Mac"}],
+                    "env_var":null,"key_url":"","docs_url":"","language":true,"vocabulary":false,"local":true,
+                    "language_sets":"auto-detect (25 European languages)","current":on_device}));
+                out.data(&rows, "")?;
             } else {
-                out.table(
-                    &["PROVIDER", "NAME", "DEFAULT MODEL", "CURRENT"],
-                    &providers
-                        .iter()
-                        .map(|p| {
-                            vec![
-                                p.id.into(),
-                                p.name.into(),
-                                p.default_model.into(),
-                                if p.id == cfg.stt.provider { "*" } else { "" }.into(),
-                            ]
-                        })
-                        .collect::<Vec<_>>(),
-                )?;
+                let mut rows: Vec<Vec<String>> = providers
+                    .iter()
+                    .map(|p| {
+                        vec![
+                            p.id.into(),
+                            p.name.into(),
+                            p.default_model.into(),
+                            if p.id == cfg.stt.provider { "*" } else { "" }.into(),
+                        ]
+                    })
+                    .collect();
+                rows.push(vec![
+                    ON_DEVICE.into(),
+                    "On-device (Apple Silicon)".into(),
+                    xflow_providers::on_device::MODEL_ID.into(),
+                    if on_device { "*" } else { "" }.into(),
+                ]);
+                out.table(&["PROVIDER", "NAME", "DEFAULT MODEL", "CURRENT"], &rows)?;
             }
+        }
+        Info { provider } if provider == ON_DEVICE => {
+            let facts = xflow_app::local_models::facts();
+            let model = xflow_providers::on_device::MODEL_ID;
+            let next = if !facts.supported {
+                "Keep an API provider: xflow providers list".to_string()
+            } else if !facts.installed {
+                format!("Install: xflow models install {model}")
+            } else {
+                "Use: xflow providers use on-device".to_string()
+            };
+            out.data(
+                &serde_json::json!({"id":ON_DEVICE,"name":facts.name,"model":model,
+                    "languages":facts.languages,"unsupported_languages":facts.warning,"download_bytes":facts.download_bytes,
+                    "license":facts.license,"fit":facts.fit,"supported":facts.supported,"installed":facts.installed,
+                    "current":cfg.stt.provider == ON_DEVICE}),
+                &format!(
+                    "On this Mac (offline): speech never leaves this computer; no key needed.\n{}\n{next}",
+                    facts.lines().join("\n")
+                ),
+            )?;
         }
         Info { provider } => {
             let p = info(provider)?;
@@ -121,7 +157,9 @@ pub fn run(path: &Path, action: Option<&args::Providers>, out: &Output) -> Resul
             }
         }
         Test { provider } => {
-            if let Some(id) = provider {
+            if provider.as_deref() == Some(ON_DEVICE) {
+                cfg.stt = on_device_stt();
+            } else if let Some(id) = provider {
                 select(&mut cfg.stt, id, None)?;
             }
             let report = check(&cfg)?;
@@ -138,9 +176,27 @@ pub fn run(path: &Path, action: Option<&args::Providers>, out: &Output) -> Resul
             let lock = config::lock(path)?;
             // Read again under the lock: an edit made meanwhile (a learned word) is kept.
             let mut file = config::load(path)?;
-            let mut stt = file.config().map_err(Error::config)?.stt;
-            select(&mut stt, provider, model.as_deref())?;
-            file.set_typed("stt", &stt).map_err(Error::config)?;
+            let current = file.config().map_err(Error::config)?.stt;
+            if provider == ON_DEVICE {
+                if model.is_some() {
+                    return Err(Error::new(
+                        2,
+                        "On-device speech has one model",
+                        "Omit --model",
+                    ));
+                }
+                super::local_models::ready_to_use()?;
+                config_edit::use_on_device(&mut file).map_err(Error::config)?;
+            } else {
+                // Back to the API route saved when on-device was chosen, then the new choice.
+                let mut stt = if current.provider == ON_DEVICE {
+                    config_edit::leave_on_device(&mut file).map_err(Error::config)?
+                } else {
+                    current
+                };
+                select(&mut stt, provider, model.as_deref())?;
+                file.set_typed("stt", &stt).map_err(Error::config)?;
+            }
             config::commit(&file, lock, out)?;
         }
     }
@@ -318,7 +374,9 @@ pub fn transcribe(
     out: &Output,
 ) -> Result<()> {
     let mut cfg = config::load(path)?.config().map_err(Error::config)?;
-    if let Some(provider) = provider {
+    if provider == Some(ON_DEVICE) {
+        cfg.stt = on_device_stt();
+    } else if let Some(provider) = provider {
         select(&mut cfg.stt, provider, model)?;
     } else if let Some(model) = model {
         cfg.stt.model = Some(model.into());
@@ -376,5 +434,21 @@ mod tests {
         select(&mut cfg, "openai", None).unwrap();
         assert!(cfg.endpoint.is_none() && cfg.api_key_env.is_none() && cfg.model.is_none());
         assert!(select(&mut cfg, "nonexistent", None).is_err());
+    }
+    #[test]
+    fn leaving_on_device_for_a_different_provider_restores_then_applies_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[stt]\nprovider = \"groq\"\nmodel = \"whisper-large-v3\"\napi_key_env = \"MY_GROQ\"\nlanguages = [\"en\"]\n").unwrap();
+        let mut file = config_edit::ConfigFile::load(&path).unwrap();
+        config_edit::use_on_device(&mut file).unwrap();
+        let mut stt = config_edit::leave_on_device(&mut file).unwrap();
+        select(&mut stt, "openai", None).unwrap();
+        file.set_typed("stt", &stt).unwrap();
+        let cfg = file.config().unwrap();
+        assert_eq!(cfg.stt.provider, "openai");
+        assert!(cfg.stt.model.is_none() && cfg.stt.api_key_env.is_none());
+        assert_eq!(cfg.stt.languages, ["en"]);
+        assert!(cfg.on_device.previous_api.is_none());
     }
 }

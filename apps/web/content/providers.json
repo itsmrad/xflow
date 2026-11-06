@@ -309,5 +309,26 @@
         "note": "Higher accuracy, more memory"
       }
     ]
+  },
+  {
+    "id": "on-device",
+    "name": "On-device (Apple Silicon)",
+    "kinds": [
+      "STT"
+    ],
+    "defaultModel": "parakeet-tdt-0.6b-v3",
+    "local": true,
+    "vocabulary": false,
+    "envVar": null,
+    "docs": null,
+    "keyUrl": null,
+    "href": "/docs/providers/local-and-offline",
+    "models": [
+      {
+        "id": "parakeet-tdt-0.6b-v3",
+        "label": "Parakeet TDT 0.6B v3",
+        "note": "Install with xflow models install; runs on this Mac"
+      }
+    ]
   }
 ]

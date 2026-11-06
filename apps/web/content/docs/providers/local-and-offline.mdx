@@ -1,9 +1,29 @@
 ---
 title: Local and offline
-description: Point xflow at a speech server on your own machine, and refuse every remote endpoint.
+description: Transcribe on your Mac with the on-device model, point xflow at a speech server you run, and refuse every remote endpoint.
 ---
 
-xflow can send audio to a server you run yourself instead of a cloud provider. No model is bundled or silently downloaded — you install and run the server.
+xflow can transcribe on your Mac with a model you install once, or send audio to a server you run yourself instead of a cloud provider. Nothing is bundled or silently downloaded.
+
+## On-device speech (Apple Silicon)
+
+On an Apple Silicon Mac with macOS 14 or newer, xflow can run NVIDIA Parakeet TDT 0.6B v3 through Core ML. Audio never leaves the Mac.
+
+```sh
+xflow models install parakeet-tdt-0.6b-v3        # 483 MB, pinned and SHA-256 verified
+xflow providers use on-device
+xflow doctor                                      # helper and model ready (does not load the model)
+```
+
+In `xflow setup` (or `xflow tui`), the speech step lists API services, **On this Mac (offline)** and a local server you already run. Choosing On this Mac skips the API key and shows the model, its 25 languages, the unsupported ones, the download size, the license and whether this Mac can run it. Nothing downloads until you press Enter on **Install**; the pane then shows bytes, total and speed, `x` cancels (the partial download is kept, so Install resumes it) and a failed download offers Retry. Once installed, Enter switches to it and setup moves on to the microphone. In Settings › Speech › Service the same pane appears for the On this Mac row, with `d` to remove the model after a confirmation; removing the model you use switches back to your saved API settings first. API services keep working while the model is missing or downloading. `xflow providers info on-device` prints the same facts.
+
+The download runs only when you ask, shows bytes and speed, and resumes if interrupted (press Ctrl-C and run the command again). It needs free space of twice the model plus 1 GiB. To install from a copy you already have, use `xflow models install parakeet-tdt-0.6b-v3 --from DIR` with the same files; they are verified the same way. `xflow models remove parakeet-tdt-0.6b-v3` deletes only the model and any partial download; keys, settings and history stay.
+
+Switching to `on-device` saves your current `[stt]` settings in `[on_device.previous_api]`. API keys, cleanup and style settings stay stored but are not used: in on-device mode xflow makes no network request for dictation, has no cloud backup or retry, and skips cleanup, styles and command or selection rewriting. Dictionary replacements and spoken formatting still apply. `xflow providers use <provider>` (or choosing a service in Settings, which also offers a saved custom server) restores the saved settings, then switches to the provider you name; with no saved settings only the provider changes. Command mode needs a cleanup model, so in on-device mode it asks you to switch to an API provider for commands.
+
+The first dictation after install can take about 20 seconds while macOS prepares the model; later starts take under a second. The helper starts on first use and exits after 30 seconds idle. `xflow transcribe FILE.wav` uses the on-device model too (WAV only).
+
+Parakeet covers 25 European languages and detects the language itself. A saved Hindi or Japanese preference (`stt.language` or `stt.languages`) blocks the switch. Intel Macs, Linux and Windows report that on-device speech is not supported.
 
 ## Inspect on-device models
 
@@ -14,7 +34,7 @@ xflow models --on-device --json
 
 This read-only report works offline. It shows native Mac hardware facts, available space on the intended model volume, and one curated model: NVIDIA Parakeet TDT 0.6B v3. The JSON includes its immutable Core ML revision and the complete 21-file size and SHA-256 manifest. Missing facts appear as `unknown`.
 
-Apple Silicon with macOS 14 or newer meets the hardware requirements, but **local transcription is not ready**: the runtime is not installed and total system memory use has not been qualified. Intel's CPU helper is unvalidated; older macOS and other architectures are incompatible with this artifact. Linux reports an unsupported managed runtime. Low disk space produces an advisory warning. No speed or smooth-fit promise follows from the hardware report.
+Apple Silicon with macOS 14 or newer meets the hardware requirements; the report says `ready` once the model is installed and the helper is present. Total system memory use has not been qualified. Intel's CPU helper is unvalidated; older macOS and other architectures are incompatible with this artifact. Linux reports an unsupported managed runtime. Low disk space produces an advisory warning. No speed or smooth-fit promise follows from the hardware report.
 
 Parakeet supports the 25 languages listed in the report. Hindi, Hindi-English mixtures and Japanese are unsupported. Its 483,105,645-byte download size covers model files only; helper, notices, filesystem allocation and Core ML caches need additional space. The provisional staging allowance is twice the model bytes plus 1 GiB, pending full installation measurements.
 
@@ -22,7 +42,7 @@ The [pinned NVIDIA model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v
 
 Model attribution: NVIDIA, Parakeet TDT 0.6B v3; Core ML conversion by FluidInference, under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Conversion changes include Core ML format and 6-bit LUT palettization of the original encoder; xflow has not modified these model files. Redistribution must preserve attribution, source/license links and modification notices. The planned FluidAudio dependency has an [Apache 2.0 license at its pinned revision](https://github.com/FluidInference/FluidAudio/blob/ee78635d23d52379117554ba72358b65a0612447/LICENSE), verified on 2026-11-05; it is not built or linked into xflow.
 
-The report does not select a provider, change settings, access credentials, install files or make network requests. Downloads and explicit metadata refresh are deferred. `xflow models local` continues to list models for the existing local server below.
+The report does not select a provider, change settings, access credentials, install files or make network requests. Explicit metadata refresh is not available. `xflow models local` continues to list models for the existing local server below.
 
 ## A local OpenAI-compatible server
 
