@@ -17,3 +17,4 @@ node_modules/
 __pycache__/
 benchmarks/languages/audio/
 graphify-out/
+tools/local-stt/coreml/.build/
