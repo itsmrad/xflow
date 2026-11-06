@@ -166,10 +166,14 @@ impl Sandbox {
             .ro()
             .query_row("SELECT pid FROM worker", [], |r| r.get(0))
             .ok()?;
-        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-        String::from_utf8_lossy(&cmdline)
-            .contains("meeting-worker")
-            .then_some(pid as i32)
+        // macOS has no /proc. ps is available on both supported test platforms.
+        let command = Command::new("/bin/ps")
+            .args(["-p", &pid.to_string(), "-o", "args="])
+            .output()
+            .ok()?;
+        (command.status.success()
+            && String::from_utf8_lossy(&command.stdout).contains("meeting-worker"))
+        .then_some(pid as i32)
     }
     fn wait_idle(&self, limit: Duration) {
         let start = Instant::now();
@@ -323,13 +327,8 @@ fn kill9(pid: i32) {
     }
 }
 fn session_of(pid: i32) -> Option<i32> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    stat.rsplit(')')
-        .next()?
-        .split_whitespace()
-        .nth(3)?
-        .parse()
-        .ok()
+    let session = unsafe { libc::getsid(pid) };
+    (session >= 0).then_some(session)
 }
 
 #[test]
@@ -428,7 +427,7 @@ fn killed_worker_is_resumed_by_status_without_loss_or_duplicates() {
     }
     let acked = invariants(&sandbox, &Acked::new(), &[]);
     kill9(sandbox.worker_pid().expect("worker running"));
-    std::thread::sleep(Duration::from_millis(200));
+    sandbox.wait_idle(Duration::from_secs(30));
     assert!(!sandbox.worker_running(), "the kernel released the lock");
     let acked = invariants(&sandbox, &acked, &[]);
     // A second start while one runs is a no-op.
@@ -611,7 +610,7 @@ fn random_process_kills_lose_and_duplicate_nothing() {
             kill9(worker);
             kills_worker += 1;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        sandbox.wait_idle(Duration::from_secs(30));
         if !sandbox.db().exists() {
             continue;
         }

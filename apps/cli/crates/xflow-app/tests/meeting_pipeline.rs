@@ -923,3 +923,64 @@ fn fresh_30_second_wav_tail_survives_recovery() {
 fn tiny_wav_tails_survive_recovery_without_accepted_text() {
     assert_tiny_tail_retained(800);
 }
+
+fn assert_legacy_unlink_intent_retained(job_state: &str) {
+    let s = scratch();
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["tiny.wav".into()],
+            expected_ms: None,
+            queued: false,
+        },
+        limits(),
+    )
+    .unwrap();
+    capture.push(0, &samples(0, 0, 800)).unwrap();
+    let meeting = capture.finish().unwrap();
+    let files = audio_files(&s.db);
+    assert_eq!(files.len(), 1);
+    let bytes = std::fs::read(&files[0]).unwrap();
+    let db = Connection::open(&s.db).unwrap();
+    // Old release committed this intent before a crash, without accepted text.
+    db.execute(
+        "UPDATE jobs SET state=?1,error='under 100 ms; not sent'",
+        [job_state],
+    )
+    .unwrap();
+    db.execute("UPDATE pieces SET state='unlink_pending'", [])
+        .unwrap();
+    drop(db);
+    for _ in 0..2 {
+        journal::recover(&s.db).unwrap();
+        assert_eq!(
+            std::fs::read(&files[0]).expect("legacy unprocessed tail deleted"),
+            bytes
+        );
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM pieces WHERE state='ready'"),
+            1
+        );
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM jobs WHERE state='retained'"),
+            1
+        );
+        assert!(texts(&s.db, &meeting).is_empty());
+    }
+    // Explicit user deletion still removes retained private audio.
+    let store = MeetingStore::at(s.db.clone());
+    store.delete(&meeting).unwrap();
+    journal::recover(&s.db).unwrap();
+    assert!(!files[0].exists());
+}
+
+#[test]
+fn legacy_abandoned_tail_with_unlink_intent_is_retained() {
+    assert_legacy_unlink_intent_retained("abandoned");
+}
+
+#[test]
+fn legacy_already_upgraded_tail_with_unlink_intent_is_retained() {
+    assert_legacy_unlink_intent_retained("retained");
+}

@@ -781,6 +781,11 @@ fn plan_jobs(
 /// is still capturing, a piece reaching into the next window's 2 s overlap
 /// waits for that window. Run inside the accepting transaction.
 pub(crate) fn release_pieces(db: &Connection, meeting: i64) -> Result<usize> {
+    // Old versions allowed abandoned jobs to authorize unlink; revoke and revalidate.
+    db.execute(
+        "UPDATE pieces SET state='ready' WHERE meeting_id=?1 AND state='unlink_pending'",
+        [meeting],
+    )?;
     const OVERLAPS: &str = "j.meeting_id=pieces.meeting_id AND j.source_idx=pieces.source_idx AND j.overlap_sample<pieces.start_sample+pieces.samples AND j.end_sample>pieces.start_sample";
     Ok(db.execute(&format!(
         "UPDATE pieces SET state='unlink_pending' WHERE meeting_id=?1 AND state IN ('ready','missing')
@@ -794,6 +799,9 @@ pub(crate) fn release_pieces(db: &Connection, meeting: i64) -> Result<usize> {
 /// The deferred unlink after a durable result: remove files, fsync the
 /// directory, then forget the rows. Safe to repeat after a crash.
 pub(crate) fn unlink_released(db: &Connection, db_path: &Path, meeting: i64) -> Result<usize> {
+    let tx = db.unchecked_transaction()?;
+    release_pieces(&tx, meeting)?;
+    tx.commit()?;
     let store = store_id(db)?;
     let dir = meeting_dir(&spool_root(db_path), &store, meeting);
     let mut statement = db.prepare(
