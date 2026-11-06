@@ -194,27 +194,26 @@ impl App {
         }
         Ok(vec![Effect::RemoveModel])
     }
-    /// The pane's body text: facts, then what is happening now.
+    /// Current state first, so short terminals keep progress and recovery visible.
     pub fn on_device_text(&self, removing: bool, error: Option<&str>) -> String {
         let Some(facts) = &self.facts else {
-            return String::new();
+            return "Model information unavailable. Esc goes back.".into();
         };
-        let mut lines = vec![
-            "Speech never leaves this computer and needs no API key.".to_string(),
-            String::new(),
-        ];
-        lines.extend(facts.lines());
-        lines.push(String::new());
-        lines.push(status(facts, &self.install, &self.config.stt.provider));
+        let mut lines = vec![];
         if removing {
             lines.push(format!(
-                "Remove the model ({}) from this Mac? Enter removes it, Esc keeps it.",
+                "Remove the model ({})? Enter removes it; Esc keeps it.",
                 crate::local_models::size(facts.download_bytes)
             ));
         }
         if let Some(error) = error {
-            lines.push(error.to_string());
+            lines.push(format!("Error: {error}"));
         }
+        lines.push(status(facts, &self.install, &self.config.stt.provider));
+        lines.push(String::new());
+        lines.push("Speech never leaves this computer and needs no API key.".into());
+        lines.push(String::new());
+        lines.extend(facts.lines());
         lines.join("\n")
     }
 }
