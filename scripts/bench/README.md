@@ -199,25 +199,27 @@ the median of their medians. Each daemon runs its own copy of the binary, so no
 two share text pages, which would split their PSS. It fails when:
 
 - a binary exceeds its target's ceiling: `floor(result.binary_bytes × 1.01)`
-  (`limits.binary_pct = 1`). Current Linux ceilings are **11,377,682 B** for `xflow`
-  and **12,839,063 B** for `xflowd`, about 1% above the matching receipt;
+  (`limits.binary_pct = 1`). Current Linux ceilings are **11,379,362 B** for `xflow`
+  and **12,966,533 B** for `xflowd`, about 1% above the matching receipt;
 - idle tree PSS grows by more than min(`limits.pss_kib`, `limits.pss_pct`);
 - idle tree CPU exceeds `limits.cpu_percent` of one core;
 - warm startup p50 exceeds the absolute `limits.startup_ms` budget. No relative
   timing is gated, so runner noise can't fail it;
 - any helper process is running at idle.
 
-The `xflowd` binary baseline uses the single [CI receipt from run 42154746953](https://github.com/itsmrad/xflow/actions/runs/42154746953/attempts/1)
-at merge commit `100a18c9e09b7e02c261a1e40aa6536599d1ffd3` (PR head `8ba3db8`).
-Since `71e4aa6`, the daemon grew 2.68% and the CLI 1.58%, exceeding the new 1%
-guard; the old 5% allowance hid that growth. That update kept 1% headroom.
+Fresh combined [PR #159 receipt](https://github.com/itsmrad/xflow/actions/runs/42227481151/attempts/1) at synthetic merge `2017a4336436ceb495716672b3c39700193dc18c`
+(PR head `477f537`, base `40a566a`) supplies the binary baselines. Against
+[main `40a566a`](https://github.com/itsmrad/xflow/actions/runs/42227023280/attempts/1):
 
-The `xflow` binary baseline uses the single [CI receipt from run 42212391796](https://github.com/itsmrad/xflow/actions/runs/42212391796/attempts/1)
-at merge commit `c742493f5c5055aebb77d1d3d53ab821516dee8f` (PR head `03b490f`), the
-MCP meeting tools (#165). These read-only tools run in the CLI, so it grew from
-11,149,960 B (on-device speech-to-text's receipt, run 42189270370) to 11,265,032 B.
-The daemon measured 12,596,872 B in the same receipt, under
-its 12,597,471 B ceiling, which stays as it was.
+- `xflowd`: 12,788,232 → 12,838,152 B (+49,920 B, +0.3904%).
+- `xflow`: 11,266,696 → 11,266,696 B (+0 B, +0.0000%).
+
+The daemon includes microphone fanout, the bounded meeting queue and independent lease lifecycle code,
+integrated with #156. These are whole-binary measurements, not per-symbol attribution.
+No meeting journal engine is added. Both receipts use rustc 1.99.1 (58cf8f9c3 2026-10-13),
+`x86_64-unknown-linux-gnu`, `--release --locked`, no extra features, fat LTO,
+one codegen unit, stripping, unwind panics and default opt-level 3.
+The single-receipt binary refresh is explicitly authorized; the 1% allowance is unchanged.
 
 Runtime baseline values and budgets are unchanged. The three original receipts
 remain intact in `runtime_runs` in the JSON: run 41375047607, attempts 1–3 at
@@ -227,11 +229,11 @@ The generated summary below describes only the current receipt in `runs`,
 including its observed runtime values; one CI run is not three new CI replicates:
 
 <!-- scoreboard:begin -->
-Generated from [`ci-baseline.json`](../../docs/benchmarks/ci-baseline.json) by `scoreboard.py render`; do not edit by hand. 1 CI runs of `c742493` on AMD EPYC 9V45 96-Core Processor, 4 CPUs ([1](https://github.com/itsmrad/xflow/actions/runs/42212391796/attempts/1)):
+Generated from [`ci-baseline.json`](../../docs/benchmarks/ci-baseline.json) by `scoreboard.py render`; do not edit by hand. 1 CI runs of `2017a43` on AMD EPYC 7763 64-Core Processor, 4 CPUs ([1](https://github.com/itsmrad/xflow/actions/runs/42227481151/attempts/1)):
 
-- Idle tree PSS: run medians 10,005–10,005 KiB (0 %), per-launch medians 9,840–10,085 KiB (2 %). The baseline is 9,873 KiB and the gate allows +987 KiB, 4.0× the per-launch spread.
-- Binaries: `xflow` 11,265,032 B in every run; `xflowd` 12,596,872 B in every run. The gate allows +1 %.
-- Warm startup p50: 1.9–1.9 ms against the absolute 100 ms budget; idle CPU at most 0.0000 % against 0.1 %.
+- Idle tree PSS: run medians 10,114–10,114 KiB (0 %), per-launch medians 9,857–10,356 KiB (5 %). The baseline is 9,873 KiB and the gate allows +987 KiB, 2.0× the per-launch spread.
+- Binaries: `xflow` 11,266,696 B in every run; `xflowd` 12,838,152 B in every run. The gate allows +1 %.
+- Warm startup p50: 2.7–2.7 ms against the absolute 100 ms budget; idle CPU at most 0.0000 % against 0.1 %.
 <!-- scoreboard:end -->
 
 Growth beyond a ceiling requires an **explicit budget change in that PR**, with

@@ -61,6 +61,71 @@ pub struct AudioClip {
     pub channels: u16,
 }
 
+/// Frames a meeting subscriber did not receive. Sequence bounds are inclusive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureGap {
+    pub from_sequence: u64,
+    pub to_sequence: u64,
+    pub frames: u64,
+}
+
+/// One native capture chunk, before resampling. Only fields known at the
+/// microphone: no session id and no wall clock.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaptureEnvelope {
+    pub generation: u64,
+    pub source_id: u64,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub epoch: u64,
+    pub host_us: u64,
+    pub frame_offset: u64,
+    pub frame_count: u32,
+    pub sequence: u64,
+    pub gap: Option<CaptureGap>,
+    /// Interleaved native PCM for `frame_count` frames.
+    pub samples: Vec<f32>,
+}
+
+/// What a meeting drain or stop observed. `stale` means this generation no
+/// longer owns the lease and nothing was consumed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeetingPull {
+    pub stale: bool,
+    pub envelopes: Vec<CaptureEnvelope>,
+    pub fault: Option<String>,
+}
+
+impl MeetingPull {
+    pub fn stale() -> Self {
+        Self {
+            stale: true,
+            envelopes: Vec::new(),
+            fault: None,
+        }
+    }
+}
+
+/// Why a recording-config change ends a meeting lease. Dictation keeps the new
+/// settings either way. `None` when the two configs are the same.
+pub fn meeting_blocked_by_dictation(
+    old: &config::RecordingConfig,
+    next: &config::RecordingConfig,
+) -> Option<&'static str> {
+    if old == next {
+        return None;
+    }
+    if next.ignore_speakers {
+        return Some("meeting capture stopped: dictation uses speaker cancellation; dictation settings were kept");
+    }
+    if next.device != old.device {
+        return Some(
+            "meeting capture stopped: dictation switched microphone; dictation settings were kept",
+        );
+    }
+    Some("meeting capture stopped: dictation capture settings changed and dictation keeps priority")
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionOptions {
     pub language: Option<String>,
@@ -226,6 +291,20 @@ pub trait AudioCapture: Send + Sync {
     /// segments with bounded memory. `None`: not supported or nothing captured.
     async fn drain(&self) -> Result<Option<AudioClip>> {
         Ok(None)
+    }
+    /// Why `next` cannot keep a meeting lease. `None` when no lease is held.
+    /// Does not change dictation settings.
+    fn meeting_conflict(
+        &self,
+        _old: &config::RecordingConfig,
+        _next: &config::RecordingConfig,
+    ) -> Option<String> {
+        None
+    }
+    /// Ends a meeting lease with a reason its subscriber can read. No-op when
+    /// no lease is held. Does not change dictation capture.
+    fn end_meeting(&self, reason: &str) {
+        let _ = reason;
     }
 }
 
@@ -486,7 +565,7 @@ pub trait Overlay: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{log_enabled, stable_hash};
+    use super::{config, log_enabled, meeting_blocked_by_dictation, stable_hash};
     use super::{read_field, BoundedReader, FieldSource, ReadGate, MAX_FIELD_UTF16};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -710,5 +789,29 @@ mod tests {
         assert!(log_enabled("warn", None) && log_enabled("error", None));
         assert!(!log_enabled("debug", Some("info")));
         assert!(!log_enabled("debug", Some("bogus")));
+    }
+
+    #[test]
+    fn dictation_change_ends_a_meeting_without_rewriting_dictation_settings() {
+        let old = config::RecordingConfig::default();
+        let mut next = old.clone();
+        assert!(meeting_blocked_by_dictation(&old, &next).is_none());
+        next.ignore_speakers = true;
+        assert!(meeting_blocked_by_dictation(&old, &next)
+            .unwrap()
+            .contains("speaker cancellation"));
+        assert!(!old.ignore_speakers && next.ignore_speakers);
+        next = old.clone();
+        next.device = Some("USB".into());
+        assert!(meeting_blocked_by_dictation(&old, &next)
+            .unwrap()
+            .contains("switched microphone"));
+        assert!(old.device.is_none());
+        next = old.clone();
+        next.silence_threshold = 0.2;
+        assert!(meeting_blocked_by_dictation(&old, &next)
+            .unwrap()
+            .contains("settings changed"));
+        assert!((next.silence_threshold - old.silence_threshold).abs() > 0.0);
     }
 }
