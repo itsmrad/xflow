@@ -1,7 +1,7 @@
  xflow  ·  History                                                                                               ✓ Done
 ╭────────────────╮╭ History ────────────────────────────────────────────────╮╭ Details ────────────────────────────────╮
 │ 1  Home        ││› The best ideas start with a conversation.              ││ The best ideas start with a             │
-│ 2  History     ││    2 min ago · Mail                                     ││ conversation.                           │
+│>2  History     ││    2 min ago · Mail                                     ││ conversation.                           │
 │ 3  Dictionary  ││                                                         ││                                         │
 │ 4  Snippets    ││                                                         ││ Said 2 min ago in Mail                  │
 │ 5  Styles      ││                                                         ││ 2.8 s of speech · ready in 0.4 s        │

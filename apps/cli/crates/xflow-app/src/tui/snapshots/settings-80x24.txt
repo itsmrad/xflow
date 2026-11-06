@@ -5,7 +5,7 @@
 │ 3  Dictionary  ││            Backup provider       None                      │
 │ 4  Snippets    ││            Model                 Recommended               │
 │ 5  Styles      ││            API key               Added                     │
-│ 6  Settings    ││            Preferred languages   Automatic                 │
+│>6  Settings    ││            Preferred languages   Automatic                 │
 │ 7  Pill        ││            Fixed language        Automatic                 │
 │ 8  Your stats  ││            Microphone            Automatic                 │
 │ 9  Check-up    ││            Ignore speaker sound  Off                       │

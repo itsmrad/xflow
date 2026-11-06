@@ -42,6 +42,23 @@ fn muted(app: &App) -> Style {
 fn accent(app: &App) -> Style {
     app.theme.base().fg(app.theme.accent)
 }
+/// Footer hint: the key is bold, the action stays muted. A sentence with no key stays plain.
+fn hint_line(label: &str, app: &App) -> Line<'static> {
+    let plain = muted(app);
+    match label.split_once(' ') {
+        Some((key, action)) if is_key(key) => Line::from(vec![
+            Span::styled(key.to_string(), plain.add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {action}"), plain),
+        ]),
+        _ => Line::from(Span::styled(label.to_string(), plain)),
+    }
+}
+fn is_key(token: &str) -> bool {
+    matches!(
+        token,
+        "Enter" | "Esc" | "Tab" | "Space" | "Del" | "↑↓" | "Type"
+    ) || token.chars().count() == 1
+}
 fn panel(
     frame: &mut Frame,
     area: Rect,
@@ -161,13 +178,18 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         ),
         header[1],
     );
-    let nav_width = if area.width >= 70 { 18 } else { 14 };
+    // 16, not 14: the border takes two cells, and ">3  Dictionary" / " 8  Your stats" need the other 14.
+    let nav_width = if area.width >= 70 { 18 } else { 16 };
     let body =
         Layout::horizontal([Constraint::Length(nav_width), Constraint::Min(1)]).split(rows[1]);
+    let selected = app.page.index();
     let items = PAGES
         .iter()
         .enumerate()
-        .map(|(i, page)| ListItem::new(format!(" {}  {}", i + 1, page.title())))
+        .map(|(i, page)| {
+            let mark = if i == selected { ">" } else { " " };
+            ListItem::new(format!("{mark}{}  {}", i + 1, page.title()))
+        })
         .collect::<Vec<_>>();
     let mut nav = ListState::default().with_selected(Some(app.page.index()));
     frame.render_stateful_widget(
@@ -199,7 +221,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
             rows[2],
         );
     }
-    // Keys line: plain words, clickable when mouse is on.
+    // Keys line: bold key, plain action, clickable when the mouse is on.
     let mut x = rows[3].x + 1;
     for (i, (label, action)) in keys(app).into_iter().enumerate() {
         let gap = if i == 0 { 0 } else { 3 };
@@ -214,7 +236,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
             );
         }
         let rect = Rect::new(x + gap, rows[3].y, width, 1);
-        frame.render_widget(Paragraph::new(label).style(muted(app)), rect);
+        frame.render_widget(Paragraph::new(hint_line(label, app)), rect);
         if let Some(action) = action {
             hits.actions.push((rect, action));
         }

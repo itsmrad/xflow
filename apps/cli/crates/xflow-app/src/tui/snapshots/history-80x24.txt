@@ -1,7 +1,7 @@
  xflow  ·  History                                                       ✓ Done
 ╭────────────────╮╭ History ───────────────────────────────────────────────────╮
 │ 1  Home        ││› The best ideas start with a conversation.                 │
-│ 2  History     ││    2 min ago · Mail                                        │
+│>2  History     ││    2 min ago · Mail                                        │
 │ 3  Dictionary  ││                                                            │
 │ 4  Snippets    ││                                                            │
 │ 5  Styles      ││                                                            │

@@ -1,6 +1,6 @@
  xflow  ·  Home                                                                                                  ✓ Done
 ╭────────────────╮╭────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 1  Home        ││                                                                                                    │
+│>1  Home        ││                                                                                                    │
 │ 2  History     ││  ✓  DONE                                                                                           │
 │ 3  Dictionary  ││     Your text is in place. It's also saved in History.                                             │
 │ 4  Snippets    ││                                                                                                    │
