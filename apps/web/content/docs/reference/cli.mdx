@@ -641,6 +641,7 @@ Commands:
   get      One meeting: provenance, sources, gaps and notes
   export   Write JSON, Markdown or timestamped text for one frozen snapshot
   delete   Delete one meeting and its audio, cancelling its transcription, or retry physical cleanup once
+  detect   Watch for a Zoom, Google Meet, Microsoft Teams or Amazon Chime call and print each decision (app name and decision only) until interrupted
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -901,6 +902,37 @@ Options:
       --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
       --config <PATH>  Read/write an alternate configuration file
   -h, --help           Print help
+```
+
+### xflow meeting detect
+
+Watch for a Zoom, Google Meet, Microsoft Teams or Amazon Chime call and print each decision (app name and decision only) until interrupted.
+
+```text
+Watch for a Zoom, Google Meet, Microsoft Teams or Amazon Chime call and print each decision (app name and decision only) until interrupted.
+
+Runs in this process and opens no microphone. Browser calls need Accessibility to read window titles. Nothing is recorded yet.
+
+Usage: xflow meeting detect [OPTIONS]
+
+Options:
+      --json
+          Emit machine-readable JSON (watch emits one object per event)
+
+  -q, --quiet
+          Suppress confirmations; requested data and errors remain visible
+
+      --color <COLOR>
+          Control colour in human output
+
+          [default: auto]
+          [possible values: auto, always, never]
+
+      --config <PATH>
+          Read/write an alternate configuration file
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ## xflow config
