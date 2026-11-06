@@ -3621,7 +3621,7 @@ async fn stream_ask(
         bail!("ask has no chat provider");
     };
     let target = chat.target();
-    let (tx, mut rx) = mpsc::channel(32);
+    let (tx, mut rx) = mpsc::channel::<String>(32);
     let publish = |text: &str| {
         let _ = desktop.send(DesktopEvent {
             state: State::Processing,
