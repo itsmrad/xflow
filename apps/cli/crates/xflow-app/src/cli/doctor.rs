@@ -311,6 +311,74 @@ fn microphone_check(used: Option<&str>, next: anyhow::Result<String>) -> Check {
     )
 }
 
+/// Checks that need the loaded configuration.
+fn config_checks(
+    path: &Path,
+    cfg: &xflow_core::config::Config,
+    status: Option<&xflow_core::ipc::Response>,
+    checks: &mut Vec<Check>,
+) -> Result<()> {
+    // Only for the configuration xflowd itself uses.
+    if let Some(learning) = status.and_then(|r| r.learning.as_ref()) {
+        if super::ipc::serves(path).unwrap_or(false) {
+            checks.push(learning_check(learning, &cfg.dictionary));
+        }
+    }
+    let used = status.and_then(|r| r.microphone.as_deref());
+    let next = if used.is_none() {
+        xflow_platform::selected_microphone(&cfg.recording)
+    } else {
+        Ok(String::new())
+    };
+    checks.push(microphone_check(used, next));
+    let known = super::provider::info(&cfg.stt.provider).map(drop);
+    let on_device = cfg.stt.provider == xflow_providers::ON_DEVICE;
+    if on_device {
+        // Finds the helper and the installed marker; never loads the model.
+        let ready = super::ipc::block_on(async { Ok(xflow_providers::on_device::check().await) })?;
+        checks.push(check(
+            "on-device speech",
+            ready.is_ok(),
+            true,
+            match ready {
+                Ok(report) => report.detail,
+                Err(error) => format!("{error:#}"),
+            },
+            "Run xflow models install parakeet-tdt-0.6b-v3, or xflow providers use <provider>",
+        ));
+    }
+    checks.push(check(
+        "provider",
+        known.is_ok() || on_device,
+        true,
+        cfg.stt.provider.clone(),
+        "Run xflow providers list and xflow providers use <provider>",
+    ));
+    let id = cfg.stt.provider.clone();
+    let env = cfg.stt.api_key_env.clone();
+    let source =
+        super::ipc::block_on(async { Ok(xflow_providers::key_status(&id, env.as_deref()).await) })?;
+    let (kind, note) = super::provider::describe(&id, &source);
+    checks.push(check(
+        "key",
+        matches!(kind, "environment" | "keystore" | "not_required"),
+        false,
+        format!("{id}: {note}"),
+        "Run xflow key status",
+    ));
+    #[cfg(target_os = "linux")]
+    if cfg.recording.ignore_speakers {
+        let default = super::system::tool("pactl", &["get-default-source"]).unwrap_or_default();
+        let sources =
+            super::system::tool("pactl", &["list", "short", "sources"]).unwrap_or_default();
+        checks.push(echo_check(
+            cfg.recording.device.as_deref(),
+            default.trim(),
+            &sources,
+        ));
+    }
+    Ok(())
+}
 pub fn run(path: &Path, out: &Output) -> Result<()> {
     let status = super::ipc::request(&xflow_core::ipc::Request::Status);
     let daemon = status
@@ -338,67 +406,7 @@ pub fn run(path: &Path, out: &Output) -> Result<()> {
         ));
     }
     if let Ok(cfg) = super::config::load(path).and_then(|f| f.config().map_err(Error::config)) {
-        // Only for the configuration xflowd itself uses.
-        if let Some(learning) = status.as_ref().ok().and_then(|r| r.learning.as_ref()) {
-            if super::ipc::serves(path).unwrap_or(false) {
-                checks.push(learning_check(learning, &cfg.dictionary));
-            }
-        }
-        let used = status.as_ref().ok().and_then(|r| r.microphone.as_deref());
-        let next = if used.is_none() {
-            xflow_platform::selected_microphone(&cfg.recording)
-        } else {
-            Ok(String::new())
-        };
-        checks.push(microphone_check(used, next));
-        let known = super::provider::info(&cfg.stt.provider).map(drop);
-        let on_device = cfg.stt.provider == xflow_providers::ON_DEVICE;
-        if on_device {
-            // Finds the helper and the installed marker; never loads the model.
-            let ready =
-                super::ipc::block_on(async { Ok(xflow_providers::on_device::check().await) })?;
-            checks.push(check(
-                "on-device speech",
-                ready.is_ok(),
-                true,
-                match ready {
-                    Ok(report) => report.detail,
-                    Err(error) => format!("{error:#}"),
-                },
-                "Run xflow models install parakeet-tdt-0.6b-v3, or xflow providers use <provider>",
-            ));
-        }
-        checks.push(check(
-            "provider",
-            known.is_ok() || on_device,
-            true,
-            cfg.stt.provider.clone(),
-            "Run xflow providers list and xflow providers use <provider>",
-        ));
-        let id = cfg.stt.provider.clone();
-        let env = cfg.stt.api_key_env.clone();
-        let source = super::ipc::block_on(async {
-            Ok(xflow_providers::key_status(&id, env.as_deref()).await)
-        })?;
-        let (kind, note) = super::provider::describe(&id, &source);
-        checks.push(check(
-            "key",
-            matches!(kind, "environment" | "keystore" | "not_required"),
-            false,
-            format!("{id}: {note}"),
-            "Run xflow key status",
-        ));
-        #[cfg(target_os = "linux")]
-        if cfg.recording.ignore_speakers {
-            let default = super::system::tool("pactl", &["get-default-source"]).unwrap_or_default();
-            let sources =
-                super::system::tool("pactl", &["list", "short", "sources"]).unwrap_or_default();
-            checks.push(echo_check(
-                cfg.recording.device.as_deref(),
-                default.trim(),
-                &sources,
-            ));
-        }
+        config_checks(path, &cfg, status.as_ref().ok(), &mut checks)?;
     }
     // Refuses a damaged keystore, or one other users can read; the detail is the fix.
     let keystore = xflow_providers::check_keystore();
