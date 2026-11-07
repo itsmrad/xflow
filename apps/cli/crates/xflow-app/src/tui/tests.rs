@@ -2126,3 +2126,113 @@ fn pill_keeps_focus_values_hits_and_actions_at_every_supported_size() {
         );
     }
 }
+
+#[test]
+fn stats_metrics_remain_readable_by_keyboard_in_short_and_narrow_terminals() {
+    let (_dir, mut app) = app();
+    app.connected = true;
+    key(&mut app, KeyCode::Char('8'));
+    assert_eq!(app.page, Page::Stats);
+    assert!(key(&mut app, KeyCode::Char('r'))
+        .iter()
+        .any(|e| matches!(e, Effect::Request(Request::Stats, Tag::Stats))));
+    for (theme, mode) in [
+        ("midnight", ColorMode::TrueColor),
+        ("paper", ColorMode::TrueColor),
+        ("paper", ColorMode::None),
+    ] {
+        app.theme = Theme::resolve(theme, &BTreeMap::new(), mode).unwrap();
+        for (width, height) in [(120, 32), (80, 24), (40, 16), (40, 12)] {
+            for n in [0, 3, 9876543] {
+                app.stats = xflow_core::ipc::Stats {
+                    sessions: n,
+                    words: n * 7,
+                    audio_ms: n * 1000,
+                    sessions_today: n / 2,
+                    words_today: n * 3,
+                    streak_days: u32::from(n > 0),
+                    wpm: (n > 0).then_some(137.0),
+                    latency_p50_ms: (n > 0).then_some(1234),
+                    latency_p95_ms: (n > 0).then_some(987654321),
+                };
+                let fixture = app.stats.clone();
+                app.stats_loaded = true;
+                app.activity = if n == 0 { vec![] } else { vec![2, 9, 4, 12] };
+                app.scroll = 0;
+                let mut pages = String::new();
+                let mut compact = String::new();
+                for _ in 0..20 {
+                    let view = screen(&app, width, height);
+                    let nav = if width >= 70 { 18 } else { 16 };
+                    compact.extend(
+                        view.lines()
+                            .skip(2)
+                            .take_while(|line| line.chars().nth(nav) == Some('│'))
+                            .flat_map(|line| {
+                                line.chars().skip(nav + 1).take(width as usize - nav - 2)
+                            })
+                            .filter(|c| !c.is_whitespace()),
+                    );
+                    pages.push_str(&view);
+                    key(&mut app, KeyCode::PageDown);
+                }
+                for metric in [
+                    "Dictations",
+                    "Today",
+                    "Streak",
+                    "Speakingpace",
+                    "Timesaved",
+                    "Typicalwait",
+                    "40words/min",
+                    "(p50)",
+                    "(p95)",
+                ] {
+                    assert!(
+                        compact.contains(metric),
+                        "{width}x{height}: missing {metric}\n{pages}"
+                    );
+                }
+                assert!(compact.contains(&(n * 7).to_string()), "{pages}");
+                if n == 0 {
+                    assert!(compact.contains("Nodictationsyet."), "{pages}");
+                    assert!(compact.contains("Notavailable"), "{pages}");
+                    assert!(pages.contains("No recent dictations"), "{pages}");
+                } else {
+                    assert!(compact.contains("987654.3s"), "{pages}");
+                    assert!(compact.contains("137wordsaminute"), "{pages}");
+                }
+                assert_eq!(app.stats, fixture);
+                key(&mut app, KeyCode::Up); // Existing list navigation returns to the top.
+                let top = screen(&app, width, height);
+                key(&mut app, KeyCode::PageDown);
+                key(&mut app, KeyCode::PageUp);
+                assert_eq!(screen(&app, width, height), top);
+                assert!(top.contains("PgUp/PgDn"), "{top}");
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut hits = render::HitMap::default();
+                terminal.draw(|f| hits = render::draw(f, &app)).unwrap();
+                assert!(hits.tabs.iter().any(|(_, p)| *p == Page::Stats));
+                assert!(terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .any(|c| c.modifier.contains(Modifier::BOLD)));
+                if width == 120 {
+                    assert!(hits.actions.iter().any(|(_, a)| *a == Action::Refresh));
+                }
+            }
+            app.stats_loaded = false;
+            app.scroll = 0;
+            let unavailable = screen(&app, width, height);
+            assert!(unavailable.contains("Stats unavailable"), "{unavailable}");
+            assert!(!unavailable.contains("No dictations yet"));
+        }
+    }
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(app.page, Page::Home);
+    key(&mut app, KeyCode::Char('8'));
+    assert_eq!(app.page, Page::Stats);
+    key(&mut app, KeyCode::Char('q'));
+    assert!(app.quit);
+}

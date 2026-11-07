@@ -465,7 +465,11 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ("Enter fix", Some(Action::Choose)),
                     ("r refresh", Some(Action::Refresh)),
                 ],
-                Page::Stats | Page::Doctor => {
+                Page::Stats => vec![
+                    ("PgUp/PgDn scroll", None),
+                    ("r refresh", Some(Action::Refresh)),
+                ],
+                Page::Doctor => {
                     vec![("↑↓ move", None), ("r refresh", Some(Action::Refresh))]
                 }
                 Page::AiApps => vec![
@@ -1282,21 +1286,31 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
 fn stats(frame: &mut Frame, area: Rect, app: &App) {
     if !app.stats_loaded {
         let text = if app.connected {
-            "No dictations yet — your stats appear after your first one.".into()
+            "Stats unavailable.\n\nPress r to refresh. If this continues, check the background helper on Check-up.".into()
         } else {
             format!(
-                "Your stats show up once xflow's background helper is running.\n\n{}",
+                "Stats unavailable while the background helper is not running.\n\n{}\n\nPress r to refresh.",
                 app.helper_down()
             )
         };
-        panel(frame, area, "Your stats", text, app);
+        frame.render_widget(
+            Paragraph::new(text)
+                .style(app.theme.base())
+                .wrap(Wrap { trim: false })
+                .scroll((
+                    (app.scroll / 8).saturating_mul(area.height.saturating_sub(2)),
+                    0,
+                ))
+                .block(block(app, "Your stats").padding(ratatui::widgets::Padding::horizontal(1))),
+            area,
+        );
         return;
     }
     let s = &app.stats;
     let time_saved = (s.words as f64 / 40.0 - s.audio_ms as f64 / 60000.0).max(0.0);
     let seconds = |ms: Option<u64>| {
         ms.map(|v| format!("{:.1} s", v as f64 / 1000.0))
-            .unwrap_or_else(|| "—".into())
+            .unwrap_or_else(|| "Not available".into())
     };
     let lines = [
         ("Dictations", format!("{} · {} words", s.sessions, s.words)),
@@ -1316,43 +1330,85 @@ fn stats(frame: &mut Frame, area: Rect, app: &App) {
             "Speaking pace",
             s.wpm
                 .map(|w| format!("{w:.0} words a minute"))
-                .unwrap_or_else(|| "—".into()),
+                .unwrap_or_else(|| "Not available".into()),
         ),
         (
             "Time saved",
-            format!("about {time_saved:.0} minutes compared with typing"),
+            format!("about {time_saved:.0} minutes vs typing at 40 words/min"),
         ),
         (
             "Typical wait",
             format!(
-                "{} (slowest {})",
+                "{} (p50), {} (p95)",
                 seconds(s.latency_p50_ms),
                 seconds(s.latency_p95_ms)
             ),
         ),
     ];
-    let text = lines
-        .into_iter()
-        .map(|(k, v)| {
-            Line::from(vec![
-                Span::styled(format!("{k:<15}"), muted(app)),
-                Span::raw(v),
-            ])
-        })
-        .collect::<Vec<_>>();
-    let rows = Layout::vertical([Constraint::Length(8), Constraint::Min(4)]).split(area);
+    let mut text = Vec::new();
+    if s.sessions == 0 {
+        text.push(Line::from("No dictations yet."));
+        text.push(Line::default());
+    }
+    for (label, value) in lines {
+        if area.width < 58 {
+            text.push(Line::from(Span::styled(
+                label,
+                app.theme.base().add_modifier(Modifier::BOLD),
+            )));
+            text.push(Line::from(value));
+        } else {
+            text.push(Line::from(vec![
+                Span::styled(format!("{label:<16}"), muted(app)),
+                Span::styled(value, app.theme.base().add_modifier(Modifier::BOLD)),
+            ]));
+        }
+    }
+    let content_height: u16 = text
+        .iter()
+        .map(|line| wrapped(&line.to_string(), area.width.saturating_sub(4)))
+        .sum();
+    let rows =
+        Layout::vertical([Constraint::Max(content_height + 2), Constraint::Length(3)]).split(area);
+    let visible = rows[0].height.saturating_sub(2);
+    let scroll = (app.scroll / 8)
+        .saturating_mul(visible)
+        .min(content_height.saturating_sub(visible));
     frame.render_widget(
         Paragraph::new(text)
-            .block(block(app, "Your stats").padding(ratatui::widgets::Padding::horizontal(1))),
+            .style(app.theme.base())
+            .wrap(Wrap { trim: false })
+            // State advances by eight; map that to contiguous, bounded pages here.
+            .scroll((scroll, 0))
+            .block(
+                block(app, "Your stats")
+                    .title_bottom(" PgUp/PgDn scroll ")
+                    .padding(ratatui::widgets::Padding::horizontal(1)),
+            ),
         rows[0],
     );
-    frame.render_widget(
-        Sparkline::default()
-            .data(&app.activity)
-            .style(accent(app))
-            .block(block(app, "Words in your recent dictations")),
-        rows[1],
-    );
+    let title = if area.width < 40 {
+        "Recent words"
+    } else {
+        "Words in your recent dictations"
+    };
+    if app.activity.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No recent dictations")
+                .style(muted(app))
+                .wrap(Wrap { trim: false })
+                .block(block(app, title)),
+            rows[1],
+        );
+    } else {
+        frame.render_widget(
+            Sparkline::default()
+                .data(&app.activity)
+                .style(accent(app))
+                .block(block(app, title)),
+            rows[1],
+        );
+    }
 }
 fn popup(area: Rect, width: u16, height: u16) -> Rect {
     // Too narrow for side margins: span the whole width so borders don't overlap.
