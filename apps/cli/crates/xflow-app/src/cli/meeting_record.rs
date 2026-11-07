@@ -19,6 +19,9 @@ const MAX_LIVE: Duration = Duration::from_secs(3 * 3600);
 /// A source this far behind the wall clock stopped delivering: a gap, not silence.
 const STALL_SAMPLES: i64 = 2 * RATE;
 const STALL: Duration = Duration::from_secs(2);
+/// A drop count for a stall arrives within this much audio after it: the
+/// daemon's backlog and socket hold well under a second.
+const DROP_REPORT: i64 = 5 * RATE;
 
 pub struct Request<'a> {
     pub app: Option<&'a str>,
@@ -491,9 +494,12 @@ struct Track {
     seen: bool,
     /// When this source last delivered audio.
     last: Option<Instant>,
-    /// Samples already gapped by `catch_up` since the last delivery, so a
-    /// drop count for the same stall is not gapped twice.
+    /// Samples already gapped by `catch_up` that a later drop count may report
+    /// again, so the same stall is not gapped twice.
     gapped: i64,
+    /// Samples delivered since that gap. Audio buffered before a stall arrives
+    /// ahead of its drop count, so `gapped` waits this long for it.
+    since_gap: i64,
     /// Dropped native frames not yet a whole output sample.
     lost: u64,
 }
@@ -525,10 +531,16 @@ impl Track {
                 self.flush(capture, source)?;
                 capture.gap(source, missing, "audio frames were dropped")?;
             }
+            self.gapped = (self.gapped - whole as i64).max(0);
         }
         self.seen = true;
         self.last = Some(at);
-        self.gapped = 0;
+        if self.gapped > 0 {
+            self.since_gap += samples.len() as i64 * RATE / i64::from(rate);
+            if self.since_gap > DROP_REPORT {
+                self.gapped = 0;
+            }
+        }
         self.pending.extend(samples.iter().map(|s| {
             if s.is_finite() {
                 s.clamp(-1.0, 1.0)
@@ -574,6 +586,7 @@ impl Track {
             self.flush(capture, source)?;
             capture.gap(source, behind, "no audio arrived from this source")?;
             self.gapped += behind;
+            self.since_gap = 0;
         }
         Ok(())
     }
@@ -846,5 +859,68 @@ mod tests {
         assert!(matches!(rx.recv().unwrap(), Msg::Mic(MicFrame::End(_), _)));
         drop(rx);
         assert!(!queue_mic(&tx, audio(0, 1), &mut dropped));
+    }
+
+    /// A frozen recorder: on resume the source looks stalled and becomes a
+    /// gap, then audio buffered before the freeze arrives, then the drop count
+    /// for the same seconds. That is one gap, not two.
+    #[test]
+    fn a_frozen_recorder_gaps_its_stall_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("xflow");
+        xflow_app::paths::private_dir(&data).unwrap();
+        let db = data.join("meetings.db");
+        let mut capture = Capture::begin(
+            &db,
+            CaptureSpec {
+                title: None,
+                labels: vec!["Microphone".into()],
+                expected_ms: None,
+                queued: false,
+            },
+            Limits {
+                session_bytes: 1 << 30,
+                global_bytes: 1 << 30,
+                reserve_bytes: 0,
+            },
+        )
+        .unwrap();
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let now = |ms: i64| ms * RATE / 1000;
+        let mut track = Track::default();
+        let tick = vec![0.1f32; 960];
+        for i in 0..50u64 {
+            track
+                .push(&mut capture, 0, 48_000, 0, &tick, at(i * 20))
+                .unwrap();
+        }
+        // Frozen for 8 s after 1 s of audio.
+        track
+            .catch_up(&mut capture, 0, now(9_000), at(9_000))
+            .unwrap();
+        assert_eq!(gaps(&db).len(), 1);
+        for _ in 0..10 {
+            track
+                .push(&mut capture, 0, 48_000, 0, &tick, at(9_000))
+                .unwrap();
+        }
+        // 7.8 s of 48 kHz frames the daemon dropped while frozen.
+        track
+            .push(&mut capture, 0, 48_000, 374_400, &tick, at(9_000))
+            .unwrap();
+        assert_eq!(gaps(&db).len(), 1, "{:?}", gaps(&db));
+        // Long after, a new drop is a new gap.
+        for i in 0..300u64 {
+            track
+                .push(&mut capture, 0, 48_000, 0, &tick, at(9_000 + i * 20))
+                .unwrap();
+        }
+        track
+            .push(&mut capture, 0, 48_000, 48_000, &tick, at(15_000))
+            .unwrap();
+        let rows = gaps(&db);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[1].1 - rows[1].0, 1_000);
     }
 }
