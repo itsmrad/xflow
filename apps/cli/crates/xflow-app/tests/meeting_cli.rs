@@ -296,7 +296,7 @@ fn malformed_and_newer_databases_are_left_unchanged() {
 
     fs::remove_file(&db).unwrap();
     let conn = rusqlite::Connection::open(&db).unwrap();
-    conn.pragma_update(None, "user_version", 4).unwrap();
+    conn.pragma_update(None, "user_version", 5).unwrap();
     drop(conn);
     fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
     let newer_bytes = fs::read(&db).unwrap();
