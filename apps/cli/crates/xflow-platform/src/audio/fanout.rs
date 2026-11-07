@@ -971,11 +971,17 @@ mod tests {
     fn pulls_racing_the_callback_lose_nothing() {
         let hub = MeetingHub::inactive();
         let generation = mono_48k(&hub);
+        // The producer never gets more than 20 callbacks ahead, so a slow test
+        // machine cannot fill the ring: any gap here is a missed callback.
+        let taken = Arc::new(AtomicU64::new(0));
         let producer = {
-            let hub = Arc::clone(&hub);
+            let (hub, taken) = (Arc::clone(&hub), Arc::clone(&taken));
             std::thread::spawn(move || {
                 let mut next = 0u32;
                 for _ in 0..2_000 {
+                    while u64::from(next) > taken.load(Ordering::Acquire) + 20 * 512 {
+                        std::thread::yield_now();
+                    }
                     let chunk: Vec<f32> = (0..512).map(|i| (next + i) as f32).collect();
                     next += 512;
                     hub.push(chunk.as_slice(), Instant::now());
@@ -990,6 +996,7 @@ mod tests {
             assert!(pull.fault.is_none(), "{:?}", pull.fault);
             gaps += pull.envelopes.iter().filter(|e| e.gap.is_some()).count();
             samples.extend(pull.envelopes.into_iter().flat_map(|e| e.samples));
+            taken.store(samples.len() as u64, Ordering::Release);
         }
         producer.join().unwrap();
         let rest = hub.release(generation);
