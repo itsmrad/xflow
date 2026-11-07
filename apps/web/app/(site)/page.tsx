@@ -3,8 +3,7 @@ import Link from "next/link";
 import { CodeBlock } from "@/components/code-block";
 import { Crossings, Heading, Section } from "@/components/frame";
 import { HeroWindow } from "@/components/hero-window";
-import { LoopObserver } from "@/components/loop";
-import { Bars, ComparisonTable, Faq, faqJsonLd, FeatureGrid, Fig, JsonLd, NumberedRows, PricingCards } from "@/components/marketing";
+import { ComparisonTable, Faq, faqJsonLd, FeatureGrid, Fig, JsonLd, NumberedRows, PricingCards } from "@/components/marketing";
 import { Pill } from "@/components/pill";
 import { ProviderGrid } from "@/components/providers";
 import { CtaBand, OsButton } from "@/components/cta";
@@ -18,14 +17,6 @@ export const metadata: Metadata = { alternates: { canonical: "/" } };
 export const dynamic = "force-static";
 
 const TOTAL = 7;
-
-function Corner({ pos, children }: { pos: string; children: string }) {
-  return (
-    <span aria-hidden className={`t-mono-label absolute hidden text-fg-subtle md:block ${pos}`}>
-      [ {children} ]
-    </span>
-  );
-}
 
 function Diff({ children }: { children: React.ReactNode }) {
   return <div className="t-mono-sm mt-6 overflow-x-auto rounded-md border border-line bg-bg-sunken px-4 py-3">{children}</div>;
@@ -65,59 +56,39 @@ xflow watch --json | jq .state    # live events`;
 
 export default function Home() {
   return (
-    <>
+    <div className="home">
       <JsonLd data={faqJsonLd(FAQ)} />
-      <LoopObserver />
 
-      {/* 1. Hero */}
-      <section className="frame rule relative -mt-px overflow-hidden" aria-labelledby="hero-title">
-        <Crossings spark />
-        <div aria-hidden className="bg-cells pointer-events-none absolute inset-0" />
-        <Corner pos="left-[var(--cell-p)] top-6">HOLD FN</Corner>
-        <Corner pos="right-[var(--cell-p)] top-6">NO TELEMETRY</Corner>
-        <Corner pos="left-[var(--cell-p)] bottom-6">.WAV → TEXT</Corner>
-        <Corner pos="right-[var(--cell-p)] bottom-6">MIT</Corner>
-        <div className="relative px-[var(--cell-p)] pb-16 pt-16 text-center md:pb-20 md:pt-24">
-          <Link
-            href="/changelog"
-            className="t-mono-sm inline-flex h-7 items-center gap-2 rounded-full border border-line-strong bg-bg-raised px-3 text-fg-muted transition-colors duration-[120ms] hover:text-fg"
-          >
-            <span aria-hidden className="size-1.5 rounded-full bg-ok" />
-            <span className="whitespace-nowrap">
-              v0.1 · macOS · Linux beta<span className="max-sm:hidden"> · open source</span>
-            </span>
-            <span aria-hidden>›</span>
-          </Link>
-          <h1 id="hero-title" className="t-display mx-auto mt-8 max-w-[20ch] text-fg">
-            Hold Fn and talk.
-            <br />
-            <span className="hl">xflow types it.</span>
+      {/* The example shows the outcome of dictation, not a live browser microphone. */}
+      <section className="frame rule home-hero" aria-labelledby="hero-title">
+        <Crossings />
+        <div className="home-intro">
+          <h1 id="hero-title" className="t-display text-fg">
+            Hold Fn and talk.<br />xflow types it.
           </h1>
-          <p className="t-lede mx-auto mt-6 max-w-[56ch] text-fg-muted">
-            Voice dictation for developers. A native Rust daemon turns speech into clean, correctly spelled text in your editor, terminal and
-            chat, wherever your cursor is.
+          <p className="t-lede text-fg-muted">
+            Voice dictation for developers. A native Rust daemon turns speech into text in your editor, terminal and chat, wherever your cursor is.
           </p>
-          <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <div className="home-actions">
             <OsButton />
-            <Button href="/docs" variant="secondary" size="lg" className="w-full sm:w-auto">
-              Read the docs →
-            </Button>
+            <Button href="/docs" variant="secondary" size="lg">Read the docs</Button>
           </div>
-          <p className="t-caption mt-4 text-fg-subtle">Free with your own key · Pro $5/month, coming soon · MIT</p>
-          <div className="mt-14 md:mt-16">
-            <HeroWindow />
-          </div>
+          <p className="home-note text-fg-muted">Free with your own key. MIT licensed.</p>
+          <Link href="/changelog" className="home-release text-fg-muted hover:text-fg">
+            v0.1 for macOS and Linux beta
+          </Link>
         </div>
+        <HeroWindow />
       </section>
 
       {/* 2. Proof strip */}
       <section className="frame rule" aria-label="Measurements">
         <Crossings />
         <div className="cells cells-4">
-          <Fig n={1} value="11 MB" caption="Idle memory, release daemon (Linux)" claim={1} visual={<Bars seed={1} filled={9} />} />
-          <Fig n={2} value="~3 ms" caption="Daemon start, p50 warm (Linux)" claim={2} visual={<Bars seed={2} filled={3} />} />
-          <Fig n={3} value="0" caption="Telemetry calls" claim={3} visual={<Bars seed={3} filled={0} />} />
-          <Fig n={4} value="10+" caption="Speech providers, plus local" claim={4} visual={<Bars seed={4} filled={32} />} />
+          <Fig n={1} value="11 MB" caption="Idle memory, release daemon (Linux)" claim={1} />
+          <Fig n={2} value="~3 ms" caption="Daemon start, p50 warm (Linux)" claim={2} />
+          <Fig n={3} value="0" caption="Telemetry calls" claim={3} />
+          <Fig n={4} value="10+" caption="Speech providers, plus local" claim={4} />
         </div>
       </section>
 
@@ -216,8 +187,8 @@ export default function Home() {
               lede="xflow is open source, has no telemetry, and keeps audio in memory. Read the code, or run it fully offline."
             />
             <div className="grid gap-x-10 gap-y-6 md:grid-cols-2 lg:grid-cols-3">
-              <Callout type="privacy" title="Audio never touches disk.">
-                Recordings live in memory and are dropped after transcription. Nothing is logged.
+              <Callout type="privacy" title="Audio stays in memory by default.">
+                Recordings live in memory and are dropped after transcription by default.
                 <Ref n={5} />
               </Callout>
               <Callout type="privacy" title="No telemetry. None.">
@@ -243,8 +214,7 @@ export default function Home() {
             </div>
             <div className="mt-10 border-t border-line pt-6">
               <Callout type="note" title="On Pro (coming soon),">
-                audio goes through xflow&apos;s server to our speech provider and isn&apos;t stored. We keep a usage record (time, duration,
-                size) for billing and abuse limits.
+                hosted dictation is planned. Review the privacy details before choosing a provider.
               </Callout>
             </div>
           </div>
@@ -264,8 +234,8 @@ export default function Home() {
           <div className="border-t border-line">
             <div className="flex flex-col">
               <div className="cells cells-4 lg:!grid-cols-2">
-                <Fig n={1} value="11 MB" caption="Idle RSS (Linux)" claim={1} visual={<Bars seed={1} filled={9} />} />
-                <Fig n={2} value="~3 ms" caption="Daemon start, p50 (warm, Linux)" claim={2} visual={<Bars seed={2} filled={3} />} />
+                <Fig n={1} value="11 MB" caption="Idle RSS (Linux)" claim={1} />
+                <Fig n={2} value="~3 ms" caption="Daemon start, p50 (warm, Linux)" claim={2} />
               </div>
               <p className="t-caption border-t border-line px-[var(--cell-p)] py-4 text-fg-subtle">
                 Measured on Linux (release build). macOS figures come with the signed release.
@@ -350,7 +320,7 @@ export default function Home() {
       {/* 9. Compare */}
       <Section id="compare" label={{ n: 7, total: TOTAL, title: "xflow vs Wispr Flow" }} labelledBy="compare-title">
         <div className="section-y px-[var(--cell-p)]">
-          <Heading id="compare-title" title="A third of the price. All of the words." lede="Wispr Flow is good. xflow is built for people who live in a terminal, and it costs less." />
+          <Heading id="compare-title" title="Choose your dictation workflow." lede="Compare provider choice, local tools and the way you work." />
           <ComparisonTable />
           <LinkMono href="/compare/wispr-flow" className="mt-6 inline-block">
             Full comparison →
@@ -384,7 +354,7 @@ export default function Home() {
       </Section>
 
       <CtaBand />
-    </>
+    </div>
   );
 }
 
