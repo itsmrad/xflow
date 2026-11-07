@@ -255,9 +255,17 @@ impl Probes {
     }
     /// Spend one probe; false once the budget is gone.
     fn take(&self) -> bool {
-        self.0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
-            .is_ok()
+        let mut left = self.0.load(Ordering::Relaxed);
+        while left > 0 {
+            match self
+                .0
+                .compare_exchange_weak(left, left - 1, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return true,
+                Err(now) => left = now,
+            }
+        }
+        false
     }
 }
 impl Reader {
