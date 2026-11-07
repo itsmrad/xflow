@@ -57,7 +57,11 @@ const SCHEMA_V3: &[&str] = &[
     "CREATE TABLE notes (meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE, snapshot TEXT NOT NULL, json TEXT NOT NULL)",
     "CREATE TABLE meeting_terms (term TEXT PRIMARY KEY, replacement TEXT NOT NULL)",
 ];
-pub(crate) const SCHEMA_VERSION: i64 = 3;
+// Only new captures get a cursor. Existing captures keep their legacy windows.
+const SCHEMA_V4: &[&str] = &[
+    "CREATE TABLE speech_plans (meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, source_idx INTEGER NOT NULL, planned_sample INTEGER NOT NULL DEFAULT 0, next_overlap_sample INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(meeting_id,source_idx))",
+];
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 /// v1 indexed case-sensitively. v2 folds case one character at a time
 /// (SQLite's Unicode table) and keeps accents, so `oauth` finds `OAuth` and
 /// `nino` does not find `niño`.
@@ -437,6 +441,12 @@ pub(crate) fn open_writer(path: &Path) -> Result<Connection> {
             }
             tx.execute_batch("PRAGMA user_version=3;")?;
         }
+        if version < 4 {
+            for ddl in SCHEMA_V4 {
+                tx.execute_batch(ddl)?;
+            }
+            tx.execute_batch("PRAGMA user_version=4;")?;
+        }
         tx.commit()?;
     }
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA synchronous=FULL; PRAGMA journal_mode=WAL;")?;
@@ -482,6 +492,7 @@ fn validate_schema(db: &Connection, allow_empty: bool) -> Result<i64> {
         .chain([&fts])
         .chain(v2)
         .chain(if version >= 3 { SCHEMA_V3 } else { &[] })
+        .chain(if version >= 4 { SCHEMA_V4 } else { &[] })
     {
         let actual: Option<String> = db
             .query_row("SELECT sql FROM sqlite_schema WHERE sql=?1", [*ddl], |r| {
@@ -761,7 +772,7 @@ mod migration_tests {
         assert_eq!(state(&path).3, 0, "v1 is case-sensitive");
         drop(open_writer(&path).unwrap());
         let (version, fts, text, hits) = state(&path);
-        assert_eq!((version, fts.as_str(), hits), (3, FTS_V2, 1));
+        assert_eq!((version, fts.as_str(), hits), (4, FTS_V2, 1));
         assert_eq!(text, "Sign in with OAuth, niño");
         let db = Connection::open(&path).unwrap();
         let secure: i64 = db
@@ -778,7 +789,7 @@ mod migration_tests {
         assert_eq!(revisions, "Sign in with OAuth, niño");
         // Reopening is a no-op.
         drop(open_writer(&path).unwrap());
-        assert_eq!(state(&path), (3, FTS_V2.into(), text, 1));
+        assert_eq!(state(&path), (4, FTS_V2.into(), text, 1));
     }
 
     #[test]
@@ -797,7 +808,7 @@ mod migration_tests {
             .execute_batch("DROP TABLE jobs;")
             .unwrap();
         drop(open_writer(&path).unwrap());
-        assert_eq!(state(&path).0, 3);
+        assert_eq!(state(&path).0, 4);
         assert_eq!(state(&path).3, 1);
     }
 }

@@ -72,9 +72,9 @@ where
                 return Ok(report);
             }
             let now = now_ms();
-            let next = jobs::next_job(&lock(&db), meeting, now)?;
+            let next = jobs::next_job(&lock(&db), meeting, now, stt.name())?;
             let Some(job) = next else {
-                let wait = jobs::next_wait(&lock(&db), meeting)?;
+                let wait = jobs::next_wait(&lock(&db), meeting, stt.name())?;
                 match wait {
                     Some(at) if at - now <= INLINE_WAIT_MS => {
                         let pause = Duration::from_millis((at - now).max(0) as u64 + 50);

@@ -8,6 +8,7 @@ pub mod notes;
 pub mod query;
 pub mod store;
 pub mod transcribe;
+mod turns;
 pub use export::{display_text, export_meeting, export_meeting_checking, ExportFormat};
 pub use query::MeetingReader;
 pub use store::{ContractError, MeetingStore};

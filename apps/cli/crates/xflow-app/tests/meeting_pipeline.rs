@@ -617,7 +617,7 @@ fn v1_database_migrates_on_first_pipeline_use() {
     )
     .unwrap();
     let imported = MeetingStore::at(db.clone()).import_json(&fixture).unwrap();
-    assert_eq!(sql(&db, "PRAGMA user_version"), 3);
+    assert_eq!(sql(&db, "PRAGMA user_version"), 4);
     let summary = MeetingReader::at(db.clone())
         .status(&imported.meeting)
         .unwrap();
@@ -1083,4 +1083,565 @@ fn a_live_piece_outwaits_a_long_writer_instead_of_stopping_the_capture() {
         .unwrap();
     capture.finish().unwrap();
     assert_eq!(sql(&s.db, "SELECT count(*) FROM pieces"), 2);
+}
+
+#[tokio::test]
+async fn speech_turn_ranges_own_audio_once_and_preserve_repeated_words() {
+    let s = scratch();
+    let stub = stub(|_, _| ok("yes yes yes"));
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["synthetic".into()],
+            expected_ms: None,
+            queued: true,
+        },
+        limits(),
+    )
+    .unwrap();
+    let id = capture.id();
+    let mut pcm = samples(0, 0, 16_000);
+    pcm.extend(vec![0; 16_000]);
+    pcm.extend(samples(0, 0, 32_000));
+    pcm.extend(vec![0; 16_000]);
+    capture.push(0, &pcm).unwrap();
+    // Two turns are durable before close. Their boundary is independent of win.
+    let conn = open_ro(&s.db).unwrap();
+    let ranges: Vec<(i64, i64, i64)> = conn
+        .prepare("SELECT overlap_sample,start_sample,end_sample FROM jobs ORDER BY win")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ranges, [(0, 0, 22_400), (22_400, 22_400, 70_400)]);
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let result = transcribe::run(
+        &s.db,
+        &[id.id],
+        provider(&stub.url, 5).as_ref(),
+        || async { false },
+        rx,
+        &mut |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.accepted, 2);
+    assert_eq!(
+        texts(&s.db, &id).len(),
+        2,
+        "same words in separate turns are not overlap"
+    );
+    assert_eq!(
+        audio_files(&s.db).len(),
+        1,
+        "unplanned durable tail still needs this piece"
+    );
+    drop(capture); // interrupted capture closes from its persisted cursor
+    journal::recover(&s.db).unwrap();
+    assert_eq!(
+        sql(&s.db, "SELECT planned_sample FROM speech_plans"),
+        80_000
+    );
+    process(&s.db, &id, provider(&stub.url, 5).as_ref()).await;
+    assert!(audio_files(&s.db).is_empty());
+    assert_eq!(
+        sql(&s.db, "SELECT count(*) FROM jobs WHERE attempts>budget"),
+        0
+    );
+    assert_eq!(sql(&s.db, "SELECT count(*) FROM gaps"), 0);
+}
+
+#[test]
+fn three_hour_plan_without_audio_is_bounded_for_both_sources() {
+    let s = scratch();
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["one".into(), "two".into()],
+            expected_ms: Some(10_800_000),
+            queued: false,
+        },
+        limits(),
+    )
+    .unwrap();
+    for source in 0..2 {
+        capture
+            .gap(source, 10_800 * 16_000, "synthetic plan without audio")
+            .unwrap();
+    }
+    capture.finish().unwrap();
+    assert_eq!(sql(&s.db, "SELECT count(*) FROM jobs"), 720);
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM speech_plans WHERE planned_sample=172800000"
+        ),
+        2
+    );
+    assert!(audio_files(&s.db).is_empty());
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM jobs WHERE end_sample-start_sample>480000"
+        ),
+        0
+    );
+}
+
+#[tokio::test]
+async fn legacy_unfinished_capture_migrates_without_replanning_accepted_ranges() {
+    let s = scratch();
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["legacy".into()],
+            expected_ms: None,
+            queued: false,
+        },
+        limits(),
+    )
+    .unwrap();
+    let id = capture.id();
+    capture.push(0, &samples(0, 0, 640_000)).unwrap();
+    let stub = stub(|n, _| ok(&format!("legacy part {n}")));
+    let stt = provider(&stub.url, 5);
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let first = transcribe::run(
+        &s.db,
+        &[id.id],
+        stt.as_ref(),
+        || async { false },
+        rx,
+        &mut |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.accepted, 1);
+    drop(capture);
+    // Actual v3 layout, with a partially planned source and durable trailing audio.
+    let db = Connection::open(&s.db).unwrap();
+    db.execute_batch("DROP TABLE speech_plans; PRAGMA user_version=3;")
+        .unwrap();
+    drop(db);
+    let report = process(&s.db, &id, stt.as_ref()).await;
+    assert_eq!(report.accepted, 1);
+    assert_eq!(texts(&s.db, &id).len(), 2);
+    assert_eq!(sql(&s.db, "SELECT count(*) FROM attempts"), 2);
+    assert_eq!(sql(&s.db, "SELECT count(*) FROM speech_plans"), 0);
+    assert_eq!(
+        sql(&s.db, "SELECT start_sample FROM jobs WHERE win=1"),
+        480_000
+    );
+    assert_eq!(
+        sql(&s.db, "SELECT overlap_sample FROM jobs WHERE win=1"),
+        448_000
+    );
+    assert!(audio_files(&s.db).is_empty());
+}
+
+#[tokio::test]
+async fn only_exact_digital_silence_can_finish_without_a_dispatch() {
+    for amplitude in [0i16, 1i16] {
+        let s = scratch();
+        let mut capture = Capture::begin(
+            &s.db,
+            CaptureSpec {
+                title: None,
+                labels: vec!["synthetic".into()],
+                expected_ms: None,
+                queued: false,
+            },
+            limits(),
+        )
+        .unwrap();
+        let id = capture.id();
+        capture.push(0, &vec![amplitude; 80_000]).unwrap();
+        capture.finish().unwrap();
+        let stub = stub(|_, _| ok("quiet audio"));
+        process(&s.db, &id, provider(&stub.url, 5).as_ref()).await;
+        assert_eq!(
+            stub.requests.load(Ordering::SeqCst),
+            usize::from(amplitude != 0)
+        );
+        assert!(audio_files(&s.db).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn dictation_request_bytes_are_unchanged_by_meeting_turn_planning() {
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let saved = bodies.clone();
+    let stub = stub(move |_, body| {
+        saved.lock().unwrap().push(body.to_vec());
+        ok("dictation")
+    });
+    let stt = provider(&stub.url, 5);
+    let clip = xflow_core::AudioClip {
+        samples: samples(0, 0, 16_000)
+            .into_iter()
+            .map(|s| f32::from(s) / 32768.0)
+            .collect(),
+        sample_rate: 16_000,
+        channels: 1,
+    };
+    let expected = xflow_providers::encode_wav(&clip).unwrap();
+    stt.transcribe(clip.clone(), Default::default())
+        .await
+        .unwrap();
+    let s = scratch();
+    let mut recording = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["synthetic".into()],
+            expected_ms: None,
+            queued: false,
+        },
+        limits(),
+    )
+    .unwrap();
+    let mut pcm = samples(0, 0, 16_000);
+    pcm.extend(vec![0; 16_000]);
+    pcm.extend(samples(0, 0, 48_000));
+    recording.push(0, &pcm).unwrap();
+    recording.finish().unwrap();
+    stt.transcribe(clip, Default::default()).await.unwrap();
+    let bodies = bodies.lock().unwrap();
+    // MIME generates a fresh random delimiter per request; every other byte,
+    // including the entire WAV and each dictation form field, must match.
+    let normalize = |body: &[u8]| {
+        let n = body.windows(2).position(|w| w == b"\r\n").unwrap();
+        let boundary = &body[..n];
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at < body.len() {
+            if body[at..].starts_with(boundary) {
+                out.extend_from_slice(b"--BOUNDARY");
+                at += n;
+            } else {
+                out.push(body[at]);
+                at += 1;
+            }
+        }
+        out
+    };
+    assert_eq!(normalize(&bodies[0]), normalize(&bodies[1]));
+    let riff = bodies[0].windows(4).position(|w| w == b"RIFF").unwrap();
+    assert_eq!(&bodies[0][riff..riff + expected.len()], expected);
+    let form = String::from_utf8_lossy(&bodies[0]);
+    assert!(form.contains("name=\"model\"\r\n\r\nstub-model"));
+    assert!(!form.contains("name=\"language\"") && !form.contains("name=\"prompt\""));
+    assert!(!form.contains("verbose_json"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn speech_turns_use_the_on_device_helper_and_durable_dispatch_ledger() {
+    use std::os::unix::fs::PermissionsExt;
+    use xflow_providers::on_device::{OnDevice, INSTALLED_MARKER};
+    let s = scratch();
+    let root = s._dir.path();
+    let fake = root.join("fake.py");
+    std::fs::write(
+        &fake,
+        include_str!("../../xflow-providers/tests/fake_stt_helper.py"),
+    )
+    .unwrap();
+    let helper = root.join("helper");
+    std::fs::write(
+        &helper,
+        format!("#!/bin/sh\nexec /usr/bin/python3 {fake:?} ok {root:?}\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let model = root.join("model");
+    std::fs::create_dir(&model).unwrap();
+    std::fs::write(model.join(INSTALLED_MARKER), "").unwrap();
+    let engine = OnDevice::new(Some(helper), model);
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["synthetic".into()],
+            expected_ms: None,
+            queued: false,
+        },
+        limits(),
+    )
+    .unwrap();
+    let id = capture.id();
+    let mut pcm = samples(0, 0, 16_000);
+    pcm.extend(vec![0; 16_000]);
+    pcm.extend(samples(0, 0, 32_000));
+    pcm.extend(vec![0; 16_000]);
+    capture.push(0, &pcm).unwrap();
+    capture.finish().unwrap();
+    let report = process(&s.db, &id, &engine).await;
+    assert_eq!((report.accepted, report.failed), (2, 0));
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM attempts WHERE provider='on-device' AND state='succeeded'"
+        ),
+        2
+    );
+    let stored = texts(&s.db, &id);
+    assert_eq!(stored.len(), 2);
+    assert!(stored[0].3.contains("bytes=44800"));
+    assert!(stored[1].3.contains("bytes=96000"));
+    assert!(audio_files(&s.db).is_empty());
+    let log = std::fs::read_to_string(root.join("log")).unwrap();
+    assert_eq!(log.matches("pid ").count(), 1, "turns reuse the helper");
+}
+
+#[tokio::test]
+async fn orphan_planning_with_an_earlier_missing_or_corrupt_piece_recovers_once() {
+    for corrupt in [false, true] {
+        let s = scratch();
+        let mut capture = Capture::begin(
+            &s.db,
+            CaptureSpec {
+                title: None,
+                labels: vec!["synthetic".into()],
+                expected_ms: None,
+                queued: false,
+            },
+            limits(),
+        )
+        .unwrap();
+        let id = capture.id();
+        capture.push(0, &samples(0, 0, 160_000)).unwrap();
+        drop(capture);
+        let files = audio_files(&s.db);
+        if corrupt {
+            let mut bytes = std::fs::read(&files[0]).unwrap();
+            bytes[100] ^= 0x55;
+            std::fs::write(&files[0], bytes).unwrap();
+        } else {
+            std::fs::remove_file(&files[0]).unwrap();
+        }
+        // The second piece was renamed and directory-synced, but not committed.
+        let db = Connection::open(&s.db).unwrap();
+        db.execute_batch("DELETE FROM pieces WHERE seq=1; UPDATE capture_sources SET next_seq=1,next_sample=80000;").unwrap();
+        drop(db);
+        let recovered = journal::recover(&s.db).unwrap();
+        assert_eq!(recovered.imported, 1);
+        assert_eq!(sql(&s.db, "SELECT count(*) FROM gaps"), 1);
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM pieces WHERE state='missing'"),
+            1
+        );
+        assert_eq!(
+            sql(&s.db, "SELECT planned_sample FROM speech_plans"),
+            160_000
+        );
+        journal::recover(&s.db).unwrap();
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM gaps"),
+            1,
+            "missing marking is idempotent"
+        );
+        let stub = stub(|_, _| ok("surviving audio"));
+        let report = process(&s.db, &id, provider(&stub.url, 5).as_ref()).await;
+        assert_eq!((report.accepted, report.failed), (1, 0));
+        assert_eq!(texts(&s.db, &id).len(), 1);
+        assert!(audio_files(&s.db).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn rate_limited_burst_keeps_audio_refunds_budget_and_finishes_each_range_once() {
+    let s = scratch();
+    let meeting = capture(&s.db, &[70]);
+    let db = s.db.clone();
+    let sent_at = Arc::new(Mutex::new(Vec::new()));
+    let times = sent_at.clone();
+    let stub = stub(move |n, body| {
+        times.lock().unwrap().push(std::time::Instant::now());
+        if n < 4 {
+            assert_eq!(sql(&db, "SELECT count(*) FROM segments"), 0);
+            assert_eq!(audio_files(&db).len(), 14, "429 never releases audio");
+            assert_eq!(
+                sql(&db, "SELECT attempts FROM jobs WHERE win=0"),
+                1,
+                "each earlier 429 was refunded"
+            );
+            assert_eq!(
+                sql(&db, "SELECT count(*) FROM jobs WHERE win>0 AND attempts>0"),
+                0,
+                "Retry-After also pauses later ranges"
+            );
+            (
+                "429 Too Many Requests",
+                "Retry-After: 1\r\n".into(),
+                json!({}),
+                Duration::ZERO,
+            )
+        } else {
+            let riff = body.windows(4).position(|w| w == b"RIFF").unwrap();
+            let size =
+                u32::from_le_bytes(body[riff + 4..riff + 8].try_into().unwrap()) as usize + 8;
+            ok(&format!(
+                "range {:016x}",
+                xflow_core::stable_hash(&body[riff..riff + size])
+            ))
+        }
+    });
+    let report = process(&s.db, &meeting, provider(&stub.url, 5).as_ref()).await;
+    assert_eq!((report.accepted, report.failed, report.waiting), (3, 0, 0));
+    assert_eq!(stub.requests.load(Ordering::SeqCst), 7);
+    let times = sent_at.lock().unwrap();
+    for pair in times[..5].windows(2) {
+        assert!(
+            pair[1].duration_since(pair[0]) >= Duration::from_secs(1),
+            "Retry-After honored between dispatches"
+        );
+    }
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM attempts WHERE state='rate_limited'"
+        ),
+        4
+    );
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM attempts WHERE state='succeeded'"
+        ),
+        3
+    );
+    assert_eq!(sql(&s.db, "SELECT sum(attempts) FROM jobs"), 3);
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM (SELECT text FROM segments GROUP BY text)"
+        ),
+        3
+    );
+    assert_eq!(texts(&s.db, &meeting).len(), 3);
+    assert!(audio_files(&s.db).is_empty());
+    journal::recover(&s.db).unwrap();
+    assert_eq!(
+        texts(&s.db, &meeting).len(),
+        3,
+        "restart never duplicates accepted text"
+    );
+}
+
+#[tokio::test]
+async fn rate_limit_backoff_survives_restart_and_also_gates_new_ranges() {
+    for retry_after in [None, Some(7_200)] {
+        let s = scratch();
+        let meeting = capture(&s.db, &[12]);
+        let stub = stub(move |n, _| {
+            if n == 0 {
+                (
+                    "429 Too Many Requests",
+                    retry_after
+                        .map(|n| format!("Retry-After: {n}\r\n"))
+                        .unwrap_or_default(),
+                    json!({}),
+                    Duration::ZERO,
+                )
+            } else {
+                ok(&format!("accepted range {n}"))
+            }
+        });
+        let stt = provider(&stub.url, 5);
+        let (stop, cancel) = tokio::sync::watch::channel(false);
+        let db = s.db.clone();
+        let run = tokio::spawn(async move {
+            let _guard = transcribe::lock_worker(&db, false).unwrap().unwrap();
+            transcribe::run(
+                &db,
+                &[meeting.id],
+                stt.as_ref(),
+                || async { false },
+                cancel,
+                &mut |_| {},
+            )
+            .await
+            .unwrap()
+        });
+        let started = std::time::Instant::now();
+        while sql(
+            &s.db,
+            "SELECT count(*) FROM attempts WHERE state='rate_limited'",
+        ) == 0
+        {
+            assert!(started.elapsed() < Duration::from_secs(10));
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let _ = stop.send(true);
+        run.await.unwrap();
+        let delay = sql(&s.db, "SELECT not_before_ms FROM jobs") - journal::now_ms();
+        let expected = retry_after.unwrap_or(30) * 1000;
+        assert!(
+            delay >= expected - 2_000 && delay <= expected,
+            "full Retry-After/default backoff persisted: {delay}"
+        );
+        assert_eq!(sql(&s.db, "SELECT attempts FROM jobs"), 0);
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM jobs WHERE state='failed'"),
+            0
+        );
+        let later = capture(&s.db, &[12]);
+        let saved_deadline = sql(&s.db, "SELECT not_before_ms FROM jobs WHERE id=1");
+        jobs::reopen(&s.db, None).unwrap();
+        assert_eq!(
+            sql(&s.db, "SELECT not_before_ms FROM jobs WHERE id=1"),
+            saved_deadline,
+            "explicit retry must honor the provider cooldown too"
+        );
+        journal::recover(&s.db).unwrap();
+        let (_cancel_tx, cancel) = tokio::sync::watch::channel(false);
+        let db = s.db.clone();
+        let engine = provider(&stub.url, 5);
+        let pending = tokio::spawn(async move {
+            let _guard = transcribe::lock_worker(&db, false).unwrap().unwrap();
+            transcribe::run(
+                &db,
+                &[later.id],
+                engine.as_ref(),
+                || async { false },
+                cancel,
+                &mut |_| {},
+            )
+            .await
+            .unwrap()
+        });
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        let _ = _cancel_tx.send(true);
+        pending.await.unwrap();
+        assert_eq!(
+            stub.requests.load(Ordering::SeqCst),
+            1,
+            "new ranges also honor the persisted cooldown"
+        );
+        assert_eq!(audio_files(&s.db).len(), 6);
+        // Advance the persisted deadline, simulating quota recovery without a 2h sleep.
+        Connection::open(&s.db)
+            .unwrap()
+            .execute("UPDATE jobs SET not_before_ms=0", [])
+            .unwrap();
+        for id in [1, 2] {
+            let id = xflow_core::meeting::MeetingId {
+                store_id: meeting.store_id.clone(),
+                id,
+            };
+            process(&s.db, &id, provider(&stub.url, 5).as_ref()).await;
+        }
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM jobs WHERE state='accepted'"),
+            2
+        );
+        assert_eq!(sql(&s.db, "SELECT count(*) FROM segments"), 2);
+        assert_eq!(sql(&s.db, "SELECT sum(attempts) FROM jobs"), 2);
+        assert!(audio_files(&s.db).is_empty());
+    }
 }

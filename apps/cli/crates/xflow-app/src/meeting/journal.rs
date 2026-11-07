@@ -24,7 +24,7 @@ pub const OVERLAP_SAMPLES: i64 = 32_000;
 pub const MAX_SOURCES: usize = 2;
 pub const MAX_SESSION_MS: i64 = 3 * 3_600_000;
 /// Hard cap on jobs per meeting, tails and splits included.
-pub const MAX_JOBS: i64 = 1024;
+pub const MAX_JOBS: i64 = MAX_SESSION_MS / 400 * MAX_SOURCES as i64 + 2;
 /// Shorter tails carry no speech worth a request; they are recorded as a gap.
 const MIN_JOB_SAMPLES: i64 = 1_600;
 const HEADER: usize = 88;
@@ -338,6 +338,7 @@ struct SourceBuf {
 /// One meeting being written. The later live recorder drives this same type.
 pub struct Capture {
     db: Connection,
+    db_path: PathBuf,
     dir: PathBuf,
     root: PathBuf,
     store: String,
@@ -443,6 +444,10 @@ impl Capture {
                 "INSERT INTO capture_sources(meeting_id,idx,source_id) VALUES (?1,?2,?3)",
                 params![meeting, idx as i64, source.id],
             )?;
+            tx.execute(
+                "INSERT INTO speech_plans(meeting_id,source_idx) VALUES (?1,?2)",
+                params![meeting, idx as i64],
+            )?;
             sources.push(SourceBuf {
                 id: source.id,
                 buf: Vec::with_capacity(PIECE_SAMPLES),
@@ -468,6 +473,7 @@ impl Capture {
         fs2::FileExt::try_lock_exclusive(&lock).context("capture lock is busy")?;
         Ok(Self {
             db,
+            db_path: db_path.to_path_buf(),
             dir,
             root,
             store_bytes: store_bytes(&store)?,
@@ -630,7 +636,14 @@ impl Capture {
                 params![self.meeting, source as i64, seq, start, count, bytes as i64, format!("{:016x}", header.payload_hash), now_ms()])?;
             tx.execute("UPDATE capture_sources SET next_seq=?3,next_sample=?4 WHERE meeting_id=?1 AND idx=?2",
                 params![self.meeting, source as i64, seq + 1, start + count])?;
-            plan_jobs(&tx, self.meeting, source as i64, start + count, false)?;
+            plan_jobs(
+                &tx,
+                &self.db_path,
+                self.meeting,
+                source as i64,
+                start + count,
+                false,
+            )?;
             tx.commit()?;
             Ok(())
         })();
@@ -687,7 +700,6 @@ impl Capture {
         self.close("stopped", Some(reason))
     }
     fn close(&mut self, state: &str, reason: Option<&str>) -> Result<()> {
-        let now = now_ms();
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -698,12 +710,12 @@ impl Capture {
             .collect();
         close_capture(
             &tx,
+            &self.db_path,
             self.meeting,
             state,
             reason,
             &ends,
             self.expected_ms,
-            now,
         )?;
         tx.commit()?;
         Ok(())
@@ -720,20 +732,21 @@ fn io_reason_of(dir: &Path) -> String {
 /// the meeting's length. Shared by finish, a visible stop and recovery.
 fn close_capture(
     db: &Connection,
+    db_path: &Path,
     meeting: i64,
     state: &str,
     reason: Option<&str>,
     ends: &[(String, i64)],
     expected_ms: Option<i64>,
-    now: i64,
 ) -> Result<()> {
+    let now = now_ms();
     let mut longest = 0;
     for (idx, (source_id, durable)) in ends.iter().enumerate() {
         db.execute(
             "UPDATE capture_sources SET finished=1 WHERE meeting_id=?1 AND idx=?2",
             params![meeting, idx as i64],
         )?;
-        plan_jobs(db, meeting, idx as i64, *durable, true)?;
+        plan_jobs(db, db_path, meeting, idx as i64, *durable, true)?;
         let durable_ms = durable * 1000 / RATE;
         longest = longest.max(durable_ms);
         if let (Some(expected), Some(reason)) = (expected_ms, reason) {
@@ -790,11 +803,21 @@ pub(crate) fn add_gap(
 /// never audio. The job after a window shares its last 2 s.
 fn plan_jobs(
     db: &Connection,
+    db_path: &Path,
     meeting: i64,
     source: i64,
     durable: i64,
     finished: bool,
 ) -> Result<()> {
+    let cursor: Option<(i64, i64)> = db.query_row(
+        "SELECT planned_sample,next_overlap_sample FROM speech_plans WHERE meeting_id=?1 AND source_idx=?2",
+        params![meeting, source], |r| Ok((r.get(0)?, r.get(1)?)),
+    ).optional()?;
+    if let Some((start, overlap)) = cursor {
+        return plan_turns(
+            db, db_path, meeting, source, start, overlap, durable, finished,
+        );
+    }
     let mut win: i64 = db.query_row(
         "SELECT COALESCE(MAX(win)+1,0) FROM jobs WHERE meeting_id=?1 AND source_idx=?2",
         params![meeting, source],
@@ -841,6 +864,79 @@ fn plan_jobs(
     }
 }
 
+/// Plan from durable PCM only, inside the piece/close transaction. A cursor and
+/// its jobs commit together; recovery can repeat this without changing ownership.
+#[allow(clippy::too_many_arguments)]
+fn plan_turns(
+    db: &Connection,
+    db_path: &Path,
+    meeting: i64,
+    source: i64,
+    mut start: i64,
+    mut overlap: i64,
+    durable: i64,
+    finished: bool,
+) -> Result<()> {
+    let mut win: i64 = db.query_row(
+        "SELECT COALESCE(MAX(win)+1,0) FROM jobs WHERE meeting_id=?1 AND source_idx=?2",
+        params![meeting, source],
+        |r| r.get(0),
+    )?;
+    while start < durable {
+        let to = (start + WINDOW_SAMPLES).min(durable);
+        let window = load_window(db, db_path, meeting, source, start, to)?;
+        let cut = super::turns::cut(&window.samples, to - start == WINDOW_SAMPLES, finished);
+        let Some((length, pause)) = cut else { break };
+        let end = start + length as i64;
+        let count: i64 = db.query_row(
+            "SELECT count(*) FROM jobs WHERE meeting_id=?1",
+            [meeting],
+            |r| r.get(0),
+        )?;
+        ensure!(count < MAX_JOBS, "meeting reached the {MAX_JOBS} job limit");
+        let tiny = end - start < MIN_JOB_SAMPLES;
+        // Exact digital silence contains no speech. Never apply an energy cutoff
+        // to discard quiet audio, and never skip context from a forced cut.
+        let silent = !tiny
+            && overlap == start
+            && window.present > 0
+            && window.samples[..length].iter().all(|s| *s == 0.0);
+        let (state, reason) = if tiny {
+            ("retained", Some("under 100 ms; not sent"))
+        } else if silent {
+            ("accepted", Some("digital silence; not sent"))
+        } else {
+            ("pending", None)
+        };
+        db.execute("INSERT INTO jobs(meeting_id,source_idx,win,overlap_sample,start_sample,end_sample,state,error) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![meeting, source, win, overlap, start, end, state, reason])?;
+        if tiny {
+            let id = source_id(db, meeting, source)?.context("missing capture source")?;
+            add_gap(
+                db,
+                meeting,
+                &id,
+                start * 1000 / RATE,
+                (end * 1000 / RATE).max(start * 1000 / RATE + 1),
+                "under 100 ms of audio; not transcribed",
+            )?;
+        }
+        fault("plan:inserted")?;
+        // Context crosses only a forced cut in continuous speech, never a pause.
+        overlap = if pause {
+            end
+        } else {
+            (end - OVERLAP_SAMPLES).max(start)
+        };
+        db.execute("UPDATE speech_plans SET planned_sample=?3,next_overlap_sample=?4 WHERE meeting_id=?1 AND source_idx=?2",
+            params![meeting, source, end, overlap])?;
+        fault("plan:updated")?;
+        start = end;
+        win += 1;
+    }
+    Ok(())
+}
+
 /// Pieces whose every dependent job is accepted. While a source
 /// is still capturing, a piece reaching into the next window's 2 s overlap
 /// waits for that window. Run inside the accepting transaction.
@@ -856,7 +952,9 @@ pub(crate) fn release_pieces(db: &Connection, meeting: i64) -> Result<usize> {
          AND EXISTS (SELECT 1 FROM jobs j WHERE {OVERLAPS})
          AND NOT EXISTS (SELECT 1 FROM jobs j WHERE {OVERLAPS} AND j.state!='accepted')
          AND (EXISTS (SELECT 1 FROM capture_sources c WHERE c.meeting_id=pieces.meeting_id AND c.idx=pieces.source_idx AND c.finished=1)
-              OR pieces.start_sample+pieces.samples<=(SELECT (MAX(j.win)+1)*{WINDOW_SAMPLES}-{OVERLAP_SAMPLES} FROM jobs j WHERE j.meeting_id=pieces.meeting_id AND j.source_idx=pieces.source_idx))"),
+              OR pieces.start_sample+pieces.samples<=COALESCE(
+                (SELECT p.next_overlap_sample FROM speech_plans p WHERE p.meeting_id=pieces.meeting_id AND p.source_idx=pieces.source_idx),
+                (SELECT MAX(j.end_sample)-{OVERLAP_SAMPLES} FROM jobs j WHERE j.meeting_id=pieces.meeting_id AND j.source_idx=pieces.source_idx)))"),
         [meeting])?)
 }
 
@@ -1042,19 +1140,24 @@ fn mark_missing(
     start: i64,
     count: i64,
 ) -> Result<()> {
-    let tx = db.unchecked_transaction()?;
-    let changed = tx.execute(
+    // Planning may already own the piece/import transaction. Outside planning,
+    // keep the missing marker and its visible gap atomic as before.
+    let transaction = db
+        .is_autocommit()
+        .then(|| db.unchecked_transaction())
+        .transpose()?;
+    let changed = db.execute(
         "UPDATE pieces SET state='missing' WHERE id=?1 AND state='ready'",
         [piece],
     )?;
     if changed == 1 {
-        let source_id: String = tx.query_row(
+        let source_id: String = db.query_row(
             "SELECT source_id FROM capture_sources WHERE meeting_id=?1 AND idx=?2",
             params![meeting, source],
             |r| r.get(0),
         )?;
         add_gap(
-            &tx,
+            db,
             meeting,
             &source_id,
             start * 1000 / RATE,
@@ -1062,7 +1165,9 @@ fn mark_missing(
             "audio piece missing or corrupt; kept in quarantine if present",
         )?;
     }
-    tx.commit()?;
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
+    }
     Ok(())
 }
 fn quarantine(dir: &Path, path: &Path) -> Result<()> {
@@ -1219,7 +1324,7 @@ pub fn recover(db_path: &Path) -> Result<Recovery> {
             let end = h.start as i64 + i64::from(h.samples);
             tx.execute("UPDATE capture_sources SET next_seq=?3,next_sample=?4 WHERE meeting_id=?1 AND idx=?2",
                 params![meeting, source, seq + 1, end])?;
-            plan_jobs(&tx, meeting, source, end, false)?;
+            plan_jobs(&tx, db_path, meeting, source, end, false)?;
             tx.commit()?;
             report.imported += 1;
         }
@@ -1261,6 +1366,7 @@ pub fn recover(db_path: &Path) -> Result<Recovery> {
             let tx = db.unchecked_transaction()?;
             close_capture(
                 &tx,
+                db_path,
                 meeting,
                 "interrupted",
                 Some(
@@ -1268,7 +1374,6 @@ pub fn recover(db_path: &Path) -> Result<Recovery> {
                 ),
                 &ends,
                 expected,
-                now_ms(),
             )?;
             tx.commit()?;
             report.interrupted += 1;
