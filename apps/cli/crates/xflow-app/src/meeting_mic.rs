@@ -32,6 +32,8 @@ const BACKLOG: usize = 16;
 const GONE: Duration = Duration::from_secs(60);
 /// How long a closing write may wait for the recorder.
 const STALL: Duration = Duration::from_secs(2);
+/// How long the last audio may take to reach a recorder that asked to stop.
+const RELEASE_FLUSH: Duration = Duration::from_secs(5);
 const MAX_FRAME: usize = 1 << 20;
 
 const ACQUIRED: u8 = 1;
@@ -184,6 +186,9 @@ async fn connection(mut stream: UnixStream, audio: Arc<dyn AudioCapture>) -> Res
                     };
                     let _ = lease.release().await;
                     pump.log(&reason);
+                    if let Some(gap) = pump.gap_frame() {
+                        let _ = queue.try_send(gap);
+                    }
                     drop(queue);
                     if let Ok(Ok(Ok(mut write))) = tokio::time::timeout(STALL, &mut writer).await {
                         end(&mut write, &reason).await?;
@@ -200,16 +205,24 @@ async fn connection(mut stream: UnixStream, audio: Arc<dyn AudioCapture>) -> Res
                     pump.log("the recorder left");
                     return Ok(());
                 }
-                // The recorder asked for the rest and is reading: wait for room.
-                for e in &last.envelopes {
-                    let frame = pump.frame(e);
-                    if queue.send(frame).await.is_err() {
-                        break;
+                // The recorder asked for the rest. One that froze instead still
+                // lets the lease, and the next meeting, go.
+                let flush = async {
+                    for e in &last.envelopes {
+                        queue.send(pump.frame(e)).await.ok()?;
                     }
-                }
+                    if let Some(gap) = pump.gap_frame() {
+                        queue.send(gap).await.ok()?;
+                    }
+                    drop(queue);
+                    (&mut writer).await.ok()?.ok()
+                };
+                let flushed = tokio::time::timeout(RELEASE_FLUSH, flush).await;
                 pump.log("released");
-                drop(queue);
-                let mut write = writer.await.context("meeting writer stopped")??;
+                let Ok(Some(mut write)) = flushed else {
+                    writer.abort();
+                    bail!("the meeting recorder stopped reading after asking to stop");
+                };
                 return end(&mut write, "released").await;
             }
         }
@@ -221,6 +234,8 @@ async fn connection(mut stream: UnixStream, audio: Arc<dyn AudioCapture>) -> Res
 struct Pump {
     /// Frames dropped since the last frame the recorder got; sent with the next one.
     carry: u64,
+    /// Rate of the last audio, for a closing gap that has no audio of its own.
+    rate: u32,
     full_since: Option<tokio::time::Instant>,
     gaps: u64,
     lost: u64,
@@ -244,6 +259,7 @@ impl Pump {
             self.lost += gap;
         }
         let lost = gap + std::mem::take(&mut self.carry);
+        self.rate = e.sample_rate;
         let channels = usize::from(e.channels.max(1));
         let mut body = Vec::with_capacity(12 + e.samples.len() / channels * 4);
         body.extend_from_slice(&e.sample_rate.to_le_bytes());
@@ -253,6 +269,17 @@ impl Pump {
             body.extend_from_slice(&mono.to_le_bytes());
         }
         framed(AUDIO, &body)
+    }
+
+    /// A frame with no audio that reports what was dropped since the last one.
+    fn gap_frame(&mut self) -> Option<Vec<u8>> {
+        if self.carry == 0 || self.rate == 0 {
+            return None;
+        }
+        let mut body = Vec::with_capacity(12);
+        body.extend_from_slice(&self.rate.to_le_bytes());
+        body.extend_from_slice(&std::mem::take(&mut self.carry).to_le_bytes());
+        Some(framed(AUDIO, &body))
     }
 
     /// Queue without waiting. A full backlog drops the frame and carries its

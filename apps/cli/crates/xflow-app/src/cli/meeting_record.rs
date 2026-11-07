@@ -152,7 +152,7 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
         let mut reader = client.try_clone()?;
         let tx = tx.clone();
         std::thread::spawn(move || {
-            let mut dropped = 0;
+            let mut dropped = Dropped::default();
             loop {
                 match reader.recv() {
                     Ok(frame) => {
@@ -441,30 +441,49 @@ pub fn native(app: Option<&str>, mic: bool, yes: bool) -> Result<()> {
 /// up by a busy database never backs up into the daemon. Audio with no room
 /// becomes lost frames on the next frame: a gap, not a stopped meeting.
 /// `false` once the lease ended or the loop is gone.
-fn queue_mic(tx: &mpsc::SyncSender<Msg>, frame: MicFrame, dropped: &mut u64) -> bool {
+fn queue_mic(tx: &mpsc::SyncSender<Msg>, frame: MicFrame, dropped: &mut Dropped) -> bool {
     let MicFrame::Audio {
         rate,
         lost,
         samples,
     } = frame
     else {
+        // The last word: what never fitted is still a gap.
+        if dropped.frames > 0 {
+            let gap = MicFrame::Audio {
+                rate: dropped.rate,
+                lost: std::mem::take(&mut dropped.frames),
+                samples: Vec::new(),
+            };
+            let _ = tx.send(Msg::Mic(gap, Instant::now()));
+        }
         let _ = tx.send(Msg::Mic(frame, Instant::now()));
         return false;
     };
     let frame = MicFrame::Audio {
         rate,
-        lost: lost + *dropped,
+        lost: lost + dropped.frames,
         samples,
     };
     match tx.try_send(Msg::Mic(frame, Instant::now())) {
-        Ok(()) => *dropped = 0,
+        Ok(()) => dropped.frames = 0,
         Err(mpsc::TrySendError::Full(Msg::Mic(MicFrame::Audio { lost, samples, .. }, _))) => {
-            *dropped = lost + samples.len() as u64;
+            *dropped = Dropped {
+                rate,
+                frames: lost + samples.len() as u64,
+            };
         }
         Err(mpsc::TrySendError::Full(_)) => {}
         Err(mpsc::TrySendError::Disconnected(_)) => return false,
     }
     true
+}
+
+/// Microphone frames the main loop had no room for, at the rate they came in.
+#[derive(Default)]
+struct Dropped {
+    rate: u32,
+    frames: u64,
 }
 
 fn stop_with(why: String, bad: bool, reason: &mut Option<String>, failed: &mut bool) {
@@ -833,18 +852,18 @@ mod tests {
             lost,
             samples: vec![0.5; n],
         };
-        let mut dropped = 0;
+        let mut dropped = Dropped::default();
         assert!(queue_mic(&tx, audio(0, 960), &mut dropped));
         // The loop is busy: these two never fit and must not block this thread.
         assert!(queue_mic(&tx, audio(0, 960), &mut dropped));
         assert!(queue_mic(&tx, audio(40, 960), &mut dropped));
-        assert_eq!(dropped, 960 + 40 + 960);
+        assert_eq!(dropped.frames, 960 + 40 + 960);
         assert!(matches!(
             rx.recv().unwrap(),
             Msg::Mic(MicFrame::Audio { lost: 0, .. }, _)
         ));
         assert!(queue_mic(&tx, audio(5, 960), &mut dropped));
-        assert_eq!(dropped, 0);
+        assert_eq!(dropped.frames, 0);
         match rx.recv().unwrap() {
             Msg::Mic(MicFrame::Audio { lost, samples, .. }, _) => {
                 assert_eq!((lost, samples.len()), (960 + 40 + 960 + 5, 960));

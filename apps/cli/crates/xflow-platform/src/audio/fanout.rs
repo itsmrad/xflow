@@ -17,7 +17,7 @@ pub(crate) const ENVELOPE_FRAMES: usize = 4096;
 pub(crate) const RING_MS: u64 = 2_000;
 /// Ceiling for many-channel, high-rate devices: the size of the old fixed queue.
 const RING_MAX_BYTES: usize = 4 << 20;
-/// Gaps waiting for the consumer. A loss that finds these full joins a later gap.
+/// Gaps waiting for the consumer. While these are full, new audio joins the pending gap.
 const MARKS: u64 = 64;
 pub(crate) const MAX_CHANNELS: u16 = 32;
 pub(crate) const MAX_RATE: u32 = 192_000;
@@ -118,15 +118,17 @@ impl Ring {
         }
         if loss.frames > 0 {
             let at = self.mark_head.load(Ordering::Relaxed);
-            if at - self.mark_tail.load(Ordering::Acquire) < MARKS {
-                let mark = &self.marks[(at % MARKS) as usize];
-                mark.at.store(head, Ordering::Relaxed);
-                mark.from.store(loss.from, Ordering::Relaxed);
-                mark.to.store(loss.to, Ordering::Relaxed);
-                mark.frames.store(loss.frames, Ordering::Relaxed);
-                self.mark_head.store(at + 1, Ordering::Release);
-                *loss = Loss::default();
+            // No room to place the gap: this audio would land before it, so it joins the gap.
+            if at - self.mark_tail.load(Ordering::Acquire) >= MARKS {
+                return false;
             }
+            let mark = &self.marks[(at % MARKS) as usize];
+            mark.at.store(head, Ordering::Relaxed);
+            mark.from.store(loss.from, Ordering::Relaxed);
+            mark.to.store(loss.to, Ordering::Relaxed);
+            mark.frames.store(loss.frames, Ordering::Relaxed);
+            self.mark_head.store(at + 1, Ordering::Release);
+            *loss = Loss::default();
         }
         let len = self.pcm.len() as u64;
         let mut index = (head * self.channels as u64) % len;
@@ -1202,5 +1204,22 @@ mod tests {
             .map(|envelope| u64::from(envelope.frame_count))
             .sum();
         assert_eq!(delivered, 0);
+    }
+
+    #[test]
+    fn audio_waits_behind_a_gap_that_has_no_mark_yet() {
+        let ring = Ring::new(48_000, 1);
+        let mut loss = Loss::default();
+        for sequence in 1..=MARKS {
+            loss.add(sequence, 10);
+            assert!(ring.write(&[0.1_f32; 4], &mut loss, 0));
+        }
+        loss.add(MARKS + 1, 10);
+        assert!(
+            !ring.write(&[0.2_f32; 4], &mut loss, 0),
+            "no mark for this gap"
+        );
+        assert_eq!(loss.frames, 10);
+        assert_eq!(ring.head.load(Ordering::Relaxed), MARKS * 4);
     }
 }
