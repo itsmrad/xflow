@@ -371,11 +371,6 @@ impl Capture {
             );
         }
         let mut db = open_writer(db_path)?;
-        // A piece that cannot commit stops the capture. Another writer (an
-        // import, a delete, crash recovery) can hold the lock past the usual
-        // 1 s on a busy Mac, so the recorder waits longer; its audio queue
-        // turns a long wait into a recorded gap, never a stopped meeting.
-        db.busy_timeout(RECORDER_BUSY)?;
         let store = store_id(&db)?;
         let root = spool_root(db_path);
         crate::paths::private_dir(&root)?;
@@ -461,6 +456,12 @@ impl Capture {
             params![meeting, now, spec.expected_ms, spec.queued],
         )?;
         tx.commit()?;
+        // A piece that cannot commit stops the capture. Another writer (an
+        // import, a delete, crash recovery) can hold the lock past the usual
+        // 1 s on a busy Mac, so pieces wait longer; the recorder's audio queue
+        // holds the audio meanwhile. Startup keeps the 1 s wait: the recorder
+        // does not read the microphone until this returns.
+        db.busy_timeout(RECORDER_BUSY)?;
         let dir = meeting_dir(&root, &store, meeting);
         crate::paths::private_dir(&dir)?;
         let lock = lock_file(&dir.join("capture.lock"))?;
