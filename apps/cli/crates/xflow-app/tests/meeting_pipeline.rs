@@ -1210,7 +1210,16 @@ async fn legacy_unfinished_capture_migrates_without_replanning_accepted_ranges()
     let stub = stub(|n, _| ok(&format!("legacy part {n}")));
     let stt = provider(&stub.url, 5);
     let (_tx, rx) = tokio::sync::watch::channel(false);
-    let first = transcribe::run(&s.db, &[id.id], stt.as_ref(), || async { false }, rx, &mut |_| {}).await.unwrap();
+    let first = transcribe::run(
+        &s.db,
+        &[id.id],
+        stt.as_ref(),
+        || async { false },
+        rx,
+        &mut |_| {},
+    )
+    .await
+    .unwrap();
     assert_eq!(first.accepted, 1);
     drop(capture);
     // Actual v3 layout, with a partially planned source and durable trailing audio.
@@ -1337,32 +1346,54 @@ async fn speech_turns_use_the_on_device_helper_and_durable_dispatch_ledger() {
     let s = scratch();
     let root = s._dir.path();
     let fake = root.join("fake.py");
-    std::fs::write(&fake, include_str!("../../xflow-providers/tests/fake_stt_helper.py")).unwrap();
+    std::fs::write(
+        &fake,
+        include_str!("../../xflow-providers/tests/fake_stt_helper.py"),
+    )
+    .unwrap();
     let helper = root.join("helper");
-    std::fs::write(&helper, format!("#!/bin/sh\nexec /usr/bin/python3 {fake:?} ok {root:?}\n")).unwrap();
+    std::fs::write(
+        &helper,
+        format!("#!/bin/sh\nexec /usr/bin/python3 {fake:?} ok {root:?}\n"),
+    )
+    .unwrap();
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
     let model = root.join("model");
     std::fs::create_dir(&model).unwrap();
     std::fs::write(model.join(INSTALLED_MARKER), "").unwrap();
     let engine = OnDevice::new(Some(helper), model);
-    let mut capture = Capture::begin(&s.db, CaptureSpec {
-        title: None, labels: vec!["synthetic".into()], expected_ms: None, queued: false,
-    }, limits()).unwrap();
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["synthetic".into()],
+            expected_ms: None,
+            queued: false,
+        },
+        limits(),
+    )
+    .unwrap();
     let id = capture.id();
-    let mut pcm = samples(0,0,16_000);
-    pcm.extend(vec![0;16_000]);
-    pcm.extend(samples(0,0,32_000));
-    pcm.extend(vec![0;16_000]);
-    capture.push(0,&pcm).unwrap();
+    let mut pcm = samples(0, 0, 16_000);
+    pcm.extend(vec![0; 16_000]);
+    pcm.extend(samples(0, 0, 32_000));
+    pcm.extend(vec![0; 16_000]);
+    capture.push(0, &pcm).unwrap();
     capture.finish().unwrap();
     let report = process(&s.db, &id, &engine).await;
-    assert_eq!((report.accepted,report.failed), (2,0));
-    assert_eq!(sql(&s.db, "SELECT count(*) FROM attempts WHERE provider='on-device' AND state='succeeded'"), 2);
+    assert_eq!((report.accepted, report.failed), (2, 0));
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM attempts WHERE provider='on-device' AND state='succeeded'"
+        ),
+        2
+    );
     let stored = texts(&s.db, &id);
-    assert_eq!(stored.len(),2);
+    assert_eq!(stored.len(), 2);
     assert!(stored[0].3.contains("bytes=44800"));
     assert!(stored[1].3.contains("bytes=96000"));
     assert!(audio_files(&s.db).is_empty());
     let log = std::fs::read_to_string(root.join("log")).unwrap();
-    assert_eq!(log.matches("pid ").count(),1,"turns reuse the helper");
+    assert_eq!(log.matches("pid ").count(), 1, "turns reuse the helper");
 }
