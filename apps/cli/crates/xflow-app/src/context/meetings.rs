@@ -341,7 +341,7 @@ pub(super) fn call(
     if let Some(c) = cursor {
         result["next_cursor"] = c;
     }
-    if output_size(&result) > RESULT_BYTES - 1024 {
+    if over_budget(&result) {
         return Err(ToolError::Storage(
             "Meeting page exceeds result budget; narrow the time range".into(),
         ));
