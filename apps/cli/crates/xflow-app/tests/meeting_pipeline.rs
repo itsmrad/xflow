@@ -1452,3 +1452,196 @@ async fn orphan_planning_with_an_earlier_missing_or_corrupt_piece_recovers_once(
         assert!(audio_files(&s.db).is_empty());
     }
 }
+
+#[tokio::test]
+async fn rate_limited_burst_keeps_audio_refunds_budget_and_finishes_each_range_once() {
+    let s = scratch();
+    let meeting = capture(&s.db, &[70]);
+    let db = s.db.clone();
+    let sent_at = Arc::new(Mutex::new(Vec::new()));
+    let times = sent_at.clone();
+    let stub = stub(move |n, body| {
+        times.lock().unwrap().push(std::time::Instant::now());
+        if n < 4 {
+            assert_eq!(sql(&db, "SELECT count(*) FROM segments"), 0);
+            assert_eq!(audio_files(&db).len(), 14, "429 never releases audio");
+            assert_eq!(
+                sql(&db, "SELECT attempts FROM jobs WHERE win=0"),
+                1,
+                "each earlier 429 was refunded"
+            );
+            assert_eq!(
+                sql(&db, "SELECT count(*) FROM jobs WHERE win>0 AND attempts>0"),
+                0,
+                "Retry-After also pauses later ranges"
+            );
+            (
+                "429 Too Many Requests",
+                "Retry-After: 1\r\n".into(),
+                json!({}),
+                Duration::ZERO,
+            )
+        } else {
+            let riff = body.windows(4).position(|w| w == b"RIFF").unwrap();
+            let size =
+                u32::from_le_bytes(body[riff + 4..riff + 8].try_into().unwrap()) as usize + 8;
+            ok(&format!(
+                "range {:016x}",
+                xflow_core::stable_hash(&body[riff..riff + size])
+            ))
+        }
+    });
+    let report = process(&s.db, &meeting, provider(&stub.url, 5).as_ref()).await;
+    assert_eq!((report.accepted, report.failed, report.waiting), (3, 0, 0));
+    assert_eq!(stub.requests.load(Ordering::SeqCst), 7);
+    let times = sent_at.lock().unwrap();
+    for pair in times[..5].windows(2) {
+        assert!(
+            pair[1].duration_since(pair[0]) >= Duration::from_secs(1),
+            "Retry-After honored between dispatches"
+        );
+    }
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM attempts WHERE state='rate_limited'"
+        ),
+        4
+    );
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM attempts WHERE state='succeeded'"
+        ),
+        3
+    );
+    assert_eq!(sql(&s.db, "SELECT sum(attempts) FROM jobs"), 3);
+    assert_eq!(
+        sql(
+            &s.db,
+            "SELECT count(*) FROM (SELECT text FROM segments GROUP BY text)"
+        ),
+        3
+    );
+    assert_eq!(texts(&s.db, &meeting).len(), 3);
+    assert!(audio_files(&s.db).is_empty());
+    journal::recover(&s.db).unwrap();
+    assert_eq!(
+        texts(&s.db, &meeting).len(),
+        3,
+        "restart never duplicates accepted text"
+    );
+}
+
+#[tokio::test]
+async fn rate_limit_backoff_survives_restart_and_also_gates_new_ranges() {
+    for retry_after in [None, Some(7_200)] {
+        let s = scratch();
+        let meeting = capture(&s.db, &[12]);
+        let stub = stub(move |n, _| {
+            if n == 0 {
+                (
+                    "429 Too Many Requests",
+                    retry_after
+                        .map(|n| format!("Retry-After: {n}\r\n"))
+                        .unwrap_or_default(),
+                    json!({}),
+                    Duration::ZERO,
+                )
+            } else {
+                ok(&format!("accepted range {n}"))
+            }
+        });
+        let stt = provider(&stub.url, 5);
+        let (stop, cancel) = tokio::sync::watch::channel(false);
+        let db = s.db.clone();
+        let run = tokio::spawn(async move {
+            let _guard = transcribe::lock_worker(&db, false).unwrap().unwrap();
+            transcribe::run(
+                &db,
+                &[meeting.id],
+                stt.as_ref(),
+                || async { false },
+                cancel,
+                &mut |_| {},
+            )
+            .await
+            .unwrap()
+        });
+        let started = std::time::Instant::now();
+        while sql(
+            &s.db,
+            "SELECT count(*) FROM attempts WHERE state='rate_limited'",
+        ) == 0
+        {
+            assert!(started.elapsed() < Duration::from_secs(10));
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let _ = stop.send(true);
+        run.await.unwrap();
+        let delay = sql(&s.db, "SELECT not_before_ms FROM jobs") - journal::now_ms();
+        let expected = retry_after.unwrap_or(30) * 1000;
+        assert!(
+            delay >= expected - 2_000 && delay <= expected,
+            "full Retry-After/default backoff persisted: {delay}"
+        );
+        assert_eq!(sql(&s.db, "SELECT attempts FROM jobs"), 0);
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM jobs WHERE state='failed'"),
+            0
+        );
+        let later = capture(&s.db, &[12]);
+        let saved_deadline = sql(&s.db, "SELECT not_before_ms FROM jobs WHERE id=1");
+        jobs::reopen(&s.db, None).unwrap();
+        assert_eq!(
+            sql(&s.db, "SELECT not_before_ms FROM jobs WHERE id=1"),
+            saved_deadline,
+            "explicit retry must honor the provider cooldown too"
+        );
+        journal::recover(&s.db).unwrap();
+        let (_cancel_tx, cancel) = tokio::sync::watch::channel(false);
+        let db = s.db.clone();
+        let engine = provider(&stub.url, 5);
+        let pending = tokio::spawn(async move {
+            let _guard = transcribe::lock_worker(&db, false).unwrap().unwrap();
+            transcribe::run(
+                &db,
+                &[later.id],
+                engine.as_ref(),
+                || async { false },
+                cancel,
+                &mut |_| {},
+            )
+            .await
+            .unwrap()
+        });
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        let _ = _cancel_tx.send(true);
+        pending.await.unwrap();
+        assert_eq!(
+            stub.requests.load(Ordering::SeqCst),
+            1,
+            "new ranges also honor the persisted cooldown"
+        );
+        assert_eq!(audio_files(&s.db).len(), 6);
+        // Advance the persisted deadline, simulating quota recovery without a 2h sleep.
+        Connection::open(&s.db)
+            .unwrap()
+            .execute("UPDATE jobs SET not_before_ms=0", [])
+            .unwrap();
+        for id in [1, 2] {
+            let id = xflow_core::meeting::MeetingId {
+                store_id: meeting.store_id.clone(),
+                id,
+            };
+            process(&s.db, &id, provider(&stub.url, 5).as_ref()).await;
+        }
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM jobs WHERE state='accepted'"),
+            2
+        );
+        assert_eq!(sql(&s.db, "SELECT count(*) FROM segments"), 2);
+        assert_eq!(sql(&s.db, "SELECT sum(attempts) FROM jobs"), 2);
+        assert!(audio_files(&s.db).is_empty());
+    }
+}

@@ -14,8 +14,6 @@ use xflow_providers::SttFailure;
 /// Segment sequence = window * stride + index; a window holds at most 4096
 /// provider spans plus splits of long text.
 const SEQUENCE_STRIDE: i64 = 10_000;
-/// Rate-limit waits longer than this end the run; `retry` resumes later.
-const MAX_RETRY_AFTER_MS: i64 = 3_600_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Job {
@@ -28,7 +26,15 @@ pub(crate) struct Job {
     pub end: i64,
 }
 
-pub(crate) fn next_job(db: &Connection, meeting: i64, now: i64) -> Result<Option<Job>> {
+pub(crate) fn next_job(
+    db: &Connection,
+    meeting: i64,
+    now: i64,
+    provider: &str,
+) -> Result<Option<Job>> {
+    if rate_limit_until(db, provider)? > now {
+        return Ok(None);
+    }
     Ok(db
         .query_row(
             "SELECT id,meeting_id,source_idx,win,overlap_sample,start_sample,end_sample FROM jobs WHERE meeting_id=?1 AND state IN ('pending','waiting') AND not_before_ms<=?2 AND attempts<budget ORDER BY start_sample,source_idx LIMIT 1",
@@ -48,11 +54,22 @@ pub(crate) fn next_job(db: &Connection, meeting: i64, now: i64) -> Result<Option
         .optional()?)
 }
 /// When the next waiting job may run, if any is waiting.
-pub(crate) fn next_wait(db: &Connection, meeting: i64) -> Result<Option<i64>> {
-    Ok(db.query_row(
+pub(crate) fn next_wait(db: &Connection, meeting: i64, provider: &str) -> Result<Option<i64>> {
+    let next: Option<i64> = db.query_row(
         "SELECT MIN(not_before_ms) FROM jobs WHERE meeting_id=?1 AND state IN ('pending','waiting') AND attempts<budget",
         [meeting],
         |r| r.get(0),
+    )?;
+    let cooldown = rate_limit_until(db, provider)?;
+    Ok(next.map(|at| at.max(cooldown)))
+}
+
+/// A confirmed 429 pauses this provider's queued ranges, including newly
+/// captured ones, across restarts. Other providers/on-device remain available.
+fn rate_limit_until(db: &Connection, provider: &str) -> Result<i64> {
+    Ok(db.query_row(
+        "SELECT COALESCE(MAX(j.not_before_ms),0) FROM jobs j JOIN attempts a ON a.job_id=j.id WHERE j.state='waiting' AND a.state='rate_limited' AND a.provider=?1 AND a.id=(SELECT MAX(last.id) FROM attempts last WHERE last.job_id=j.id)",
+        [provider], |r| r.get(0),
     )?)
 }
 
@@ -227,14 +244,16 @@ pub(crate) fn fail(
         let state = match failure {
             SttFailure::NotSent => "not_sent",
             SttFailure::Ambiguous => "ambiguous",
+            SttFailure::RateLimited(_) => "rate_limited",
             _ => "failed",
         };
-        tx.execute(
+        let completed = tx.execute(
             "UPDATE attempts SET state=?2,error=?3 WHERE id=?1 AND state='reserved'",
             params![attempt, state, message],
         )?;
-        if failure == SttFailure::NotSent {
-            // A refused connection carried no audio and cannot be billed.
+        if completed == 1 && matches!(failure, SttFailure::NotSent | SttFailure::RateLimited(_)) {
+            // Unsent or explicitly rate-rejected audio did not get transcribed.
+            // Keep the dispatch history, but refund this reservation exactly once.
             tx.execute(
                 "UPDATE jobs SET attempts=attempts-1 WHERE id=?1 AND attempts>0",
                 [job.id],
@@ -250,13 +269,15 @@ pub(crate) fn fail(
         _ if attempt.is_none() => Failed::Final,
         SttFailure::NotSent => Failed::Unavailable,
         SttFailure::Rejected(_) => Failed::Final,
-        _ if attempts >= budget => Failed::Final,
         SttFailure::RateLimited(after) => Failed::Retry(
-            now + after
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(30_000)
-                .clamp(1_000, MAX_RETRY_AFTER_MS),
+            now.saturating_add(
+                after
+                    .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+                    .unwrap_or(30_000)
+                    .max(1_000),
+            ),
         ),
+        _ if attempts >= budget => Failed::Final,
         _ => Failed::Retry(now + 2_000 * (1 << attempts.clamp(0, 4))),
     };
     let (state, at) = match outcome {
@@ -273,11 +294,11 @@ pub(crate) fn fail(
 }
 
 /// Explicit user retry: failed and waiting jobs get a fresh three-attempt
-/// budget. Attempt history is kept.
+/// budget. Attempt history and provider rate-limit deadlines are kept.
 pub fn reopen(db_path: &Path, meeting: Option<i64>) -> Result<usize> {
     let db = open_writer(db_path)?;
     Ok(db.execute(
-        "UPDATE jobs SET state='pending',attempts=0,not_before_ms=0 WHERE state IN ('failed','waiting','pending') AND (?1 IS NULL OR meeting_id=?1)",
+        "UPDATE jobs SET state='pending',attempts=0,not_before_ms=0 WHERE state IN ('failed','waiting','pending') AND (?1 IS NULL OR meeting_id=?1) AND (state!='waiting' OR COALESCE((SELECT a.state FROM attempts a WHERE a.job_id=jobs.id ORDER BY a.id DESC LIMIT 1),'')!='rate_limited')",
         [meeting],
     )?)
 }

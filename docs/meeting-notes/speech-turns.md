@@ -28,6 +28,17 @@ and two cursors without writing audio. Typical counts depend on pauses; 720 is
 not the worst-case speech-turn count. No additional transcription dispatch is
 hidden inside a job.
 
+Confirmed HTTP 429 responses remain in the dispatch ledger as `rate_limited`
+but do not consume the three-attempt budget. Their durable `not_before_ms`
+pauses every queued range for that provider, including newly captured ranges;
+other providers and on-device work remain available. Numeric `Retry-After`
+seconds are honored in full, including daily-cap waits over an hour. Missing
+headers use a 30-second backoff. The background meeting worker resumes later;
+recovery and explicit retry preserve the cooldown and audio, and accepted text
+is committed once.
+Ambiguous requests (including a crash before recording the 429) still count.
+The original unpaced failure below predates this correction.
+
 ## Synthetic provider measurements
 
 All measurements below used file-only `say` PCM through `xflow meeting process
@@ -92,3 +103,10 @@ split a sentence or fail to find a turn boundary in noise. A language switch
 without a sufficient pause remains one request. Legacy unfinished captures
 finish with their original window geometry and therefore retain the old
 language limitation until a new meeting is started.
+
+At measured pause densities, a three-hour single-source meeting uses about
+1,258 English / 1,167 mixed requests (63% / 58% of
+[Groq's published 2,000-request daily free cap](https://console.groq.com/docs/rate-limits));
+two active sources exceed that cap, so remaining ranges must wait for its reset.
+These limits apply to the organization and retries add requests; audio-hour
+limits may be reached first. No new Groq calls were used for the rate-limit fix.
