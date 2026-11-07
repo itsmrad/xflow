@@ -7045,8 +7045,16 @@ mod tests {
                 learner,
                 learning.clone(),
             ));
-            // The first read has seen the delivery.
+            // The first read has seen the delivery. The pause keeps the usual
+            // timing; the loop waits out a slow runner instead of racing it.
             tokio::time::sleep(Duration::from_millis(40)).await;
+            while desktop.field_reads.load(Ordering::SeqCst) == 0 {
+                assert!(
+                    !task.is_finished(),
+                    "the watch ended before reading the field"
+                );
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
             Self {
                 desktop,
                 notify,
@@ -7073,6 +7081,11 @@ mod tests {
             Config::load(&self.path)
                 .map(|c| c.dictionary)
                 .unwrap_or_default()
+        }
+        /// The next save, however long the runner takes; `None` once the watch
+        /// (60 s at most) ends without one. For tests about what is saved, not when.
+        async fn next_save(&mut self) -> Option<Completion> {
+            self.saves.recv().await
         }
         /// The next save, if one lands within `ms`.
         async fn save_within(&mut self, ms: u64) -> Option<Completion> {
@@ -7533,15 +7546,15 @@ mod tests {
         )
         .await;
         run.edit("Ask Priyanka and Zorblax now ");
-        assert!(run.save_within(3000).await.is_some());
+        assert!(run.next_save().await.is_some());
         run.edit("Ask Priyanka and Zorblex now ");
-        assert!(run.save_within(3000).await.is_some());
+        assert!(run.next_save().await.is_some());
         assert_eq!(run.dictionary().words, ["Zorblex", "Priyanka"]);
         run.edit("Ask Priyankka and Zorblex now ");
         let Some(Completion::Learned {
             change: Some(change),
             ..
-        }) = run.save_within(3000).await
+        }) = run.next_save().await
         else {
             panic!("the re-edit was not saved");
         };

@@ -822,9 +822,15 @@ fn status(id: Option<&str>, config: &Path, out: &Output) -> Result<()> {
     // Queued work whose worker died (crash, reboot): continue it. This only
     // resumes what the user already asked to transcribe.
     let mut status = status;
-    if status.worker.queued > 0 && !status.worker.running && start_worker(&db, config)? {
-        status.worker.running = true;
-        status.worker.state = Some("restarted".into());
+    if status.worker.queued > 0 && !status.worker.running {
+        if start_worker(&db, config)? {
+            status.worker.running = true;
+            status.worker.state = Some("restarted".into());
+        } else {
+            // A worker took the lock after the status read (one started just
+            // before this call): it is running, so say so.
+            status.worker.running = true;
+        }
     }
     if out.json {
         return Ok(out.data(&status, "")?);
