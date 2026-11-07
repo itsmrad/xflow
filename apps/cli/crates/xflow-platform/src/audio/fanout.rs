@@ -555,17 +555,21 @@ impl MeetingHub {
         }
         let mut reader = self.reader();
         let mut state = self.lock();
-        fold_pending(&mut state, &self.pending_chunks, &self.pending_frames);
         let mut pull = MeetingPull {
             stale: false,
-            envelopes: match reader.take() {
-                Some(mut r) if r.generation == generation => r.drain(true),
-                _ => Vec::new(),
-            },
-            fault: state.fault_message(),
+            envelopes: Vec::new(),
+            fault: None,
         };
-        push_tail_gap(&mut pull, &mut state);
-        state.ring = None;
+        if reader.as_ref().is_some_and(|r| r.generation == generation) {
+            pull.envelopes = reader.take().map_or_else(Vec::new, |mut r| r.drain(true));
+        }
+        // A lease activated since `release` let go of the state is not this one to end.
+        if state.generation == generation {
+            fold_pending(&mut state, &self.pending_chunks, &self.pending_frames);
+            pull.fault = state.fault_message();
+            push_tail_gap(&mut pull, &mut state);
+            state.ring = None;
+        }
         pull
     }
 
