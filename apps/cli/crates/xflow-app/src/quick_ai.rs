@@ -1,5 +1,4 @@
 //! A short, context-free voice turn over the shared model gateway.
-use crate::{chat, context};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -10,7 +9,7 @@ use xflow_providers::llm::{self, ChatProvider as _, Event};
 struct VoiceChat {
     gateway: llm::Gateway,
     provider: String,
-    env: chat::TurnEnv,
+    model: String,
 }
 
 pub(crate) fn build(config: &Config) -> Result<Arc<dyn ChatProvider>> {
@@ -49,12 +48,7 @@ pub(crate) fn build(config: &Config) -> Result<Arc<dyn ChatProvider>> {
     Ok(Arc::new(VoiceChat {
         gateway,
         provider: selected.provider,
-        env: chat::TurnEnv {
-            context: Arc::new(context::ContextEnv::current()?),
-            model,
-            max_context_tokens: config.ai.max_context_tokens,
-            max_output_tokens: 512,
-        },
+        model,
     }))
 }
 
@@ -64,7 +58,7 @@ impl ChatProvider for VoiceChat {
         &self.provider
     }
     fn model(&self) -> &str {
-        &self.env.model
+        &self.model
     }
     async fn warm(&self) -> Result<()> {
         self.gateway.warm().await.map_err(Into::into)
@@ -72,20 +66,20 @@ impl ChatProvider for VoiceChat {
     async fn stream(&self, question: &str, tx: mpsc::Sender<String>) -> Result<()> {
         let (events, mut rx) = mpsc::channel(16);
         let turn = async move {
-            chat::run_turn(
-                &self.gateway,
-                &self.env,
-                context::Sources::default(),
-                &mut vec![],
-                question,
-                &events,
-            )
-            .await?;
+            // Voice turns have no transcript sources or tools.
+            let request = llm::ChatRequest {
+                model: self.model.clone(),
+                system: "Answer the user's question briefly. No transcript history or tools are available.".into(),
+                messages: vec![llm::Message::User(question.to_owned())],
+                tools: vec![],
+                max_output_tokens: 512,
+            };
+            self.gateway.stream(&request, &events).await?;
             Ok::<_, anyhow::Error>(())
         };
         let receive = async {
             while let Some(event) = rx.recv().await {
-                if let chat::TurnEvent::Model(Event::Text(text)) = event {
+                if let Event::Text(text) = event {
                     tx.send(text).await?;
                 }
             }
@@ -159,6 +153,11 @@ mod tests {
         assert_eq!(body["model"], "voice-model");
         assert_eq!(body["messages"][1]["content"], "Why use idempotency keys?");
         assert_eq!(body["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            body["messages"][0]["content"],
+            "Answer the user's question briefly. No transcript history or tools are available."
+        );
+        assert_eq!(body["max_tokens"], 512);
         assert!(body.get("tools").is_none());
         assert!(!body.to_string().contains("CLEANUP ONLY INSTRUCTIONS"));
     }
