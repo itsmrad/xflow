@@ -26,6 +26,10 @@ fn main() {
         .expect("clang is required to build xflow on macOS");
     assert!(status.success(), "meeting_native.m failed to compile");
     println!("cargo:rustc-link-arg-bin=xflow={}", object.display());
+    // `@available` calls `__isPlatformVersionAtLeast`. Rust std defines it, but
+    // release LTO drops it because only this object uses it, and rustc links
+    // with -nodefaultlibs, which leaves out clang's runtime. Add it back.
+    println!("cargo:rustc-link-arg-bin=xflow=-fapple-link-rtlib");
     // AppKit is opened at run time by the helper, so other commands never load it.
     for framework in ["Foundation", "CoreAudio"] {
         println!("cargo:rustc-link-arg-bin=xflow=-framework");
