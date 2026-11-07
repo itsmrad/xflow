@@ -175,7 +175,13 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         header[1],
     );
     // 16 leaves 14 inside the border: " 3  Dictionary" and " 8  Your stats".
-    let nav_width = if area.width >= 70 { 18 } else { 16 };
+    let nav_width = if app.page == Page::Doctor && area.width < 70 {
+        0
+    } else if area.width >= 70 {
+        18
+    } else {
+        16
+    };
     let body =
         Layout::horizontal([Constraint::Length(nav_width), Constraint::Min(1)]).split(rows[1]);
     let selected = app.page.index();
@@ -215,6 +221,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> HitMap {
         Page::Home => home(frame, body[1], app, &mut hits),
         Page::Dictionary => dictionary(frame, body[1], app, &mut hits),
         Page::Stats => stats(frame, body[1], app),
+        Page::Doctor => checkup(frame, body[1], app, &mut hits),
         Page::Styles => styles(frame, body[1], app, &mut hits),
         Page::Snippets => snippets(frame, body[1], app, &mut hits),
         Page::Settings => settings(frame, body[1], app, &mut hits),
@@ -461,17 +468,25 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ("Esc back", Some(Action::Back)),
                 ],
                 Page::Chat => vec![("↑↓ move", None), ("Enter choose", Some(Action::Choose))],
-                Page::Doctor if app.doctor_grant(app.selected()).is_some() => vec![
-                    ("Enter fix", Some(Action::Choose)),
-                    ("r refresh", Some(Action::Refresh)),
-                ],
+                Page::Doctor => {
+                    let mut keys = vec![];
+                    if app.doctor_grant(app.selected()).is_some() {
+                        keys.push(("Enter fix", Some(Action::Choose)));
+                    }
+                    keys.extend([
+                        ("r refresh", Some(Action::Refresh)),
+                        ("q quit", Some(Action::Quit)),
+                        ("↑↓ move", None),
+                        ("Esc back", Some(Action::Back)),
+                        ("Tab next page", None),
+                        ("? help", Some(Action::Help)),
+                    ]);
+                    return keys;
+                }
                 Page::Stats => vec![
                     ("PgUp/PgDn scroll", None),
                     ("r refresh", Some(Action::Refresh)),
                 ],
-                Page::Doctor => {
-                    vec![("↑↓ move", None), ("r refresh", Some(Action::Refresh))]
-                }
                 Page::AiApps => vec![
                     ("Enter choose", Some(Action::Choose)),
                     ("r refresh", Some(Action::Refresh)),
@@ -1063,6 +1078,88 @@ fn pill(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
         ];
         panel(frame, parts[1], "Current value", text, app);
     }
+}
+
+// Check-up keeps diagnostics intact; only the status prefix is expanded for scanning.
+fn diagnostic_label(label: &str) -> String {
+    let (status, text) = if let Some(text) = label.strip_prefix('!') {
+        ("! Check", text)
+    } else if let Some(text) = label.strip_prefix('✓').or_else(|| label.strip_prefix('+')) {
+        ("OK", text)
+    } else if let Some(text) = label.strip_prefix('•') {
+        ("Not checked", text)
+    } else {
+        ("Info", label)
+    };
+    format!("{status}: {}", text.trim_start())
+}
+
+fn checkup(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
+    let rows = app.rows();
+    let selected = app.selected();
+    let parts = if area.width >= 90 {
+        Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)]).split(area)
+    } else {
+        Layout::vertical([
+            Constraint::Min(4),
+            Constraint::Length((area.height / 2).clamp(5, 10)),
+        ])
+        .split(area)
+    };
+    let title = if app.diagnostics.is_empty() {
+        "Checking local setup".into()
+    } else {
+        format!("Checks {}/{}", selected + 1, rows.len())
+    };
+    let items = rows.iter().map(|(label, _)| {
+        ListItem::new(diagnostic_label(label)).style(if label.starts_with('!') {
+            app.theme.base().fg(app.theme.error)
+        } else {
+            app.theme.base()
+        })
+    });
+    let mut state = ListState::default().with_selected(Some(selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(block(app, title))
+            .highlight_symbol("> ")
+            .highlight_style(app.theme.selected()),
+        parts[0],
+        &mut state,
+    );
+    for index in state.offset()..rows.len() {
+        let y = parts[0].y + 1 + (index - state.offset()) as u16;
+        if y + 1 >= parts[0].bottom() {
+            break;
+        }
+        hits.rows.push((
+            Rect::new(parts[0].x + 1, y, parts[0].width.saturating_sub(2), 1),
+            index,
+        ));
+    }
+    let text = rows
+        .get(selected)
+        .map(|(label, more)| {
+            let label = diagnostic_label(label);
+            if more.is_empty() {
+                label
+            } else {
+                format!("{label}\n\n{more}")
+            }
+        })
+        .unwrap_or_else(|| "Checking local setup… Press r to refresh.".into());
+    let inner = block(app, "Details PgUp/Dn").padding(ratatui::widgets::Padding::horizontal(1));
+    let inside = inner.inner(parts[1]);
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    // Existing PgUp/PgDn steps are eight units; page by the visible details height.
+    let scroll = (app.scroll / 8).saturating_mul(inside.height.clamp(1, 8));
+    frame.render_widget(
+        paragraph
+            .block(inner)
+            .style(app.theme.base())
+            .scroll((scroll, 0)),
+        parts[1],
+    );
 }
 
 fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {

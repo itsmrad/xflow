@@ -2236,3 +2236,106 @@ fn stats_metrics_remain_readable_by_keyboard_in_short_and_narrow_terminals() {
     key(&mut app, KeyCode::Char('q'));
     assert!(app.quit);
 }
+
+#[test]
+fn checkup_readable_status_focus_and_details_at_all_sizes() {
+    let started = std::time::Instant::now();
+    let (_dir, mut app) = app();
+    app.page = Page::Doctor;
+    app.connected = true;
+    app.diagnostics = vec![
+        "✓ Settings valid".into(),
+        "! Kubernetes PostgreSQL OAuth — José, Priya and Mei: a deliberately long diagnostic with recovery instructions at the end: retry-setup".into(),
+        "+ Clipboard tool found".into(),
+        "• Microphone not checked".into(),
+    ];
+    for (theme, colors) in [
+        ("midnight", ColorMode::TrueColor),
+        ("paper", ColorMode::TrueColor),
+        ("paper", ColorMode::None),
+    ] {
+        app.theme = Theme::resolve(theme, &BTreeMap::new(), colors).unwrap();
+        for (width, height) in [(120, 32), (80, 24), (40, 16), (40, 12)] {
+            key(&mut app, KeyCode::Home);
+            // Find by label so macOS's permission rows keep their indices/actions.
+            let index = app
+                .rows()
+                .iter()
+                .position(|(r, _)| r.starts_with("! Kubernetes"))
+                .unwrap();
+            for _ in 0..index {
+                key(&mut app, KeyCode::Down);
+            }
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut hits = render::HitMap::default();
+            terminal
+                .draw(|frame| hits = render::draw(frame, &app))
+                .unwrap();
+            let text = screen(&app, width, height);
+            assert!(text.contains("! Check"), "{width}x{height}: {text}");
+            assert!(
+                text.contains("r refresh") && text.contains("q quit"),
+                "{text}"
+            );
+            assert!(
+                text.contains("Details") && text.contains("Kubernetes"),
+                "{text}"
+            );
+            let (rect, _) = hits
+                .rows
+                .iter()
+                .find(|(_, i)| *i == index)
+                .expect("selected row has a hit region");
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(rect.x, rect.y)].symbol(), ">");
+            assert!(buffer[(rect.x, rect.y)]
+                .modifier
+                .contains(Modifier::REVERSED | Modifier::BOLD));
+            assert!(hits
+                .rows
+                .iter()
+                .all(|(r, _)| r.width > 0 && r.height == 1 && r.bottom() <= height));
+            assert!(hits
+                .actions
+                .iter()
+                .any(|(_, a)| matches!(a, Action::Refresh)));
+            assert!(hits.actions.iter().any(|(_, a)| matches!(a, Action::Quit)));
+            let mut tail = false;
+            for _ in 0..8 {
+                tail |= screen(&app, width, height).contains("retry-setup");
+                key(&mut app, KeyCode::PageDown);
+            }
+            assert!(tail, "detail must be reachable at {width}x{height}");
+            for _ in 0..8 {
+                key(&mut app, KeyCode::PageUp);
+            }
+            assert_eq!(app.scroll, 0);
+            assert!(key(&mut app, KeyCode::Char('r'))
+                .iter()
+                .any(|e| matches!(e, Effect::Doctor)));
+            assert_eq!(app.selected(), index);
+            key(&mut app, KeyCode::End);
+            let text = screen(&app, width, height);
+            assert!(text.contains("Not checked"), "{text}");
+        }
+    }
+    eprintln!(
+        "Check-up: 12 theme/size variants, keyboard, hit regions and redraws in {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn checkup_loading_and_helper_down_keep_recovery_visible() {
+    let (_dir, mut app) = app();
+    app.page = Page::Doctor;
+    app.diagnostics.clear();
+    for (width, height) in [(120, 32), (80, 24), (40, 16), (40, 12)] {
+        let text = screen(&app, width, height);
+        assert!(text.contains("Checking local setup"), "{text}");
+        assert!(
+            text.contains("! Check") && text.contains("r refresh") && text.contains("q quit"),
+            "{text}"
+        );
+    }
+}
