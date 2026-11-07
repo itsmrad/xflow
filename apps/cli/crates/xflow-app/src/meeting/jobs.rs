@@ -589,6 +589,85 @@ pub struct PipelineStatus {
 
 pub const WARN_AFTER_MS: i64 = 24 * 3_600_000;
 
+/// One meeting's row in `status`.
+fn meeting_pipeline(db: &Connection, store: &str, id: i64, now: i64) -> Result<MeetingPipeline> {
+    let (title, started, capture, reason, created, ended): (
+        Option<String>,
+        i64,
+        String,
+        Option<String>,
+        i64,
+        Option<i64>,
+    ) = db.query_row(
+        "SELECT m.title,m.started_at_ms,c.state,c.reason,c.created_ms,c.ended_ms FROM meetings m JOIN captures c ON c.meeting_id=m.id WHERE m.id=?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+    )?;
+    let count = |sql: &str| -> rusqlite::Result<i64> { db.query_row(sql, [id], |r| r.get(0)) };
+    let windows = Windows {
+        total: count("SELECT count(*) FROM jobs WHERE meeting_id=?1")?,
+        accepted: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='accepted'")?,
+        empty: count("SELECT count(*) FROM jobs j WHERE meeting_id=?1 AND state='accepted' AND NOT EXISTS(SELECT 1 FROM segment_provenance p WHERE p.job_id=j.id)")?,
+        pending: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='pending'")?,
+        waiting: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='waiting'")?,
+        failed: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='failed'")?,
+        retained: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='retained'")?,
+        abandoned: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='abandoned'")?,
+    };
+    let (pieces, bytes, samples): (i64, i64, i64) = db.query_row(
+        "SELECT count(*),COALESCE(SUM(bytes),0),COALESCE(SUM(samples),0) FROM pieces WHERE meeting_id=?1 AND state IN ('ready','unlink_pending')",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let age = (pieces > 0).then(|| now - ended.unwrap_or(created));
+    let mut warnings = Vec::new();
+    if age.is_some_and(|a| a >= WARN_AFTER_MS) {
+        warnings.push(format!(
+            "audio has waited over 24 hours for transcription; run `xflow meeting retry {store}:{id}` or delete the meeting. It is never deleted automatically."
+        ));
+    }
+    if capture == "interrupted" || capture == "stopped" {
+        warnings.push(format!(
+            "capture {capture}: {}",
+            reason.clone().unwrap_or_default()
+        ));
+    }
+    Ok(MeetingPipeline {
+        meeting: MeetingId {
+            store_id: store.to_owned(),
+            id,
+        },
+        title,
+        capture,
+        reason,
+        started_at_ms: started,
+        windows,
+        attempts: count("SELECT count(*) FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.meeting_id=?1 AND a.state!='not_sent'")?,
+        ambiguous_attempts: count("SELECT count(*) FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.meeting_id=?1 AND a.state='ambiguous'")?,
+        pending_audio: PendingAudio {
+            pieces,
+            bytes,
+            seconds: samples / RATE,
+            age_ms: age,
+        },
+        gaps: count("SELECT count(*) FROM gaps WHERE meeting_id=?1")?,
+        dedup_trimmed: count("SELECT count(*) FROM segment_provenance p JOIN jobs j ON j.id=p.job_id WHERE j.meeting_id=?1 AND p.dedup='trimmed'")?,
+        dedup_uncertain: count("SELECT count(*) FROM segment_provenance p JOIN jobs j ON j.id=p.job_id WHERE j.meeting_id=?1 AND p.dedup IN ('uncertain','unchecked')")?,
+        next_retry_ms: db.query_row(
+            "SELECT MIN(not_before_ms) FROM jobs WHERE meeting_id=?1 AND state='waiting'",
+            [id],
+            |r| r.get(0),
+        )?,
+        last_error: db
+            .query_row(
+                "SELECT error FROM jobs WHERE meeting_id=?1 AND state IN ('failed','waiting','pending') AND error IS NOT NULL ORDER BY id DESC LIMIT 1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?,
+        warnings,
+    })
+}
 /// Read-only. `now` is explicit so the 24-hour warning is testable.
 pub fn status(
     db_path: &Path,
@@ -650,82 +729,9 @@ pub fn status(
         rows
     };
     for id in ids {
-        let (title, started, capture, reason, created, ended): (
-            Option<String>,
-            i64,
-            String,
-            Option<String>,
-            i64,
-            Option<i64>,
-        ) = db.query_row(
-            "SELECT m.title,m.started_at_ms,c.state,c.reason,c.created_ms,c.ended_ms FROM meetings m JOIN captures c ON c.meeting_id=m.id WHERE m.id=?1",
-            [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
-        )?;
-        let count = |sql: &str| -> rusqlite::Result<i64> { db.query_row(sql, [id], |r| r.get(0)) };
-        let windows = Windows {
-            total: count("SELECT count(*) FROM jobs WHERE meeting_id=?1")?,
-            accepted: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='accepted'")?,
-            empty: count("SELECT count(*) FROM jobs j WHERE meeting_id=?1 AND state='accepted' AND NOT EXISTS(SELECT 1 FROM segment_provenance p WHERE p.job_id=j.id)")?,
-            pending: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='pending'")?,
-            waiting: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='waiting'")?,
-            failed: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='failed'")?,
-            retained: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='retained'")?,
-            abandoned: count("SELECT count(*) FROM jobs WHERE meeting_id=?1 AND state='abandoned'")?,
-        };
-        let (pieces, bytes, samples): (i64, i64, i64) = db.query_row(
-            "SELECT count(*),COALESCE(SUM(bytes),0),COALESCE(SUM(samples),0) FROM pieces WHERE meeting_id=?1 AND state IN ('ready','unlink_pending')",
-            [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?;
-        let age = (pieces > 0).then(|| now - ended.unwrap_or(created));
-        let mut warnings = Vec::new();
-        if age.is_some_and(|a| a >= WARN_AFTER_MS) {
-            warnings.push(format!(
-                "audio has waited over 24 hours for transcription; run `xflow meeting retry {store}:{id}` or delete the meeting. It is never deleted automatically."
-            ));
-        }
-        if capture == "interrupted" || capture == "stopped" {
-            warnings.push(format!(
-                "capture {capture}: {}",
-                reason.clone().unwrap_or_default()
-            ));
-        }
-        status.meetings.push(MeetingPipeline {
-            meeting: MeetingId {
-                store_id: store.clone(),
-                id,
-            },
-            title,
-            capture,
-            reason,
-            started_at_ms: started,
-            windows,
-            attempts: count("SELECT count(*) FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.meeting_id=?1 AND a.state!='not_sent'")?,
-            ambiguous_attempts: count("SELECT count(*) FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.meeting_id=?1 AND a.state='ambiguous'")?,
-            pending_audio: PendingAudio {
-                pieces,
-                bytes,
-                seconds: samples / RATE,
-                age_ms: age,
-            },
-            gaps: count("SELECT count(*) FROM gaps WHERE meeting_id=?1")?,
-            dedup_trimmed: count("SELECT count(*) FROM segment_provenance p JOIN jobs j ON j.id=p.job_id WHERE j.meeting_id=?1 AND p.dedup='trimmed'")?,
-            dedup_uncertain: count("SELECT count(*) FROM segment_provenance p JOIN jobs j ON j.id=p.job_id WHERE j.meeting_id=?1 AND p.dedup IN ('uncertain','unchecked')")?,
-            next_retry_ms: db.query_row(
-                "SELECT MIN(not_before_ms) FROM jobs WHERE meeting_id=?1 AND state='waiting'",
-                [id],
-                |r| r.get(0),
-            )?,
-            last_error: db
-                .query_row(
-                    "SELECT error FROM jobs WHERE meeting_id=?1 AND state IN ('failed','waiting','pending') AND error IS NOT NULL ORDER BY id DESC LIMIT 1",
-                    [id],
-                    |r| r.get(0),
-                )
-                .optional()?,
-            warnings,
-        });
+        status
+            .meetings
+            .push(meeting_pipeline(&db, &store, id, now)?);
     }
     Ok(status)
 }
