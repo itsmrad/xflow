@@ -260,8 +260,12 @@ int xflow_meeting_native(const char *app, int mic, int yes, int mute) {
             picker.accessibilityLabel = @"App to record";
             alert.accessoryView = picker;
             [alert layout];
-            NSWindow *window = alert.window;
+            // Keep NSAlert's accessible content with normal modeless focus rules.
+            NSWindow *window = [[CLS(NSWindow) alloc] initWithContentRect:alert.window.contentView.bounds styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+            window.contentView = alert.window.contentView;
             window.title = @"Record this meeting?";
+            window.accessibilitySubrole = @"AXDialog";
+            [window center];
             MeetingConsent *consent = [MeetingConsent new];
             window.delegate = consent;
             NSButton *record = alert.buttons[0], *cancel = alert.buttons[1];

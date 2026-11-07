@@ -30,7 +30,9 @@ int main(int argc, const char **argv) {
         });
         id observer = [NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil usingBlock:^(NSNotification *notification) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                NSWindow *window = App.windows.firstObject;
+                NSWindow *window = nil;
+                for (NSWindow *candidate in App.windows)
+                    if (candidate.visible && [candidate.title isEqual:@"Record this meeting?"]) window = candidate;
                 assert(window && window.visible && !atomic_load(&running));
                 assert(window.defaultButtonCell == nil);
                 NSButton *record = button(window.contentView, @"Record"), *cancel = button(window.contentView, @"Cancel");
