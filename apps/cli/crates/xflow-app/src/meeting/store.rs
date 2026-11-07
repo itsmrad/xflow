@@ -345,12 +345,17 @@ pub(crate) fn open_reader(path: &Path) -> Result<Connection> {
             | OpenFlags::SQLITE_OPEN_NOFOLLOW
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
-    db.busy_timeout(Duration::from_millis(50))?;
+    // WAL readers only wait on locks while another connection recovers the
+    // WAL after a crash or rebuilds the shared index; give that the writers'
+    // wait, not a fixed failure for status, the TUI and MCP.
+    db.busy_timeout(WRITER_BUSY)?;
     db.execute_batch("PRAGMA query_only=ON;")?;
-    deadline(&mut db)?;
     validate_schema(&db, false)?;
     // A read can create a group-readable SHM under a loose umask.
     private_sidecars(&path, true)?;
+    // The query budget starts once the connection is ready, so a lock wait
+    // above never spends it.
+    deadline(&mut db)?;
     Ok(db)
 }
 /// Wait this long for another writer, then fail. Schema creation holds the same lock.

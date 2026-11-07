@@ -1048,3 +1048,39 @@ async fn live_gap_keeps_later_audio_in_place_and_is_reported() {
         "audio goes only after its text is stored"
     );
 }
+
+/// Another writer (an import, a delete, crash recovery) holding the lock past
+/// the usual 1 s busy wait must not stop a live recording: the piece commits
+/// once the lock frees, and the capture goes on.
+#[test]
+fn a_live_piece_outwaits_a_long_writer_instead_of_stopping_the_capture() {
+    let s = scratch();
+    let mut capture = Capture::begin(
+        &s.db,
+        CaptureSpec {
+            title: None,
+            labels: vec!["mic".into()],
+            expected_ms: None,
+            queued: false,
+        },
+        limits(),
+    )
+    .unwrap();
+    let (held, holding) = std::sync::mpsc::channel();
+    let path = s.db.clone();
+    let writer = std::thread::spawn(move || {
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        held.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(1500));
+        other.execute_batch("COMMIT;").unwrap();
+    });
+    holding.recv().unwrap();
+    capture.push(0, &samples(0, 0, PIECE_SAMPLES)).unwrap();
+    writer.join().unwrap();
+    capture
+        .push(0, &samples(0, PIECE_SAMPLES, PIECE_SAMPLES))
+        .unwrap();
+    capture.finish().unwrap();
+    assert_eq!(sql(&s.db, "SELECT count(*) FROM pieces"), 2);
+}

@@ -11,6 +11,7 @@ use std::{
     fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
+    time::Duration,
 };
 use xflow_core::meeting::{Gap, MeetingId, Source, TimeRange};
 
@@ -354,6 +355,9 @@ pub struct Capture {
     _lock: File,
 }
 
+/// How long a recorder commit waits for another writer before it fails.
+const RECORDER_BUSY: Duration = Duration::from_secs(10);
+
 impl Capture {
     pub fn begin(db_path: &Path, spec: CaptureSpec, limits: Limits) -> Result<Self> {
         ensure!(
@@ -452,6 +456,12 @@ impl Capture {
             params![meeting, now, spec.expected_ms, spec.queued],
         )?;
         tx.commit()?;
+        // A piece that cannot commit stops the capture. Another writer (an
+        // import, a delete, crash recovery) can hold the lock past the usual
+        // 1 s on a busy Mac, so pieces wait longer; the recorder's audio queue
+        // holds the audio meanwhile. Startup keeps the 1 s wait: the recorder
+        // does not read the microphone until this returns.
+        db.busy_timeout(RECORDER_BUSY)?;
         let dir = meeting_dir(&root, &store, meeting);
         crate::paths::private_dir(&dir)?;
         let lock = lock_file(&dir.join("capture.lock"))?;
