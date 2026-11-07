@@ -1116,10 +1116,7 @@ mod tests {
                 .collect();
             for (row, _, _) in &rows {
                 let message = row.trim_start_matches(['!', '•', '✓', '+']).trim_start();
-                assert!(
-                    lines.iter().any(|l| l.contains(message)),
-                    "{width}: {row}"
-                );
+                assert!(lines.iter().any(|l| l.contains(message)), "{width}: {row}");
             }
             assert!(lines.iter().any(|l| l.contains("Enter fix")), "{width}");
         }
