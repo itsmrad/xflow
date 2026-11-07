@@ -861,7 +861,7 @@ impl App {
             return String::new();
         };
         if crate::harness::is_harness(choice.id) {
-            return "Opt-in installed CLI. Uses its own login; xflow never reads authentication files. The CLI may persist logs, caches or sessions. Codex/Cursor isolation is unverified and launches are refused. Claude is prefetch only.".into();
+            return crate::harness::isolation_reason(choice.id).unwrap_or("Opt-in installed CLI. Uses its own login; xflow never reads authentication files. The CLI may persist logs, caches or sessions. Claude is prefetch only.").into();
         }
         let mut text = format!("Choose where your questions go. Press Enter to set up {}.\n\nThe key stays encrypted on this computer. Your dictations are shared only after you allow it.", choice.name);
         if let Some(issue) = self.chat.key_state(choice.id).and_then(key_issue) {

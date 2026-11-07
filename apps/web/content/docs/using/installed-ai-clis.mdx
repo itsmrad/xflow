@@ -15,9 +15,12 @@ bounded local searches; this integration does not attach MCP or fetch entire
 meeting transcripts. Automatic managed settings are controlled by the CLI, and
 this is not an operating-system filesystem sandbox.
 
-`codex` and `cursor` appear in setup and can be selected explicitly, but currently
-refuse chat launches because their stdin and host-access isolation have not been
-verified. Use Claude Code or an API provider until those boundaries are verified.
+`codex` and `cursor` appear in setup but refuse chat launches for specific reasons:
+Codex's empty MCP override does not exclude inherited servers, and Cursor's tool
+filters do not disable inherited MCP startup or hooks. Stdin and a correct,
+tool-free answer do not establish those startup boundaries. See the
+[verification evidence and synthetic canary procedure](https://github.com/itsmrad/xflow/blob/main/docs/harness-isolation.md).
+Use Claude Code or an API provider until exclusive startup control is established.
 
 Select transcript sources explicitly:
 

@@ -543,3 +543,44 @@ printf '{{"type":"stream_event","event":{{"delta":{{"type":"text_delta","text":"
         );
     }
 }
+
+#[test]
+fn unsupported_isolation_explains_each_provider_without_spawning_it() {
+    use std::os::unix::fs::PermissionsExt;
+    for (provider, binary, reason) in [
+        ("codex", "codex", "mcp_servers={}"),
+        ("cursor", "cursor-agent", "session hooks"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let bins = root.join("bin");
+        std::fs::create_dir(&bins).unwrap();
+        let executable = bins.join(binary);
+        let marker = root.join("spawned");
+        std::fs::write(
+            &executable,
+            format!("#!/bin/sh\necho spawned > '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        write_config(root, "");
+        let result = command(root)
+            .env("PATH", &bins)
+            .args([
+                "ask",
+                "Synthetic canary",
+                "--provider",
+                provider,
+                "--no-context",
+            ])
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(result.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&result.stderr).contains(reason));
+        assert!(
+            !marker.exists(),
+            "isolation refusal must happen before CLI startup"
+        );
+    }
+}
