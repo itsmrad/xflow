@@ -110,6 +110,8 @@ impl Sandbox {
             .env("XDG_DATA_HOME", self.path().join("data"))
             .env("XDG_CONFIG_HOME", self.path().join("config"))
             .env("XDG_RUNTIME_DIR", self.path().join("run"))
+            .env("XDG_STATE_HOME", self.path().join("state"))
+            .env("XDG_CACHE_HOME", self.path().join("cache"))
             .env("NO_COLOR", "1")
             .env("PATH", "/usr/bin:/bin")
             .args(args)
@@ -309,7 +311,7 @@ fn complete(sandbox: &Sandbox) {
     );
     assert_eq!(
         sandbox.n("SELECT count(*) FROM segments"),
-        sandbox.n("SELECT count(*) FROM jobs WHERE state='accepted'")
+        sandbox.n("SELECT count(*) FROM jobs WHERE state='accepted' AND (error IS NULL OR error!='digital silence; not sent')")
     );
     assert_eq!(sandbox.n("SELECT count(*) FROM pieces"), 0);
     let files = std::fs::read_dir(sandbox.spool())
@@ -681,4 +683,65 @@ fn random_process_kills_lose_and_duplicate_nothing() {
         sandbox.n("SELECT count(*) FROM gaps"),
     );
     assert!(kills_worker > 0 && kills_cli > 0);
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn speech_range_cursor_and_jobs_recover_atomically_at_each_boundary() {
+    let stub = stub(Duration::ZERO);
+    for point in [
+        "plan:inserted",
+        "plan:updated",
+        "piece:committed",
+        "result:reserved",
+        "result:received",
+        "result:committed",
+        "result:unlinked",
+    ] {
+        let sandbox = Sandbox::new(&stub);
+        let path = sandbox.path().join("turns.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut wav = hound::WavWriter::create(&path, spec).unwrap();
+        // Unequal turns and pauses deliberately straddle 5 s journal pieces.
+        for (voice, quiet) in [(2, 1), (3, 2), (1, 1), (4, 1)] {
+            for i in 0..voice * 16_000 {
+                wav.write_sample(((i % 2000) as i16 - 1000) * 8).unwrap();
+            }
+            for _ in 0..quiet * 16_000 {
+                wav.write_sample(0i16).unwrap();
+            }
+        }
+        wav.finalize().unwrap();
+        sandbox
+            .xflow(&["meeting", "process", path.to_str().unwrap()])
+            .env("XFLOW_MEETING_FAULT", format!("{point}=2=kill"))
+            .output()
+            .unwrap();
+        sandbox.wait_idle(Duration::from_secs(30));
+        let before = invariants(&sandbox, &Acked::new(), &[]);
+        let resumed = sandbox.run(&["meeting", "retry", "--wait"]);
+        assert!(
+            resumed.status.success(),
+            "{point}: {}",
+            String::from_utf8_lossy(&resumed.stderr)
+        );
+        sandbox.wait_idle(Duration::from_secs(30));
+        invariants(&sandbox, &before, &[]);
+        complete(&sandbox);
+        let db = sandbox.ro();
+        let (cursor, end): (i64,i64) = db.query_row("SELECT p.planned_sample,MAX(j.end_sample) FROM speech_plans p JOIN jobs j USING(meeting_id,source_idx)", [], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(cursor, end, "{point}");
+        let discontinuities: i64 = db.query_row("SELECT count(*) FROM jobs j JOIN jobs n ON n.meeting_id=j.meeting_id AND n.source_idx=j.source_idx AND n.win=j.win+1 WHERE j.end_sample!=n.start_sample", [], |r| r.get(0)).unwrap();
+        assert_eq!(discontinuities, 0, "{point}");
+        assert_eq!(
+            sandbox.n("SELECT count(*) FROM jobs WHERE attempts>budget"),
+            0,
+            "{point}"
+        );
+    }
 }

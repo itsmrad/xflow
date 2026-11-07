@@ -373,7 +373,7 @@ fn segments(
         pieces = window(text, "window");
     }
     if let Some(first) = pieces.first_mut() {
-        if job.win > 0 {
+        if job.win > 0 && job.overlap < job.start {
             match (previous, previous_accepted) {
                 (_, false) => first.dedup = "unchecked",
                 (None, true) => {}
