@@ -17,6 +17,14 @@ use xflow_providers::llm::{self, ChatProvider, ChatRequest, Event, LlmError, Mes
 pub fn is_harness(id: &str) -> bool {
     matches!(id, "claude-code" | "codex" | "cursor")
 }
+/// A tool-free answer does not establish that CLI startup is isolated.
+pub fn isolation_reason(id: &str) -> Option<&'static str> {
+    match id {
+        "codex" => Some("Codex launch refused: --ignore-user-config leaves system/managed configuration, and mcp_servers={} does not replace inherited servers; an exclusive MCP boundary is required"),
+        "cursor" => Some("Cursor launch refused: stdin works, but tool filters and workspace read denies do not disable inherited MCP startup or session hooks; an exclusive startup boundary is required"),
+        _ => None,
+    }
+}
 fn executable(id: &str) -> Result<PathBuf, LlmError> {
     use std::os::unix::fs::PermissionsExt;
     let names: &[&str] = match id {
@@ -328,8 +336,8 @@ impl ChatProvider for Gateway {
         }
         let id = self.harness.as_deref().unwrap();
         let path = executable(id)?;
-        if id != "claude-code" {
-            return Err(LlmError::Provider("this CLI's stdin and host-access isolation are not verified; choose Claude Code or an API provider".into()));
+        if let Some(reason) = isolation_reason(id) {
+            return Err(LlmError::Provider(reason.into()));
         }
         let help = probe(&path, &["--help"]).await?;
         for flag in [
