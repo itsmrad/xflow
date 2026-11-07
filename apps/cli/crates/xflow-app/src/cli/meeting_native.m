@@ -42,6 +42,11 @@ static NSDate *began;
 static id sleepObserver;
 static pthread_mutex_t outLock = PTHREAD_MUTEX_INITIALIZER;
 
+static void wakeApp(void) {
+    [App stop:nil];
+    [App postEvent:[CLS(NSEvent) otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:0 data1:0 data2:0] atStart:YES];
+}
+
 static void frame(char kind, const void *body, uint32_t length) {
     pthread_mutex_lock(&outLock);
     uint8_t head[5] = {(uint8_t)kind, length, length >> 8, length >> 16, length >> 24};
@@ -190,6 +195,17 @@ static void writer(void) {
 }
 @end
 
+@interface MeetingConsent : NSObject <NSWindowDelegate>
+@property NSInteger answer;
+- (void)record:(id)sender;
+- (void)decline:(id)sender;
+@end
+@implementation MeetingConsent
+- (void)record:(id)sender { self.answer = 1; wakeApp(); }
+- (void)decline:(id)sender { self.answer = -1; wakeApp(); }
+- (BOOL)windowShouldClose:(NSWindow *)sender { [self decline:nil]; return NO; }
+@end
+
 int xflow_meeting_native(const char *app, int mic, int yes, int mute) {
     @autoreleasepool {
         parentPID = getppid();
@@ -206,10 +222,10 @@ int xflow_meeting_native(const char *app, int mic, int yes, int mute) {
         [NSThread detachNewThreadWithBlock:^{
             char c = 0;
             while (read(STDIN_FILENO, &c, 1) == 1 && c != 'q') {
-                if (c == 's') dispatch_async(dispatch_get_main_queue(), ^{ [App stop:nil]; [App postEvent:[CLS(NSEvent) otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:1 data1:0 data2:0] atStart:YES]; });
+                if (c == 's') dispatch_async(dispatch_get_main_queue(), ^{ wakeApp(); });
             }
-            quit = true; atomic_store(&running, false);
-            dispatch_async(dispatch_get_main_queue(), ^{ [App abortModal]; [App stop:nil]; [App postEvent:[CLS(NSEvent) otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:0 data1:0 data2:0] atStart:YES]; });
+            atomic_store(&running, false);
+            dispatch_async(dispatch_get_main_queue(), ^{ quit = true; wakeApp(); });
         }];
         NSMutableArray *visible = [NSMutableArray new];
         for (NSRunningApplication *a in [CLS(NSWorkspace) sharedWorkspace].runningApplications)
@@ -230,6 +246,7 @@ int xflow_meeting_native(const char *app, int mic, int yes, int mute) {
             else selected = matches[0];
         }
         if (!yes) {
+            NSRunningApplication *previous = [CLS(NSWorkspace) sharedWorkspace].frontmostApplication;
             NSAlert *alert = [CLS(NSAlert) new];
             alert.messageText = @"Record this meeting?";
             alert.informativeText = [NSString stringWithFormat:@"Xflow records %@ the app you choose, including its helper processes. A browser records all of its tabs. Audio stays private on this Mac until it is sent to your configured transcription provider. Make sure everyone in the meeting agrees. Stop any time from the Xflow indicator. Nothing is recorded until you choose Record.", mic ? @"your microphone and" : @""];
@@ -242,9 +259,32 @@ int xflow_meeting_native(const char *app, int mic, int yes, int mute) {
             if (at != NSNotFound) [picker selectItemAtIndex:at + (mic ? 1 : 0)];
             picker.accessibilityLabel = @"App to record";
             alert.accessoryView = picker;
-            [App activateIgnoringOtherApps:YES];
-            NSModalResponse answer = [alert runModal];
-            if (quit || answer != NSAlertFirstButtonReturn) { frame('D', NULL, 0); return 0; }
+            [alert layout];
+            NSWindow *window = alert.window;
+            window.title = @"Record this meeting?";
+            MeetingConsent *consent = [MeetingConsent new];
+            window.delegate = consent;
+            NSButton *record = alert.buttons[0], *cancel = alert.buttons[1];
+            record.target = cancel.target = consent;
+            record.action = @selector(record:); cancel.action = @selector(decline:);
+            record.keyEquivalent = @""; cancel.keyEquivalent = @"\e";
+            window.defaultButtonCell = nil;
+            window.initialFirstResponder = cancel;
+            // Return must never become consent, even with Record keyboard-focused.
+            id keys = [CLS(NSEvent) addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
+                if (event.window == window && (event.keyCode == 36 || event.keyCode == 76)) return nil;
+                return event;
+            }];
+            [window orderFrontRegardless];
+            // runModal before App.run never finishes launching the AX server.
+            [App run];
+            [CLS(NSEvent) removeMonitor:keys];
+            [window orderOut:nil];
+            if (App.active && previous && !previous.terminated && previous.processIdentifier != getpid()) {
+                if (@available(macOS 14.0, *)) [App yieldActivationToApplication:previous];
+                [previous activateWithOptions:0];
+            }
+            if (quit || consent.answer != 1) { frame('D', NULL, 0); return 0; }
             NSInteger index = picker.indexOfSelectedItem - (mic ? 1 : 0);
             selected = index >= 0 && index < (NSInteger)visible.count ? visible[index] : nil;
         }
