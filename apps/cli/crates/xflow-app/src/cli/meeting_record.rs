@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use xflow_app::meeting::journal::{self, Capture, CaptureSpec, Limits, RATE};
+use xflow_app::meeting_mic::Frame as MicFrame;
 
 /// Live meetings stop here; the journal holds at most three hours.
 const MAX_LIVE: Duration = Duration::from_secs(3 * 3600);
@@ -147,17 +148,19 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
     if let Some(client) = &client {
         let mut reader = client.try_clone()?;
         let tx = tx.clone();
-        std::thread::spawn(move || loop {
-            match reader.recv() {
-                Ok(frame) => {
-                    let end = matches!(frame, xflow_app::meeting_mic::Frame::End(_));
-                    if tx.send(Msg::Mic(frame, Instant::now())).is_err() || end {
+        std::thread::spawn(move || {
+            let mut dropped = 0;
+            loop {
+                match reader.recv() {
+                    Ok(frame) => {
+                        if !queue_mic(&tx, frame, &mut dropped) {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Msg::MicGone(format!("{e:#}")));
                         return;
                     }
-                }
-                Err(e) => {
-                    let _ = tx.send(Msg::MicGone(format!("{e:#}")));
-                    return;
                 }
             }
         });
@@ -185,7 +188,7 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
         };
         let result: anyhow::Result<()> = match msg {
             Ok(Msg::Mic(
-                xflow_app::meeting_mic::Frame::Audio {
+                MicFrame::Audio {
                     rate,
                     lost,
                     samples,
@@ -195,7 +198,7 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
                 Some(s) => tracks[s].push(&mut capture, s, rate, lost, &samples, at),
                 None => Ok(()),
             },
-            Ok(Msg::Mic(xflow_app::meeting_mic::Frame::End(why), _)) => {
+            Ok(Msg::Mic(MicFrame::End(why), _)) => {
                 mic_done = true;
                 if why != "released" {
                     stop_with(
@@ -429,6 +432,36 @@ pub fn native(app: Option<&str>, mic: bool, yes: bool) -> Result<()> {
         )
     };
     std::process::exit(code)
+}
+
+/// Hands a microphone frame to the main loop without waiting, so a loop held
+/// up by a busy database never backs up into the daemon. Audio with no room
+/// becomes lost frames on the next frame: a gap, not a stopped meeting.
+/// `false` once the lease ended or the loop is gone.
+fn queue_mic(tx: &mpsc::SyncSender<Msg>, frame: MicFrame, dropped: &mut u64) -> bool {
+    let MicFrame::Audio {
+        rate,
+        lost,
+        samples,
+    } = frame
+    else {
+        let _ = tx.send(Msg::Mic(frame, Instant::now()));
+        return false;
+    };
+    let frame = MicFrame::Audio {
+        rate,
+        lost: lost + *dropped,
+        samples,
+    };
+    match tx.try_send(Msg::Mic(frame, Instant::now())) {
+        Ok(()) => *dropped = 0,
+        Err(mpsc::TrySendError::Full(Msg::Mic(MicFrame::Audio { lost, samples, .. }, _))) => {
+            *dropped = lost + samples.len() as u64;
+        }
+        Err(mpsc::TrySendError::Full(_)) => {}
+        Err(mpsc::TrySendError::Disconnected(_)) => return false,
+    }
+    true
 }
 
 fn stop_with(why: String, bad: bool, reason: &mut Option<String>, failed: &mut bool) {
@@ -777,5 +810,41 @@ mod tests {
             let samples = vec![0.25f32; rate as usize];
             assert_eq!(pcm16(&samples, rate).unwrap().len(), 16_000, "{rate}");
         }
+    }
+
+    #[test]
+    fn a_full_loop_queue_turns_mic_audio_into_lost_frames() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let audio = |lost, n| MicFrame::Audio {
+            rate: 48_000,
+            lost,
+            samples: vec![0.5; n],
+        };
+        let mut dropped = 0;
+        assert!(queue_mic(&tx, audio(0, 960), &mut dropped));
+        // The loop is busy: these two never fit and must not block this thread.
+        assert!(queue_mic(&tx, audio(0, 960), &mut dropped));
+        assert!(queue_mic(&tx, audio(40, 960), &mut dropped));
+        assert_eq!(dropped, 960 + 40 + 960);
+        assert!(matches!(
+            rx.recv().unwrap(),
+            Msg::Mic(MicFrame::Audio { lost: 0, .. }, _)
+        ));
+        assert!(queue_mic(&tx, audio(5, 960), &mut dropped));
+        assert_eq!(dropped, 0);
+        match rx.recv().unwrap() {
+            Msg::Mic(MicFrame::Audio { lost, samples, .. }, _) => {
+                assert_eq!((lost, samples.len()), (960 + 40 + 960 + 5, 960));
+            }
+            _ => panic!("expected audio"),
+        }
+        assert!(!queue_mic(
+            &tx,
+            MicFrame::End("released".into()),
+            &mut dropped
+        ));
+        assert!(matches!(rx.recv().unwrap(), Msg::Mic(MicFrame::End(_), _)));
+        drop(rx);
+        assert!(!queue_mic(&tx, audio(0, 1), &mut dropped));
     }
 }

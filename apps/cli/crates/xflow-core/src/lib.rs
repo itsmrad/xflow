@@ -63,7 +63,8 @@ pub struct AudioClip {
     pub channels: u16,
 }
 
-/// Frames a meeting subscriber did not receive. Sequence bounds are inclusive.
+/// Frames a meeting subscriber did not receive, just before the envelope that
+/// carries it. Sequence bounds are inclusive and count capture callbacks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CaptureGap {
     pub from_sequence: u64,
@@ -381,7 +382,8 @@ pub trait AudioCapture: Send + Sync {
     }
 }
 
-/// A held meeting lease. Pull often: the shared ring holds well under a second.
+/// A held meeting lease. Pull often: the shared ring holds about two seconds,
+/// and audio past that becomes a gap while the lease goes on.
 #[async_trait]
 pub trait MeetingSubscription: Send + Sync {
     fn generation(&self) -> u64;

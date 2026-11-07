@@ -1,6 +1,7 @@
 //! The daemon's shared microphone, leased to one meeting recorder over a
 //! private socket. The daemon only pumps PCM: no files, database or provider.
-//! A slow or vanished recorder ends its lease; dictation never waits on it.
+//! A vanished recorder ends its lease. A slow one gets counted gaps instead of
+//! audio it could not take; dictation never waits on either.
 use anyhow::{bail, ensure, Context, Result};
 use std::{
     io::{Read, Write},
@@ -14,14 +15,22 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
-    sync::watch,
+    sync::{
+        mpsc::{error::TrySendError, Sender},
+        watch,
+    },
 };
-use xflow_core::{AudioCapture, MeetingPull};
+use xflow_core::{AudioCapture, CaptureEnvelope};
 
-/// The shared ring holds well under a second; pull well inside that.
+/// The shared ring holds about two seconds; pull well inside that.
 const PUMP: Duration = Duration::from_millis(20);
 const OPEN: Duration = Duration::from_secs(8);
-/// A recorder that cannot take one frame in this long loses the lease.
+/// Audio frames waiting for a slow recorder, about a third of a second. Past
+/// that the pump keeps pulling and counts what it drops as a gap.
+const BACKLOG: usize = 16;
+/// A recorder that has taken nothing for this long is not coming back.
+const GONE: Duration = Duration::from_secs(60);
+/// How long a closing write may wait for the recorder.
 const STALL: Duration = Duration::from_secs(2);
 const MAX_FRAME: usize = 1 << 20;
 
@@ -131,50 +140,110 @@ async fn connection(mut stream: UnixStream, audio: Arc<dyn AudioCapture>) -> Res
         }
     };
     send(&mut write, ACQUIRED, &lease.generation().to_le_bytes()).await?;
+    // The writer owns the socket, so a recorder that stops reading never delays a pull.
+    let (queue, mut backlog) = tokio::sync::mpsc::channel::<Vec<u8>>(BACKLOG);
+    let mut writer = tokio::spawn(async move {
+        while let Some(frame) = backlog.recv().await {
+            write.write_all(&frame).await?;
+        }
+        Ok::<_, std::io::Error>(write)
+    });
     let mut tick = tokio::time::interval(PUMP);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut byte = [0u8; 1];
     let mut sent = tokio::time::Instant::now();
+    let mut pump = Pump::default();
     loop {
         tokio::select! {
             _ = tick.tick() => {
+                pump.tick();
                 let pull = lease.pull();
                 let quiet = pull.envelopes.is_empty() && sent.elapsed() >= ALIVE_EVERY;
-                let result = if quiet {
-                    send(&mut write, ALIVE, &[]).await
+                let queued = if quiet {
+                    pump.alive(&queue)
                 } else {
-                    forward(&mut write, &pull).await
+                    pull.envelopes.iter().try_for_each(|e| pump.audio(&queue, e))
                 };
-                if let Err(e) = result {
+                if queued.is_err() {
                     let _ = lease.release().await;
-                    return Err(e);
+                    pump.log("the recorder connection failed");
+                    return match writer.await {
+                        Ok(Err(e)) => Err(e.into()),
+                        _ => bail!("the meeting recorder connection closed"),
+                    };
                 }
                 if quiet || !pull.envelopes.is_empty() {
                     sent = tokio::time::Instant::now();
                 }
-                if pull.stale || pull.fault.is_some() {
-                    let reason = pull.fault.unwrap_or_else(|| "the meeting microphone lease ended".into());
+                let gone = pump.full_since.is_some_and(|t| t.elapsed() >= GONE);
+                if pull.stale || pull.fault.is_some() || gone {
+                    let reason = match pull.fault {
+                        Some(fault) => fault,
+                        None if gone => "the meeting recorder stopped reading".into(),
+                        None => "the meeting microphone lease ended".into(),
+                    };
                     let _ = lease.release().await;
-                    let mut stream = read.reunite(write)?;
-                    return end(&mut stream, &reason).await;
+                    pump.log(&reason);
+                    drop(queue);
+                    if let Ok(Ok(Ok(mut write))) = tokio::time::timeout(STALL, &mut writer).await {
+                        end(&mut write, &reason).await?;
+                    } else {
+                        writer.abort();
+                    }
+                    return Ok(());
                 }
             }
             got = read.read(&mut byte) => {
                 let last = lease.release().await?;
-                if matches!(got, Ok(1)) && byte[0] == RELEASE {
-                    forward(&mut write, &last).await?;
-                    let mut stream = read.reunite(write)?;
-                    return end(&mut stream, "released").await;
+                if !(matches!(got, Ok(1)) && byte[0] == RELEASE) {
+                    writer.abort();
+                    pump.log("the recorder left");
+                    return Ok(());
                 }
-                return Ok(());
+                // The recorder asked for the rest and is reading: wait for room.
+                for e in &last.envelopes {
+                    let frame = pump.frame(e);
+                    if queue.send(frame).await.is_err() {
+                        break;
+                    }
+                }
+                pump.log("released");
+                drop(queue);
+                let mut write = writer.await.context("meeting writer stopped")??;
+                return end(&mut write, "released").await;
             }
         }
     }
 }
 
-async fn forward<W: AsyncWriteExt + Unpin>(w: &mut W, pull: &MeetingPull) -> Result<()> {
-    for e in &pull.envelopes {
-        let lost = e.gap.map_or(0, |g| g.frames);
+/// What the pump drops for a slow recorder, and what it saw, for one log line.
+#[derive(Default)]
+struct Pump {
+    /// Frames dropped since the last frame the recorder got; sent with the next one.
+    carry: u64,
+    full_since: Option<tokio::time::Instant>,
+    gaps: u64,
+    lost: u64,
+    last_tick: Option<tokio::time::Instant>,
+    longest_tick: Duration,
+}
+
+impl Pump {
+    fn tick(&mut self) {
+        let now = tokio::time::Instant::now();
+        if let Some(last) = self.last_tick.replace(now) {
+            self.longest_tick = self.longest_tick.max(now - last);
+        }
+    }
+
+    /// The bridge frame for `e`, carrying every frame lost before it.
+    fn frame(&mut self, e: &CaptureEnvelope) -> Vec<u8> {
+        let gap = e.gap.map_or(0, |g| g.frames);
+        if gap > 0 {
+            self.gaps += 1;
+            self.lost += gap;
+        }
+        let lost = gap + std::mem::take(&mut self.carry);
         let channels = usize::from(e.channels.max(1));
         let mut body = Vec::with_capacity(12 + e.samples.len() / channels * 4);
         body.extend_from_slice(&e.sample_rate.to_le_bytes());
@@ -183,9 +252,61 @@ async fn forward<W: AsyncWriteExt + Unpin>(w: &mut W, pull: &MeetingPull) -> Res
             let mono = frame.iter().sum::<f32>() / channels as f32;
             body.extend_from_slice(&mono.to_le_bytes());
         }
-        send(w, AUDIO, &body).await?;
+        framed(AUDIO, &body)
     }
-    Ok(())
+
+    /// Queue without waiting. A full backlog drops the frame and carries its
+    /// audio, and the loss it reported, to the next frame as a gap.
+    fn audio(&mut self, queue: &Sender<Vec<u8>>, e: &CaptureEnvelope) -> Result<(), ()> {
+        let owed = self.carry + e.gap.map_or(0, |g| g.frames);
+        let frame = self.frame(e);
+        match queue.try_send(frame) {
+            Ok(()) => self.full_since = None,
+            Err(TrySendError::Full(_)) => {
+                if owed == 0 {
+                    self.gaps += 1;
+                }
+                self.carry = owed + u64::from(e.frame_count);
+                self.lost += u64::from(e.frame_count);
+                self.full_since
+                    .get_or_insert_with(tokio::time::Instant::now);
+            }
+            Err(TrySendError::Closed(_)) => return Err(()),
+        }
+        Ok(())
+    }
+
+    fn alive(&mut self, queue: &Sender<Vec<u8>>) -> Result<(), ()> {
+        match queue.try_send(framed(ALIVE, &[])) {
+            Ok(()) => self.full_since = None,
+            Err(TrySendError::Full(_)) => {
+                self.full_since
+                    .get_or_insert_with(tokio::time::Instant::now);
+            }
+            Err(TrySendError::Closed(_)) => return Err(()),
+        }
+        Ok(())
+    }
+
+    fn log(&self, reason: &str) {
+        xflow_core::log(
+            "info",
+            &format!(
+                "meeting microphone ended ({reason}): {} gaps, {} frames lost, longest pull interval {} ms",
+                self.gaps,
+                self.lost,
+                self.longest_tick.as_millis()
+            ),
+        );
+    }
+}
+
+fn framed(kind: u8, body: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(5 + body.len());
+    frame.push(kind);
+    frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    frame.extend_from_slice(body);
+    frame
 }
 
 async fn send<W: AsyncWriteExt + Unpin>(w: &mut W, kind: u8, body: &[u8]) -> Result<()> {
@@ -193,17 +314,13 @@ async fn send<W: AsyncWriteExt + Unpin>(w: &mut W, kind: u8, body: &[u8]) -> Res
         body.len() <= MAX_FRAME,
         "meeting microphone frame too large"
     );
-    let mut frame = Vec::with_capacity(5 + body.len());
-    frame.push(kind);
-    frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
-    frame.extend_from_slice(body);
-    tokio::time::timeout(STALL, w.write_all(&frame))
+    tokio::time::timeout(STALL, w.write_all(&framed(kind, body)))
         .await
         .context("the meeting recorder stopped reading")??;
     Ok(())
 }
 
-async fn end(stream: &mut UnixStream, reason: &str) -> Result<()> {
+async fn end<W: AsyncWriteExt + Unpin>(stream: &mut W, reason: &str) -> Result<()> {
     let mut reason = reason.to_owned();
     reason.truncate(512);
     send(stream, END, reason.as_bytes()).await
@@ -293,7 +410,7 @@ impl Client {
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use xflow_core::{AudioClip, CaptureEnvelope, CaptureGap, MeetingSubscription};
+    use xflow_core::{AudioClip, CaptureEnvelope, CaptureGap, MeetingPull, MeetingSubscription};
 
     #[derive(Default)]
     struct Shared {
@@ -301,6 +418,9 @@ mod tests {
         released: Mutex<u32>,
         fault: Mutex<Option<String>>,
         quiet: Mutex<bool>,
+        /// Pull a real 20 ms of 48 kHz mono each time, and count it.
+        live: Mutex<bool>,
+        produced: Mutex<u64>,
     }
     struct FakeMic(Arc<Shared>);
     struct FakeLease(Arc<Shared>, Mutex<u64>);
@@ -314,6 +434,26 @@ mod tests {
             let mut n = self.1.lock().unwrap();
             *n += 1;
             let fault = self.0.fault.lock().unwrap().clone();
+            if *self.0.live.lock().unwrap() {
+                *self.0.produced.lock().unwrap() += 960;
+                return MeetingPull {
+                    stale: false,
+                    fault,
+                    envelopes: vec![CaptureEnvelope {
+                        generation: 7,
+                        source_id: 1,
+                        sample_rate: 48_000,
+                        channels: 1,
+                        epoch: 1,
+                        host_us: 0,
+                        frame_offset: 0,
+                        frame_count: 960,
+                        sequence: *n,
+                        gap: None,
+                        samples: vec![0.25; 960],
+                    }],
+                };
+            }
             if *self.0.quiet.lock().unwrap() {
                 return MeetingPull {
                     stale: false,
@@ -486,5 +626,55 @@ mod tests {
         .unwrap();
         assert_eq!(reason, "dictation switched microphone");
         wait(|| *shared.released.lock().unwrap() == 1).await;
+    }
+
+    /// A recorder that stops reading used to lose the lease after 2 s, which
+    /// stopped the meeting. Now the pump keeps pulling and reports a gap.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_recorder_that_stops_reading_gets_a_gap_not_an_end() {
+        let shared = Arc::new(Shared::default());
+        *shared.live.lock().unwrap() = true;
+        let (_dir, path, _server) = server(&shared);
+        let (lost, frames, reason) = tokio::task::spawn_blocking(move || {
+            let mut client = Client::acquire_at(&path).unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            let (mut lost, mut frames) = (0u64, 0u64);
+            let started = std::time::Instant::now();
+            let mut count = |frame| match frame {
+                Frame::Audio {
+                    lost: l, samples, ..
+                } => {
+                    lost += l;
+                    frames += samples.len() as u64;
+                    None
+                }
+                Frame::End(reason) => Some(reason),
+            };
+            while started.elapsed() < Duration::from_millis(600) {
+                if let Some(reason) = count(client.recv().unwrap()) {
+                    panic!("the lease ended: {reason}");
+                }
+            }
+            client.release().unwrap();
+            let reason = loop {
+                if let Some(reason) = count(client.recv().unwrap()) {
+                    break reason;
+                }
+            };
+            (lost, frames, reason)
+        })
+        .await
+        .unwrap();
+        assert_eq!(reason, "released");
+        assert!(
+            lost > 48_000,
+            "about 3 s minus the backlog is a gap: {lost}"
+        );
+        assert!(frames > 0);
+        assert_eq!(
+            lost + frames,
+            *shared.produced.lock().unwrap(),
+            "every pulled frame is delivered or counted"
+        );
     }
 }
