@@ -42,10 +42,31 @@ pub trait VisibleScreen {
     fn visible_range(&self) -> Option<(usize, usize)>;
     fn in_viewport(&self, start: usize, len: usize) -> bool;
     fn range(&self, start: usize, len: usize) -> Option<String>;
+    /// Largest tail this screen may be asked for.
+    fn max_tail(&self) -> usize {
+        MAX_CONFIRM_UTF16
+    }
+    /// The first readable offset at or after `start` (a screen that can only
+    /// cut at character boundaries moves it forward). None to abstain.
+    fn align(&self, start: usize, _end: usize) -> Option<usize> {
+        Some(start)
+    }
+    /// A screen whose text is cached reads twice, this far apart, and both
+    /// reads must agree.
+    fn reread_after(&self) -> Option<Duration> {
+        None
+    }
+    /// Pause before retrying a read the screen moved under.
+    fn retry_gap(&self) -> Duration {
+        READ_RETRY_GAP
+    }
 }
 
 pub const MAX_VISIBLE_UTF16: usize = 16_384;
 pub const MAX_CONFIRM_UTF16: usize = 4_096;
+/// Reads a moving screen (a TUI redrawing) gets before abstaining.
+const READ_ATTEMPTS: usize = 3;
+const READ_RETRY_GAP: Duration = Duration::from_millis(150);
 
 fn placeholder(text: &str) -> bool {
     ["[Pasted text", "[Pasted Content"]
@@ -68,31 +89,16 @@ pub fn confirm(
     {
         return Err("unconfirmed");
     }
-    if !screen.safe() {
-        return Err("unsafe-screen");
-    }
-    let visible_range = screen.visible_range().ok_or("visible-range")?;
-    let (start, len) = visible_range;
-    let end = start.checked_add(len).ok_or("visible-bound")?;
-    let proposed_len = corrected.encode_utf16().count();
-    let len = len.min(proposed_len.saturating_mul(4).clamp(512, MAX_CONFIRM_UTF16));
-    if len == 0 || proposed_len > len {
-        return Err("visible-bound");
-    }
-    let start = end - len;
-    if !screen.safe() || !screen.in_viewport(start, len) {
-        return Err("unsafe-screen");
-    }
-    let visible = screen.range(start, len).ok_or("visible-read")?;
-    if !screen.safe()
-        || screen.visible_range() != Some(visible_range)
-        || !screen.in_viewport(start, len)
-    {
-        return Err("unsafe-screen");
-    }
-    if visible.encode_utf16().count() != len {
-        return Err("visible-count");
-    }
+    let mut attempt = 0;
+    let visible = loop {
+        attempt += 1;
+        match read_tail(screen, corrected) {
+            Err(Read::Moved) if attempt < READ_ATTEMPTS => std::thread::sleep(screen.retry_gap()),
+            Err(Read::Moved) => return Err("unsafe-screen"),
+            Err(Read::Fail(reason)) => return Err(reason),
+            Ok(visible) => break visible,
+        }
+    };
     let mut matches = visible
         .char_indices()
         .filter(|(i, _)| visible[*i..].starts_with(corrected));
@@ -107,6 +113,65 @@ pub fn confirm(
     } else {
         Err("unconfirmed")
     }
+}
+
+enum Read {
+    /// The range or its bounds changed, or the tail left the viewport: retry.
+    Moved,
+    Fail(&'static str),
+}
+/// One bounded tail read. The text stays here and in `confirm` only.
+fn read_tail(screen: &impl VisibleScreen, corrected: &str) -> Result<String, Read> {
+    if !screen.safe() {
+        return Err(Read::Fail("unsafe-screen"));
+    }
+    let visible_range = screen.visible_range().ok_or(Read::Fail("visible-range"))?;
+    let (start, len) = visible_range;
+    let end = start.checked_add(len).ok_or(Read::Fail("visible-bound"))?;
+    let proposed_len = corrected.encode_utf16().count();
+    let cap = screen.max_tail().min(MAX_CONFIRM_UTF16);
+    let len = len.min(proposed_len.saturating_mul(4).clamp(512.min(cap), cap));
+    if len == 0 || proposed_len > len {
+        return Err(Read::Fail("visible-bound"));
+    }
+    let tail = len;
+    let start = screen
+        .align(end - tail, end)
+        .ok_or(Read::Fail("visible-read"))?;
+    if start < end - tail || start >= end || end - start < proposed_len {
+        return Err(Read::Fail("visible-bound"));
+    }
+    let len = end - start;
+    if !screen.safe() {
+        return Err(Read::Fail("unsafe-screen"));
+    }
+    if !screen.in_viewport(start, len) {
+        return Err(Read::Moved);
+    }
+    let visible = screen.range(start, len).ok_or(Read::Fail("visible-read"))?;
+    if !screen.safe() {
+        return Err(Read::Fail("unsafe-screen"));
+    }
+    if screen.visible_range() != Some(visible_range) || !screen.in_viewport(start, len) {
+        return Err(Read::Moved);
+    }
+    if visible.encode_utf16().count() != len {
+        return Err(Read::Fail("visible-count"));
+    }
+    if let Some(gap) = screen.reread_after() {
+        std::thread::sleep(gap);
+        if !screen.safe() {
+            return Err(Read::Fail("unsafe-screen"));
+        }
+        if screen.visible_range() != Some(visible_range)
+            || screen.align(end - tail, end) != Some(start)
+            || screen.range(start, len).as_deref() != Some(visible.as_str())
+            || !screen.safe()
+        {
+            return Err(Read::Moved);
+        }
+    }
+    Ok(visible)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -593,6 +658,9 @@ mod tests {
             self.bounds.set(Some((start, len)));
             self.in_viewport
         }
+        fn retry_gap(&self) -> Duration {
+            Duration::ZERO
+        }
         fn range(&self, start: usize, len: usize) -> Option<String> {
             assert_eq!(
                 self.bounds.get(),
@@ -685,6 +753,106 @@ mod tests {
             confirm(&screen, "Jose fixed useEffect", "José fixed useEffect"),
             Err("visible-read")
         );
+    }
+    /// A screen that redraws: its range moves for the first `moving` reads.
+    /// `cached` makes it read twice like Ghostty, `align` cuts like Ghostty.
+    struct Live {
+        text: std::cell::RefCell<String>,
+        moving: Cell<usize>,
+        calls: Cell<usize>,
+        reads: Cell<usize>,
+        cached: bool,
+        cap: usize,
+        boundary_after: usize,
+        change_on_reread: Option<String>,
+    }
+    impl Live {
+        fn new(text: &str) -> Self {
+            Self {
+                text: std::cell::RefCell::new(text.into()),
+                moving: Cell::new(0),
+                calls: Cell::new(0),
+                reads: Cell::new(0),
+                cached: false,
+                cap: MAX_CONFIRM_UTF16,
+                boundary_after: 0,
+                change_on_reread: None,
+            }
+        }
+    }
+    impl VisibleScreen for Live {
+        fn safe(&self) -> bool {
+            true
+        }
+        fn visible_range(&self) -> Option<(usize, usize)> {
+            self.calls.set(self.calls.get() + 1);
+            let len = self.text.borrow().encode_utf16().count();
+            if self.moving.get() > 0 && self.calls.get().is_multiple_of(2) {
+                self.moving.set(self.moving.get() - 1);
+                return Some((0, len + 1));
+            }
+            Some((0, len))
+        }
+        fn in_viewport(&self, _: usize, len: usize) -> bool {
+            len <= self.cap
+        }
+        fn range(&self, start: usize, len: usize) -> Option<String> {
+            self.reads.set(self.reads.get() + 1);
+            if self.reads.get() == 2 {
+                if let Some(next) = &self.change_on_reread {
+                    *self.text.borrow_mut() = next.clone();
+                }
+            }
+            let units: Vec<u16> = self.text.borrow().encode_utf16().collect();
+            String::from_utf16(units.get(start..start + len)?).ok()
+        }
+        fn max_tail(&self) -> usize {
+            self.cap
+        }
+        fn align(&self, start: usize, end: usize) -> Option<usize> {
+            (start + self.boundary_after < end).then_some(start + self.boundary_after)
+        }
+        fn reread_after(&self) -> Option<Duration> {
+            self.cached.then_some(Duration::ZERO)
+        }
+        fn retry_gap(&self) -> Duration {
+            Duration::ZERO
+        }
+    }
+    #[test]
+    fn a_redrawing_screen_is_retried_and_a_cached_one_must_read_the_same_twice() {
+        let (original, corrected) = ("ask Claud to review", "ask Claude to review");
+        let text = "  Opus · auto mode\n❯ ask Claude to review\n  ? for shortcuts";
+        // Moves once, then settles: confirmed on the second attempt.
+        let screen = Live::new(text);
+        screen.moving.set(1);
+        assert_eq!(confirm(&screen, original, corrected), Ok(()));
+        assert_eq!(screen.reads.get(), 2);
+        // Never settles: abstains after three reads.
+        let screen = Live::new(text);
+        screen.moving.set(10);
+        assert_eq!(confirm(&screen, original, corrected), Err("unsafe-screen"));
+        assert_eq!(screen.reads.get(), READ_ATTEMPTS);
+        // Cached (Ghostty): two agreeing reads confirm.
+        let mut screen = Live::new(text);
+        screen.cached = true;
+        screen.cap = 2_048;
+        screen.boundary_after = 1;
+        assert_eq!(confirm(&screen, original, corrected), Ok(()));
+        assert_eq!(screen.reads.get(), 2);
+        // The second read differs (a stale first read): never saved from it.
+        let mut screen = Live::new("❯ ask Claude to review");
+        screen.cached = true;
+        screen.change_on_reread = Some("❯ ask Claud to review!".into());
+        assert_ne!(confirm(&screen, original, corrected), Ok(()));
+        // Ghostty's cap: a proposal longer than its tail is never read.
+        let mut screen = Live::new(&"x".repeat(3_000));
+        screen.cap = 2_048;
+        assert_eq!(
+            confirm(&screen, "old", &"y".repeat(2_049)),
+            Err("visible-bound")
+        );
+        assert_eq!(screen.reads.get(), 0);
     }
     #[test]
     fn confirmation_requires_a_line_end_and_no_placeholder_elsewhere() {
