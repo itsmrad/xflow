@@ -12,12 +12,16 @@ use std::{
     time::{Duration, Instant},
 };
 use xflow_app::meeting::journal::{self, Capture, CaptureSpec, Limits, RATE};
+use xflow_app::meeting_mic::Frame as MicFrame;
 
 /// Live meetings stop here; the journal holds at most three hours.
 const MAX_LIVE: Duration = Duration::from_secs(3 * 3600);
 /// A source this far behind the wall clock stopped delivering: a gap, not silence.
 const STALL_SAMPLES: i64 = 2 * RATE;
 const STALL: Duration = Duration::from_secs(2);
+/// A drop count for a stall arrives within this much audio after it: the
+/// daemon's backlog and socket hold well under a second.
+const DROP_REPORT: i64 = 5 * RATE;
 
 pub struct Request<'a> {
     pub app: Option<&'a str>,
@@ -147,17 +151,19 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
     if let Some(client) = &client {
         let mut reader = client.try_clone()?;
         let tx = tx.clone();
-        std::thread::spawn(move || loop {
-            match reader.recv() {
-                Ok(frame) => {
-                    let end = matches!(frame, xflow_app::meeting_mic::Frame::End(_));
-                    if tx.send(Msg::Mic(frame, Instant::now())).is_err() || end {
+        std::thread::spawn(move || {
+            let mut dropped = Dropped::default();
+            loop {
+                match reader.recv() {
+                    Ok(frame) => {
+                        if !queue_mic(&tx, frame, &mut dropped) {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Msg::MicGone(format!("{e:#}")));
                         return;
                     }
-                }
-                Err(e) => {
-                    let _ = tx.send(Msg::MicGone(format!("{e:#}")));
-                    return;
                 }
             }
         });
@@ -185,7 +191,7 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
         };
         let result: anyhow::Result<()> = match msg {
             Ok(Msg::Mic(
-                xflow_app::meeting_mic::Frame::Audio {
+                MicFrame::Audio {
                     rate,
                     lost,
                     samples,
@@ -195,7 +201,7 @@ pub fn record(req: &Request, config: &Path, out: &Output) -> Result<()> {
                 Some(s) => tracks[s].push(&mut capture, s, rate, lost, &samples, at),
                 None => Ok(()),
             },
-            Ok(Msg::Mic(xflow_app::meeting_mic::Frame::End(why), _)) => {
+            Ok(Msg::Mic(MicFrame::End(why), _)) => {
                 mic_done = true;
                 if why != "released" {
                     stop_with(
@@ -431,6 +437,55 @@ pub fn native(app: Option<&str>, mic: bool, yes: bool) -> Result<()> {
     std::process::exit(code)
 }
 
+/// Hands a microphone frame to the main loop without waiting, so a loop held
+/// up by a busy database never backs up into the daemon. Audio with no room
+/// becomes lost frames on the next frame: a gap, not a stopped meeting.
+/// `false` once the lease ended or the loop is gone.
+fn queue_mic(tx: &mpsc::SyncSender<Msg>, frame: MicFrame, dropped: &mut Dropped) -> bool {
+    let MicFrame::Audio {
+        rate,
+        lost,
+        samples,
+    } = frame
+    else {
+        // The last word: what never fitted is still a gap.
+        if dropped.frames > 0 {
+            let gap = MicFrame::Audio {
+                rate: dropped.rate,
+                lost: std::mem::take(&mut dropped.frames),
+                samples: Vec::new(),
+            };
+            let _ = tx.send(Msg::Mic(gap, Instant::now()));
+        }
+        let _ = tx.send(Msg::Mic(frame, Instant::now()));
+        return false;
+    };
+    let frame = MicFrame::Audio {
+        rate,
+        lost: lost + dropped.frames,
+        samples,
+    };
+    match tx.try_send(Msg::Mic(frame, Instant::now())) {
+        Ok(()) => dropped.frames = 0,
+        Err(mpsc::TrySendError::Full(Msg::Mic(MicFrame::Audio { lost, samples, .. }, _))) => {
+            *dropped = Dropped {
+                rate,
+                frames: lost + samples.len() as u64,
+            };
+        }
+        Err(mpsc::TrySendError::Full(_)) => {}
+        Err(mpsc::TrySendError::Disconnected(_)) => return false,
+    }
+    true
+}
+
+/// Microphone frames the main loop had no room for, at the rate they came in.
+#[derive(Default)]
+struct Dropped {
+    rate: u32,
+    frames: u64,
+}
+
 fn stop_with(why: String, bad: bool, reason: &mut Option<String>, failed: &mut bool) {
     if reason.is_none() {
         *reason = Some(why);
@@ -458,9 +513,12 @@ struct Track {
     seen: bool,
     /// When this source last delivered audio.
     last: Option<Instant>,
-    /// Samples already gapped by `catch_up` since the last delivery, so a
-    /// drop count for the same stall is not gapped twice.
+    /// Samples already gapped by `catch_up` that a later drop count may report
+    /// again, so the same stall is not gapped twice.
     gapped: i64,
+    /// Samples delivered since that gap. Audio buffered before a stall arrives
+    /// ahead of its drop count, so `gapped` waits this long for it.
+    since_gap: i64,
     /// Dropped native frames not yet a whole output sample.
     lost: u64,
 }
@@ -492,10 +550,16 @@ impl Track {
                 self.flush(capture, source)?;
                 capture.gap(source, missing, "audio frames were dropped")?;
             }
+            self.gapped = (self.gapped - whole as i64).max(0);
         }
         self.seen = true;
         self.last = Some(at);
-        self.gapped = 0;
+        if self.gapped > 0 {
+            self.since_gap += samples.len() as i64 * RATE / i64::from(rate);
+            if self.since_gap > DROP_REPORT {
+                self.gapped = 0;
+            }
+        }
         self.pending.extend(samples.iter().map(|s| {
             if s.is_finite() {
                 s.clamp(-1.0, 1.0)
@@ -541,6 +605,7 @@ impl Track {
             self.flush(capture, source)?;
             capture.gap(source, behind, "no audio arrived from this source")?;
             self.gapped += behind;
+            self.since_gap = 0;
         }
         Ok(())
     }
@@ -777,5 +842,104 @@ mod tests {
             let samples = vec![0.25f32; rate as usize];
             assert_eq!(pcm16(&samples, rate).unwrap().len(), 16_000, "{rate}");
         }
+    }
+
+    #[test]
+    fn a_full_loop_queue_turns_mic_audio_into_lost_frames() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let audio = |lost, n| MicFrame::Audio {
+            rate: 48_000,
+            lost,
+            samples: vec![0.5; n],
+        };
+        let mut dropped = Dropped::default();
+        assert!(queue_mic(&tx, audio(0, 960), &mut dropped));
+        // The loop is busy: these two never fit and must not block this thread.
+        assert!(queue_mic(&tx, audio(0, 960), &mut dropped));
+        assert!(queue_mic(&tx, audio(40, 960), &mut dropped));
+        assert_eq!(dropped.frames, 960 + 40 + 960);
+        assert!(matches!(
+            rx.recv().unwrap(),
+            Msg::Mic(MicFrame::Audio { lost: 0, .. }, _)
+        ));
+        assert!(queue_mic(&tx, audio(5, 960), &mut dropped));
+        assert_eq!(dropped.frames, 0);
+        match rx.recv().unwrap() {
+            Msg::Mic(MicFrame::Audio { lost, samples, .. }, _) => {
+                assert_eq!((lost, samples.len()), (960 + 40 + 960 + 5, 960));
+            }
+            _ => panic!("expected audio"),
+        }
+        assert!(!queue_mic(
+            &tx,
+            MicFrame::End("released".into()),
+            &mut dropped
+        ));
+        assert!(matches!(rx.recv().unwrap(), Msg::Mic(MicFrame::End(_), _)));
+        drop(rx);
+        assert!(!queue_mic(&tx, audio(0, 1), &mut dropped));
+    }
+
+    /// A frozen recorder: on resume the source looks stalled and becomes a
+    /// gap, then audio buffered before the freeze arrives, then the drop count
+    /// for the same seconds. That is one gap, not two.
+    #[test]
+    fn a_frozen_recorder_gaps_its_stall_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("xflow");
+        xflow_app::paths::private_dir(&data).unwrap();
+        let db = data.join("meetings.db");
+        let mut capture = Capture::begin(
+            &db,
+            CaptureSpec {
+                title: None,
+                labels: vec!["Microphone".into()],
+                expected_ms: None,
+                queued: false,
+            },
+            Limits {
+                session_bytes: 1 << 30,
+                global_bytes: 1 << 30,
+                reserve_bytes: 0,
+            },
+        )
+        .unwrap();
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let now = |ms: i64| ms * RATE / 1000;
+        let mut track = Track::default();
+        let tick = vec![0.1f32; 960];
+        for i in 0..50u64 {
+            track
+                .push(&mut capture, 0, 48_000, 0, &tick, at(i * 20))
+                .unwrap();
+        }
+        // Frozen for 8 s after 1 s of audio.
+        track
+            .catch_up(&mut capture, 0, now(9_000), at(9_000))
+            .unwrap();
+        assert_eq!(gaps(&db).len(), 1);
+        for _ in 0..10 {
+            track
+                .push(&mut capture, 0, 48_000, 0, &tick, at(9_000))
+                .unwrap();
+        }
+        // 7.8 s of 48 kHz frames the daemon dropped while frozen.
+        track
+            .push(&mut capture, 0, 48_000, 374_400, &tick, at(9_000))
+            .unwrap();
+        assert_eq!(gaps(&db).len(), 1, "{:?}", gaps(&db));
+        // Long after, a new drop is a new gap.
+        for i in 0..300u64 {
+            track
+                .push(&mut capture, 0, 48_000, 0, &tick, at(9_000 + i * 20))
+                .unwrap();
+        }
+        track
+            .push(&mut capture, 0, 48_000, 48_000, &tick, at(15_000))
+            .unwrap();
+        let rows = gaps(&db);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[1].1 - rows[1].0, 1_000);
     }
 }
