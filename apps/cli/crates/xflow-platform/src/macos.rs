@@ -1302,6 +1302,7 @@ impl xflow_core::replay::KeyReplay for TerminalKeys {
         if !self.feed.settled() {
             return Err("abstain");
         }
+        self.screen.reset_probes();
         let (screen, original, corrected) = (
             self.screen.clone(),
             original.to_owned(),

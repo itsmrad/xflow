@@ -115,8 +115,10 @@ pub(super) struct Reader {
     app: Shared,
     element: Shared,
     window: Shared,
-    /// Ghostty has no range bounds and counts in characters; see `ghostty_end`.
+    /// Ghostty has no range bounds and counts in characters; see `last_boundary`.
     ghostty: bool,
+    /// Boundary probes left for this confirm; see `GHOSTTY_PROBES`.
+    probes: Probes,
 }
 fn retain(value: &Owned) -> Owned {
     Owned(unsafe { CFRetain(value.0 as MutRef) } as Ref)
@@ -156,6 +158,7 @@ impl Reader {
             element: Shared(retain(element)),
             window: Shared(retain(window)),
             ghostty: false,
+            probes: Probes::new(),
         }))
     }
     pub(super) fn same(&self, f: &Focus) -> bool {
@@ -187,14 +190,17 @@ impl xflow_core::replay::VisibleScreen for Reader {
     }
     fn visible_range(&self) -> Option<(usize, usize)> {
         let r = named_range(&self.element.0, "AXVisibleCharacterRange")?;
-        if self.ghostty {
-            // Its range is in characters; the text is UTF-16. Find the real end.
-            return (r.location == 0)
-                .then(|| ghostty_end(&self.element.0, r.length as usize))
-                .flatten()
-                .map(|end| (0, end));
-        }
         Some((r.location as usize, r.length as usize))
+    }
+    fn utf16_range(&self, (start, len): (usize, usize)) -> Option<(usize, usize)> {
+        if !self.ghostty {
+            return Some((start, len));
+        }
+        // Its range is in characters; the text is UTF-16. Find the real end.
+        (start == 0)
+            .then(|| last_boundary(len, |p| self.probe(p)))
+            .flatten()
+            .map(|end| (0, end))
     }
     fn in_viewport(&self, start: usize, len: usize) -> bool {
         if self.ghostty {
@@ -219,7 +225,12 @@ impl xflow_core::replay::VisibleScreen for Reader {
             return Some(start);
         }
         // Ghostty can only cut at character boundaries.
-        (start..end.min(start + BOUNDARY_SPAN)).find(|&p| boundary(&self.element.0, p))
+        for p in start..end.min(start + BOUNDARY_SPAN) {
+            if self.probe(p)? {
+                return Some(p);
+            }
+        }
+        None
     }
     fn reread_after(&self) -> Option<Duration> {
         // Ghostty caches its screen text for 500 ms.
@@ -231,17 +242,43 @@ const GHOSTTY_TAIL_UTF16: usize = 2_048;
 const GHOSTTY_REREAD: Duration = Duration::from_millis(550);
 /// Longer than any character's UTF-16 length a terminal cell can hold.
 const BOUNDARY_SPAN: usize = 64;
+/// Boundary probes (one AX call each, up to 100 ms when Ghostty is busy) per
+/// confirm. Plain text needs about 67 per read attempt; past this, abstain.
+const GHOSTTY_PROBES: usize = 256;
+struct Probes(AtomicUsize);
+impl Probes {
+    fn new() -> Self {
+        Self(AtomicUsize::new(GHOSTTY_PROBES))
+    }
+    fn reset(&self) {
+        self.0.store(GHOSTTY_PROBES, Ordering::Relaxed);
+    }
+    /// Spend one probe; false once the budget is gone.
+    fn take(&self) -> bool {
+        self.0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .is_ok()
+    }
+}
+impl Reader {
+    /// Start a confirm with a full probe budget.
+    pub(super) fn reset_probes(&self) {
+        self.probes.reset();
+    }
+    /// Whether `at` is a boundary; None once this confirm's budget is spent.
+    fn probe(&self, at: usize) -> Option<bool> {
+        self.probes.take().then(|| boundary(&self.element.0, at))
+    }
+}
 /// Ghostty's text may be longer in UTF-16 than its character count `chars`.
 /// The end is the last offset where an empty range can be cut, with none in the
-/// next `BOUNDARY_SPAN` units. None when that cannot be shown.
-fn ghostty_end(element: &Owned, chars: usize) -> Option<usize> {
-    last_boundary(chars, |p| boundary(element, p))
-}
-fn last_boundary(chars: usize, boundary: impl Fn(usize) -> bool) -> Option<usize> {
+/// next `BOUNDARY_SPAN` units. None when that cannot be shown, or when
+/// `boundary` returns None (out of probes): never a shorter end.
+fn last_boundary(chars: usize, mut boundary: impl FnMut(usize) -> Option<bool>) -> Option<usize> {
     let limit = chars.checked_add(xflow_core::replay::MAX_CONFIRM_UTF16)?;
     let mut last = None;
     for p in chars..=limit {
-        if boundary(p) {
+        if boundary(p)? {
             last = Some(p);
         } else if p - last.unwrap_or(chars) >= BOUNDARY_SPAN {
             return last;
@@ -898,17 +935,50 @@ mod tests {
             .chain([len])
             .collect();
         let chars = text.chars().count() - 2;
-        assert_eq!(last_boundary(chars, |p| marks.contains(&p)), Some(len));
+        assert_eq!(
+            last_boundary(chars, |p| Some(marks.contains(&p))),
+            Some(len)
+        );
         // No boundary anywhere near: abstain rather than walk the whole tail.
         let probes = Cell::new(0);
         assert_eq!(
             last_boundary(10, |_| {
                 probes.set(probes.get() + 1);
-                false
+                Some(false)
             }),
             None
         );
         assert!(probes.get() <= BOUNDARY_SPAN + 1);
+    }
+    #[test]
+    fn a_confirm_spends_at_most_its_probe_budget_and_then_abstains() {
+        let budget = Probes::new();
+        let spent = Cell::new(0);
+        let probe = |p: usize, end: usize| {
+            budget.take().then(|| {
+                spent.set(spent.get() + 1);
+                p <= end
+            })
+        };
+        // A Ghostty that accepts every empty range (clamps instead of failing):
+        // without a budget the search walks all 4,097 offsets.
+        assert_eq!(last_boundary(10, |p| probe(p, usize::MAX)), None);
+        assert_eq!(spent.get(), GHOSTTY_PROBES);
+        // Spent budget: a search that would find the end abstains, never
+        // returns a shorter end.
+        assert_eq!(last_boundary(10, |p| probe(p, 12)), None);
+        assert_eq!(spent.get(), GHOSTTY_PROBES);
+        // A fresh confirm: plain text finds its end within one attempt's share.
+        budget.reset();
+        spent.set(0);
+        assert_eq!(last_boundary(10, |p| probe(p, 12)), Some(12));
+        assert!(spent.get() <= 3 + BOUNDARY_SPAN);
+        // A screen whose end needs more probes than the budget (wide glyphs):
+        // the search stops at the cap and abstains.
+        budget.reset();
+        spent.set(0);
+        assert_eq!(last_boundary(10, |p| probe(p, 10 + GHOSTTY_PROBES)), None);
+        assert_eq!(spent.get(), GHOSTTY_PROBES);
     }
     #[test]
     fn visible_bounds_reject_scrollback_and_unknown_geometry() {

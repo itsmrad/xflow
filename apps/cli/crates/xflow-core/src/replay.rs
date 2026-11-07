@@ -42,6 +42,12 @@ pub trait VisibleScreen {
     fn visible_range(&self) -> Option<(usize, usize)>;
     fn in_viewport(&self, start: usize, len: usize) -> bool;
     fn range(&self, start: usize, len: usize) -> Option<String>;
+    /// The UTF-16 `(start, len)` of a `visible_range` reading, for a screen
+    /// that reports it in other units. Runs once per read attempt; the cheap
+    /// `visible_range` is what later checks compare. None to abstain.
+    fn utf16_range(&self, visible: (usize, usize)) -> Option<(usize, usize)> {
+        Some(visible)
+    }
     /// Largest tail this screen may be asked for.
     fn max_tail(&self) -> usize {
         MAX_CONFIRM_UTF16
@@ -126,7 +132,9 @@ fn read_tail(screen: &impl VisibleScreen, corrected: &str) -> Result<String, Rea
         return Err(Read::Fail("unsafe-screen"));
     }
     let visible_range = screen.visible_range().ok_or(Read::Fail("visible-range"))?;
-    let (start, len) = visible_range;
+    let (start, len) = screen
+        .utf16_range(visible_range)
+        .ok_or(Read::Fail("visible-range"))?;
     let end = start.checked_add(len).ok_or(Read::Fail("visible-bound"))?;
     let proposed_len = corrected.encode_utf16().count();
     let cap = screen.max_tail().min(MAX_CONFIRM_UTF16);
@@ -761,6 +769,7 @@ mod tests {
         moving: Cell<usize>,
         calls: Cell<usize>,
         reads: Cell<usize>,
+        searches: Cell<usize>,
         cached: bool,
         cap: usize,
         boundary_after: usize,
@@ -773,6 +782,7 @@ mod tests {
                 moving: Cell::new(0),
                 calls: Cell::new(0),
                 reads: Cell::new(0),
+                searches: Cell::new(0),
                 cached: false,
                 cap: MAX_CONFIRM_UTF16,
                 boundary_after: 0,
@@ -805,6 +815,10 @@ mod tests {
             }
             let units: Vec<u16> = self.text.borrow().encode_utf16().collect();
             String::from_utf16(units.get(start..start + len)?).ok()
+        }
+        fn utf16_range(&self, visible: (usize, usize)) -> Option<(usize, usize)> {
+            self.searches.set(self.searches.get() + 1);
+            Some(visible)
         }
         fn max_tail(&self) -> usize {
             self.cap
@@ -840,6 +854,11 @@ mod tests {
         screen.boundary_after = 1;
         assert_eq!(confirm(&screen, original, corrected), Ok(()));
         assert_eq!(screen.reads.get(), 2);
+        assert_eq!(
+            screen.searches.get(),
+            1,
+            "the end is searched once per attempt"
+        );
         // The second read differs (a stale first read): never saved from it.
         let mut screen = Live::new("❯ ask Claude to review");
         screen.cached = true;
