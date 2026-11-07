@@ -39,7 +39,7 @@ def error_kind(text):
                         ("workspace_trust", ("do you trust the contents",)),
                         ("login", ("not logged", "authenticate", "login required", "api key")),
                         ("quota", ("quota", "rate limit", "usage limit", "limit exceeded")),
-                        ("platform", ("sandbox is not supported", "sandboxing is not supported", "bubblewrap")),
+                        ("platform", ("sandbox is not supported", "sandboxing is not supported", "sandbox failed to start", "apparmor", "bubblewrap")),
                         ("network", ("connection", "network", "unavailable"))):
         if any(word in text for word in words):
             return name
@@ -234,6 +234,7 @@ def self_test():
     assert out.text == "Cedar"
     out.event({"type": "tool_call"})
     assert out.tools == ["tool_call"]
+    assert error_kind("Sandbox failed to start, possibly due to AppArmor configuration") == "platform"
     print("canary parser self-test passed")
 
 

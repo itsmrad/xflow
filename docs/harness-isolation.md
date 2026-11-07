@@ -67,8 +67,22 @@ with `/Users/mrad/code/agent-policy/tools/policyctl.py resources`; wait if avail
 RAM is below 1 GiB. Use only one CLI probe at a time.
 
 ```sh
+# From a checkout of this PR:
 python3 scripts/verify-harnesses.py self-test
 python3 scripts/verify-harnesses.py cursor --allow-cli-side-effects
+```
+
+If the Mac checkout does not contain this PR, use its existing authenticated `gh`
+to retrieve only the script, without changing the checkout or building:
+
+```sh
+task_probe_dir="$(mktemp -d)"
+task_probe_sha="$(gh pr view 200 --repo itsmrad/xflow --json headRefOid --jq .headRefOid)"
+gh api -H 'Accept: application/vnd.github.raw+json' \
+  "repos/itsmrad/xflow/contents/scripts/verify-harnesses.py?ref=$task_probe_sha" \
+  > "$task_probe_dir/verify-harnesses.py"
+python3 "$task_probe_dir/verify-harnesses.py" self-test
+python3 "$task_probe_dir/verify-harnesses.py" cursor --allow-cli-side-effects
 ```
 
 The same script accepts `claude-code` and `codex`. It creates its fixture, private
