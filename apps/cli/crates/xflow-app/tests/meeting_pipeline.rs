@@ -1397,3 +1397,58 @@ async fn speech_turns_use_the_on_device_helper_and_durable_dispatch_ledger() {
     let log = std::fs::read_to_string(root.join("log")).unwrap();
     assert_eq!(log.matches("pid ").count(), 1, "turns reuse the helper");
 }
+
+#[tokio::test]
+async fn orphan_planning_with_an_earlier_missing_or_corrupt_piece_recovers_once() {
+    for corrupt in [false, true] {
+        let s = scratch();
+        let mut capture = Capture::begin(
+            &s.db,
+            CaptureSpec {
+                title: None,
+                labels: vec!["synthetic".into()],
+                expected_ms: None,
+                queued: false,
+            },
+            limits(),
+        )
+        .unwrap();
+        let id = capture.id();
+        capture.push(0, &samples(0, 0, 160_000)).unwrap();
+        drop(capture);
+        let files = audio_files(&s.db);
+        if corrupt {
+            let mut bytes = std::fs::read(&files[0]).unwrap();
+            bytes[100] ^= 0x55;
+            std::fs::write(&files[0], bytes).unwrap();
+        } else {
+            std::fs::remove_file(&files[0]).unwrap();
+        }
+        // The second piece was renamed and directory-synced, but not committed.
+        let db = Connection::open(&s.db).unwrap();
+        db.execute_batch("DELETE FROM pieces WHERE seq=1; UPDATE capture_sources SET next_seq=1,next_sample=80000;").unwrap();
+        drop(db);
+        let recovered = journal::recover(&s.db).unwrap();
+        assert_eq!(recovered.imported, 1);
+        assert_eq!(sql(&s.db, "SELECT count(*) FROM gaps"), 1);
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM pieces WHERE state='missing'"),
+            1
+        );
+        assert_eq!(
+            sql(&s.db, "SELECT planned_sample FROM speech_plans"),
+            160_000
+        );
+        journal::recover(&s.db).unwrap();
+        assert_eq!(
+            sql(&s.db, "SELECT count(*) FROM gaps"),
+            1,
+            "missing marking is idempotent"
+        );
+        let stub = stub(|_, _| ok("surviving audio"));
+        let report = process(&s.db, &id, provider(&stub.url, 5).as_ref()).await;
+        assert_eq!((report.accepted, report.failed), (1, 0));
+        assert_eq!(texts(&s.db, &id).len(), 1);
+        assert!(audio_files(&s.db).is_empty());
+    }
+}

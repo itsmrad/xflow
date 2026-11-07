@@ -700,7 +700,6 @@ impl Capture {
         self.close("stopped", Some(reason))
     }
     fn close(&mut self, state: &str, reason: Option<&str>) -> Result<()> {
-        let now = now_ms();
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -717,7 +716,6 @@ impl Capture {
             reason,
             &ends,
             self.expected_ms,
-            now,
         )?;
         tx.commit()?;
         Ok(())
@@ -740,8 +738,8 @@ fn close_capture(
     reason: Option<&str>,
     ends: &[(String, i64)],
     expected_ms: Option<i64>,
-    now: i64,
 ) -> Result<()> {
+    let now = now_ms();
     let mut longest = 0;
     for (idx, (source_id, durable)) in ends.iter().enumerate() {
         db.execute(
@@ -1142,19 +1140,24 @@ fn mark_missing(
     start: i64,
     count: i64,
 ) -> Result<()> {
-    let tx = db.unchecked_transaction()?;
-    let changed = tx.execute(
+    // Planning may already own the piece/import transaction. Outside planning,
+    // keep the missing marker and its visible gap atomic as before.
+    let transaction = db
+        .is_autocommit()
+        .then(|| db.unchecked_transaction())
+        .transpose()?;
+    let changed = db.execute(
         "UPDATE pieces SET state='missing' WHERE id=?1 AND state='ready'",
         [piece],
     )?;
     if changed == 1 {
-        let source_id: String = tx.query_row(
+        let source_id: String = db.query_row(
             "SELECT source_id FROM capture_sources WHERE meeting_id=?1 AND idx=?2",
             params![meeting, source],
             |r| r.get(0),
         )?;
         add_gap(
-            &tx,
+            db,
             meeting,
             &source_id,
             start * 1000 / RATE,
@@ -1162,7 +1165,9 @@ fn mark_missing(
             "audio piece missing or corrupt; kept in quarantine if present",
         )?;
     }
-    tx.commit()?;
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
+    }
     Ok(())
 }
 fn quarantine(dir: &Path, path: &Path) -> Result<()> {
@@ -1369,7 +1374,6 @@ pub fn recover(db_path: &Path) -> Result<Recovery> {
                 ),
                 &ends,
                 expected,
-                now_ms(),
             )?;
             tx.commit()?;
             report.interrupted += 1;

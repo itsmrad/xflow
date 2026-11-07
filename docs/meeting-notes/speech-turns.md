@@ -5,7 +5,11 @@ speech, using the existing energy detector's soft edge floor. Shorter pauses
 stay in the same request. Continuous speech is capped at 30 seconds of new
 audio, with the existing two seconds of context after a forced cut. A pause
 ends that context: the following turn never reads speech from the previous
-turn. This changes meetings only. Dictation preparation, providers, forms and
+turn. A known exception is a pause spanning a forced maximum-length cut:
+for example, 29.8 s speech followed by 800 ms quiet crosses that cut and can
+retain prior-turn context in the next request. This needs a follow-up; the
+synthetic language proofs below do not exercise that boundary.
+This changes meetings only. Dictation preparation, providers, forms and
 language preferences are unchanged; nothing new runs when no meeting is active.
 
 Schema 4 adds a per-source planning cursor. Jobs retain explicit sample ranges,
@@ -80,7 +84,10 @@ were used to tune the measured result.
 
 The on-device path uses the same range and budget ledger and reuses its helper;
 a file-only integration test verifies PCM framing with the existing fake helper.
-Actual Core ML model quality and latency were not measured. Pause detection can
+Actual Core ML model quality and latency were not measured. A separate loopback
+comparison of the old and new binaries' file-dictation requests matched all
+154,316 multipart bytes after replacing only the random MIME delimiter
+(SHA-256 `9194dc26bb7b6bdb9cb0f5f43e5836a09dfc3a1adc17369fb74e7ee228c4ba3a`). Pause detection can
 split a sentence or fail to find a turn boundary in noise. A language switch
 without a sufficient pause remains one request. Legacy unfinished captures
 finish with their original window geometry and therefore retain the old
