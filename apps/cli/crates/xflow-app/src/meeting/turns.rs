@@ -10,7 +10,7 @@ const PAUSE_FRAMES: usize = 20; // 400 ms; shorter gaps stay in the same request
 pub(super) fn cut(samples: &[f32], capped: bool, finished: bool) -> Option<(usize, bool)> {
     let mut voiced = false;
     let mut quiet = 0;
-    for (i, frame) in samples.chunks_exact(FRAME).enumerate() {
+    for (i, frame) in samples.as_chunks::<FRAME>().0.iter().enumerate() {
         let audio = AudioClip {
             samples: frame.to_vec(),
             sample_rate: RATE as u32,
