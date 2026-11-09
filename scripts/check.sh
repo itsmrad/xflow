@@ -49,10 +49,13 @@ check_install() {
     else
         missing shellcheck "installer lint"
     fi
+    for tool in python3 curl wget sha256sum readelf; do
+        command -v "$tool" >/dev/null 2>&1 || { missing "$tool" "installer tests"; return 0; }
+    done
     scripts/test-install.sh
     # The glibc gate must reject a floor below what any real binary needs.
-    if GLIBC_FLOOR=2.0 scripts/check-glibc.sh /bin/sh >/dev/null 2>&1; then
-        echo "error: check-glibc.sh accepted a binary above its floor" >&2
+    if GLIBC_FLOOR=2.0 scripts/check-glibc.sh /bin/sh 2>&1 | grep -q 'above the GLIBC_2.0 floor'; then :; else
+        echo "error: check-glibc.sh did not reject /bin/sh against a GLIBC_2.0 floor" >&2
         exit 1
     fi
 }

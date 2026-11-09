@@ -30,7 +30,7 @@ xflow service install --enable
 xflow
 ```
 
-The script downloads the newest release tarball and its `SHA256SUMS`, refuses to install on a checksum mismatch, missing sums or an unsupported architecture, and installs `xflow` and `xflowd` into `~/.local/bin` without sudo. Pin a release with `sh -s -- --version v0.2.1-beta` and pick another prefix with `--prefix PATH` (the user service expects `~/.local/bin`). `wget -qO- URL | sh` works too. Releases also ship the script as an `install.sh` asset and inside each tarball, where it installs that tarball's binaries.
+The script downloads the newest release tarball and its `SHA256SUMS`, refuses to install on a checksum mismatch, missing sums or an unsupported architecture, and installs `xflow` and `xflowd` into `~/.local/bin` without sudo. Pin a release with `sh -s -- --version v0.2.1-beta` and pick another prefix with `--prefix PATH` (the user service expects `~/.local/bin`). `wget -qO- URL | sh` works too. Each release also ships the script as an `install.sh` asset, which installs that release, and inside its tarball, where it installs that tarball's binaries.
 
 ## Build and run
 

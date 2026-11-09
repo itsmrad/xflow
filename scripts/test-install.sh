@@ -1,7 +1,7 @@
 #!/bin/sh
 # Exercise scripts/install.sh's download mode against a loopback release server:
 # good (curl and wget, both arches), tampered, unsupported arch, missing sums, and
-# the local --bin-dir path. Needs python3, curl, wget, tar, sha256sum.
+# installs from an extracted tarball. Needs python3, curl, wget, tar, sha256sum.
 set -eu
 cd "$(dirname "$0")/.."
 work=$(mktemp -d)
@@ -10,9 +10,9 @@ trap '[ -z "$server" ] || kill "$server"; rm -rf "$work"' EXIT
 trap 'exit 1' HUP INT TERM
 fail() { echo "FAIL $*" >&2; exit 1; }
 
-# Fake releases: v1 and v2 are good, bad has a tampered tarball, nosums has no SHA256SUMS.
+# Fake releases: v1 and v2 are good; the others are broken as their tags say.
 srv=$work/srv
-release() { # tag label [tamper]
+release() { # tag label [tamper|crash|dupe]
     dir=$srv/download/$1
     mkdir -p "$dir"
     for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
@@ -20,22 +20,27 @@ release() { # tag label [tamper]
         mkdir -p "$work/stage/$name"
         for bin in xflow xflowd; do
             printf '#!/bin/sh\necho %s %s %s\n' "$bin" "$2" "$target" >"$work/stage/$name/$bin"
+            [ "${3:-}" != crash ] || printf '#!/bin/sh\nexit 1\n' >"$work/stage/$name/$bin"
             chmod 755 "$work/stage/$name/$bin"
         done
         tar -C "$work/stage" -czf "$dir/$name.tar.gz" "$name"
     done
     (cd "$dir" && sha256sum -- *.tar.gz >SHA256SUMS)
-    if [ -n "${3:-}" ]; then
-        for tarball in "$dir"/*.tar.gz; do printf 'x' >>"$tarball"; done
-    fi
+    case ${3:-} in
+        tamper) for tarball in "$dir"/*.tar.gz; do printf 'x' >>"$tarball"; done ;;
+        dupe) sed -i p "$dir/SHA256SUMS" ;;
+    esac
 }
 release v1 one
 release v2 two
-release bad evil tamper
-release nosums none
-rm "$srv/download/nosums/SHA256SUMS"
-mkdir -p "$srv/api"
+release v3-tampered evil tamper
+release v4-nosums none
+rm "$srv/download/v4-nosums/SHA256SUMS"
+release v5-crash crash crash
+release v6-dupe dupe dupe
+mkdir -p "$srv/api" "$srv/api-empty"
 printf '[\n  {\n    "tag_name": "v2",\n    "prerelease": true\n  }\n]\n' >"$srv/api/releases"
+echo '[]' >"$srv/api-empty/releases"
 
 python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$srv" >"$work/server.log" 2>&1 &
 server=$!
@@ -60,7 +65,7 @@ done
 run() { # arch path prefix args...
     arch=$1 path=$2 prefix=$3
     shift 3
-    FAKE_ARCH=$arch PATH=$work/shim:$path sh -s -- --prefix "$prefix" "$@" <scripts/install.sh >"$work/out" 2>&1
+    FAKE_ARCH=$arch PATH=$work/shim:$path sh -s -- --prefix "$prefix" "$@" <"${script:-scripts/install.sh}" >"$work/out" 2>&1
 }
 expect_fail() { # message arch args...
     message=$1
@@ -79,16 +84,33 @@ run aarch64 "$work/tools" "$prefix" --version v1 || fail "wget install: $(cat "$
 echo "PASS pinned version, aarch64, wget"
 
 before=$(sha256sum "$prefix/bin/xflow" "$prefix/bin/xflowd")
-expect_fail "checksum mismatch" x86_64 "$PATH" "$prefix" --version bad
-[ "$(sha256sum "$prefix/bin/xflow" "$prefix/bin/xflowd")" = "$before" ] || fail "tampered release changed the install"
-[ -z "$(find "$prefix/bin" -name '.*')" ] || fail "temporary files left behind"
+unchanged() {
+    [ "$(sha256sum "$prefix/bin/xflow" "$prefix/bin/xflowd")" = "$before" ] || fail "$1 changed the install"
+    [ -z "$(find "$prefix/bin" -name '.*')" ] || fail "$1 left temporary files behind"
+}
+expect_fail "checksum mismatch" x86_64 "$PATH" "$prefix" --version v3-tampered
+unchanged "a tampered release"
 echo "PASS tampered tarball refused, old install unchanged"
+expect_fail "xflow v5-crash does not run here" x86_64 "$PATH" "$prefix" --version v5-crash
+unchanged "a release that cannot run"
+echo "PASS binaries that cannot run here refused, old install unchanged"
 
 expect_fail "no prebuilt release for riscv64" riscv64 "$PATH" "$work/p2"
-expect_fail "refusing to install unverified files" x86_64 "$PATH" "$work/p2" --version nosums
-expect_fail "invalid release tag" x86_64 "$PATH" "$work/p2" --version '../v1'
+expect_fail "refusing to install unverified files" x86_64 "$PATH" "$work/p2" --version v4-nosums
+expect_fail "no single entry for x86_64" x86_64 "$PATH" "$work/p2" --version v6-dupe
+for tag in ../v1 v1/../v2 v1..2 -v1 latest; do
+    expect_fail "invalid release tag" x86_64 "$PATH" "$work/p2" --version "$tag"
+done
+(XFLOW_API_URL="http://127.0.0.1:$port/api-empty" && expect_fail "no release found" x86_64 "$PATH" "$work/p2")
 [ ! -e "$work/p2/bin/xflow" ] || fail "a refused install wrote binaries"
-echo "PASS unsupported arch, missing sums and bad tag refused"
+echo "PASS unsupported arch, missing or ambiguous sums, bad tags and no releases refused"
+
+# A release's install.sh asset is stamped with its tag (as release.yml does) and installs that tag.
+sed 's/^pinned=$/pinned=v1/' scripts/install.sh >"$work/pinned.sh"
+grep -qx 'pinned=v1' "$work/pinned.sh" || fail "pinned= line not found to stamp"
+(script=$work/pinned.sh && run x86_64 "$PATH" "$work/p4") || fail "pinned asset install: $(cat "$work/out")"
+[ "$("$work/p4/bin/xflowd")" = "xflowd one x86_64-unknown-linux-gnu" ] || fail "pinned asset did not install v1"
+echo "PASS stamped release asset installs its own tag"
 
 # Local path: an extracted release tarball installs its own binaries with no network.
 tar -C "$work" -xzf "$srv/download/v1/xflow-1-x86_64-unknown-linux-gnu.tar.gz"
