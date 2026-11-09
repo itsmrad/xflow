@@ -31,9 +31,9 @@ use xflow_core::{
         CleanupOutcome, Delivery, FailedAudio, Grant, HistoryEntry, Learning, Permissions, Request,
         Response, Timings, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     },
-    log, privacy_line, AppContext, AudioCapture, AudioClip, ChatProvider, CleanupMode, Desktop,
-    DesktopEvent, FieldEvent, GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode, SpeechToText,
-    State, TextTransformer, Transcript, TranscriptionOptions, TransformRequest,
+    log, privacy_line, AppContext, AudioCapture, AudioClip, ChatProvider, CleanupMode, CopyReason,
+    Desktop, DesktopEvent, FieldEvent, GlobalHotkeys, HotkeyAction, InjectionOutcome, Mode,
+    SpeechToText, State, TextTransformer, Transcript, TranscriptionOptions, TransformRequest,
 };
 
 #[cfg(debug_assertions)]
@@ -136,6 +136,7 @@ enum Completion {
         processed: Processed,
         result: Result<Option<InjectionOutcome>>,
         ticket: Option<xflow_core::DeliveryTicket>,
+        reason: Option<CopyReason>,
     },
     /// `seq`: the dictionary clock, read before the file was (see `Learned`).
     Reloaded {
@@ -881,6 +882,7 @@ impl Engine {
                 level: r.level,
                 message: r.message.clone(),
                 mode: self.mode,
+                copy_reason: None,
             });
         }
         let _ = self.events.send(r);
@@ -1425,13 +1427,18 @@ impl Engine {
                         .await
                         .unwrap_or_else(|e| Err(e.into()));
                         match saved {
-                            Ok(()) => "; its audio is kept for 24 h: run xflow retry",
+                            Ok(()) => KEPT,
                             Err(e) => {
                                 log("warn", &format!("could not keep the failed audio: {e:#}"));
-                                ""
+                                NOT_KEPT_SAVE
                             }
                         }
                     }
+                    // Never promise a retry that has nothing to send. Only dictations are kept.
+                    None if failed.is_some()
+                        && session_mode == Mode::Dictation
+                        && !config.privacy.keep_failed_audio => NOT_KEPT_OFF,
+                    None if failed.is_some() => NOT_KEPT,
                     _ => "",
                 };
                 recovered = keep.retry && failed.is_none();
@@ -1546,7 +1553,7 @@ impl Engine {
                 if let Some(e) = failed {
                     // A partial instruction must never run against the selection.
                     if session_mode == Mode::Command {
-                        return Err(e.context("part of the command could not be transcribed; selection left untouched"));
+                        return Err(e.context(format!("part of the command could not be transcribed; selection left untouched{note}")));
                     }
                     if rewrite {
                         (rewrite, copy) = (false, true);
@@ -1984,7 +1991,7 @@ impl Engine {
                     }
                     // Late, from a canceled session: nothing it kept may stay.
                     Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
-                    Completion::Finished { generation, mut processed, result, ticket } => {
+                    Completion::Finished { generation, mut processed, result, ticket, reason } => {
                         self.delivering = false;
                         // Late, or for a dictation that will not be watched: wait out its reads.
                         let replay = ticket.as_ref().is_some_and(|ticket| ticket.keys.is_some());
@@ -2010,7 +2017,7 @@ impl Engine {
                                     && xflow_platform::terminal_controls(&processed.text, &processed.target) {
                                     add_warning(&mut processed.warning, "Terminal paste capability unverified");
                                 }
-                                let message = delivery_message(processed.warning.take(), outcome);
+                                let message = delivery_message(processed.warning.take(), outcome, reason);
                                 // One final success event: subscribers can trust its complete payload.
                                 self.last_timings = Some(processed.timings.clone());
                                 self.served = Some((processed.provider.clone(), processed.model.clone()));
@@ -2025,11 +2032,11 @@ impl Engine {
                                 }
                                 let answer = (self.mode == Mode::Ask).then(|| processed.text.clone());
                                 self.state = State::Success; self.message = message; let mut r = self.status();
-                                r.text = Some(processed.text); r.injection = outcome; r.entry = processed.entry; r.timings = Some(processed.timings);
+                                r.text = Some(processed.text); r.injection = outcome; r.copy_reason = reason; r.entry = processed.entry; r.timings = Some(processed.timings);
                                 fit_final(&mut r);
                                 // Pills alert only on a failed paste, never on an asked-for copy.
                                 // An ask answer is the panel text; it is not an injection.
-                                let _ = self.desktop_events.send(DesktopEvent { state: self.state, level: 0.0, message: answer.or_else(|| self.message.clone().filter(|_| self.delivery == Delivery::Inject)), mode: self.mode });
+                                let _ = self.desktop_events.send(DesktopEvent { state: self.state, level: 0.0, message: answer.or_else(|| self.message.clone().filter(|_| self.delivery == Delivery::Inject)), mode: self.mode, copy_reason: reason });
                                 let _ = self.events.send(r);
                             }
                             Err(e) => self.set_state(State::Error, Some(format!("{INJECTION_FAILED}: {e}; transcript available via last"))),
@@ -2069,14 +2076,14 @@ impl Engine {
                         // The selection must still be the one rewritten: same app, window and text.
                         let moved = delivery == Delivery::Inject && processed.rewrite && desktop.context_with_selection().await.ok().as_ref() != Some(&processed.target);
                         if moved { add_warning(&mut processed.warning, "Selection changed; rewrite copied"); }
-                        let mut ticket = None;
-                        let result = match delivery { Delivery::Inject if processed.copy || moved => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::Inject if observed => desktop.inject_observed(&processed.text, &processed.target).await.map(|delivered| { ticket = delivered.ticket; Some(delivered.outcome) }), Delivery::Inject => desktop.inject(&processed.text, &processed.target).await.map(Some), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
+                        let (mut ticket, mut reason) = (None, None);
+                        let result = match delivery { Delivery::Inject if processed.copy || moved => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::Inject => desktop.inject_observed(&processed.text, &processed.target, observed).await.map(|delivered| { ticket = delivered.ticket; reason = delivered.reason.filter(|_| delivered.outcome == InjectionOutcome::ClipboardOnly); Some(delivered.outcome) }), Delivery::Clipboard => desktop.copy(&processed.text).await.map(|_| Some(InjectionOutcome::ClipboardOnly)), Delivery::None => Ok(None) };
                         if delivery != Delivery::None { processed.timings.inject_ms = Some(ms(start.elapsed())); }
                         processed.timings.total_ms = ms(processed.stopped.elapsed());
                         if let Some(entry) = &mut processed.entry { entry.latency_ms = Some(processed.timings.total_ms as u64); if store.set_latency(entry.id, processed.timings.total_ms as u64).await.is_err() { add_warning(&mut processed.warning, "History latency update failed"); } }
                         // After delivery: the terms it mentions lead the next dictation's hints.
                         let text = recent.as_ref().map(|_| processed.text.clone());
-                        let _ = tx.send(Completion::Finished { generation, processed, result, ticket }).await;
+                        let _ = tx.send(Completion::Finished { generation, processed, result, ticket, reason }).await;
                         if let (Some(recent), Some(text)) = (recent, text) { lock(&recent).note(&text); }
                     });
                 }
@@ -2107,6 +2114,7 @@ impl Engine {
                                     level: 0.0,
                                     message: None,
                                     mode: Mode::Ask,
+                                    copy_reason: None,
                                 });
                             }
                         }
@@ -3551,21 +3559,29 @@ fn add_warning(warning: &mut Option<String>, message: &str) {
     }));
 }
 pub(crate) const UNCERTAIN: &str = "Pasted — check it landed";
+/// What a failed transcription says about its audio; pills read the first words.
+pub(crate) const KEPT: &str = "; its audio is kept for 24 h: run xflow retry";
+pub(crate) const NOT_KEPT: &str = "; audio not kept for retry";
+const NOT_KEPT_OFF: &str = "; audio not kept for retry: privacy.keep_failed_audio is off";
+const NOT_KEPT_SAVE: &str = "; audio not kept for retry: saving it failed";
 
-fn delivery_message(warning: Option<String>, outcome: Option<InjectionOutcome>) -> Option<String> {
-    let delivery = match outcome {
-        Some(InjectionOutcome::ClipboardOnly) => Some(COPIED),
-        Some(InjectionOutcome::Uncertain) => Some(UNCERTAIN),
-        _ => None,
+fn delivery_message(
+    warning: Option<String>,
+    outcome: Option<InjectionOutcome>,
+    reason: Option<CopyReason>,
+) -> Option<String> {
+    let delivery = match (outcome, reason) {
+        (Some(InjectionOutcome::ClipboardOnly), Some(reason)) => {
+            format!("{COPIED}; {}", reason.hint())
+        }
+        (Some(InjectionOutcome::ClipboardOnly), None) => COPIED.into(),
+        (Some(InjectionOutcome::Uncertain), _) => UNCERTAIN.into(),
+        _ => return warning.map(|s| bounded_message(&s)),
     };
-    if let Some(delivery) = delivery {
-        Some(bounded_message(&match warning {
-            Some(warning) => format!("{delivery}; {warning}"),
-            None => delivery.into(),
-        }))
-    } else {
-        warning.map(|s| bounded_message(&s))
-    }
+    Some(bounded_message(&match warning {
+        Some(warning) => format!("{delivery}; {warning}"),
+        None => delivery,
+    }))
 }
 /// A recording-config change rebuilds the microphone owner. End a meeting lease
 /// first, with a reason, and leave dictation's new settings alone.
@@ -3669,6 +3685,7 @@ async fn stream_ask(
             level: 0.0,
             message: Some(text.to_owned()),
             mode: Mode::Ask,
+            copy_reason: None,
         });
         let mut frame = Response::status(State::Processing, 0.0);
         frame.text = Some(text.to_owned());
@@ -4962,7 +4979,18 @@ mod tests {
             &self,
             text: &str,
             target: &AppContext,
+            observe: bool,
         ) -> Result<xflow_core::ObservedDelivery> {
+            let terminal = self.guard_terminal && xflow_platform::terminal_controls(text, target);
+            let reason = terminal.then_some(CopyReason::Terminal);
+            if !observe {
+                let outcome = self.inject(text, target).await?;
+                return Ok(xflow_core::ObservedDelivery {
+                    outcome,
+                    ticket: None,
+                    reason,
+                });
+            }
             let before = self.field.lock().unwrap().clone();
             let field = self.watch_field(target).await;
             let receipt = before.as_ref().and_then(|b| {
@@ -4976,7 +5004,11 @@ mod tests {
                     receipt,
                     keys: None,
                 });
-            Ok(xflow_core::ObservedDelivery { outcome, ticket })
+            Ok(xflow_core::ObservedDelivery {
+                outcome,
+                ticket,
+                reason,
+            })
         }
         async fn watch_field(&self, _: &AppContext) -> Option<Box<dyn xflow_core::FieldWatch>> {
             self.field.lock().unwrap().as_ref()?;
@@ -6359,6 +6391,39 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn a_failed_command_says_its_audio_is_not_kept_whatever_the_setting() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        // All parts failed, then only the first: neither blames the setting.
+        let cases: [fn(usize) -> bool; 2] = [|_| true, |i| i == 0];
+        for broken in cases {
+            let (mut engine, tx, rx, mut events, _, stt) = kept_fixture(broken, Some(&dir));
+            // Never reached: the transcription fails first.
+            engine.services.transformer = Some(Arc::new(FailingCleanup));
+            let task = tokio::spawn(engine.run(rx));
+            let sent = stt.clips.lock().unwrap().len();
+            let start = Request::Start {
+                mode: Mode::Command,
+                context: None,
+                t0_us: None,
+                delivery: Delivery::Inject,
+                hold: false,
+            };
+            let started = ask(&tx, start).await;
+            assert!(started.ok, "{:?}", started.message);
+            wait_for(|| stt.clips.lock().unwrap().len() > sent).await;
+            assert!(ask(&tx, Request::Stop).await.ok);
+            let message = timeout_event_error(&mut events).await.message.unwrap();
+            assert!(
+                message.contains(NOT_KEPT) && !message.contains(NOT_KEPT_OFF),
+                "{message}"
+            );
+            assert!(!dir.exists());
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
     async fn a_failed_dictation_is_kept_only_when_opted_in_and_survives_a_restart() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("failed");
@@ -6368,7 +6433,8 @@ mod tests {
         let task = tokio::spawn(engine.run(rx));
         dictate(&tx, &stt).await;
         let error = timeout_event_error(&mut events).await;
-        assert!(!error.message.unwrap().contains("kept"));
+        // Off: the failure says so instead of promising a retry.
+        assert!(error.message.unwrap().ends_with(NOT_KEPT_OFF));
         assert!(ask(&tx, Request::Status).await.failed_audio.is_none());
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
@@ -7112,7 +7178,7 @@ mod tests {
                 ..RecordingDesktop::default()
             });
             let delivered = desktop
-                .inject_observed(dictated, &AppContext::default())
+                .inject_observed(dictated, &AppContext::default(), true)
                 .await
                 .unwrap();
             let (finalize, finalized) = oneshot::channel();
@@ -7350,7 +7416,7 @@ mod tests {
             ..RecordingDesktop::default()
         });
         let delivered = desktop
-            .inject_observed(DICTATED, &AppContext::default())
+            .inject_observed(DICTATED, &AppContext::default(), true)
             .await
             .unwrap();
         *desktop.field.lock().unwrap() = Some(FIXED.into());
@@ -9857,12 +9923,14 @@ mod tests {
                     *desktop.copies.lock().unwrap(),
                     ["git status\necho \"$VARS\" `some_fn()`\necho 'userId' ..."]
                 );
-                assert!(r
-                    .message
-                    .unwrap()
-                    .contains("Terminal paste capability unverified"));
+                // Why it was copied comes first, typed and in the message.
+                assert_eq!(r.copy_reason, Some(CopyReason::Terminal));
+                let message = r.message.unwrap();
+                assert!(message.starts_with(&format!("{COPIED}; {}", CopyReason::Terminal.hint())));
+                assert!(message.contains("Terminal paste capability unverified"));
             } else {
                 assert_eq!(r.injection, Some(InjectionOutcome::Pasted));
+                assert_eq!(r.copy_reason, None);
                 assert_eq!(
                     *desktop.injections.lock().unwrap(),
                     ["git status\necho “$VARS” `some_fn()`\necho ‘userId’ …\n"]
@@ -10436,6 +10504,18 @@ mod tests {
         let logic = include_str!("../../../../../packaging/gnome-extension/logic.js");
         assert!(logic.contains(NO_SIGNAL) && logic.contains(ENDS_SOON));
         assert!(logic.contains("Copied — press Ctrl+V to paste"));
+        for reason in CopyReason::ALL {
+            let name = serde_json::to_value(reason).unwrap();
+            let entry = format!("{}: '{}'", name.as_str().unwrap(), reason.label());
+            assert!(logic.contains(&entry), "{entry}");
+        }
+        let kept = KEPT
+            .trim_start_matches("; ")
+            .trim_end_matches(": run xflow retry");
+        assert!(logic.contains(&format!("KEPT = '{kept}'")));
+        let not_kept = NOT_KEPT.trim_start_matches("; ");
+        assert!(logic.contains(&format!("NOT_KEPT = '{not_kept}'")));
+        assert!(NOT_KEPT_OFF.starts_with(NOT_KEPT) && NOT_KEPT_SAVE.starts_with(NOT_KEPT));
     }
     #[test]
     fn recognition_hints_include_stt_and_dictionary_words() {
@@ -10862,9 +10942,18 @@ mod tests {
         let message = delivery_message(
             Some("Cleanup failed; original transcript retained".into()),
             Some(InjectionOutcome::ClipboardOnly),
+            None,
         )
         .unwrap();
         assert!(message.contains("Cleanup failed") && message.contains(COPIED));
+        let message = delivery_message(
+            Some("Cleanup failed".into()),
+            Some(InjectionOutcome::ClipboardOnly),
+            Some(CopyReason::Accessibility),
+        )
+        .unwrap();
+        assert!(message.starts_with(&format!("{COPIED}; Accessibility is off")));
+        assert!(message.ends_with("; Cleanup failed"));
     }
 
     #[tokio::test]
@@ -10896,7 +10985,8 @@ mod tests {
         // The watch armed for the delivery is stopped, unread and uncounted.
         assert_eq!(desktop.field_reads.load(Ordering::SeqCst), 0);
         assert_eq!(ask(&tx, Request::Status).await.learning.unwrap().watches, 0);
-        let message = delivery_message(Some("Cleanup failed".into()), event.injection).unwrap();
+        let message =
+            delivery_message(Some("Cleanup failed".into()), event.injection, None).unwrap();
         assert!(message.contains("Cleanup failed") && message.contains("check it landed"));
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();

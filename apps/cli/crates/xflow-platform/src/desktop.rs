@@ -9,7 +9,7 @@ use tokio::{
 };
 use xflow_core::{
     config::{InjectionConfig, InjectionMethod},
-    AppContext, Desktop, InjectionOutcome,
+    AppContext, CopyReason, Desktop, InjectionOutcome, ObservedDelivery,
 };
 
 const MAX_TEXT: usize = 64 * 1024;
@@ -227,17 +227,22 @@ fn paste_shortcut(app: Option<&str>) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn safe_target(text: &str, target: &AppContext, current: &AppContext) -> bool {
+    unsafe_target(text, target, current).is_none()
+}
+/// Why `current` must not receive `text`, if it must not.
+fn unsafe_target(text: &str, target: &AppContext, current: &AppContext) -> Option<CopyReason> {
     if target.window_id.as_deref().is_none_or(str::is_empty)
         || target.app_id.as_deref().is_none_or(str::is_empty)
         || target.window_id != current.window_id
         || target.app_id != current.app_id
         || target.terminal_input != current.terminal_input
     {
-        return false;
+        return Some(CopyReason::Focus);
     }
     // Terminal control characters can submit commands even without a newline.
-    !terminal_controls(text, current)
+    terminal_controls(text, current).then_some(CopyReason::Terminal)
 }
 
 fn injection_options(config: &InjectionConfig, target: &AppContext) -> serde_json::Value {
@@ -250,17 +255,26 @@ fn injection_options(config: &InjectionConfig, target: &AppContext) -> serde_jso
     })
 }
 
-fn injection_result(json: &str) -> Result<InjectionOutcome> {
+/// The extension's reply. An unknown or missing `reason` (older extension) is None.
+fn injection_result(json: &str) -> Result<(InjectionOutcome, Option<CopyReason>)> {
     if json.len() > MAX_TEXT {
         bail!("Shell injection result exceeds limit");
     }
     let value: serde_json::Value = serde_json::from_str(json)?;
-    match value["outcome"].as_str() {
-        Some("pasted") => Ok(InjectionOutcome::Pasted),
-        Some("typed") => Ok(InjectionOutcome::Typed),
-        Some("clipboard_only") => Ok(InjectionOutcome::ClipboardOnly),
+    let outcome = match value["outcome"].as_str() {
+        Some("pasted") => InjectionOutcome::Pasted,
+        Some("typed") => InjectionOutcome::Typed,
+        Some("clipboard_only") => InjectionOutcome::ClipboardOnly,
         _ => bail!("invalid Shell injection outcome"),
-    }
+    };
+    let reason = serde_json::from_value(value["reason"].clone()).ok();
+    let known = |r: &CopyReason| *r != CopyReason::Unknown;
+    Ok((
+        outcome,
+        reason
+            .filter(known)
+            .filter(|_| outcome == InjectionOutcome::ClipboardOnly),
+    ))
 }
 
 fn parse_selection(text: String) -> Result<String> {
@@ -513,13 +527,34 @@ impl Desktop for LinuxDesktop {
     }
 
     async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome> {
+        Ok(self.inject_observed(text, target, false).await?.outcome)
+    }
+
+    /// Never observes; it adds why text was only copied.
+    async fn inject_observed(
+        &self,
+        text: &str,
+        target: &AppContext,
+        _observe: bool,
+    ) -> Result<ObservedDelivery> {
+        let done = |outcome, reason| ObservedDelivery {
+            outcome,
+            ticket: None,
+            reason,
+        };
+        let copied = |reason| done(InjectionOutcome::ClipboardOnly, Some(reason));
         if text.len() > MAX_TEXT {
             bail!("injection text exceeds 64 KiB");
         }
         let method = self.config.effective_method();
-        if method == InjectionMethod::Clipboard || !safe_target(text, target, target) {
+        let early = if method == InjectionMethod::Clipboard {
+            Some(CopyReason::Settings)
+        } else {
+            unsafe_target(text, target, target)
+        };
+        if let Some(reason) = early {
             self.copy(text).await?;
-            return Ok(InjectionOutcome::ClipboardOnly);
+            return Ok(copied(reason));
         }
         if let Ok(Some(shell)) = self.shell().await {
             let options = injection_options(&self.config, target).to_string();
@@ -531,7 +566,8 @@ impl Desktop for LinuxDesktop {
             )
             .await
             .context("Shell injection timed out; delivery is uncertain")??;
-            return injection_result(&json);
+            let (outcome, reason) = injection_result(&json)?;
+            return Ok(done(outcome, reason));
         }
         let previous = if method == InjectionMethod::Paste && self.config.restore_clipboard {
             self.clipboard(false).await.ok()
@@ -542,11 +578,11 @@ impl Desktop for LinuxDesktop {
             self.copy(text).await?;
         }
         let current = self.context().await?;
-        if !safe_target(text, target, &current) {
+        if let Some(reason) = unsafe_target(text, target, &current) {
             if method == InjectionMethod::Type {
                 self.copy(text).await?;
             }
-            return Ok(InjectionOutcome::ClipboardOnly);
+            return Ok(copied(reason));
         }
         let mut previous_primary = None;
         let result = if method == InjectionMethod::Type {
@@ -587,7 +623,7 @@ impl Desktop for LinuxDesktop {
             if method == InjectionMethod::Type {
                 self.copy(text).await?;
             }
-            return Ok(InjectionOutcome::ClipboardOnly);
+            return Ok(copied(CopyReason::Keys));
         }
         if let Some(previous) = previous {
             self.restore_later(previous, text, false);
@@ -595,11 +631,12 @@ impl Desktop for LinuxDesktop {
         if let Some(previous) = previous_primary {
             self.restore_later(previous, text, true);
         }
-        Ok(if method == InjectionMethod::Type {
+        let outcome = if method == InjectionMethod::Type {
             InjectionOutcome::Typed
         } else {
             InjectionOutcome::Pasted
-        })
+        };
+        Ok(done(outcome, None))
     }
 }
 
@@ -760,6 +797,11 @@ mod tests {
         let mut changed = context.clone();
         changed.terminal_input = false;
         assert!(!safe_target("prompt", &context, &changed));
+        // The reason the pill shows: a control character versus a focus change.
+        let terminal = unsafe_target("prompt\nnext line", &context, &context);
+        assert_eq!(terminal, Some(CopyReason::Terminal));
+        let moved = unsafe_target("prompt", &context, &changed);
+        assert_eq!(moved, Some(CopyReason::Focus));
         assert!(!is_terminal(Some("claude")));
         assert!(!is_terminal(Some("codex")));
         assert!(!is_terminal(Some("aider")));
@@ -816,10 +858,21 @@ mod tests {
         ] {
             assert_eq!(
                 injection_result(&format!("{{\"outcome\":\"{name}\",\"message\":null}}")).unwrap(),
-                expected
+                (expected, None)
             );
         }
         assert!(injection_result(r#"{"outcome":"unknown"}"#).is_err());
+        // The extension's reason; an unknown one or one on a paste is dropped.
+        for (json, reason) in [
+            (
+                r#"{"outcome":"clipboard_only","reason":"focus"}"#,
+                Some(CopyReason::Focus),
+            ),
+            (r#"{"outcome":"clipboard_only","reason":"later"}"#, None),
+            (r#"{"outcome":"pasted","reason":"keys"}"#, None),
+        ] {
+            assert_eq!(injection_result(json).unwrap().1, reason, "{json}");
+        }
         assert_eq!(
             InjectionConfig {
                 clipboard_only: true,

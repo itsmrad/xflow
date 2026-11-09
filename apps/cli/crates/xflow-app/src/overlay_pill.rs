@@ -14,7 +14,7 @@ use tokio::{
     sync::{broadcast, watch},
     time::timeout,
 };
-use xflow_core::{DesktopEvent, State};
+use xflow_core::{CopyReason, DesktopEvent, State};
 
 mod native;
 
@@ -125,6 +125,12 @@ struct PillEvent {
     /// The only thing shown after release: a short red failure pill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     alert: Option<Alert>,
+    /// With `Copied`: why the paste did not happen, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<CopyReason>,
+    /// With `Transcribe`: whether the audio was kept for `xflow retry`, when said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kept: Option<bool>,
     /// A spoken question. The helper stays up and draws `text` in the same panel.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     ask: bool,
@@ -166,9 +172,25 @@ impl PillEvent {
 
     /// `processed`: this session reached Processing, so an error is a transcription failure.
     fn from_desktop(event: DesktopEvent, processed: bool) -> Self {
-        use crate::daemon::{COPIED, ENDS_SOON, HANDS_FREE, INJECTION_FAILED, NO_SIGNAL};
+        use crate::daemon::{
+            COPIED, ENDS_SOON, HANDS_FREE, INJECTION_FAILED, KEPT, NOT_KEPT, NO_SIGNAL,
+        };
         let message = event.message.as_deref().unwrap_or_default();
         let listening = event.state == State::Listening;
+        let said = |note: &str| message.contains(note.trim_start_matches("; "));
+        let kept = if said(KEPT) {
+            Some(true)
+        } else {
+            said(NOT_KEPT).then_some(false)
+        };
+        let alert = match event.state {
+            State::Idle if message == crate::speech::NOT_CAUGHT => Some(Alert::NoSpeech),
+            State::Success if message.starts_with(COPIED) => Some(Alert::Copied),
+            State::Error if message.starts_with(INJECTION_FAILED) => Some(Alert::Paste),
+            State::Error if processed => Some(Alert::Transcribe),
+            State::Error => Some(Alert::Record),
+            _ => None,
+        };
         Self {
             state: event.state,
             level: if event.level.is_finite() {
@@ -185,14 +207,9 @@ impl PillEvent {
             .then_some(message)
             .filter(|text| !text.is_empty())
             .map(pill_text),
-            alert: match event.state {
-                State::Idle if message == crate::speech::NOT_CAUGHT => Some(Alert::NoSpeech),
-                State::Success if message.starts_with(COPIED) => Some(Alert::Copied),
-                State::Error if message.starts_with(INJECTION_FAILED) => Some(Alert::Paste),
-                State::Error if processed => Some(Alert::Transcribe),
-                State::Error => Some(Alert::Record),
-                _ => None,
-            },
+            reason: event.copy_reason.filter(|_| alert == Some(Alert::Copied)),
+            kept: kept.filter(|_| alert == Some(Alert::Transcribe)),
+            alert,
         }
     }
 }
@@ -623,6 +640,7 @@ mod tests {
                 level: f32::NAN,
                 message: Some("private".into()),
                 mode: Default::default(),
+                copy_reason: None,
             },
             false,
         );
@@ -637,6 +655,7 @@ mod tests {
                     level: 0.0,
                     message: Some(message.into()),
                     mode: Default::default(),
+                    copy_reason: None,
                 },
                 processed,
             )
@@ -680,6 +699,53 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(read.alert, Some(Alert::Transcribe));
+    }
+
+    #[test]
+    fn alerts_say_why_text_was_copied_and_whether_audio_was_kept() {
+        use crate::daemon::{COPIED, KEPT, NOT_KEPT};
+        let pill = |state, message: String, copy_reason, processed| {
+            PillEvent::from_desktop(
+                DesktopEvent {
+                    state,
+                    level: 0.0,
+                    message: Some(message),
+                    mode: Default::default(),
+                    copy_reason,
+                },
+                processed,
+            )
+        };
+        let copied = pill(
+            State::Success,
+            format!("{COPIED}; {}", CopyReason::Focus.hint()),
+            Some(CopyReason::Focus),
+            true,
+        );
+        assert_eq!(
+            (copied.alert, copied.reason),
+            (Some(Alert::Copied), Some(CopyReason::Focus))
+        );
+        // A reason never rides on a paste.
+        let pasted = pill(State::Success, String::new(), Some(CopyReason::Focus), true);
+        assert_eq!((pasted.alert, pasted.reason), (None, None));
+        for (note, kept) in [
+            (KEPT.to_owned(), Some(true)),
+            (
+                format!("{NOT_KEPT}: privacy.keep_failed_audio is off"),
+                Some(false),
+            ),
+            (String::new(), None),
+        ] {
+            let failed = pill(State::Error, format!("HTTP 500{note}"), None, true);
+            assert_eq!(
+                (failed.alert, failed.kept),
+                (Some(Alert::Transcribe), kept),
+                "{note}"
+            );
+        }
+        // Recording failures say nothing about retry.
+        assert_eq!(pill(State::Error, KEPT.into(), None, false).kept, None);
     }
 
     fn notice(op: u64) -> Notice {
@@ -788,6 +854,7 @@ mod tests {
                     level: 0.0,
                     message: Some(message),
                     mode: Default::default(),
+                    copy_reason: None,
                 },
                 false,
             )

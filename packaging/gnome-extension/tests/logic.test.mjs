@@ -5,9 +5,17 @@ import * as L from '../logic.js';
 
 test('parseEvent validates state, clamps level and defaults mode', () => {
     assert.deepEqual(L.parseEvent('{"state":"listening","level":0.42,"message":null,"mode":"command"}'),
-        {state: 'listening', level: 0.42, message: null, mode: 'command'});
+        {state: 'listening', level: 0.42, message: null, mode: 'command', reason: null, kept: null});
     assert.deepEqual(L.parseEvent('{"state":"listening","level":7}'),
-        {state: 'listening', level: 1, message: null, mode: 'dictation'});
+        {state: 'listening', level: 1, message: null, mode: 'dictation', reason: null, kept: null});
+    // Typed copy reason; unknown names are dropped.
+    assert.equal(L.parseEvent(`{"state":"success","message":"${L.COPIED}","copy_reason":"focus"}`).reason, 'focus');
+    assert.equal(L.parseEvent('{"state":"success","copy_reason":"later"}').reason, null);
+    assert.equal(L.parseEvent('{"state":"success","copy_reason":"toString"}').reason, null);
+    // The audio note survives message truncation.
+    const long = `${'x'.repeat(L.MAX_MESSAGE_CHARS * 2)}; ${L.NOT_KEPT}: privacy.keep_failed_audio is off`;
+    assert.equal(L.parseEvent(JSON.stringify({state: 'error', message: long})).kept, false);
+    assert.equal(L.parseEvent(`{"state":"error","message":"HTTP 500; ${L.KEPT}: run xflow retry"}`).kept, true);
     assert.equal(L.parseEvent('{"state":"listening","level":"x"}').level, 0);
     assert.equal(L.parseEvent('{"state":"recording"}'), null);
     assert.equal(L.parseEvent('[1]'), null);
@@ -258,6 +266,11 @@ test('after release only failures the user must act on alert', () => {
     assert.equal(L.alertText('success', `${L.COPIED}; Terminal paste capability unverified`, 'processing'), 'Copied — paste with Ctrl+V');
     assert.equal(L.alertText('idle', L.NOT_CAUGHT, 'processing'), 'No speech heard');
     assert.equal(L.alertText('error', 'groq: 401 invalid key', 'processing'), "Couldn't transcribe");
+    // Why text was only copied, and whether failed audio waits for a retry.
+    assert.equal(L.alertText('success', L.COPIED, 'processing', 'accessibility'), 'Copied (Accessibility off) — Ctrl+V');
+    assert.equal(L.alertText('error', 'HTTP 500', 'processing', null, true), "Couldn't transcribe — audio kept");
+    assert.equal(L.alertText('error', 'HTTP 500', 'processing', null, false), "Couldn't transcribe — audio not kept");
+    assert.equal(L.alertText('error', 'device lost', 'listening', null, false), 'Recording failed');
     assert.equal(L.alertText('error', 'Injection failed: x; transcript available via last', 'processing'), "Couldn't paste");
     assert.equal(L.alertText('error', 'input device lost', 'listening'), 'Recording failed');
     assert.equal(L.alertText('error', L.NOT_RUNNING, 'listening'), L.NOT_RUNNING);

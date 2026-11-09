@@ -268,17 +268,27 @@ fn beside_pill(mut frame: Rect, position: &str, scale: f64) -> Rect {
 const ALERT_SECS: f64 = 2.0;
 
 /// What the pill says: a failure alert after release, or a listening advisory.
-fn label_text(event: &PillEvent) -> Option<&'static CStr> {
-    Some(match (event.alert, event.ends_soon, event.no_signal) {
-        (Some(Alert::Copied), ..) => c"Copied — paste with ⌘V",
-        (Some(Alert::NoSpeech), ..) => c"No speech heard",
-        (Some(Alert::Paste), ..) => c"Couldn't paste",
-        (Some(Alert::Transcribe), ..) => c"Couldn't transcribe",
-        (Some(Alert::Record), ..) => c"Recording failed",
-        (None, true, _) => c"Recording stops in 1 min",
-        (None, _, true) => c"Can't hear you — check mic",
-        (None, false, false) => return None,
-    })
+fn label_text(event: &PillEvent) -> Option<String> {
+    if let (Some(Alert::Copied), Some(reason)) = (event.alert, event.reason) {
+        return Some(format!("Copied ({}) — ⌘V", reason.label()));
+    }
+    Some(
+        match (event.alert, event.ends_soon, event.no_signal) {
+            (Some(Alert::Copied), ..) => "Copied — paste with ⌘V",
+            (Some(Alert::NoSpeech), ..) => "No speech heard",
+            (Some(Alert::Paste), ..) => "Couldn't paste",
+            (Some(Alert::Transcribe), ..) => match event.kept {
+                Some(true) => "Couldn't transcribe — audio kept",
+                Some(false) => "Couldn't transcribe — audio not kept",
+                None => "Couldn't transcribe",
+            },
+            (Some(Alert::Record), ..) => "Recording failed",
+            (None, true, _) => "Recording stops in 1 min",
+            (None, _, true) => "Can't hear you — check mic",
+            (None, false, false) => return None,
+        }
+        .into(),
+    )
 }
 
 /// Static advisories, or the streaming answer in the same text layer.
@@ -288,7 +298,7 @@ fn caption(event: &PillEvent) -> Option<String> {
         .as_ref()
         .filter(|text| !text.is_empty())
         .cloned()
-        .or_else(|| label_text(event).map(|text| text.to_string_lossy().into_owned()))
+        .or_else(|| label_text(event))
 }
 
 fn ease_out(p: f64) -> f64 {
@@ -913,15 +923,26 @@ mod tests {
 
     #[test]
     fn label_text_matches_the_daemon_messages_and_alerts_win() {
-        let text = |event: &PillEvent| label_text(event).map(|t| t.to_str().unwrap());
+        let text = label_text;
         let mut event = PillEvent::default();
         assert_eq!(text(&event), None);
         event.no_signal = true;
-        assert_eq!(text(&event), Some(crate::daemon::NO_SIGNAL));
+        assert_eq!(text(&event).as_deref(), Some(crate::daemon::NO_SIGNAL));
         event.ends_soon = true;
-        assert_eq!(text(&event), Some(crate::daemon::ENDS_SOON));
+        assert_eq!(text(&event).as_deref(), Some(crate::daemon::ENDS_SOON));
         event.alert = Some(Alert::Copied);
-        assert_eq!(text(&event), Some("Copied — paste with ⌘V"));
+        assert_eq!(text(&event).as_deref(), Some("Copied — paste with ⌘V"));
+        event.reason = Some(xflow_core::CopyReason::Accessibility);
+        assert_eq!(
+            text(&event).as_deref(),
+            Some("Copied (Accessibility off) — ⌘V")
+        );
+        event.alert = Some(Alert::Transcribe);
+        event.kept = Some(false);
+        assert_eq!(
+            text(&event).as_deref(),
+            Some("Couldn't transcribe — audio not kept")
+        );
     }
     #[test]
     fn notice_names_the_saved_words_and_its_undo() {

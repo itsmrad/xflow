@@ -67,7 +67,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | `stats` | — | `stats` (sessions, words, audio_ms, today, streak, wpm, latency p50/p95) |
 | `reload` | — | idle only; stage services before swapping config; on error keep the running config and return the error; SIGHUP uses this path. A reload requested while one is in flight is queued (up to 8) and answered by one more read of config.toml |
 | `undo_learned` | `op` (optional; the pill's change id, absent for the latest) | undo the latest automatic dictionary change once by restoring config.toml's exact previous bytes; refused, writing nothing, after any later save, a reload, a newer change, a restart or with a wrong `op`. `message` names the words |
-| `subscribe` | — | snapshot, then every state/level event; the final event of a successful session carries `text`, `injection`, `entry`, `timings`. A learned-words event carries only `message` and leaves the state unchanged |
+| `subscribe` | — | snapshot, then every state/level event; the final event of a successful session carries `text`, `injection`, `entry`, `timings`, and with `injection: "clipboard_only"` an optional `copy_reason` (`settings`, `accessibility`, `focus`, `not_editable`, `terminal`, `clipboard`, `keys`) whose explanation also follows the Copied text in `message`; more names may be added without a protocol bump, so clients must treat an unknown `copy_reason` as absent (the Rust client reads it as `unknown`). A failed transcription's `message` ends by saying whether its audio was kept for `retry`. A learned-words event carries only `message` and leaves the state unchanged |
 | `allow` | `grant` ("input_monitoring" / "accessibility" / "microphone") | macOS: xflowd asks the system, which lists xflowd in System Settings and prompts while undecided; replies with status. A microphone reply adds `permissions.microphone` (null while undecided), read by a short-lived `xflowd --microphone` child so AVFoundation never loads in the daemon |
 | `shutdown` | — | unchanged |
 
@@ -90,7 +90,7 @@ specific Fn gesture). No permission polling runs at idle. The integrated daemon 
 - `Command(s request_json) → s response_json` — same JSON as the socket, restricted to
   `status, start, stop, toggle, cancel, copy_last, paste_last`. Errors: `InvalidArgs` (bad JSON),
   `AccessDenied` (request not allowed over D-Bus), `Failed` (daemon stopping).
-- signal `Event(s json)` — `DesktopEvent {state, level, message, mode}`; levels ≤ 30 Hz while listening.
+- signal `Event(s json)` — `DesktopEvent {state, level, message, mode, copy_reason?}`; levels ≤ 30 Hz while listening.
 
 **`org.xflow.Shell`** at `/org/xflow/Shell` (owned by the GNOME extension):
 
@@ -98,7 +98,7 @@ specific Fn gesture). No permission polling runs at idle. The integrated daemon 
 - `Inject(s text, s options_json) → s result_json` — options
   `{"method": "paste"|"type", "terminal": bool, "restore_clipboard": bool, "restore_delay_ms": u32,
   "target": {"app_id", "window_id"}|null}`; result `{"outcome": "pasted"|"typed"|"clipboard_only",
-  "message": s|null}`. Pastes with Ctrl+V (Ctrl+Shift+V when `terminal`) through a Clutter virtual
+  "message": s|null, "reason": s?}` (`reason` is a `copy_reason` name; unknown or absent is ignored). Pastes with Ctrl+V (Ctrl+Shift+V when `terminal`) through a Clutter virtual
   keyboard after setting the clipboard; `clipboard_only` when the focused window no longer matches
   `target`, focus is unknown or the screen is locked. Restores the previous clipboard text after
   `restore_delay_ms` only if the clipboard still holds the injected text.

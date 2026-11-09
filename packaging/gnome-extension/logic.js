@@ -78,6 +78,9 @@ export function parseEvent(json) {
         level: clamp(finite(event.level, 0), 0, 1),
         message: truncateMessage(event.message),
         mode: event.mode === 'command' ? 'command' : 'dictation',
+        // Read before truncation: the audio note ends the message.
+        reason: Object.hasOwn(COPY_REASONS, event.copy_reason ?? '') ? event.copy_reason : null,
+        kept: keptAudio(event.message),
     };
 }
 
@@ -460,6 +463,20 @@ export class HotkeyMachine {
 // Daemon messages (daemon.rs COPIED, NOT_CAUGHT, INJECTION_FAILED, NO_SIGNAL, ENDS_SOON).
 export const COPIED = 'Copied — press Ctrl+V to paste';
 export const NOT_CAUGHT = "Didn't catch anything";
+// CopyReason::label (xflow-core), by its JSON name.
+export const COPY_REASONS = Object.freeze({
+    settings: 'copy-only mode', accessibility: 'Accessibility off', focus: 'focus moved',
+    not_editable: 'no text field', terminal: 'terminal guard', clipboard: 'clipboard changed', keys: 'keys failed',
+});
+// Daemon KEPT / NOT_KEPT: whether a failed dictation's audio waits for `xflow retry`.
+export const KEPT = 'its audio is kept for 24 h';
+export const NOT_KEPT = 'audio not kept for retry';
+
+function keptAudio(message) {
+    if (typeof message !== 'string') return null;
+    if (message.includes(KEPT)) return true;
+    return message.includes(NOT_KEPT) ? false : null;
+}
 const HINTS = ["Can't hear you — check mic", 'Recording stops in 1 min'];
 export const ALERT_MS = 2000;
 
@@ -471,15 +488,20 @@ export function isHint(state, message) {
 /**
  * Brief text for the short red pill after release, or null to stay hidden.
  * Only failures the user must act on alert; a paste, an asked-for copy or a
- * discard is silent. `previous` is the state before this event.
+ * discard is silent. `previous` is the state before this event; `reason` and
+ * `kept` come from parseEvent.
  */
-export function alertText(state, message, previous) {
+export function alertText(state, message, previous, reason = null, kept = null) {
     if (state === 'idle') return message === NOT_CAUGHT ? 'No speech heard' : null;
-    if (state === 'success') return message?.startsWith(COPIED) ? 'Copied — paste with Ctrl+V' : null;
+    if (state === 'success') {
+        if (!message?.startsWith(COPIED)) return null;
+        return reason ? `Copied (${COPY_REASONS[reason]}) — Ctrl+V` : 'Copied — paste with Ctrl+V';
+    }
     if (state !== 'error') return null;
     if (message === NOT_RUNNING) return message;
     if (message?.startsWith('Injection failed')) return "Couldn't paste";
-    if (previous === 'processing') return "Couldn't transcribe";
+    if (previous === 'processing')
+        return kept === null ? "Couldn't transcribe" : `Couldn't transcribe — audio ${kept ? 'kept' : 'not kept'}`;
     if (previous === 'listening') return 'Recording failed';
     return message ?? 'XFlow error'; // a command or setup failure outside a dictation
 }
