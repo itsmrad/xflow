@@ -2262,8 +2262,9 @@ async fn query(
             limit,
             offset,
             query,
+            filter,
         } => {
-            let (rows, total) = store.history(limit, offset, query).await?;
+            let (rows, total) = store.history_where(limit, offset, query, filter).await?;
             r.total = Some(total);
             fit_history(&mut r, rows)?;
         }
@@ -2278,14 +2279,18 @@ async fn query(
                 bail!("history entry not found");
             }
         }
-        Request::HistoryCopy { id } | Request::HistoryPaste { id } => {
+        Request::HistoryCopy { id } => {
             let entry = store.get(id).await?.context("history entry not found")?;
-            if matches!(request, Request::HistoryCopy { .. }) {
-                desktop.copy(&entry.text).await?;
-            } else {
-                let target = desktop.context().await.unwrap_or_default();
-                r.injection = Some(desktop.inject(&entry.text, &target).await?);
-            }
+            desktop.copy(&entry.text).await?;
+        }
+        Request::HistoryPaste { id, original } => {
+            let entry = store.get(id).await?.context("history entry not found")?;
+            let text = match entry.raw_text {
+                Some(raw) if original => raw,
+                _ => entry.text,
+            };
+            let target = desktop.context().await.unwrap_or_default();
+            r.injection = Some(desktop.inject(&text, &target).await?);
         }
         Request::CopyLast => {
             desktop
@@ -4677,6 +4682,7 @@ mod tests {
                     limit: 5,
                     offset: 0,
                     query: None,
+                    filter: Default::default(),
                 }
             )
             .await
@@ -4699,6 +4705,7 @@ mod tests {
                 limit: 5,
                 offset: 0,
                 query: None,
+                filter: Default::default(),
             }
         )
         .await
@@ -4793,6 +4800,7 @@ mod tests {
                 limit: 5,
                 offset: 0,
                 query: None,
+                filter: Default::default(),
             }
         )
         .await
@@ -5446,6 +5454,7 @@ mod tests {
                         limit: 10,
                         offset: 0,
                         query: None,
+                        filter: Default::default(),
                     },
                 )
                 .await;
@@ -9202,6 +9211,7 @@ mod tests {
                 limit: 10,
                 offset: 0,
                 query: Some("READY".into()),
+                filter: Default::default(),
             },
         )
         .await;
@@ -9212,7 +9222,8 @@ mod tests {
             Request::History {
                 limit: 10,
                 offset: 1,
-                query: None
+                query: None,
+                filter: Default::default(),
             }
         )
         .await
@@ -9224,13 +9235,56 @@ mod tests {
         );
         assert!(ask(&tx, Request::HistoryCopy { id: entry.id }).await.ok);
         assert_eq!(
-            ask(&tx, Request::HistoryPaste { id: entry.id })
-                .await
-                .injection,
+            ask(
+                &tx,
+                Request::HistoryPaste {
+                    id: entry.id,
+                    original: false,
+                }
+            )
+            .await
+            .injection,
             Some(InjectionOutcome::Pasted)
         );
         assert_eq!(desktop.copies.lock().unwrap().len(), 1);
         assert_eq!(desktop.injections.lock().unwrap().len(), 2);
+        assert!(
+            ask(
+                &tx,
+                Request::HistoryPaste {
+                    id: entry.id,
+                    original: true,
+                }
+            )
+            .await
+            .ok
+        );
+        assert_eq!(
+            desktop
+                .injections
+                .lock()
+                .unwrap()
+                .last()
+                .map(String::as_str),
+            Some("um post gres is ready")
+        );
+        for (mode, found) in [(Mode::Dictation, 1), (Mode::Command, 0)] {
+            let filter = xflow_core::ipc::HistoryFilter {
+                mode: Some(mode),
+                ..Default::default()
+            };
+            let page = ask(
+                &tx,
+                Request::History {
+                    limit: 10,
+                    offset: 0,
+                    query: None,
+                    filter,
+                },
+            )
+            .await;
+            assert_eq!(page.total, Some(found));
+        }
         assert!(ask(&tx, Request::CopyLast).await.ok);
         assert_eq!(
             ask(&tx, Request::PasteLast).await.injection,
@@ -9242,7 +9296,10 @@ mod tests {
             Request::HistoryGet { id: entry.id },
             Request::HistoryDelete { id: entry.id },
             Request::HistoryCopy { id: entry.id },
-            Request::HistoryPaste { id: entry.id },
+            Request::HistoryPaste {
+                id: entry.id,
+                original: false,
+            },
         ] {
             assert!(!ask(&tx, r).await.ok);
         }
@@ -9601,6 +9658,7 @@ mod tests {
                 limit: 5,
                 offset: 0,
                 query: None,
+                filter: Default::default(),
             },
         )
         .await;

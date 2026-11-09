@@ -17,8 +17,8 @@ use std::{
 use xflow_core::{
     config::{Config, Replacement, Snippet, Style},
     ipc::{
-        CleanupOutcome, Delivery, Grant, HistoryEntry, Permissions, Request, Response, Stats,
-        Timings,
+        CleanupOutcome, Delivery, Grant, HistoryEntry, HistoryFilter, Permissions, Request,
+        Response, Stats, Timings, HISTORY_ACTIONS_PROTOCOL,
     },
     CleanupMode, Mode, State,
 };
@@ -26,6 +26,19 @@ use xflow_providers::KeySource;
 use zeroize::Zeroizing;
 
 pub const PAGE_SIZE: usize = 30;
+/// History filter choices: (value, label); "" matches all.
+const HISTORY_MODES: &[(&str, &str)] = &[
+    ("", "Any kind"),
+    ("dictation", "Dictation"),
+    ("command", "Voice edits"),
+    ("ask", "Questions"),
+];
+const HISTORY_PERIODS: &[(&str, &str)] = &[
+    ("", "Any time"),
+    ("today", "Today"),
+    ("7", "Last 7 days"),
+    ("30", "Last 30 days"),
+];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Home,
@@ -85,6 +98,9 @@ pub enum Action {
     Cancel,
     Copy,
     Paste,
+    /// History: paste the entry's original (before cleanup or correction).
+    PasteOriginal,
+    Filter,
     Retry,
     Add,
     AddCorrection,
@@ -133,6 +149,12 @@ pub fn commands() -> Vec<Command> {
         (Action::Ask, "Ask a question by voice", "a"),
         (Action::Copy, "Copy text", "c"),
         (Action::Paste, "Paste text into the app you were using", "p"),
+        (
+            Action::PasteOriginal,
+            "Paste the original, before cleanup",
+            "o",
+        ),
+        (Action::Filter, "Filter history by app, kind or date", "f"),
         (Action::Retry, "Retry the failed dictation and copy it", "R"),
         (Action::Choose, "Open or change the selected item", "Enter"),
         (Action::Add, "Add something new", "n"),
@@ -239,6 +261,7 @@ pub enum EditTarget {
     Menu(Vec<Action>),
     Setup(Step),
     Transcript(i64),
+    HistoryFilter,
     ChatProvider(String),
 }
 pub struct Field {
@@ -404,6 +427,8 @@ pub struct App {
     pub history: Vec<HistoryEntry>,
     pub detail: Option<HistoryEntry>,
     pub query: String,
+    /// History filter choices: app id, mode and period ("" is any).
+    pub filter: [String; 3],
     pub offset: usize,
     pub total: u64,
     pub generation: u64,
@@ -487,6 +512,7 @@ impl App {
             history: vec![],
             detail: None,
             query: String::new(),
+            filter: Default::default(),
             offset: 0,
             total: 0,
             generation: 0,
@@ -1045,6 +1071,7 @@ impl App {
                         limit: PAGE_SIZE,
                         offset: self.offset,
                         query: Some(self.query.clone()).filter(|s| !s.is_empty()),
+                        filter: self.history_filter(),
                     },
                     Tag::History(self.generation),
                 )]
@@ -1056,6 +1083,7 @@ impl App {
                         limit: PAGE_SIZE,
                         offset: 0,
                         query: None,
+                        filter: Default::default(),
                     },
                     Tag::Activity,
                 ),
@@ -1276,6 +1304,8 @@ impl App {
             KeyCode::Esc => Action::Back,
             KeyCode::Char('c') => Action::Copy,
             KeyCode::Char('p') => Action::Paste,
+            KeyCode::Char('o') => Action::PasteOriginal,
+            KeyCode::Char('f') => Action::Filter,
             KeyCode::Char('R') => Action::Retry,
             KeyCode::Char('n') | KeyCode::Char('N') => Action::Add,
             KeyCode::Enter => Action::Choose,
@@ -1627,8 +1657,47 @@ impl App {
                     self.query.clear();
                     self.offset = 0;
                     return self.refresh();
+                } else if self.page == Page::History && self.filter != <[String; 3]>::default() {
+                    self.filter = Default::default();
+                    self.offset = 0;
+                    return self.refresh();
                 } else if self.page != Page::Home {
                     return self.action(Action::Go(Page::Home));
+                }
+            }
+            Action::PasteOriginal if self.page != Page::History => (),
+            // An older xflowd would ignore these fields: paste the cleaned text, list everything.
+            Action::PasteOriginal | Action::Filter if !self.speaks(HISTORY_ACTIONS_PROTOCOL) => {
+                self.toast = Some(if self.status.protocol.is_none() {
+                    "xflow's background helper isn't ready yet. Try again in a moment.".into()
+                } else {
+                    "xflow's background helper is an older version. Restart it with xflow daemon restart, then try again.".into()
+                });
+            }
+            Action::PasteOriginal => {
+                let Some(h) = self.history.get(self.selected()) else {
+                    return vec![];
+                };
+                if h.raw_text
+                    .as_deref()
+                    .is_none_or(|r| r.trim() == h.text.trim())
+                {
+                    self.toast = Some("This dictation has no separate original.".into());
+                    return vec![];
+                }
+                return vec![Effect::Request(
+                    Request::HistoryPaste {
+                        id: h.id,
+                        original: true,
+                    },
+                    Tag::Done("Pasted the original."),
+                )];
+            }
+            Action::Filter => {
+                self.open_filter();
+                if self.page != Page::History {
+                    self.page = Page::History;
+                    return self.refresh();
                 }
             }
             Action::Copy | Action::Paste => {
@@ -1636,7 +1705,10 @@ impl App {
                 let request = match self.page {
                     Page::History => match self.history.get(self.selected()) {
                         Some(h) if copy => Request::HistoryCopy { id: h.id },
-                        Some(h) => Request::HistoryPaste { id: h.id },
+                        Some(h) => Request::HistoryPaste {
+                            id: h.id,
+                            original: false,
+                        },
                         None => return vec![],
                     },
                     Page::Home if copy => Request::CopyLast,
@@ -1739,15 +1811,22 @@ impl App {
             Page::History => {
                 if let Some(h) = self.history.get(pos) {
                     let preview = h.text.trim().chars().take(60).collect::<String>();
-                    self.menu(
-                        &preview,
-                        vec![
-                            (Action::Copy, "Copy"),
-                            (Action::Paste, "Paste into the app you were using"),
-                            (Action::Edit, "Correct this transcript"),
-                            (Action::Delete, "Delete"),
-                        ],
-                    );
+                    let mut items = vec![
+                        (Action::Copy, "Copy"),
+                        (Action::Paste, "Paste into the app you were using"),
+                        (Action::Edit, "Correct this transcript"),
+                        (Action::Delete, "Delete"),
+                    ];
+                    if h.raw_text
+                        .as_deref()
+                        .is_some_and(|r| r.trim() != h.text.trim())
+                    {
+                        items.insert(
+                            3,
+                            (Action::PasteOriginal, "Paste the original, before cleanup"),
+                        );
+                    }
+                    self.menu(&preview, items);
                 }
             }
             Page::Dictionary | Page::Snippets | Page::Styles => {
@@ -2195,6 +2274,89 @@ impl App {
         }
         Ok(())
     }
+    /// The running xflowd understands `protocol` (known from its status).
+    pub fn speaks(&self, protocol: u32) -> bool {
+        self.status.protocol.is_some_and(|p| p >= protocol)
+    }
+    fn open_filter(&mut self) {
+        let [app, mode, period] = self.filter.clone();
+        let mut apps = vec![String::new()];
+        apps.extend(self.history.iter().filter_map(|h| h.app_id.clone()));
+        apps[1..].sort();
+        apps.dedup();
+        let named = |choices: &'static [(&str, &str)]| {
+            move |c: &str| {
+                choices
+                    .iter()
+                    .find(|(v, _)| *v == c)
+                    .map_or(c.to_string(), |(_, l)| l.to_string())
+            }
+        };
+        self.edit(
+            EditTarget::HistoryFilter,
+            "Filter history",
+            "Show only some dictations. Apps come from the dictations listed now.",
+            vec![
+                Field::pick("App", app, apps, |a| {
+                    if a.is_empty() {
+                        "Any app".into()
+                    } else {
+                        options::app_name(a)
+                    }
+                }),
+                Field::pick(
+                    "Kind",
+                    mode,
+                    HISTORY_MODES.iter().map(|m| m.0.to_string()).collect(),
+                    named(HISTORY_MODES),
+                ),
+                Field::pick(
+                    "When",
+                    period,
+                    HISTORY_PERIODS.iter().map(|p| p.0.to_string()).collect(),
+                    named(HISTORY_PERIODS),
+                ),
+            ],
+        );
+    }
+    /// The chosen filters, with "When" as of now.
+    pub fn history_filter(&self) -> HistoryFilter {
+        let [app, mode, period] = &self.filter;
+        let now = self.now();
+        HistoryFilter {
+            app_id: Some(app.clone()).filter(|a| !a.is_empty()),
+            mode: match mode.as_str() {
+                "dictation" => Some(Mode::Dictation),
+                "command" => Some(Mode::Command),
+                "ask" => Some(Mode::Ask),
+                _ => None,
+            },
+            since: match period.as_str() {
+                "today" => Some(options::start_of_day(now, self.utc())),
+                "7" => Some(now - 7 * 86_400),
+                "30" => Some(now - 30 * 86_400),
+                _ => None,
+            },
+        }
+    }
+    /// Labels of the active filters, for the list title.
+    pub fn filter_labels(&self) -> Vec<String> {
+        let [app, mode, period] = &self.filter;
+        let mut out = vec![];
+        if !app.is_empty() {
+            out.push(options::app_name(app));
+        }
+        for (value, choices) in [(mode, HISTORY_MODES), (period, HISTORY_PERIODS)] {
+            if let Some((_, label)) = choices.iter().find(|(v, _)| !v.is_empty() && v == value) {
+                out.push(label.to_string());
+            }
+        }
+        out
+    }
+    /// The fixed test clock also fixes the time zone (UTC), so snapshots match anywhere.
+    pub fn utc(&self) -> bool {
+        self.now.is_some()
+    }
     fn open_editor(&mut self, action: Action) -> Vec<Effect> {
         if self.page == Page::History {
             if let Some(h) = self
@@ -2400,6 +2562,14 @@ impl App {
                 effects.extend(self.open_setup(Step::Microphone));
                 return Ok(effects);
             }
+            EditTarget::HistoryFilter => {
+                for (choice, field) in self.filter.iter_mut().zip(&editor.fields) {
+                    *choice = field.value.to_string();
+                }
+                self.offset = 0;
+                self.selected[Page::History.index()] = 0;
+                return Ok(self.refresh());
+            }
             EditTarget::Transcript(id) => {
                 let text = editor.fields[0].value.trim().to_owned();
                 if text.is_empty() {
@@ -2469,7 +2639,10 @@ impl App {
                 self.set_optional("recording.device", value)?;
                 return Ok(vec![]);
             }
-            EditTarget::Key { .. } | EditTarget::Transcript(_) | EditTarget::ChatProvider(_) => {
+            EditTarget::Key { .. }
+            | EditTarget::Transcript(_)
+            | EditTarget::HistoryFilter
+            | EditTarget::ChatProvider(_) => {
                 unreachable!()
             }
             EditTarget::Overlay(key) => {

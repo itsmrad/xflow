@@ -4,12 +4,12 @@
 │>2  History     ││    2 min ago · Mail                                     ││ conversation.                           │
 │ 3  Dictionary  ││                                                         ││                                         │
 │ 4  Snippets    ││                                                         ││ Said 2 min ago in Mail                  │
-│ 5  Styles      ││                                                         ││ 2.8 s of speech · ready in 0.4 s        │
-│ 6  Settings    ││                                                         ││                                         │
-│ 7  Pill        ││                                                         ││ Before cleanup:                         │
-│ 8  Your stats  ││                                                         ││ um the best ideas start with a          │
-│ 9  Check-up    ││                                                         ││ conversation                            │
-│ 0  AI apps     ││                                                         ││                                         │
+│ 5  Styles      ││                                                         ││ Thu 1 Oct 2026, 13:00                   │
+│ 6  Settings    ││                                                         ││ 2.8 s of speech · ready in 0.4 s        │
+│ 7  Pill        ││                                                         ││                                         │
+│ 8  Your stats  ││                                                         ││ Original (o pastes it):                 │
+│ 9  Check-up    ││                                                         ││ um the best ideas start with a          │
+│ 0  AI apps     ││                                                         ││ conversation                            │
 │ -  Chat        ││                                                         ││                                         │
 │ =  Meetings    ││                                                         ││                                         │
 │                ││                                                         ││                                         │
@@ -32,4 +32,4 @@
 │                ││                                                         ││                                         │
 ╰────────────────╯╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────╯
 
- / search · Enter options · ↑↓ move · Esc back · Tab next page · ? help · q quit
+ / search · f filter · Enter options · q quit · Esc back · ? help · Tab next page
