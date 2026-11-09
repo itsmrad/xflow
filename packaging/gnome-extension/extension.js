@@ -194,7 +194,7 @@ export default class XFlowExtension extends Extension {
         // Shown only while listening; after release only a failure alerts, briefly.
         const listening = this._state === 'listening';
         const hint = L.isHint(this._state, this._message);
-        const alert = listening ? null : L.alertText(this._state, this._message, this._previous);
+        const alert = listening ? null : L.alertText(this._state, this._message, this._previous, this._reason, this._kept);
         const idle = !listening && !alert;
         const minimal = idle && s.get_string('idle-style') === 'minimal';
         const theme = L.resolveTheme(s.get_string('theme'), this._desktop.get_string('color-scheme'));
@@ -290,6 +290,8 @@ export default class XFlowExtension extends Extension {
         this._state = event.state;
         this._mode = event.mode ?? this._mode;
         this._message = event.message ?? null;
+        this._reason = event.reason ?? null;
+        this._kept = event.kept ?? null;
         if (event.state === 'listening') this._waveform.setLevel(event.level ?? 0);
         if (changed) {
             this._cancelSource('_holdSource');
@@ -302,7 +304,7 @@ export default class XFlowExtension extends Extension {
 
     _scheduleHold() {
         this._cancelSource('_holdSource');
-        if (this._state === 'listening' || !L.alertText(this._state, this._message, this._previous)) return;
+        if (this._state === 'listening' || !L.alertText(this._state, this._message, this._previous, this._reason, this._kept)) return;
         const ms = L.holdTime(this._settings.get_int('error-hold-ms'));
         this._holdSource = this._timeout(Math.max(1, ms), () => {
             this._holdSource = 0;
@@ -477,7 +479,7 @@ export default class XFlowExtension extends Extension {
         const before = options.restore_clipboard ? await this._getClipboard(St.ClipboardType.CLIPBOARD) : null;
         if (!this._enabled || this._epoch !== epoch || Main.sessionMode.isLocked) throw new Error();
         this._clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
-        const fallback = {outcome: 'clipboard_only', message: 'Focus changed or is unknown; text copied'};
+        const fallback = {outcome: 'clipboard_only', message: 'Focus changed or is unknown; text copied', reason: 'focus'};
         if (!L.focusMatches(options.target, this._context())) return fallback;
         let outcome;
         try {
@@ -488,7 +490,8 @@ export default class XFlowExtension extends Extension {
                 else {
                     // ponytail: raw typing is restricted to ASCII on the active
                     // keyboard layout; paste delivers other Unicode losslessly.
-                    if (/[^\x09\x0a\x0d\x20-\x7e]/.test(text)) return fallback;
+                    if (/[^\x09\x0a\x0d\x20-\x7e]/.test(text))
+                        return {outcome: 'clipboard_only', message: 'Only ASCII can be typed here; text copied', reason: 'keys'};
                     for (const unit of L.typeUnits(text)) {
                         const keyval = unit.keysym ?? Clutter.unicode_to_keysym(unit.codepoint);
                         this._key(keyval, true, true);
@@ -511,7 +514,7 @@ export default class XFlowExtension extends Extension {
                 }
                 outcome = 'pasted';
             }
-        } catch { return {outcome: 'clipboard_only', message: 'Desktop delivery failed; text copied'}; }
+        } catch { return {outcome: 'clipboard_only', message: 'Desktop delivery failed; text copied', reason: 'keys'}; }
         if (options.restore_clipboard && before !== null) {
             this._restoreSource = this._timeout(options.restore_delay_ms, () => {
                 this._restoreSource = 0;

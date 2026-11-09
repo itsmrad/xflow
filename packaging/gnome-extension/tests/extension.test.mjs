@@ -46,7 +46,7 @@ test('focus changed during clipboard snapshot copies text without sending keys',
     const result = f.x._inject('dictation', options(f.target));
     f.focus({app_id: 'editor', window_id: '2'});
     snapshot(null, 'old clipboard');
-    assert.equal((await result).outcome, 'clipboard_only');
+    assert.deepEqual([(await result).outcome, (await result).reason], ['clipboard_only', 'focus']);
     assert.equal(f.clipboard(), 'dictation');
     assert.equal(f.keys.length, 0);
     assert.equal(f.timers.length, 0, 'copy-only recovery must remain on the clipboard');

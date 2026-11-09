@@ -1,4 +1,4 @@
-use crate::{AppContext, InjectionOutcome, Mode, State};
+use crate::{AppContext, CopyReason, InjectionOutcome, Mode, State};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -403,6 +403,9 @@ pub struct Response {
     pub history: Vec<HistoryEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub injection: Option<InjectionOutcome>,
+    /// With `injection: clipboard_only`: why, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_reason: Option<CopyReason>,
     pub level: f32,
     /// Last successfully opened microphone, including selection notices.
     #[serde(default, skip_serializing_if = "Option::is_none")]

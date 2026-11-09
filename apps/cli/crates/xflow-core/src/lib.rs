@@ -226,6 +226,63 @@ pub enum InjectionOutcome {
     ClipboardOnly,
 }
 
+/// Why a dictation was only copied, when the desktop adapter knows.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyReason {
+    /// `injection.method = "clipboard"`.
+    Settings,
+    /// macOS Accessibility is off, so focus cannot be read.
+    Accessibility,
+    /// The app or window changed since recording began, or focus is unknown.
+    Focus,
+    /// The focused element is not an editable text field.
+    NotEditable,
+    /// Pasting into this terminal could run commands.
+    Terminal,
+    /// Another app changed the clipboard before the paste keys.
+    Clipboard,
+    /// The paste or typing keys could not be sent.
+    Keys,
+}
+impl CopyReason {
+    pub const ALL: [Self; 7] = [
+        Self::Settings,
+        Self::Accessibility,
+        Self::Focus,
+        Self::NotEditable,
+        Self::Terminal,
+        Self::Clipboard,
+        Self::Keys,
+    ];
+    /// A few words for the pill.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Settings => "copy-only mode",
+            Self::Accessibility => "Accessibility off",
+            Self::Focus => "focus moved",
+            Self::NotEditable => "no text field",
+            Self::Terminal => "terminal guard",
+            Self::Clipboard => "clipboard changed",
+            Self::Keys => "keys failed",
+        }
+    }
+    /// The status message's explanation, with the repair step when there is one.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Settings => "injection.method is \"clipboard\"",
+            Self::Accessibility => {
+                "Accessibility is off for xflowd: run xflow, open Check-up and switch it on"
+            }
+            Self::Focus => "the focused app or window changed or could not be read",
+            Self::NotEditable => "no editable text field was focused",
+            Self::Terminal => "pasting into this terminal could run commands",
+            Self::Clipboard => "another app changed the clipboard",
+            Self::Keys => "the paste keys could not be sent",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
@@ -244,6 +301,9 @@ pub struct DesktopEvent {
     pub message: Option<String>,
     #[serde(default)]
     pub mode: Mode,
+    /// Success that was only copied: why, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_reason: Option<CopyReason>,
 }
 
 #[async_trait]
@@ -400,12 +460,19 @@ pub trait MeetingSubscription: Send + Sync {
 pub trait Desktop: Send + Sync {
     async fn context(&self) -> Result<AppContext>;
     async fn inject(&self, text: &str, target: &AppContext) -> Result<InjectionOutcome>;
-    /// Optional observation must be prepared by injection itself, before keys.
+    /// `inject`, plus why text was only copied when the adapter knows. With
+    /// `observe`, also a watch prepared by injection itself, before keys.
     /// Unsupported adapters deliver normally and explicitly report a safe miss.
-    async fn inject_observed(&self, text: &str, target: &AppContext) -> Result<ObservedDelivery> {
+    async fn inject_observed(
+        &self,
+        text: &str,
+        target: &AppContext,
+        _observe: bool,
+    ) -> Result<ObservedDelivery> {
         Ok(ObservedDelivery {
             outcome: self.inject(text, target).await?,
             ticket: None,
+            reason: None,
         })
     }
     async fn copy(&self, text: &str) -> Result<()>;
@@ -449,6 +516,8 @@ pub struct ObservedDelivery {
     pub outcome: InjectionOutcome,
     /// None is an unsupported/late-readiness safe miss, never permission to reacquire.
     pub ticket: Option<DeliveryTicket>,
+    /// Set only with `ClipboardOnly`.
+    pub reason: Option<CopyReason>,
 }
 /// Selection and generation belong to the same guarded bounded read as text.
 pub struct FieldSnapshot {

@@ -10,7 +10,7 @@ use std::{
 };
 use xflow_core::{
     config::{InjectionConfig, InjectionMethod},
-    AppContext, Desktop, FieldWatch, InjectionOutcome,
+    AppContext, CopyReason, Desktop, FieldWatch, InjectionOutcome,
 };
 
 const MAX_TEXT: usize = 64 * 1024;
@@ -924,6 +924,33 @@ fn decision(text: &str, method: InjectionMethod, target: &AppContext, current: &
         Decision::Paste
     }
 }
+/// Why `decision` chose Copy, for the user. Without Accessibility focus is unknown,
+/// so that comes before the focus checks it would fail.
+fn copy_reason(
+    text: &str,
+    method: InjectionMethod,
+    target: &AppContext,
+    current: &Focus,
+    trusted: bool,
+) -> CopyReason {
+    if method == InjectionMethod::Clipboard {
+        CopyReason::Settings
+    } else if !trusted {
+        CopyReason::Accessibility
+    } else if target.app_id.as_deref().is_none_or(str::is_empty)
+        || current.context.app_id.as_deref() == Some("com.apple.loginwindow")
+        || target.window_id.is_none()
+        || target.app_id != current.context.app_id
+        || target.window_id != current.context.window_id
+        || target.terminal_input != current.context.terminal_input
+    {
+        CopyReason::Focus
+    } else if terminal_controls(text, &current.context) {
+        CopyReason::Terminal
+    } else {
+        CopyReason::NotEditable
+    }
+}
 /// A field's character count, value and selected-text length (UTF-16 units).
 type Snapshot = (Option<i64>, Option<String>, i64);
 fn content_len(s: &Snapshot) -> Option<i64> {
@@ -1215,8 +1242,9 @@ impl Desktop for MacDesktop {
         &self,
         text: &str,
         target: &AppContext,
+        observe: bool,
     ) -> Result<xflow_core::ObservedDelivery> {
-        self.deliver(text, target, true).await
+        self.deliver(text, target, observe).await
     }
 }
 impl MacDesktop {
@@ -1228,9 +1256,10 @@ impl MacDesktop {
         target: &AppContext,
         observe: bool,
     ) -> Result<xflow_core::ObservedDelivery> {
-        let copied = xflow_core::ObservedDelivery {
+        let copied = |reason| xflow_core::ObservedDelivery {
             outcome: InjectionOutcome::ClipboardOnly,
             ticket: None,
+            reason,
         };
         if text.len() > MAX_TEXT {
             bail!("injection text exceeds 64 KiB");
@@ -1244,25 +1273,31 @@ impl MacDesktop {
         // restore the flag here, off the async runtime.
         // shortcut: a clipboard error (`?`) or cancellation before the worker restores it on the
         // async thread (two AX calls, each capped by the 0.2 s messaging timeout); fine while rare.
-        let (action, accessibility, reader, watch) = tokio::task::spawn_blocking(move || {
-            let mut focus = focus();
-            let action = decision(&text_owned, method, &target_owned, &focus);
-            let keys = matches!(action, Decision::Paste | Decision::Type);
-            let reader = keys.then(|| observe::Reader::new(&focus)).flatten();
-            let watch = reader.clone().filter(|_| observe).map(observe::arm);
-            (
-                action,
-                focus._accessibility.take().filter(|_| keys),
-                reader,
-                watch,
-            )
-        })
-        .await?;
+        let (action, accessibility, reader, watch, reason) =
+            tokio::task::spawn_blocking(move || {
+                let mut focus = focus();
+                let action = decision(&text_owned, method, &target_owned, &focus);
+                let reason = (action == Decision::Copy).then(|| {
+                    let trusted = unsafe { AXIsProcessTrusted() };
+                    copy_reason(&text_owned, method, &target_owned, &focus, trusted)
+                });
+                let keys = matches!(action, Decision::Paste | Decision::Type);
+                let reader = keys.then(|| observe::Reader::new(&focus)).flatten();
+                let watch = reader.clone().filter(|_| observe).map(observe::arm);
+                (
+                    action,
+                    focus._accessibility.take().filter(|_| keys),
+                    reader,
+                    watch,
+                    reason,
+                )
+            })
+            .await?;
         match action {
             Decision::Refuse => bail!("refusing delivery into a secure field"),
             Decision::Copy => {
                 self.write(text)?;
-                return Ok(copied);
+                return Ok(copied(reason));
             }
             _ => {}
         }
@@ -1284,7 +1319,7 @@ impl MacDesktop {
                     drop(accessibility)
                 })
                 .await;
-                return Ok(copied);
+                return Ok(copied(Some(CopyReason::Clipboard)));
             }
         }
         let target = target.clone();
@@ -1311,8 +1346,12 @@ impl MacDesktop {
                 ))));
             }
             if action == Decision::Copy {
+                let trusted = unsafe { AXIsProcessTrusted() };
+                let reason = copy_reason(&text_owned, method, &target, &current, trusted);
                 let copied = clipboard().and_then(|c| c.write(&text_owned));
-                return drop(reply.send(copied.map(|()| (Decision::Copy, false, None))));
+                return drop(
+                    reply.send(copied.map(|()| (Decision::Copy, false, None, Some(reason)))),
+                );
             }
             // The exact element and window, or nothing is read and nothing is learned.
             // Receipts have their own gate: they outlive a dropped watch.
@@ -1375,7 +1414,7 @@ impl MacDesktop {
                 return drop(reply.send(Err(e)));
             }
             if action == Decision::Type {
-                return drop(reply.send(Ok((action, false, ticket))));
+                return drop(reply.send(Ok((action, false, ticket, None))));
             }
             let mut restored = false;
             let landed = await_paste(
@@ -1393,7 +1432,7 @@ impl MacDesktop {
                         restore_previous();
                         restored = true;
                     }
-                    let _ = reply.send(Ok((action, confirmed, ticket)));
+                    let _ = reply.send(Ok((action, confirmed, ticket, None)));
                 },
             );
             // Uncertain at the reply: a late receipt still restores; none keeps the dictation.
@@ -1405,10 +1444,12 @@ impl MacDesktop {
                 }
             }
         });
-        let (action, confirmed, ticket) = outcome.await.context("delivery task stopped")??;
+        let (action, confirmed, ticket, reason) =
+            outcome.await.context("delivery task stopped")??;
         Ok(xflow_core::ObservedDelivery {
             outcome: injection_outcome(action, confirmed),
             ticket,
+            reason,
         })
     }
 }
@@ -2712,5 +2753,32 @@ mod tests {
         }
         assert_eq!(decision("echo hi", P, &terminal, &current), Paste);
         assert_eq!(decision("hello", P, &AppContext::default(), &current), Copy);
+    }
+    #[test]
+    fn copy_reason_names_the_check_that_copied() {
+        use CopyReason::{Accessibility, NotEditable, Settings, Terminal};
+        use InjectionMethod::{Clipboard, Paste as P};
+        let target = AppContext {
+            app_id: Some("com.googlecode.iterm2".into()),
+            window_id: Some("1:2".into()),
+            selected_text: None,
+            terminal_input: false,
+        };
+        let mut current = Focus {
+            context: target.clone(),
+            editable: Some(true),
+            ..Default::default()
+        };
+        let reason = |text, method, current: &Focus, trusted| {
+            copy_reason(text, method, &target, current, trusted)
+        };
+        assert_eq!(reason("hi", Clipboard, &current, false), Settings);
+        // Lost mid-session: focus reads as unknown, and the fix is the permission.
+        assert_eq!(reason("hi", P, &Focus::default(), false), Accessibility);
+        assert_eq!(reason("echo hi\n", P, &current, true), Terminal);
+        current.editable = Some(false);
+        assert_eq!(reason("hi", P, &current, true), NotEditable);
+        current.context.window_id = Some("1:3".into());
+        assert_eq!(reason("hi", P, &current, true), CopyReason::Focus);
     }
 }
