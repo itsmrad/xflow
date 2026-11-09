@@ -1350,6 +1350,7 @@ mod tests {
                     limit: 30,
                     offset: 0,
                     query: Some("obsolete".into()),
+                    filter: Default::default(),
                 },
                 Tag::History(1),
             )],

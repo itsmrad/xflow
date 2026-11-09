@@ -4,7 +4,10 @@ use tokio::sync::oneshot;
 
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Bumped when a request or response changes incompatibly; reported by Status.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
+/// First protocol with `HistoryPaste::original` and `History::filter`. Older daemons
+/// ignore both fields, so clients check `protocol` before sending them.
+pub const HISTORY_ACTIONS_PROTOCOL: u32 = 4;
 
 /// Where a finished transcript goes.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,6 +77,8 @@ pub enum Request {
         offset: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query: Option<String>,
+        #[serde(default, skip_serializing_if = "HistoryFilter::is_empty")]
+        filter: HistoryFilter,
     },
     HistoryGet {
         id: i64,
@@ -84,8 +89,11 @@ pub enum Request {
     HistoryCopy {
         id: i64,
     },
+    /// `original` pastes the entry's first text (`raw_text`) instead of its text.
     HistoryPaste {
         id: i64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        original: bool,
     },
     /// Replace an entry's text with the user's correction (its first text is kept
     /// as `raw_text`) and, with `dictionary.auto_learn`, learn the corrected words.
@@ -149,6 +157,24 @@ impl Request {
             delivery: Delivery::Inject,
             hold: false,
         }
+    }
+}
+
+/// Narrows `History`; an empty filter matches every entry.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryFilter {
+    /// Exact `app_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<Mode>,
+    /// Unix seconds: entries created at or after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+}
+impl HistoryFilter {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -469,6 +495,14 @@ mod tests {
                     limit: 5,
                     offset: 0,
                     query: None,
+                    filter: HistoryFilter::default(),
+                },
+            ),
+            (
+                r#"{"command":"history_paste","id":7}"#,
+                Request::HistoryPaste {
+                    id: 7,
+                    original: false,
                 },
             ),
         ] {
@@ -488,6 +522,56 @@ mod tests {
                 hold: false,
             }
         ));
+    }
+
+    #[test]
+    fn history_actions_stay_off_the_wire_unless_used() {
+        // Protocol 3 daemons ignore unknown fields: plain requests must look the same.
+        let plain = Request::HistoryPaste {
+            id: 7,
+            original: false,
+        };
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"command":"history_paste","id":7}"#
+        );
+        let list = Request::History {
+            limit: 5,
+            offset: 0,
+            query: None,
+            filter: HistoryFilter::default(),
+        };
+        assert_eq!(
+            serde_json::to_string(&list).unwrap(),
+            r#"{"command":"history","limit":5,"offset":0}"#
+        );
+        for request in [
+            Request::HistoryPaste {
+                id: 7,
+                original: true,
+            },
+            Request::History {
+                limit: 5,
+                offset: 0,
+                query: Some("é".into()),
+                filter: HistoryFilter {
+                    app_id: Some("slack".into()),
+                    mode: Some(Mode::Command),
+                    since: Some(1_700_000_000),
+                },
+            },
+        ] {
+            let json = serde_json::to_string(&request).unwrap();
+            assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), request);
+        }
+        assert_eq!(
+            serde_json::to_string(&Request::HistoryPaste {
+                id: 7,
+                original: true
+            })
+            .unwrap(),
+            r#"{"command":"history_paste","id":7,"original":true}"#
+        );
     }
 
     #[test]

@@ -13,6 +13,12 @@
 - **Pasting keeps your copied image, rich text or files (macOS).** After a dictation is pasted, xflow puts back everything you had copied, every format byte for byte, instead of only its text; before, a copied image or file was replaced by an empty clipboard. Over 32 MB only the text comes back, and the daemon log says so. (#27)
 - **Clipboard managers skip pasted dictations (macOS).** The dictation xflow pastes and then takes back is marked with the nspasteboard.org transient types, so clipboard managers that honor them don't keep it in history. A dictation left for you to paste yourself is a plain copy and is recorded. (#27)
 
+### History
+- **Paste what you actually said.** In History, `o` (or Enter → "Paste the original, before cleanup") pastes the transcript as it was before cleanup or your correction. The details pane labels it "Original" and shows the exact date and time next to "2 min ago".
+- **Filter History.** `f` narrows the list by app, kind (dictation, voice edits, questions) and period (today, 7 or 30 days); Esc clears it. Paging and counts follow the filter.
+- **Search ignores case in every script.** "école" finds "École", "ärger" finds "ÄRGER" and "привет" finds "ПРИВЕТ"; before, only A–Z ignored case. Accents still count.
+- An older background helper can't do these; the TUI says to restart it (`xflow daemon restart`) instead of pasting the cleaned text. Daemon protocol is now 4. (#22)
+
 ### Learning from corrections
 - **Corrections are saved seconds after you make them.** About two seconds after a fixed word settles and your cursor moves off it, or as soon as you switch fields or send, instead of at the end of a 60-second watch. The notice names the word for four seconds with a clickable Undo, even while you record.
 - **The next dictation is right.** An unusual word fixed to a close spelling now saves a literal correction at once, so it no longer depends on the recognizer honoring hints, including after model cleanup. An everyday word fixed to an unusual one saves only the word until you make the same fix again.
