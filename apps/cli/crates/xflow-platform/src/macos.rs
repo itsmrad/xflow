@@ -320,7 +320,7 @@ impl Pasteboard {
     /// Copy every item's flavors, skipping those macOS translates. Past MAX_CLIP,
     /// keep only the text. None when nothing restorable can be read.
     fn snapshot(&self) -> Option<Clip> {
-        let (mut items, mut total, mut skipped) = (Vec::new(), 0, 0);
+        let (mut items, mut total, mut skipped) = (Vec::new(), 0, Vec::new());
         for index in 1..=self.count()? {
             let item = self.item(index)?;
             let mut flavors = ptr::null();
@@ -342,7 +342,11 @@ impl Pasteboard {
                 let status =
                     unsafe { PasteboardCopyItemFlavorData(self.0, item, flavor, &mut data) };
                 let Some(data) = Owned::new(data).filter(|_| status == 0) else {
-                    skipped += 1;
+                    // TEMP diagnostic for CI: which flavors fail, and why.
+                    skipped.push(format!(
+                        "{} ({status}, flags {flags:#x})",
+                        cf_text(flavor).unwrap_or_default()
+                    ));
                     continue;
                 };
                 total += unsafe { CFDataGetLength(data.0) } as usize;
@@ -367,7 +371,8 @@ impl Pasteboard {
             }
             items.push(kept);
         }
-        let partial = (skipped > 0).then(|| format!("{skipped} unreadable formats left out"));
+        let partial = (!skipped.is_empty())
+            .then(|| format!("unreadable formats left out: {}", skipped.join(", ")));
         Some(Clip { items, partial })
     }
     /// A flavor's bytes (at most 2 × MAX_TEXT), or the OSStatus that refused them.
