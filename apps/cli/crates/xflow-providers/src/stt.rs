@@ -1170,7 +1170,9 @@ fn can_fail_over(error: &anyhow::Error) -> bool {
         Some(
             ProviderFailure::Timeout
                 | ProviderFailure::Connect
+                | ProviderFailure::Dns
                 | ProviderFailure::Interrupted
+                | ProviderFailure::Quota(_)
                 | ProviderFailure::Status(408 | 429 | 500..=599)
                 | ProviderFailure::RateLimited(_)
         )

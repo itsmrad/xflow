@@ -1097,6 +1097,7 @@ impl App {
             return vec![]; // Nothing dictated yet is not an error.
         }
         if !response.ok {
+            let said = options::say(&response);
             let message = response
                 .message
                 .unwrap_or_else(|| "xflow couldn't do that".into());
@@ -1109,7 +1110,7 @@ impl App {
                     "Saved — applies when this dictation finishes.".into()
                 }
                 Tag::Reload => format!("Saved, but not applied yet: {}", options::plain(&message)),
-                _ => options::plain(&message),
+                _ => said.unwrap_or_else(|| options::plain(&message)),
             });
             return vec![];
         }

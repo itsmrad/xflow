@@ -1290,6 +1290,88 @@ async fn timing_shapes_are_reported_only_as_the_provider_gave_them() {
 }
 
 #[tokio::test]
+async fn each_failure_class_has_one_user_problem() {
+    use xflow_core::problem::Problem as P;
+    let limited = |retry_after_s| P::RateLimited { retry_after_s };
+    let cases: [(&str, &[u8], &str, P); 8] = [
+        ("401 Unauthorized", b"{}", "", P::KeyRejected),
+        ("403 Forbidden", b"{}", "", P::Forbidden),
+        (
+            "429 Too Many Requests",
+            b"{}",
+            "Retry-After: 7\r\n",
+            limited(Some(7)),
+        ),
+        (
+            "429 Too Many Requests",
+            br#"{"error":{"message":"Rate limit reached, quota per minute"}}"#,
+            "",
+            limited(None),
+        ),
+        (
+            "429 Too Many Requests",
+            br#"{"error":{"code":"insufficient_quota"}}"#,
+            "",
+            P::QuotaExhausted,
+        ),
+        ("402 Payment Required", b"{}", "", P::QuotaExhausted),
+        ("500 Internal Server Error", b"{}", "", P::ProviderDown),
+        ("503 Service Unavailable", b"{}", "", P::ProviderDown),
+    ];
+    for (status, body, headers, expected) in cases {
+        let (url, _rx) = server(status, body, Duration::ZERO, headers).await;
+        let mut cfg = config("custom", url);
+        cfg.model = Some("m".into());
+        let error = build_stt(&cfg, true)
+            .unwrap()
+            .transcribe(clip(), Default::default())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            crate::problem(&error),
+            Some(expected),
+            "{status}: {error:#}"
+        );
+        // The response body is never part of the message.
+        assert!(!format!("{error:#}").contains("insufficient_quota"));
+    }
+    let (url, _rx) = server("200 OK", br#"{"text":"late"}"#, Duration::from_secs(3), "").await;
+    let mut cfg = config("custom", url);
+    cfg.model = Some("m".into());
+    cfg.timeout_secs = 1;
+    let error = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe(clip(), Default::default())
+        .await
+        .unwrap_err();
+    assert_eq!(crate::problem(&error), Some(P::Timeout));
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let mut cfg = config("custom", format!("http://127.0.0.1:{port}/transcribe"));
+    cfg.model = Some("m".into());
+    let error = build_stt(&cfg, true)
+        .unwrap()
+        .transcribe(clip(), Default::default())
+        .await
+        .unwrap_err();
+    assert_eq!(crate::problem(&error), Some(P::Unreachable));
+    // `.invalid` never resolves (RFC 6761), online or not.
+    let error = reqwest::Client::new()
+        .get("http://xflow-fixture.invalid/")
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .unwrap_err();
+    let error = crate::http_error(error);
+    assert_eq!(crate::problem(&error), Some(P::Offline), "{error:#}");
+    assert_eq!(
+        crate::classify_stt_failure(&error),
+        crate::SttFailure::NotSent
+    );
+}
+#[tokio::test]
 async fn failures_are_classified_for_the_meeting_ledger() {
     // 429 keeps Retry-After; the message dictation shows is unchanged.
     let (url, _rx) = server(

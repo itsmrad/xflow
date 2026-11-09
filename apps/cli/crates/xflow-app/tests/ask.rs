@@ -274,7 +274,7 @@ fn empty_question_and_connection_failure_are_one_line_errors() {
     let out = run(command(d.path()).args(["ask", "--no-context", "hello"]));
     assert_eq!(out.status.code(), Some(5));
     let error = one_line_error(&out);
-    assert!(error.contains("could not connect"), "{error}");
+    assert!(error.contains("Can't connect to custom"), "{error}");
     assert!(!error.contains("127.0.0.1"), "{error}");
 }
 #[test]

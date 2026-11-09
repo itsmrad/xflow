@@ -343,8 +343,18 @@ pub fn value_text(key: &str, value: &str) -> String {
     }
 }
 
-/// Plain-English replacement for daemon, provider and config errors.
-/// Never shows paths, sockets, TOML or stack text.
+/// A daemon reply or status in words: its typed problem through the shared
+/// presenter, else `plain` on its message.
+pub fn say(response: &xflow_core::ipc::Response) -> Option<String> {
+    let id = response.provider.as_deref().unwrap_or_default();
+    response
+        .problem
+        .and_then(|problem| problem.explain(&provider_name(id), id))
+        .or_else(|| response.message.as_deref().map(plain))
+}
+
+/// Plain-English fallback for errors without a typed problem (config, local and
+/// helper errors). Never shows paths, sockets, TOML or stack text.
 pub fn plain(error: &str) -> String {
     let lower = error.to_lowercase();
     let rules: &[(&str, &str)] = &[
@@ -356,8 +366,6 @@ pub fn plain(error: &str) -> String {
         ("changed outside", "Your settings were changed somewhere else, so xflow reloaded them. Please make your choice again."),
         ("api key unavailable", "This service needs an API key. Add it in Settings → Speech → API key."),
         ("missing key", "This service needs an API key. Add it in Settings → Speech → API key."),
-        ("401", "The service didn't accept your API key. Paste it again in Settings → Speech → API key."),
-        ("403", "The service didn't accept your API key. Paste it again in Settings → Speech → API key."),
         ("gemini asr language", "Gemini can't use that language. Pick another language or Automatic."),
         ("invalid provider endpoint", "That service needs a server address. Set it up with the xflow setup command, or choose another service."),
         ("custom endpoint", "That service needs a server address. Set it up with the xflow setup command, or choose another service."),

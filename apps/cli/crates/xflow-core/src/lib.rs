@@ -17,6 +17,7 @@ pub mod learn;
 pub mod lists;
 pub mod meeting;
 pub mod meeting_detect;
+pub mod problem;
 pub mod replay;
 pub mod snap;
 pub mod text;
@@ -244,6 +245,9 @@ pub struct DesktopEvent {
     pub message: Option<String>,
     #[serde(default)]
     pub mode: Mode,
+    /// The typed failure behind an error `message`, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<problem::Problem>,
 }
 
 #[async_trait]

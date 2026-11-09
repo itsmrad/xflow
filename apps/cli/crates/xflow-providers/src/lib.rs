@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use std::{net::IpAddr, sync::Arc, time::Duration};
 use xflow_core::{
     config::{CleanupConfig, Config, SttConfig},
+    problem::Problem,
     AudioClip, ChatProvider, CleanupMode, SpeechToText, TextTransformer, Transcript,
     TranscriptionOptions, TransformRequest,
 };
@@ -428,15 +429,19 @@ impl Credentials {
             return Ok(None);
         }
         if !self.allow_store {
-            bail!("API key unavailable in the configured environment variable");
+            return Err(ProviderFailure::NoKey(
+                "API key unavailable in the configured environment variable".into(),
+            )
+            .into());
         }
         let provider = self.provider.clone();
         match blocking(move || lookup(&provider)).await?? {
             Stored::Key(secret) => Ok(Some(secret.0)),
-            Stored::Missing => bail!(
+            Stored::Missing => Err(ProviderFailure::NoKey(format!(
                 "API key unavailable; set the provider environment variable or run `xflow key set {}`",
                 self.provider
-            ),
+            ))
+            .into()),
             Stored::InKeychain => bail!(
                 "your {} key {IN_KEYCHAIN}; run `xflow key status` once to move it",
                 self.provider
@@ -469,11 +474,11 @@ impl Credentials {
     async fn read<T: serde::de::DeserializeOwned>(&self, response: Response) -> Result<T> {
         if matches!(response.status().as_u16(), 401 | 403) {
             self.invalidate().await;
-            bail!(
-                "{} rejected the key (HTTP {})",
-                self.provider,
-                response.status().as_u16()
-            );
+            return Err(ProviderFailure::KeyRejected {
+                provider: self.provider.clone(),
+                status: response.status().as_u16(),
+            }
+            .into());
         }
         read_response(response).await
     }
@@ -712,16 +717,30 @@ pub fn check_keystore() -> Result<bool> {
 enum ProviderFailure {
     Timeout,
     Connect,
+    /// The provider's host name did not resolve.
+    Dns,
     Interrupted,
     Status(u16),
     /// HTTP 429 with the provider's `Retry-After` seconds, when given.
     RateLimited(Option<u64>),
+    /// HTTP 402, or a 429 whose body says the account is out of credit.
+    Quota(u16),
+    /// No key; the text says where to put one.
+    NoKey(String),
+    /// HTTP 401/403 on an authenticated request.
+    KeyRejected {
+        provider: String,
+        status: u16,
+    },
 }
+/// Also the LLM gateway's `LlmError::Network` text, so both classify as offline.
+const UNRESOLVED: &str = "could not resolve the provider's address";
 impl std::fmt::Display for ProviderFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Timeout => f.write_str("provider request timed out; it was not retried"),
             Self::Connect => f.write_str("could not connect to provider"),
+            Self::Dns => f.write_str(UNRESOLVED),
             Self::Interrupted => f.write_str("provider connection interrupted; it was not retried"),
             Self::Status(status) => {
                 write!(f, "provider returned HTTP {status}; response body omitted")
@@ -729,13 +748,81 @@ impl std::fmt::Display for ProviderFailure {
             Self::RateLimited(_) => {
                 f.write_str("provider returned HTTP 429; response body omitted")
             }
+            Self::Quota(status) => write!(
+                f,
+                "provider account is out of credit or quota (HTTP {status}); response body omitted"
+            ),
+            Self::NoKey(text) => f.write_str(text),
+            Self::KeyRejected { provider, status } => {
+                write!(f, "{provider} rejected the key (HTTP {status})")
+            }
         }
     }
 }
 impl std::error::Error for ProviderFailure {}
+impl ProviderFailure {
+    fn problem(&self) -> Option<Problem> {
+        Some(match self {
+            Self::Timeout | Self::Status(408) => Problem::Timeout,
+            Self::Connect | Self::Interrupted => Problem::Unreachable,
+            Self::Dns => Problem::Offline,
+            Self::Status(403) | Self::KeyRejected { status: 403, .. } => Problem::Forbidden,
+            Self::Status(401) | Self::KeyRejected { .. } => Problem::KeyRejected,
+            Self::Status(500..=599) => Problem::ProviderDown,
+            Self::Status(_) => return None,
+            Self::RateLimited(retry_after_s) => Problem::RateLimited {
+                retry_after_s: *retry_after_s,
+            },
+            Self::Quota(_) => Problem::QuotaExhausted,
+            Self::NoKey(_) => Problem::KeyMissing,
+        })
+    }
+}
+/// What a provider failure means to the user, for the shared presenter
+/// (`Problem::explain`); None when the error is not a classified provider failure.
+pub fn problem(error: &anyhow::Error) -> Option<Problem> {
+    error.chain().find_map(|e| {
+        e.downcast_ref::<ProviderFailure>()
+            .and_then(ProviderFailure::problem)
+            .or_else(|| e.downcast_ref::<llm::LlmError>().and_then(llm_problem))
+    })
+}
+pub fn llm_problem(error: &llm::LlmError) -> Option<Problem> {
+    use llm::LlmError as E;
+    Some(match error {
+        E::Auth => Problem::KeyRejected,
+        E::NotLoggedIn => Problem::KeyMissing,
+        E::RateLimit { retry_after } => Problem::RateLimited {
+            retry_after_s: retry_after.map(|d| d.as_secs()),
+        },
+        E::QuotaExhausted => Problem::QuotaExhausted,
+        E::Overloaded => Problem::ProviderDown,
+        E::Timeout => Problem::Timeout,
+        E::Network(why) if why == UNRESOLVED => Problem::Offline,
+        E::Network(_) => Problem::Unreachable,
+        E::ContextTooLong
+        | E::NotInstalled
+        | E::Offline
+        | E::Interrupted { .. }
+        | E::Provider(_) => return None,
+    })
+}
+/// hyper reports a failed lookup only as text in the error's source chain.
+fn unresolved(error: &reqwest::Error) -> bool {
+    let mut source = std::error::Error::source(error);
+    while let Some(e) = source {
+        if e.to_string().starts_with("dns error") {
+            return true;
+        }
+        source = e.source();
+    }
+    false
+}
 fn http_error(error: reqwest::Error) -> anyhow::Error {
     if error.is_timeout() {
         ProviderFailure::Timeout.into()
+    } else if error.is_connect() && unresolved(&error) {
+        ProviderFailure::Dns.into()
     } else if error.is_connect() {
         ProviderFailure::Connect.into()
     } else if error.is_request() || error.is_body() || error.is_decode() {
@@ -762,25 +849,35 @@ pub enum SttFailure {
 }
 pub fn classify_stt_failure(error: &anyhow::Error) -> SttFailure {
     match error.downcast_ref::<ProviderFailure>() {
-        Some(ProviderFailure::Connect) => SttFailure::NotSent,
+        Some(ProviderFailure::Connect | ProviderFailure::Dns) => SttFailure::NotSent,
         Some(ProviderFailure::Timeout | ProviderFailure::Interrupted) => SttFailure::Ambiguous,
         Some(ProviderFailure::RateLimited(after)) => {
             SttFailure::RateLimited(after.map(Duration::from_secs))
         }
         Some(ProviderFailure::Status(status @ (408 | 500..=599))) => SttFailure::Transient(*status),
-        Some(ProviderFailure::Status(status)) => SttFailure::Rejected(*status),
-        None => SttFailure::Other,
+        Some(ProviderFailure::Status(status) | ProviderFailure::Quota(status)) => {
+            SttFailure::Rejected(*status)
+        }
+        Some(ProviderFailure::NoKey(_) | ProviderFailure::KeyRejected { .. }) | None => {
+            SttFailure::Other
+        }
     }
 }
 async fn read_bytes(mut response: Response, strict: bool) -> Result<Vec<u8>> {
     if strict && !response.status().is_success() {
         let status = response.status().as_u16();
+        if status == 402 {
+            return Err(ProviderFailure::Quota(status).into());
+        }
         if status == 429 {
             let after = response
                 .headers()
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.trim().parse::<u64>().ok());
+            if after.is_none() && out_of_credit(&mut response).await {
+                return Err(ProviderFailure::Quota(status).into());
+            }
             return Err(ProviderFailure::RateLimited(after).into());
         }
         return Err(ProviderFailure::Status(status).into());
@@ -799,6 +896,26 @@ async fn read_bytes(mut response: Response, strict: bool) -> Result<Vec<u8>> {
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+/// A 429 that is an empty account, not a rate limit; the body is read (4 KiB at
+/// most) and dropped. "quota" alone is not enough: Gemini says it for per-minute limits.
+async fn out_of_credit(response: &mut Response) -> bool {
+    let mut body = Vec::new();
+    while body.len() < 4096 {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    let body = String::from_utf8_lossy(&body).to_ascii_lowercase();
+    [
+        "insufficient_quota",
+        "credit",
+        "billing_hard_limit",
+        "spend",
+    ]
+    .iter()
+    .any(|word| body.contains(word))
 }
 async fn read_response<T: serde::de::DeserializeOwned>(response: Response) -> Result<T> {
     let bytes = read_bytes(response, true).await?;

@@ -268,15 +268,19 @@ fn beside_pill(mut frame: Rect, position: &str, scale: f64) -> Rect {
 const ALERT_SECS: f64 = 2.0;
 
 /// What the pill says: a failure alert after release, or a listening advisory.
-fn label_text(event: &PillEvent) -> Option<&'static CStr> {
+fn label_text(event: &PillEvent) -> Option<&'static str> {
+    // Only an error event carries a problem, and it always has an alert.
+    if let Some(problem) = event.problem {
+        return Some(problem.title());
+    }
     Some(match (event.alert, event.ends_soon, event.no_signal) {
-        (Some(Alert::Copied), ..) => c"Copied — paste with ⌘V",
-        (Some(Alert::NoSpeech), ..) => c"No speech heard",
-        (Some(Alert::Paste), ..) => c"Couldn't paste",
-        (Some(Alert::Transcribe), ..) => c"Couldn't transcribe",
-        (Some(Alert::Record), ..) => c"Recording failed",
-        (None, true, _) => c"Recording stops in 1 min",
-        (None, _, true) => c"Can't hear you — check mic",
+        (Some(Alert::Copied), ..) => "Copied — paste with ⌘V",
+        (Some(Alert::NoSpeech), ..) => "No speech heard",
+        (Some(Alert::Paste), ..) => "Couldn't paste",
+        (Some(Alert::Transcribe), ..) => "Couldn't transcribe",
+        (Some(Alert::Record), ..) => "Recording failed",
+        (None, true, _) => "Recording stops in 1 min",
+        (None, _, true) => "Can't hear you — check mic",
         (None, false, false) => return None,
     })
 }
@@ -288,7 +292,7 @@ fn caption(event: &PillEvent) -> Option<String> {
         .as_ref()
         .filter(|text| !text.is_empty())
         .cloned()
-        .or_else(|| label_text(event).map(|text| text.to_string_lossy().into_owned()))
+        .or_else(|| label_text(event).map(str::to_owned))
 }
 
 fn ease_out(p: f64) -> f64 {
@@ -908,7 +912,7 @@ mod tests {
 
     #[test]
     fn label_text_matches_the_daemon_messages_and_alerts_win() {
-        let text = |event: &PillEvent| label_text(event).map(|t| t.to_str().unwrap());
+        let text = label_text;
         let mut event = PillEvent::default();
         assert_eq!(text(&event), None);
         event.no_signal = true;
@@ -917,6 +921,10 @@ mod tests {
         assert_eq!(text(&event), Some(crate::daemon::ENDS_SOON));
         event.alert = Some(Alert::Copied);
         assert_eq!(text(&event), Some("Copied — paste with ⌘V"));
+        event.alert = Some(Alert::Transcribe);
+        assert_eq!(text(&event), Some("Couldn't transcribe"));
+        event.problem = Some(xflow_core::problem::Problem::KeyRejected);
+        assert_eq!(text(&event), Some("Key rejected"));
     }
     #[test]
     fn notice_names_the_saved_words_and_its_undo() {

@@ -993,6 +993,34 @@ fn backup_picker_only_offers_known_stored_keys_and_displays_the_current_choice()
     assert!(editor_error(&app).unwrap().contains("saving"));
 }
 #[test]
+fn a_typed_daemon_problem_is_shown_by_the_shared_presenter() {
+    let (_dir, mut app) = populated();
+    app.event(Response {
+        message: Some(
+            "groq transcription failed: provider returned HTTP 429; response body omitted".into(),
+        ),
+        provider: Some("groq".into()),
+        problem: Some(xflow_core::problem::Problem::RateLimited {
+            retry_after_s: Some(7),
+        }),
+        ..Response::status(State::Error, 0.0)
+    });
+    let text = screen(&app, 120, 35);
+    assert!(text.contains("Rate limited"), "{text}");
+    assert!(
+        text.contains("Groq is rate-limiting you. Wait 7 s"),
+        "{text}"
+    );
+    assert!(!text.contains("HTTP 429"), "{text}");
+    assert_plain(&text);
+    // Without a typed problem the message still gets the plain-English fallback.
+    app.event(Response {
+        message: Some("weird failure: at /tmp/x.toml line 3".into()),
+        ..Response::status(State::Error, 0.0)
+    });
+    assert!(screen(&app, 120, 35).contains("Weird failure."));
+}
+#[test]
 fn kept_failed_audio_offers_a_retry_that_copies_instead_of_pasting_into_the_terminal() {
     let (_dir, mut app) = populated();
     assert!(key(&mut app, KeyCode::Char('R')).is_empty());
