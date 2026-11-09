@@ -20,6 +20,18 @@ Commands below run from the repository root. For direct Cargo commands, use
 `--manifest-path apps/cli/Cargo.toml` or run Cargo from `apps/cli`.
 `scripts/check.sh`, the installer, and the package scripts run from any directory.
 
+## Install a Linux release
+
+No compiler needed (x86_64 or aarch64, glibc 2.39+: Ubuntu 24.04, Debian 13, Fedora 41 or newer):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/itsmrad/xflow/main/scripts/install.sh | sh
+xflow service install --enable
+xflow
+```
+
+The script downloads the newest release tarball and its `SHA256SUMS`, refuses to install on a checksum mismatch, missing sums or an unsupported architecture, and installs `xflow` and `xflowd` into `~/.local/bin` without sudo. Pin a release with `sh -s -- --version v0.2.1-beta` and pick another prefix with `--prefix PATH` (the user service expects `~/.local/bin`). `wget -qO- URL | sh` works too. Each release also ships the script as an `install.sh` asset, which installs that release, and inside its tarball, where it installs that tarball's binaries.
+
 ## Build and run
 
 The locked dependency set declares Rust 1.88 as its highest minimum compiler version (notably `instability`, `darling`, and ICU crates). CI checks the workspace against that compiler. Native development libraries are also required:
@@ -116,7 +128,7 @@ Optional user service: install [packaging/xflow.service](packaging/xflow.service
 
 ## CLI guide
 
-Build the binaries, then run `scripts/install.sh` (or `--prefix PATH --bin-dir PATH` for a staged install). The script installs binaries atomically and prints the next step. Run `xflow setup` (on macOS it opens the guided TUI setup) for numbered provider/model/microphone selection, hidden key input, an optional connection test with another try on a rejected key, and optional GNOME/service installation. New GNOME extensions on Wayland need a logout/login before `xflow extension enable`. `--yes` accepts config defaults; desktop installation, activation and provider checks require their explicit flags in scripts:
+Build the binaries, then run `scripts/install.sh` (or `--prefix PATH --bin-dir PATH` for a staged install); without a local build it downloads and verifies a release instead (see [Install a Linux release](#install-a-linux-release)). The script installs binaries atomically and prints the next step. Run `xflow setup` (on macOS it opens the guided TUI setup) for numbered provider/model/microphone selection, hidden key input, an optional connection test with another try on a rejected key, and optional GNOME/service installation. New GNOME extensions on Wayland need a logout/login before `xflow extension enable`. `--yes` accepts config defaults; desktop installation, activation and provider checks require their explicit flags in scripts:
 
 ```sh
 xflow setup --yes --provider groq --model whisper-large-v3-turbo
@@ -190,7 +202,7 @@ version tui
 
 `--json`, `--quiet`, `--color auto|always|never` and `--config PATH` are global flags. JSON data goes to stdout; errors are JSON objects on stderr with `error`, `hint` and `exit_code`. `watch --json` and `daemon logs --follow --json` emit newline-delimited JSON. Human tables honour `NO_COLOR`, `CLICOLOR_FORCE` and terminal detection; explicit `--color` wins. `--quiet` suppresses confirmations and progress while retaining requested data. `listen` and `transcribe` print plain text for pipes; `listen` subscribes before recording with `delivery=none` and accepts a successful transcript only after observing the new recording's Listening event. It ignores old results queued after the snapshot, exits promptly when a recording ends without text, and cancels on Ctrl-C even while Start awaits its reply. Without `--seconds`, an interactive `listen` records until Enter; it repeats unless `--once` is set. In a pipe, use `--seconds N` and it finishes after one dictation.
 
-Config writes use the shared comment-preserving editor, validate the whole document, and reload an available daemon. An explicit `--config` pointing to a different file edits that file without reloading the default daemon. `config edit` edits a temporary copy using `$VISUAL` or `$EDITOR`, validates it, then atomically replaces the original; a failed editor or invalid file preserves the original. Editor commands support whitespace-separated arguments, without shell expansion. Resetting config or clearing history requires confirmation or `--yes`. Dictionary import/export uses one vocabulary word per line; JSON export also includes replacements. History supports `--limit`, `--offset`, `--query` and complete paged exports as JSON, CSV or Markdown.
+Config writes use the shared comment-preserving editor, validate the whole document, and reload an available daemon. An explicit `--config` pointing to a different file edits that file without reloading the default daemon. `config edit` edits a temporary copy using `$VISUAL` or `$EDITOR`, validates it, then atomically replaces the original; a failed editor or invalid file preserves the original. Editor commands support whitespace-separated arguments, without shell expansion. Resetting config or clearing history requires confirmation or `--yes`. Dictionary import/export uses one vocabulary word per line; JSON export also includes replacements, and importing that JSON merges its words and replacements (existing replacements win on conflict; learned words arrive as regular words, and learning settings and learned/never-learn tags are not imported). Invalid files change nothing. History supports `--limit`, `--offset`, `--query` and complete paged exports as JSON, CSV or Markdown.
 
 `providers test` is an explicit non-billable credential/reachability check and uploads no audio. `transcribe` explicitly submits the file to the configured provider (subject to `privacy.offline`). `doctor` makes no provider calls and never opens the microphone; it reports desktop dependencies and actionable fixes, with separate manual checks for sound quality and text delivery. Key commands never print secrets; stdin and hidden-input keys are zeroized after use. File/config/catalog commands create no Tokio runtime; async I/O commands create a current-thread runtime on demand. The service belongs to `graphical-session.target` and stops with the graphical session.
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Install
+- **One-line Linux install, verified.** `curl -fsSL https://raw.githubusercontent.com/itsmrad/xflow/main/scripts/install.sh | sh` downloads the newest x86_64 or aarch64 release with curl or wget, checks it against the release's `SHA256SUMS` and installs `xflow` and `xflowd` into `~/.local/bin` without sudo. A checksum mismatch, missing sums or an unsupported architecture stops it before anything is replaced. `--version TAG` pins a release, `--prefix PATH` picks another location; from a checkout or an extracted tarball it still installs the local binaries.
+- **Releases are checked before they ship.** A tag publishes only when CI passed on its commit; the binaries must start and need no newer glibc than 2.39 (Ubuntu 24.04). Each release includes `install.sh`, as an asset and inside the tarball.
+
 ### Dictation
 - **Spoken underscore and dash work in every app.** In a browser, chat app or Electron app, "EBS underscore 321 underscore GHJ" becomes `EBS_321_GHJ` and "Hi dash There" becomes `Hi-There`. Outside terminals and editors a dash joins only IDs (capitals, digits, single letters, camelCase) or two capitalised words; "a dash of salt", "the 100 meter dash today", "underscore the point" and "Dash" as a name stay as said. Dot, slash, colon, operators and quotes stay in terminals and editors. Whisper's commas around the word no longer block it: "Hi, Dash, There." becomes `Hi-There.` `formatting.spoken_code = false` turns it all off.
 - **"cloud.ai" becomes Claude.ai.** Bare "cloud" is unchanged.
