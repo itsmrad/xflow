@@ -1,6 +1,6 @@
 #!/bin/sh
 # The one verification entry point shared by local runs and CI.
-# Usage: scripts/check.sh [fmt|extension|clippy|test]...   (no arguments: every stage)
+# Usage: scripts/check.sh [fmt|extension|install|clippy|test]...   (no arguments: every stage)
 # Missing optional tools are skipped with a notice locally but fail under CI.
 set -eu
 cd "$(dirname "$0")/.."
@@ -43,14 +43,29 @@ check_extension() {
     fi
 }
 
-[ "$#" -gt 0 ] || set -- fmt extension clippy test
+check_install() {
+    if command -v shellcheck >/dev/null 2>&1; then
+        shellcheck scripts/install.sh scripts/test-install.sh scripts/check-glibc.sh
+    else
+        missing shellcheck "installer lint"
+    fi
+    scripts/test-install.sh
+    # The glibc gate must reject a floor below what any real binary needs.
+    if GLIBC_FLOOR=2.0 scripts/check-glibc.sh /bin/sh >/dev/null 2>&1; then
+        echo "error: check-glibc.sh accepted a binary above its floor" >&2
+        exit 1
+    fi
+}
+
+[ "$#" -gt 0 ] || set -- fmt extension install clippy test
 for stage in "$@"; do
     echo "==> $stage" >&2
     case "$stage" in
         fmt) cargo fmt --manifest-path apps/cli/Cargo.toml --all -- --check ;;
         extension) check_extension ;;
+        install) check_install ;;
         clippy) cargo clippy --manifest-path apps/cli/Cargo.toml --workspace --all-targets --locked --features xflow-app/test-support -- -D warnings ;;
         test) run_tests ;;
-        *) echo "usage: $0 [fmt|extension|clippy|test]..." >&2; exit 2 ;;
+        *) echo "usage: $0 [fmt|extension|install|clippy|test]..." >&2; exit 2 ;;
     esac
 done

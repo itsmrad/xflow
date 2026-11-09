@@ -19,8 +19,13 @@ cargo build --manifest-path apps/cli/Cargo.toml --release --locked --target "$ta
 name=xflow-$version-$target
 stage=dist/$name
 rm -rf "$stage" "$stage.tar.gz"
-mkdir -p "$stage/packaging" "$stage/config"
+mkdir -p "$stage/packaging" "$stage/config" "$stage/scripts"
 install -m755 "apps/cli/target/$target/release/xflow" "apps/cli/target/$target/release/xflowd" "$stage/"
+# The staged binaries start, and run on the oldest supported glibc.
+"$stage/xflow" --version >/dev/null
+"$stage/xflowd" --version >/dev/null
+scripts/check-glibc.sh "$stage/xflow" "$stage/xflowd"
+install -m755 scripts/install.sh "$stage/scripts/"
 cp -R packaging/gnome-extension "$stage/packaging/"
 install -m644 packaging/xflow.service "$stage/packaging/"
 install -m644 config/default.toml "$stage/config/"
