@@ -63,7 +63,7 @@ if [ -z "$bindir" ]; then
     tmp=$(mktemp -d)
     if [ -z "$version" ]; then
         # shortcut: newest release including prereleases (all are betas today); switch to /releases/latest once stable releases exist.
-        api=${XFLOW_API_URL:-https://api.github.com/repos/itsmrad/xflow}/releases?per_page=1
+        api="${XFLOW_API_URL:-https://api.github.com/repos/itsmrad/xflow}/releases?per_page=1"
         fetch "$api" "$tmp/releases.json" || die "cannot look up the latest release at $api; pass --version TAG"
         version=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/releases.json" | head -n 1)
         [ -n "$version" ] || die "no release found at $api; pass --version TAG"
@@ -87,7 +87,8 @@ if [ -z "$bindir" ]; then
 fi
 
 for binary in xflow xflowd; do
-    [ -f "$bindir/$binary" ] && [ -x "$bindir/$binary" ] || {
+    [ -f "$bindir/$binary" ] && [ -x "$bindir/$binary" ] && continue
+    {
         echo "error: missing executable $bindir/$binary" >&2
         [ -n "$tmp" ] || echo 'hint: build with cargo build --manifest-path apps/cli/Cargo.toml --release --locked, pass --bin-dir PATH, or run with --version TAG to download a release' >&2
         exit 1
