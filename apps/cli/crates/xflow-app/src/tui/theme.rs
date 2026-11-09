@@ -105,12 +105,10 @@ pub enum ColorMode {
 }
 impl ColorMode {
     pub fn detect() -> Self {
-        Self::from_env(|key| std::env::var_os(key).map(|v| v.to_string_lossy().into_owned()))
+        Self::from_env(&env_var)
     }
-    fn from_env(var: impl Fn(&str) -> Option<String>) -> Self {
-        // no-color.org: only a non-empty NO_COLOR disables colour.
-        if var("NO_COLOR").is_some_and(|v| !v.is_empty()) || var("TERM").as_deref() == Some("dumb")
-        {
+    fn from_env(var: &dyn Fn(&str) -> Option<String>) -> Self {
+        if no_color(var) || dumb_term(var) {
             Self::None
         } else if var("COLORTERM").is_some_and(|v| v == "truecolor" || v == "24bit") {
             Self::TrueColor
@@ -118,6 +116,16 @@ impl ColorMode {
             Self::Ansi
         }
     }
+}
+pub fn env_var(key: &str) -> Option<String> {
+    std::env::var_os(key).map(|v| v.to_string_lossy().into_owned())
+}
+/// no-color.org: only a non-empty NO_COLOR disables colour.
+pub fn no_color(var: &dyn Fn(&str) -> Option<String>) -> bool {
+    var("NO_COLOR").is_some_and(|v| !v.is_empty())
+}
+pub fn dumb_term(var: &dyn Fn(&str) -> Option<String>) -> bool {
+    var("TERM").as_deref() == Some("dumb")
 }
 fn rgb(n: u32) -> Color {
     Color::Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8)
@@ -191,7 +199,7 @@ mod tests {
     fn color_mode_follows_no_color_and_dumb_terminals() {
         let mode = |vars: &[(&str, &str)]| {
             let vars = vars.to_vec();
-            ColorMode::from_env(move |key| {
+            ColorMode::from_env(&move |key| {
                 vars.iter()
                     .find(|(k, _)| *k == key)
                     .map(|(_, v)| v.to_string())

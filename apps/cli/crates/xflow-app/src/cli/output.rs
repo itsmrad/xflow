@@ -4,6 +4,8 @@ use serde::Serialize;
 use std::io::{self, IsTerminal, Write};
 use xflow_core::ipc::Response;
 
+use xflow_app::tui::{dumb_term, env_var, no_color};
+
 pub struct Output {
     pub json: bool,
     pub quiet: bool,
@@ -14,11 +16,7 @@ impl Output {
         let color = match color {
             Color::Always => true,
             Color::Never => false,
-            Color::Auto => {
-                std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
-                    && (std::env::var("CLICOLOR_FORCE").is_ok_and(|v| !v.is_empty() && v != "0")
-                        || io::stdout().is_terminal())
-            }
+            Color::Auto => auto_color(&env_var, io::stdout().is_terminal()),
         };
         Self {
             json,
@@ -212,9 +210,37 @@ pub fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
     .collect::<Vec<_>>()
     .join("\n")
 }
+/// NO_COLOR wins, then CLICOLOR_FORCE, then TERM=dumb, then whether stdout is a terminal.
+fn auto_color(var: &dyn Fn(&str) -> Option<String>, terminal: bool) -> bool {
+    !no_color(var)
+        && (var("CLICOLOR_FORCE").is_some_and(|v| !v.is_empty() && v != "0")
+            || (terminal && !dumb_term(var)))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn auto_color_follows_no_color_clicolor_force_and_dumb_terminals() {
+        let auto = |vars: &[(&str, &str)], terminal| {
+            let vars = vars.to_vec();
+            auto_color(
+                &move |key| {
+                    vars.iter()
+                        .find(|(k, _)| *k == key)
+                        .map(|(_, v)| v.to_string())
+                },
+                terminal,
+            )
+        };
+        assert!(auto(&[], true));
+        assert!(!auto(&[], false));
+        assert!(auto(&[("NO_COLOR", "")], true));
+        assert!(!auto(&[("NO_COLOR", "1")], true));
+        assert!(!auto(&[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")], true));
+        assert!(!auto(&[("TERM", "dumb")], true));
+        assert!(auto(&[("TERM", "dumb"), ("CLICOLOR_FORCE", "1")], false));
+        assert!(!auto(&[("CLICOLOR_FORCE", "0")], false));
+    }
     #[test]
     fn human_and_json_status_golden() {
         assert_eq!(

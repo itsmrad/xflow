@@ -81,9 +81,9 @@ Edit the effective `ui.themes` table in Settings to add a theme, or edit the con
 and reload. Invalid theme edits roll back; invalid loaded themes fall back to paper with a notice.
 
 Truecolor terminals use the full palette; other terminals receive a 16-color fallback.
-`NO_COLOR` restores default terminal colors. State text, symbols, bold/reverse selection and
-validation messages avoid color-only signaling. At 120x35, list/details can sit side by side;
-at 80x24 they stack. Below 35 columns or 12 rows, a resize/quit fallback replaces the full UI.
+A non-empty `NO_COLOR` or `TERM=dumb` restores default terminal colors; an empty `NO_COLOR` is
+ignored. State text, symbols, bold/reverse selection and validation messages avoid color-only
+signaling. At 120x35, list/details can sit side by side; at 80x24 they stack. Below 35 columns or 12 rows, a resize/quit fallback replaces the full UI.
 All terminal-cell symbols are sanitized against control-byte injection from transcripts/config.
 
 ## Verification

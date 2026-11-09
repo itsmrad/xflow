@@ -15,6 +15,7 @@ pub use integrations::{smart_formatting, smart_line};
 pub use options::key_label;
 pub use runtime::run;
 pub use state::Step;
+pub use theme::{dumb_term, env_var, no_color};
 
 #[cfg(test)]
 mod chat_tests;
