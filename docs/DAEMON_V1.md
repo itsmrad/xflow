@@ -143,11 +143,14 @@ is read in the record-start context job, from the same focus walk as the context
 so Listening never waits on it. Only a non-empty selection of at most 6,000
 characters in an editable field qualifies; secure, search and address fields,
 terminals and terminal input are skipped. Hands-free sessions, "scratch that" and
-speech over 12 words are normal dictation, and the selection is dropped. A rewrite
-runs as command mode within the dictation cleanup budget, is recorded in history
-as `command`, and replaces exactly the selection, keeping its edge whitespace. A
-timeout, failure, reply-like output or partial transcription copies the dictated
-text instead; a selection that changed before delivery gets the rewrite copied.
+speech over 12 words are normal dictation, and the selection is dropped. A short
+hold over a selection of more than 6,000 characters is neither rewritten nor
+pasted: the selection is dropped and the dictated text is copied with a notice.
+A rewrite runs as command mode within the dictation cleanup budget, is recorded
+in history as `command`, and replaces exactly the selection, keeping its edge
+whitespace. A timeout, failure, reply-like output or partial transcription copies
+the dictated text instead; a selection that changed before delivery gets the
+rewrite copied.
 
 ## Reload, capture and responsiveness
 

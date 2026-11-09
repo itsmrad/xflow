@@ -101,7 +101,7 @@ const MIC_SLOW: Duration = Duration::from_secs(1);
 const START_GRACE: Duration = Duration::from_secs(5);
 /// How often captured audio moves from the microphone buffer into segments.
 const DRAIN_EVERY: Duration = Duration::from_secs(1);
-/// Longer selections are dictated over, not rewritten: one model call stays fast.
+/// Longer selections are never rewritten (one model call stays fast) nor pasted over.
 const MAX_REWRITE_CHARS: usize = 6000;
 /// Longer speech over a selection is replacement text, pasted as dictated.
 const REWRITE_WORDS: usize = 12;
@@ -1513,15 +1513,16 @@ impl Engine {
                     && mode != CleanupMode::Raw
                     && local.split_whitespace().count() <= REWRITE_WORDS
                     && target.selected_text.as_deref().is_some_and(|s| !s.trim().is_empty());
+                // A failed rewrite leaves the selection alone: the dictation goes to the clipboard.
+                let mut copy = false;
+                // A short instruction pasted over a long selection would replace the document with it.
                 if rewrite && target.selected_text.as_deref().is_some_and(|s| s.chars().count() > MAX_REWRITE_CHARS) {
-                    rewrite = false;
-                    add_warning(&mut warning, "Selection is over 6,000 characters; dictated instead of rewriting");
+                    (rewrite, copy) = (false, true);
+                    add_warning(&mut warning, "Selection is over 6,000 characters; not rewritten, selection left untouched");
                 }
                 if session_mode == Mode::Dictation && !rewrite {
                     target.selected_text = None;
                 }
-                // A failed rewrite leaves the selection alone: the dictation goes to the clipboard.
-                let mut copy = false;
                 if let Some(e) = failed {
                     // A partial instruction must never run against the selection.
                     if session_mode == Mode::Command {
@@ -5095,36 +5096,23 @@ mod tests {
         off.cleanup.rewrite_selection = false;
         let mut raw = rewriting();
         raw.cleanup.mode = CleanupMode::Raw;
-        let long = "x".repeat(6001);
-        // Over the 64 KiB frame limit: still dictated and saved, never an error.
-        let huge = "x".repeat(70 * 1024);
-        for (case, config, rewrite, context, notice) in [
-            ("no selection", rewriting(), None, None, false),
-            (
-                "blank selection",
-                rewriting(),
-                Some(" \n".to_owned()),
-                None,
-                false,
-            ),
+        for (case, config, rewrite, context) in [
+            ("no selection", rewriting(), None, None),
+            ("blank selection", rewriting(), Some(" \n".to_owned()), None),
             (
                 "terminal",
                 rewriting(),
                 Some("Tuesday".into()),
                 Some(terminal),
-                false,
             ),
             (
                 "default off",
                 Config::default(),
                 Some("Tuesday".into()),
                 None,
-                false,
             ),
-            ("turned off", off, Some("Tuesday".into()), None, false),
-            ("raw mode", raw, Some("Tuesday".into()), None, false),
-            ("too long", rewriting(), Some(long), None, true),
-            ("over 64 KiB", rewriting(), Some(huge), None, true),
+            ("turned off", off, Some("Tuesday".into()), None),
+            ("raw mode", raw, Some("Tuesday".into()), None),
         ] {
             let transformer = Arc::new(RecordingTransformer::default());
             let desktop = RecordingDesktop {
@@ -5141,13 +5129,68 @@ mod tests {
                 Some("post gres is ready"),
                 "{case}"
             );
-            assert_eq!(
-                r.message.is_some_and(|m| m.contains("6,000")),
-                notice,
-                "{case}"
-            );
+            assert!(r.message.is_none(), "{case}: {:?}", r.message);
             assert_eq!(r.entry.map(|e| e.mode), Some(Mode::Dictation), "{case}");
         }
+    }
+    #[tokio::test]
+    async fn a_short_instruction_over_an_oversized_selection_is_copied_not_pasted() {
+        // Characters, not bytes: 6,001 "é" are 12,002 bytes; 70 KiB is over the 64 KiB frame limit.
+        for (case, selection) in [
+            ("too long", "x".repeat(6001)),
+            ("too many characters", "é".repeat(6001)),
+            ("over 64 KiB", "x".repeat(70 * 1024)),
+        ] {
+            let transformer = Arc::new(RecordingTransformer::default());
+            let desktop = RecordingDesktop {
+                rewrite: Some(selection),
+                ..RecordingDesktop::default()
+            };
+            let (desktop, r) = hold_over(rewriting(), SAID, desktop, transformer.clone()).await;
+            assert_eq!(r.state, State::Success, "{case}: {:?}", r.message);
+            let message = r.message.unwrap();
+            assert!(
+                message.starts_with(COPIED) && message.contains("over 6,000 characters"),
+                "{case}: {message}"
+            );
+            assert!(desktop.injections.lock().unwrap().is_empty(), "{case}");
+            assert_eq!(
+                desktop.field.lock().unwrap().as_deref(),
+                Some("Meet on Tuesday"),
+                "{case}"
+            );
+            assert_eq!(
+                *desktop.copies.lock().unwrap(),
+                ["post gres is ready "],
+                "{case}"
+            );
+            // The selection never reaches the model, the reply or history.
+            assert!(
+                transformer.0.lock().unwrap().iter().all(|c| c.1.is_empty()),
+                "{case}"
+            );
+            assert!(
+                r.text
+                    .is_some_and(|t| !t.contains("xxx") && !t.contains("éé")),
+                "{case}"
+            );
+            let entry = r.entry.unwrap();
+            assert_eq!(entry.mode, Mode::Dictation, "{case}");
+            assert!(
+                !entry.text.contains("xxx") && !entry.text.contains("éé"),
+                "{case}"
+            );
+        }
+        // 6,000 characters (12,000 bytes) is within the limit and still rewrites.
+        let transformer = Arc::new(RecordingTransformer::default());
+        let desktop = RecordingDesktop {
+            rewrite: Some("é".repeat(6000)),
+            ..RecordingDesktop::default()
+        };
+        let (_, r) = hold_over(rewriting(), SAID, desktop, transformer.clone()).await;
+        assert_eq!(r.state, State::Success, "{:?}", r.message);
+        assert_eq!(transformer.0.lock().unwrap().len(), 1);
+        assert_eq!(r.entry.map(|e| e.mode), Some(Mode::Command));
     }
     #[tokio::test]
     async fn long_speech_over_a_selection_is_dictated_not_rewritten() {
