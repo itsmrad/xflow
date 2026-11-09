@@ -5,6 +5,7 @@
 ### Dictation
 - **Spoken underscore and dash work in every app.** In a browser, chat app or Electron app, "EBS underscore 321 underscore GHJ" becomes `EBS_321_GHJ` and "Hi dash There" becomes `Hi-There`. Outside terminals and editors a dash joins only IDs (capitals, digits, single letters, camelCase) or two capitalised words; "a dash of salt", "the 100 meter dash today", "underscore the point" and "Dash" as a name stay as said. Dot, slash, colon, operators and quotes stay in terminals and editors. Whisper's commas around the word no longer block it: "Hi, Dash, There." becomes `Hi-There.` `formatting.spoken_code = false` turns it all off.
 - **"cloud.ai" becomes Claude.ai.** Bare "cloud" is unchanged.
+- **A long selection is never pasted over.** With Edit selected text on, a short instruction over a selection of more than 6,000 characters used to be pasted in its place. Now the selection is left untouched, what you said is copied, and a notice explains the limit. Hands-free and speech over 12 words still paste as before. (#146)
 
 ### Learning from corrections
 - **Corrections are saved seconds after you make them.** About two seconds after a fixed word settles and your cursor moves off it, or as soon as you switch fields or send, instead of at the end of a 60-second watch. The notice names the word for four seconds with a clickable Undo, even while you record.
