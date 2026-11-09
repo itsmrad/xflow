@@ -32,6 +32,23 @@ fn xdg(name: &str, fallback: &str) -> Result<PathBuf> {
 fn unit_path() -> Result<PathBuf> {
     Ok(xdg("XDG_CONFIG_HOME", ".config")?.join("systemd/user/xflow.service"))
 }
+/// A .deb/.rpm/AUR install ships its own unit running /usr/bin/xflowd.
+#[cfg(target_os = "linux")]
+fn packaged() -> bool {
+    std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .is_ok_and(|exe| exe == Path::new("/usr/bin/xflow"))
+        && Path::new("/usr/lib/systemd/user/xflow.service").exists()
+}
+/// The xflowd the user service runs: our user unit's, else the packaged one.
+#[cfg(target_os = "linux")]
+pub(super) fn service_program() -> Option<PathBuf> {
+    if unit_path().ok()?.exists() {
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/bin/xflowd"))
+    } else {
+        Some(PathBuf::from("/usr/bin/xflowd"))
+    }
+}
 fn extension_path() -> Result<PathBuf> {
     Ok(xdg("XDG_DATA_HOME", ".local/share")?
         .join("gnome-shell/extensions")
@@ -128,7 +145,14 @@ fn graphical_session() -> bool {
 pub fn service(action: &args::Service, out: &Output) -> Result<()> {
     match action {
         args::Service::Install { enable } => {
-            atomic(&unit_path()?, UNIT.as_bytes())?;
+            let path = unit_path()?;
+            if !packaged() {
+                atomic(&path, UNIT.as_bytes())?;
+            } else if path.exists() {
+                // Our old ~/.local/bin unit would shadow the package's, and its links would block enable.
+                systemd_user(&["--user", "disable", "--now", "xflow.service"])?;
+                std::fs::remove_file(path)?;
+            }
             systemd_user(&["--user", "daemon-reload"])?;
             if *enable {
                 systemd_user(&["--user", "enable", "--now", "xflow.service"])?;

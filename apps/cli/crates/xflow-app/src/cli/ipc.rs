@@ -109,9 +109,8 @@ fn meeting_recording() -> bool {
 fn service_runs_ours() -> bool {
     #[cfg(target_os = "macos")]
     let service = super::launchd::installed_program();
-    #[cfg(not(target_os = "macos"))]
-    let service = std::env::var_os("HOME")
-        .map(|home| std::path::PathBuf::from(home).join(".local/bin/xflowd"));
+    #[cfg(target_os = "linux")]
+    let service = super::system::service_program();
     let ours = std::env::current_exe().map(|exe| exe.with_file_name("xflowd"));
     match (
         service.map(std::fs::canonicalize),
