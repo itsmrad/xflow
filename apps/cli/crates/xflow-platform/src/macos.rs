@@ -342,11 +342,10 @@ impl Pasteboard {
                 let status =
                     unsafe { PasteboardCopyItemFlavorData(self.0, item, flavor, &mut data) };
                 let Some(data) = Owned::new(data).filter(|_| status == 0) else {
-                    // TEMP diagnostic for CI: which flavors fail, and why.
-                    skipped.push(format!(
-                        "{} ({status}, flags {flags:#x})",
-                        cf_text(flavor).unwrap_or_default()
-                    ));
+                    // Listed but never stored (UTF-16 beside UTF-8): nothing to lose.
+                    if status != NO_FLAVOR {
+                        skipped.push(cf_text(flavor).unwrap_or_default());
+                    }
                     continue;
                 };
                 total += unsafe { CFDataGetLength(data.0) } as usize;
