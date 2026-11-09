@@ -77,6 +77,13 @@ jobs:
           cargo build --manifest-path apps/cli/Cargo.toml --release --locked --target "$SCOREBOARD_TARGET" -p xflow-app --bin xflowd --bin xflow
           mkdir -p target/scoreboard-bin
           cp "apps/cli/target/$SCOREBOARD_TARGET/release/xflowd" "apps/cli/target/$SCOREBOARD_TARGET/release/xflow" target/scoreboard-bin/
+      # The packages job installs these in clean containers.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scoreboard-bin
+          path: target/scoreboard-bin
+          retention-days: 1
+          if-no-files-found: error
       - name: Release binaries stay within the glibc floor
         run: scripts/check-glibc.sh target/scoreboard-bin/xflowd target/scoreboard-bin/xflow
       # Sizes, idle PSS/CPU and startup budget against docs/benchmarks/ci-baseline.json.
@@ -158,6 +165,43 @@ jobs:
           persist-credentials: false
       # Loopback release fixtures (good, tampered, unsupported arch, missing sums) and shellcheck.
       - run: scripts/check.sh install
+
+  packages:
+    name: deb, rpm, Arch packages
+    needs: scoreboard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: scoreboard-bin
+          path: target/scoreboard-bin
+      - name: Release tarball from the scoreboard binaries
+        run: XFLOW_PREBUILT=target/scoreboard-bin scripts/package-release.sh x86_64-unknown-linux-gnu
+      # Install, reinstall, upgrade and remove in clean Ubuntu, Fedora and Arch containers.
+      - run: scripts/test-packages.sh dist/xflow-*-x86_64-unknown-linux-gnu.tar.gz
+
+  nix:
+    name: Nix flake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+      # Builds x86_64 from the pinned release (fetchurl checks its hash) and evaluates aarch64.
+      - run: |
+          nix build --print-build-logs .#packages.x86_64-linux.default
+          result/bin/xflow --version
+          result/bin/xflowd --version
+          grep -qx "ExecStart=$(readlink -f result)/bin/xflowd" result/lib/systemd/user/xflow.service
+          nix eval --raw .#packages.aarch64-linux.default.drvPath
+          cat flake.lock
+          git diff --exit-code flake.lock
 
   msrv:
     defaults:

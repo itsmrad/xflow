@@ -14,13 +14,15 @@ if [ -n "${2:-}" ] && [ "$2" != "v$version" ]; then
     exit 1
 fi
 
-cargo build --manifest-path apps/cli/Cargo.toml --release --locked --target "$target" -p xflow-app --bins
+# XFLOW_PREBUILT=DIR packages binaries built elsewhere (CI's package tests reuse the scoreboard build).
+bin=${XFLOW_PREBUILT:-apps/cli/target/$target/release}
+[ -n "${XFLOW_PREBUILT:-}" ] || cargo build --manifest-path apps/cli/Cargo.toml --release --locked --target "$target" -p xflow-app --bins
 
 name=xflow-$version-$target
 stage=dist/$name
 rm -rf "$stage" "$stage.tar.gz"
 mkdir -p "$stage/packaging" "$stage/config" "$stage/scripts"
-install -m755 "apps/cli/target/$target/release/xflow" "apps/cli/target/$target/release/xflowd" "$stage/"
+install -m755 "$bin/xflow" "$bin/xflowd" "$stage/"
 # The staged binaries start, and run on the oldest supported glibc.
 "$stage/xflow" --version >/dev/null
 "$stage/xflowd" --version >/dev/null
