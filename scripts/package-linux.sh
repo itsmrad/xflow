@@ -26,8 +26,8 @@ fi
 for tarball in "$@"; do
     name=$(basename "$tarball" .tar.gz)
     case $name in
-        xflow-*-x86_64-unknown-linux-gnu) arch=amd64 ;;
-        xflow-*-aarch64-unknown-linux-gnu) arch=arm64 ;;
+        xflow-*-x86_64-unknown-linux-gnu) arch=amd64 rpmarch=x86_64 ;;
+        xflow-*-aarch64-unknown-linux-gnu) arch=arm64 rpmarch=aarch64 ;;
         *) die "not a Linux release tarball: $tarball" ;;
     esac
     version=${name#xflow-}
@@ -42,9 +42,11 @@ for tarball in "$@"; do
     sed 's|^ExecStart=%h/\.local/bin/xflowd$|ExecStart=/usr/bin/xflowd|' "$src/packaging/xflow.service" >"$work/root/xflow.service"
     grep -qx 'ExecStart=/usr/bin/xflowd' "$work/root/xflow.service" || die "unexpected ExecStart in $tarball"
     install -m644 "$src/LICENSE" "$src/README.md" "$src/SCOWL-LICENSE.txt" "$src/BPE-LICENSE.txt" "$work/root/doc/"
-    for packager in deb rpm; do
+    # Package versions sort betas first (0.2.1~beta); file names keep the tag's "-beta",
+    # since GitHub release assets don't keep "~".
+    for packager in deb:"xflow_$version-1_$arch.deb" rpm:"xflow-$version-1.$rpmarch.rpm"; do
         # Timestamps come from the tarball, so the same tarball gives the same package.
         (cd "$work" && SOURCE_DATE_EPOCH=$(stat -c %Y "$src/xflow") ARCH=$arch VERSION=$version \
-            "$nfpm" package -f "$repo/packaging/linux/nfpm.yaml" -p "$packager" -t "$out/")
+            "$nfpm" package -f "$repo/packaging/linux/nfpm.yaml" -p "${packager%%:*}" -t "$out/${packager#*:}")
     done
 done

@@ -39,11 +39,13 @@
               pkgs.stdenv.cc.cc.lib
             ];
             installPhase = ''
+              runHook preInstall
               install -Dm755 -t $out/bin xflow xflowd
               install -dm755 $out/lib/systemd/user
               substitute packaging/xflow.service $out/lib/systemd/user/xflow.service \
                 --replace-fail '%h/.local/bin/xflowd' "$out/bin/xflowd"
               install -Dm644 -t $out/share/doc/xflow LICENSE README.md SCOWL-LICENSE.txt BPE-LICENSE.txt
+              runHook postInstall
             '';
             meta = {
               description = "Local-first voice typing for Linux desktops";

@@ -64,7 +64,7 @@ systemctl --user enable --now ~/.nix-profile/lib/systemd/user/xflow.service
 xflow
 ```
 
-Upgrade with the same package manager. Removing the package stops the running user service.
+Upgrade with the same package manager. Removing the package stops the user service for logged-in users but does not disable it; run `systemctl --user disable xflow.service` first to clear that too. Moving from `install.sh` to a package? Remove `~/.local/bin/xflow` and `~/.local/bin/xflowd`, which would otherwise come first on `PATH`.
 
 ## Build and run
 

@@ -40,6 +40,12 @@ fn packaged() -> bool {
         .is_ok_and(|exe| exe == Path::new("/usr/bin/xflow"))
         && Path::new("/usr/lib/systemd/user/xflow.service").exists()
 }
+/// A user unit that `xflow service install` wrote for ~/.local/bin, not one the user edited.
+#[cfg(any(target_os = "linux", test))]
+fn runs_local_bin(unit: &str) -> bool {
+    unit.lines()
+        .any(|line| line.trim() == "ExecStart=%h/.local/bin/xflowd")
+}
 /// The xflowd the user service runs: our user unit's, else the packaged one.
 #[cfg(target_os = "linux")]
 pub(super) fn service_program() -> Option<PathBuf> {
@@ -149,9 +155,16 @@ pub fn service(action: &args::Service, out: &Output) -> Result<()> {
             if !packaged() {
                 atomic(&path, UNIT.as_bytes())?;
             } else if path.exists() {
-                // Our old ~/.local/bin unit would shadow the package's, and its links would block enable.
-                systemd_user(&["--user", "disable", "--now", "xflow.service"])?;
-                std::fs::remove_file(path)?;
+                if runs_local_bin(&std::fs::read_to_string(&path)?) {
+                    // Our old ~/.local/bin unit would shadow the package's, and its links would block enable.
+                    systemd_user(&["--user", "disable", "--now", "xflow.service"])?;
+                    std::fs::remove_file(path)?;
+                } else {
+                    eprintln!(
+                        "warning: keeping {}, which overrides the packaged unit; remove it to use /usr/bin/xflowd",
+                        path.display()
+                    );
+                }
             }
             systemd_user(&["--user", "daemon-reload"])?;
             if *enable {
@@ -364,6 +377,15 @@ mod tests {
         atomic(&path, b"first").unwrap();
         atomic(&path, b"second").unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"second");
+    }
+
+    #[test]
+    fn package_installs_replace_only_our_local_bin_unit() {
+        assert!(runs_local_bin(UNIT));
+        assert!(!runs_local_bin(
+            &UNIT.replace("%h/.local/bin/xflowd", "/opt/xflow/xflowd")
+        ));
+        assert!(!runs_local_bin(""));
     }
 
     #[test]

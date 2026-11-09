@@ -44,6 +44,13 @@ tar -xzf "$tarball" -C "$work/x"
 mv "$work/x/$name" "$work/x/xflow-99.0.0-x86_64-unknown-linux-gnu"
 tar -C "$work/x" -czf "$work/new/xflow-99.0.0-x86_64-unknown-linux-gnu.tar.gz" xflow-99.0.0-x86_64-unknown-linux-gnu
 "$repo/scripts/package-linux.sh" "$work/old/$name.tar.gz" "$work/new/xflow-99.0.0-x86_64-unknown-linux-gnu.tar.gz"
+for file in "$work/old/xflow_$version-1_amd64.deb" "$work/old/xflow-$version-1.x86_64.rpm" \
+    "$work/new/xflow_99.0.0-1_amd64.deb" "$work/new/xflow-99.0.0-1.x86_64.rpm"; do
+    [ -f "$file" ] || fail "missing $file"
+done
+# GitHub renames release assets with "~", which would break SHA256SUMS.
+[ -z "$(find "$work/old" "$work/new" -name '*~*')" ] || fail "package file names contain ~"
+echo "PASS package file names"
 # The PKGBUILD as committed, pointed at a local tarball; makepkg uses a source file it finds beside it.
 pkgbuild() { # dir tarball tag
     mkdir -p "$work/arch/$1"
