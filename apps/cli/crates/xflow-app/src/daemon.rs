@@ -271,6 +271,8 @@ pub struct Engine {
     // Tokio's clock (the same in production) so the listening hints can be tested on paused time.
     started: Option<tokio::time::Instant>,
     silent_since: Option<tokio::time::Instant>,
+    /// The session's caller key-down (`monotonic_us`), for `Timings`.
+    t0_us: Option<u64>,
     segments: Segments,
     timings: Timings,
     last_timings: Option<Timings>,
@@ -373,6 +375,7 @@ impl Engine {
             notifications: tokio::task::JoinSet::new(),
             started: None,
             silent_since: None,
+            t0_us: None,
             segments: Segments::default(),
             timings: Timings::default(),
             last_timings: None,
@@ -1043,11 +1046,12 @@ impl Engine {
         self.started = Some(tokio::time::Instant::now());
         self.silent_since = self.started;
         self.segments = Segments::default();
+        self.t0_us = t0_us;
+        #[cfg(target_os = "macos")]
+        crate::overlay_pill::PILL_SHOWN.store(0, Ordering::Relaxed);
         self.timings = Timings {
             open_ms: Some(ms(opened.elapsed())),
-            hotkey_ms: t0_us
-                .and_then(|t| monotonic_us().checked_sub(t))
-                .map(|n| (n / 1000).min(u32::MAX as u64) as u32),
+            hotkey_ms: self.since_t0(monotonic_us()),
             ..Timings::default()
         };
         let stt = self.services.stt.clone();
@@ -1164,6 +1168,12 @@ impl Engine {
             self.cue(xflow_platform::Cue::Start);
         }
     }
+    /// Milliseconds from the session's caller key-down to `at_us` (`monotonic_us`).
+    fn since_t0(&self, at_us: u64) -> Option<u32> {
+        at_us
+            .checked_sub(self.t0_us?)
+            .map(|n| (n / 1000).min(u32::MAX as u64) as u32)
+    }
     async fn stop(&mut self, completion: mpsc::Sender<Completion>) -> Result<()> {
         if self.state != State::Listening {
             bail!("no recording is active");
@@ -1177,8 +1187,18 @@ impl Engine {
         self.drain().await;
         let live = self.segments.count;
         let mut warning = None;
+        #[cfg(target_os = "macos")]
+        {
+            let shown = crate::overlay_pill::PILL_SHOWN.swap(0, Ordering::Relaxed);
+            self.timings.pill_ms = (shown != 0).then(|| self.since_t0(shown)).flatten();
+        }
         match self.services.audio.stop().await {
             Ok(audio) => {
+                self.timings.first_sample_ms =
+                    self.services.audio.first_sample().and_then(|first| {
+                        let micros = first.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                        self.since_t0(monotonic_us().checked_sub(micros)?)
+                    });
                 if let Err(e) = audio_duration(&audio) {
                     self.segments = Segments::default();
                     return Err(e);
@@ -3787,7 +3807,7 @@ fn trace_segment(_: &str) {}
 fn ms(d: Duration) -> u32 {
     d.as_millis().min(u32::MAX as u128) as u32
 }
-fn monotonic_us() -> u64 {
+pub(crate) fn monotonic_us() -> u64 {
     let mut t = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -3942,8 +3962,10 @@ pub async fn serve_with_path(config: Config, config_path: PathBuf) -> Result<()>
             notice_tx.subscribe(),
             config_path.clone(),
         );
+        // XFLOW_TEST_PILL=1: a test-support daemon still spawns the real pill, for the scoreboard.
+        let show = native || std::env::var_os("XFLOW_TEST_PILL").is_some_and(|v| v == "1");
         tokio::spawn(async move {
-            if native {
+            if show {
                 crate::overlay_pill::run(events, notices, config).await;
             }
         })
@@ -4266,11 +4288,14 @@ mod tests {
         assert!(status.success());
     }
 
-    struct FakeAudio(AtomicBool);
+    /// `.1`: the first sample, stamped as capture starts.
+    #[derive(Default)]
+    struct FakeAudio(AtomicBool, std::sync::Mutex<Option<std::time::Instant>>);
     #[async_trait]
     impl AudioCapture for FakeAudio {
         async fn start(&self) -> Result<()> {
             self.0.store(true, Ordering::SeqCst);
+            *self.1.lock().unwrap() = Some(std::time::Instant::now());
             Ok(())
         }
         async fn stop(&self) -> Result<AudioClip> {
@@ -4287,6 +4312,9 @@ mod tests {
         }
         fn microphone(&self) -> Option<String> {
             Some("Fixture mic (Bluetooth headphones kept in high quality)".into())
+        }
+        fn first_sample(&self) -> Option<std::time::Instant> {
+            *self.1.lock().unwrap()
         }
         fn level(&self) -> f32 {
             0.2
@@ -4507,7 +4535,7 @@ mod tests {
     async fn hotkeys_drive_capture_and_reload_keeps_old_adapter_on_failure() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
-        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        let audio = Arc::new(FakeAudio::default());
         let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
         let options = Arc::new(Mutex::new(Vec::new()));
         let called = Arc::new(Notify::new());
@@ -4612,7 +4640,7 @@ mod tests {
     }
     #[tokio::test]
     async fn cancel_during_network_keeps_actor_responsive_and_prevents_injection() {
-        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        let audio = Arc::new(FakeAudio::default());
         let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
         let called = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
@@ -4659,7 +4687,7 @@ mod tests {
     }
     #[tokio::test]
     async fn cleanup_failure_preserves_transcript_history_and_clipboard_fallback() {
-        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        let audio = Arc::new(FakeAudio::default());
         let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
         let called = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
@@ -4799,7 +4827,7 @@ mod tests {
         let engine = Engine::new(
             Config::default(),
             Services {
-                audio: Arc::new(FakeAudio(AtomicBool::new(false))),
+                audio: Arc::new(FakeAudio::default()),
                 desktop: desktop.clone(),
                 stt: Arc::new(FakeStt {
                     called: called.clone(),
@@ -5405,7 +5433,7 @@ mod tests {
         let engine = Engine::new(
             config,
             Services {
-                audio: Arc::new(FakeAudio(AtomicBool::new(false))),
+                audio: Arc::new(FakeAudio::default()),
                 desktop,
                 stt: Arc::new(ImmediateStt {
                     calls: calls.clone(),
@@ -9208,10 +9236,11 @@ mod tests {
             ),
             (Some(PROTOCOL_VERSION), Some("fixture"), Some("mock-model"))
         );
+        let t0_us = monotonic_us();
         let request = Request::Start {
             mode: Mode::Dictation,
             context: None,
-            t0_us: Some(monotonic_us()),
+            t0_us: Some(t0_us),
             delivery: Delivery::Inject,
             hold: false,
         };
@@ -9227,9 +9256,15 @@ mod tests {
         assert_eq!(entry.language.as_deref(), Some("en"));
         assert_eq!(entry.duration_ms, Some(500));
         assert!(
-            timings.hotkey_ms.is_some() && timings.open_ms.is_some() && timings.inject_ms.is_some()
+            timings.hotkey_ms.is_some()
+                && timings.open_ms.is_some()
+                && timings.first_sample_ms.is_some()
+                && timings.inject_ms.is_some()
         );
         assert_eq!(timings.audio_ms, 500);
+        // Stamped as capture started: inside the session, never before key-down.
+        let first = timings.first_sample_ms.unwrap();
+        assert!(u64::from(first) <= (monotonic_us() - t0_us) / 1000);
         assert_eq!(entry.latency_ms, Some(timings.total_ms as u64));
         assert_eq!(
             ask(&tx, Request::Status).await.timings,
@@ -10527,7 +10562,7 @@ mod tests {
             Arc::new(RecordingDesktop::default()),
             Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
         );
-        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        let audio = Arc::new(FakeAudio::default());
         engine.services.audio = audio.clone();
         let (events, live) = (engine.events.clone(), engine.live.subscribe());
         let task = tokio::spawn(engine.run(rx));

@@ -282,6 +282,12 @@ pub struct Timings {
     /// Start request -> microphone stream running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_ms: Option<u32>,
+    /// Caller hotkey press -> first microphone sample of this dictation (needs `t0_us`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_sample_ms: Option<u32>,
+    /// Caller hotkey press -> recording pill on screen (macOS; needs `t0_us`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pill_ms: Option<u32>,
     pub audio_ms: u32,
     /// Stop -> transcript received.
     pub stt_ms: u32,

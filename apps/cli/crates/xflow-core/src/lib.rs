@@ -358,6 +358,11 @@ pub trait AudioCapture: Send + Sync {
     fn finished(&self) -> bool {
         false
     }
+    /// When the last stopped dictation's first sample arrived. `None`: not
+    /// supported, or no sample arrived.
+    fn first_sample(&self) -> Option<std::time::Instant> {
+        None
+    }
     /// Audio captured since the last drain, while recording continues; `stop()`
     /// returns only what is left. Lets the daemon transcribe long dictations in
     /// segments with bounded memory. `None`: not supported or nothing captured.

@@ -212,6 +212,11 @@ fn learning_check(
         "Save any setting, or run xflow daemon restart, so xflowd reads config.toml again",
     )
 }
+/// Doctor can't see System Settings' switches: one that is on while xflowd is not
+/// trusted belongs to an older build, since bare executables are listed by path and
+/// granted by signature. No bundle ID yet, so `tccutil reset … <id>` can't remove it.
+#[cfg(any(target_os = "macos", test))]
+const STALE_GRANT: &str = "If xflowd already looks switched on, that row is an old copy: macOS ties each permission to the exact signed file, so an ad-hoc rebuild or one signed differently needs it again. First select each xflowd row and click −, then press Enter on it in Check-up and switch on the row that appears";
 #[cfg(any(target_os = "macos", test))]
 fn permission_checks(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<Check> {
     use xflow_core::ipc::{ACCESSIBILITY_FIX, INPUT_MONITORING_FIX, UNVERIFIED_SHORTCUT};
@@ -230,7 +235,7 @@ fn permission_checks(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<
             permissions.accessibility,
             true,
             "xflowd text delivery",
-            ACCESSIBILITY_FIX,
+            &format!("{ACCESSIBILITY_FIX}. {STALE_GRANT}"),
         ),
         check(
             "Input Monitoring",
@@ -241,7 +246,7 @@ fn permission_checks(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<
             } else {
                 "covered by Accessibility"
             },
-            INPUT_MONITORING_FIX,
+            &format!("{INPUT_MONITORING_FIX}. {STALE_GRANT}"),
         ),
     ];
     if let Some(received) = permissions.keyboard_events {
@@ -580,7 +585,11 @@ mod tests {
                 .find(|c| c.name == "Input Monitoring")
                 .unwrap();
             assert_eq!(input.ok, granted);
-            assert_eq!(input.hint, xflow_core::ipc::INPUT_MONITORING_FIX);
+            assert!(input
+                .hint
+                .starts_with(xflow_core::ipc::INPUT_MONITORING_FIX));
+            // Every failing grant explains a switch left on for an older build.
+            assert!(checks.iter().take(2).all(|c| c.hint.ends_with(STALE_GRANT)));
             assert!(checks.iter().any(|c| c.name == "Shortcut events" && !c.ok));
         }
         assert!(permission_checks(None).iter().any(|c| !c.ok && c.required));
