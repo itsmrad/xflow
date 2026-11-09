@@ -88,11 +88,9 @@ fi
 
 for binary in xflow xflowd; do
     [ -f "$bindir/$binary" ] && [ -x "$bindir/$binary" ] && continue
-    {
-        echo "error: missing executable $bindir/$binary" >&2
-        [ -n "$tmp" ] || echo 'hint: build with cargo build --manifest-path apps/cli/Cargo.toml --release --locked, pass --bin-dir PATH, or run with --version TAG to download a release' >&2
-        exit 1
-    }
+    echo "error: missing executable $bindir/$binary" >&2
+    [ -n "$tmp" ] || echo 'hint: build with cargo build --manifest-path apps/cli/Cargo.toml --release --locked, pass --bin-dir PATH, or run with --version TAG to download a release' >&2
+    exit 1
 done
 mkdir -p "$prefix/bin"
 # Stage both, then rename: upgrades never truncate a running binary or leave a half copy.
