@@ -53,6 +53,16 @@ romanization or quick-switch IPC is introduced; see `benchmarks/languages/README
 Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 KiB per frame.
 `PROTOCOL_VERSION = 3`; `status` reports `version` and `protocol`.
 
+A failed reply or an `error` status/event may carry an optional `problem` that classifies
+`message`. The `message` text itself is unchanged, and `problem` is omitted when the failure is
+not classified. Its shape is `{"kind": …}`, where `kind` is one of `key_missing`, `key_rejected`,
+`forbidden`, `rate_limited` (with optional `retry_after_s`), `quota_exhausted`, `provider_down`,
+`timeout`, `offline`, `unreachable`, `local_server_down`, `microphone` or `paste_failed`. A
+client must treat a `kind` it does not know as unclassified and fall back to `message`. While
+`problem` is set, `provider` names the provider the failure is about; after a failover that is
+the backup. Clients present it with `xflow_core::problem::Problem::{title, explain}`. The field
+is additive, so the protocol version is unchanged.
+
 | Request (`"command"`) | Fields | Reply / semantics |
 | --- | --- | --- |
 | `status` | — | state, level, version, protocol, provider, model, mode (while active), optional daemon permissions (accessibility, input_monitoring, keyboard_events); last successful timings when inactive, cleared when a session fails; `learning`: count-only correction-learning diagnostics (watches, outcomes, reads, unread_max, late, merged, editing), dictionary entry counts, its `fingerprint` and whether an undo is available — never words |
@@ -90,7 +100,7 @@ specific Fn gesture). No permission polling runs at idle. The integrated daemon 
 - `Command(s request_json) → s response_json` — same JSON as the socket, restricted to
   `status, start, stop, toggle, cancel, copy_last, paste_last`. Errors: `InvalidArgs` (bad JSON),
   `AccessDenied` (request not allowed over D-Bus), `Failed` (daemon stopping).
-- signal `Event(s json)` — `DesktopEvent {state, level, message, mode}`; levels ≤ 30 Hz while listening.
+- signal `Event(s json)` — `DesktopEvent {state, level, message, mode, problem?}` (`problem` as on the socket); levels ≤ 30 Hz while listening.
 
 **`org.xflow.Shell`** at `/org/xflow/Shell` (owned by the GNOME extension):
 

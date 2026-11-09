@@ -473,11 +473,7 @@ impl Route {
             Err(_) => return Err(LlmError::Timeout.into()),
             Ok(Err(error)) if error.is_connect() => {
                 return Err(Failure {
-                    error: LlmError::Network(if super::unresolved(&error) {
-                        super::UNRESOLVED.into()
-                    } else {
-                        "could not connect".into()
-                    }),
+                    error: LlmError::Network(super::connect_failure(&error).into()),
                     retry: true,
                     after: None,
                 })

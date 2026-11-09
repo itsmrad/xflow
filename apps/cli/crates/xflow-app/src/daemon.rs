@@ -229,8 +229,10 @@ pub struct Engine {
     delivery: Delivery,
     last: Option<String>,
     message: Option<String>,
-    /// What the error `message` means, while the state is Error.
+    /// What the error `message` means, while the state is Error, and the provider it
+    /// is about when a failover named it (after a failover, the backup's error).
     problem: Option<Problem>,
+    failed_by: Option<String>,
     persistence_warning: Option<String>,
     generation: u64,
     epoch: Arc<AtomicU64>,
@@ -353,6 +355,7 @@ impl Engine {
             last: None,
             message: None,
             problem: None,
+            failed_by: None,
             persistence_warning: None,
             generation: 0,
             epoch: Arc::new(AtomicU64::new(0)),
@@ -458,6 +461,10 @@ impl Engine {
         }
         r.failed_audio = self.kept.clone();
         r.problem = self.problem;
+        if let Some(provider) = &self.failed_by {
+            r.provider = Some(provider.clone());
+            r.model = None;
+        }
         r
     }
     /// Where failed dictations go while `privacy.keep_failed_audio` is on.
@@ -898,12 +905,13 @@ impl Engine {
             .downcast_ref::<Noted>()
             .map_or(error, |noted| &noted.0);
         self.problem = known.or_else(|| xflow_providers::problem(typed));
+        self.failed_by = xflow_providers::failed_provider(typed).map(str::to_owned);
         self.set_state(State::Error, Some(format!("{error:#}")));
     }
     fn set_state(&mut self, state: State, message: Option<String>) {
         self.state = state;
         if state != State::Error {
-            self.problem = None;
+            (self.problem, self.failed_by) = (None, None);
         }
         if state == State::Error {
             // Status timings describe the last success; after a failure they would read as its.
@@ -2053,7 +2061,7 @@ impl Engine {
                                 let _ = self.desktop_events.send(DesktopEvent { state: self.state, level: 0.0, message: answer.or_else(|| self.message.clone().filter(|_| self.delivery == Delivery::Inject)), mode: self.mode, problem: None });
                                 let _ = self.events.send(r);
                             }
-                            Err(e) => { self.problem = Some(Problem::PasteFailed); self.set_state(State::Error, Some(format!("{INJECTION_FAILED}: {e}; transcript available via last"))); }
+                            Err(e) => { (self.problem, self.failed_by) = (Some(Problem::PasteFailed), None); self.set_state(State::Error, Some(format!("{INJECTION_FAILED}: {e}; transcript available via last"))); }
                         }
                     }
                     Completion::Reloaded { result, replies, seq } => {
@@ -9178,11 +9186,14 @@ mod tests {
                 _: TranscriptionOptions,
             ) -> Result<Transcript> {
                 if self.0.fetch_add(1, Ordering::SeqCst) > 0 {
-                    // Typed like a provider's 429, so the session's problem is set too.
-                    return Err(xflow_providers::llm::LlmError::RateLimit {
-                        retry_after: Some(Duration::from_secs(7)),
-                    }
-                    .into());
+                    // Typed like a backup provider's 429, so the session's problem
+                    // and the provider it names are set too.
+                    return Err(
+                        anyhow::Error::new(xflow_providers::llm::LlmError::RateLimit {
+                            retry_after: Some(Duration::from_secs(7)),
+                        })
+                        .context(xflow_providers::Attempt("backup".into())),
+                    );
                 }
                 Ok(Transcript {
                     provider: None,
@@ -9209,13 +9220,51 @@ mod tests {
             retry_after_s: Some(7),
         });
         assert_eq!(failed.problem, limited);
+        assert_eq!(failed.provider.as_deref(), Some("backup"));
         let status = ask(&tx, Request::Status).await;
         assert_eq!(status.state, State::Error);
         assert!(status.timings.is_none());
         assert_eq!(status.problem, limited);
-        // The next session starts without the old problem.
+        // The next session starts without the old problem, under the primary.
         let started = ask(&tx, Request::start()).await;
         assert_eq!((started.state, started.problem), (State::Listening, None));
+        assert_eq!(started.provider.as_deref(), Some("fixture"));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_kept_failed_dictation_still_reports_its_problem() {
+        // Keeping the audio adds a note to the message; the provider error stays typed.
+        struct NoCredit;
+        #[async_trait]
+        impl SpeechToText for NoCredit {
+            fn name(&self) -> &str {
+                "fixture"
+            }
+            async fn transcribe(
+                &self,
+                _: AudioClip,
+                _: TranscriptionOptions,
+            ) -> Result<Transcript> {
+                Err(xflow_providers::llm::LlmError::QuotaExhausted.into())
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let desktop = Arc::new(RecordingDesktop::default());
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop, unused_store());
+        engine.services.stt = Arc::new(NoCredit);
+        engine.config.privacy.keep_failed_audio = true;
+        engine.kept_dir = Some(root.path().join("failed"));
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        let failed = settled(&mut events).await;
+        assert_eq!(failed.state, State::Error, "{:?}", failed.message);
+        let message = failed.message.unwrap();
+        assert!(message.contains("its audio is kept for 24 h"), "{message}");
+        assert!(message.contains("out of credit"), "{message}");
+        assert_eq!(failed.problem, Some(Problem::QuotaExhausted));
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }

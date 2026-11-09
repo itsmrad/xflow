@@ -25,6 +25,8 @@ pub enum Problem {
     Offline,
     /// Connection refused or dropped.
     Unreachable,
+    /// A service on this computer (loopback endpoint) refused the connection.
+    LocalServerDown,
     Microphone,
     PasteFailed,
     #[serde(other)]
@@ -44,6 +46,7 @@ impl Problem {
             Self::Timeout => "Service too slow",
             Self::Offline => "You're offline",
             Self::Unreachable => "Can't reach service",
+            Self::LocalServerDown => "Local server is off",
             Self::Microphone => "Microphone problem",
             Self::PasteFailed => "Couldn't paste",
             Self::Unknown => "Something went wrong",
@@ -85,6 +88,9 @@ impl Problem {
             Self::Unreachable => format!(
                 "Can't connect to {name}. Check your internet connection, VPN or firewall, and try again."
             ),
+            Self::LocalServerDown => format!(
+                "{name} isn't answering on this computer, so its local server may not be running. Start it and try again, {other}"
+            ),
             Self::Microphone => "xflow can't record from your microphone. Check it's plugged in, choose it in Settings (xflow devices lists them), and allow microphone access in your system settings.".into(),
             Self::PasteFailed => "xflow couldn't paste here. Your text is saved: run xflow copy, or copy it from History, and paste it yourself.".into(),
             Self::Unknown => return None,
@@ -97,7 +103,7 @@ mod tests {
     use super::*;
 
     /// Every kind; the exhaustive matches above keep new kinds from being missed.
-    const ALL: [Problem; 13] = [
+    const ALL: [Problem; 14] = [
         Problem::KeyMissing,
         Problem::KeyRejected,
         Problem::Forbidden,
@@ -112,6 +118,7 @@ mod tests {
         Problem::Timeout,
         Problem::Offline,
         Problem::Unreachable,
+        Problem::LocalServerDown,
         Problem::Microphone,
         Problem::PasteFailed,
         Problem::Unknown,

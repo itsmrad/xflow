@@ -79,12 +79,14 @@ fn explain(provider: &str, error: &LlmError) -> Error {
             LlmError::Offline => format!(
                 "privacy.offline allows only loopback providers, so {provider} is refused: use provider custom with a loopback ai.endpoint, or turn offline off"
             ),
-            other => xflow_providers::llm_problem(other)
-                .and_then(|problem| {
-                    let name = find_provider(ProviderKind::Chat, provider).map_or(provider, |p| p.name);
-                    problem.explain(name, provider)
-                })
-                .unwrap_or_else(|| format!("{provider}: {other}")),
+            other => {
+                let name = find_provider(ProviderKind::Chat, provider).map_or(provider, |p| p.name);
+                match xflow_providers::llm_problem(other).and_then(|p| p.explain(name, provider)) {
+                    Some(text) if *other == LlmError::Auth => format!("{text}{key_url}"),
+                    Some(text) => text,
+                    None => format!("{provider}: {other}"),
+                }
+            }
         },
     )
 }

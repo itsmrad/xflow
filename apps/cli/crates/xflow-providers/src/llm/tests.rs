@@ -590,7 +590,11 @@ async fn connect_failure_is_retried_and_reported_without_the_url() {
     drop(listener);
     let gateway = gateway(vec![route(Wire::ChatCompletions, "custom", &url)]);
     let (result, _) = run(&gateway, &request()).await;
-    assert_eq!(result, Err(LlmError::Network("could not connect".into())));
+    // A loopback server that refuses is a local server that is not running.
+    assert_eq!(
+        result,
+        Err(LlmError::Network("the local server is not running".into()))
+    );
 }
 
 // Messages

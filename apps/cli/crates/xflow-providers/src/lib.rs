@@ -20,8 +20,9 @@ pub use check::{check_cleanup, CheckReport};
 use check::{check_request, probe_url};
 mod stt;
 pub use stt::{
-    backup_providers, build_stt, check_stt, fallback_warning, hint_fit, language_capability,
-    language_lead, transcribe_file, validate_fallback, validate_fallback_route, FailoverExhausted,
+    backup_providers, build_stt, check_stt, failed_provider, fallback_warning, hint_fit,
+    language_capability, language_lead, transcribe_file, validate_fallback,
+    validate_fallback_route, Attempt, FailoverExhausted,
 };
 mod audio;
 mod catalog;
@@ -717,6 +718,8 @@ pub fn check_keystore() -> Result<bool> {
 enum ProviderFailure {
     Timeout,
     Connect,
+    /// A loopback endpoint refused: the local server is not running.
+    LocalDown,
     /// The provider's host name did not resolve.
     Dns,
     Interrupted,
@@ -733,14 +736,16 @@ enum ProviderFailure {
         status: u16,
     },
 }
-/// Also the LLM gateway's `LlmError::Network` text, so both classify as offline.
+/// Also the LLM gateway's `LlmError::Network` texts, so both classify alike.
 const UNRESOLVED: &str = "could not resolve the provider's address";
+const LOCAL_DOWN: &str = "the local server is not running";
 impl std::fmt::Display for ProviderFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Timeout => f.write_str("provider request timed out; it was not retried"),
             Self::Connect => f.write_str("could not connect to provider"),
             Self::Dns => f.write_str(UNRESOLVED),
+            Self::LocalDown => f.write_str(LOCAL_DOWN),
             Self::Interrupted => f.write_str("provider connection interrupted; it was not retried"),
             Self::Status(status) => {
                 write!(f, "provider returned HTTP {status}; response body omitted")
@@ -766,6 +771,7 @@ impl ProviderFailure {
             Self::Timeout | Self::Status(408) => Problem::Timeout,
             Self::Connect | Self::Interrupted => Problem::Unreachable,
             Self::Dns => Problem::Offline,
+            Self::LocalDown => Problem::LocalServerDown,
             Self::Status(403) | Self::KeyRejected { status: 403, .. } => Problem::Forbidden,
             Self::Status(401) | Self::KeyRejected { .. } => Problem::KeyRejected,
             Self::Status(500..=599) => Problem::ProviderDown,
@@ -799,6 +805,7 @@ pub fn llm_problem(error: &llm::LlmError) -> Option<Problem> {
         E::Overloaded => Problem::ProviderDown,
         E::Timeout => Problem::Timeout,
         E::Network(why) if why == UNRESOLVED => Problem::Offline,
+        E::Network(why) if why == LOCAL_DOWN => Problem::LocalServerDown,
         E::Network(_) => Problem::Unreachable,
         E::ContextTooLong
         | E::NotInstalled
@@ -818,11 +825,23 @@ fn unresolved(error: &reqwest::Error) -> bool {
     }
     false
 }
+/// The `LlmError::Network` text for a failed connect.
+fn connect_failure(error: &reqwest::Error) -> &'static str {
+    if unresolved(error) {
+        UNRESOLVED
+    } else if error.url().is_some_and(is_loopback) {
+        LOCAL_DOWN
+    } else {
+        "could not connect"
+    }
+}
 fn http_error(error: reqwest::Error) -> anyhow::Error {
     if error.is_timeout() {
         ProviderFailure::Timeout.into()
     } else if error.is_connect() && unresolved(&error) {
         ProviderFailure::Dns.into()
+    } else if error.is_connect() && error.url().is_some_and(is_loopback) {
+        ProviderFailure::LocalDown.into()
     } else if error.is_connect() {
         ProviderFailure::Connect.into()
     } else if error.is_request() || error.is_body() || error.is_decode() {
@@ -849,7 +868,9 @@ pub enum SttFailure {
 }
 pub fn classify_stt_failure(error: &anyhow::Error) -> SttFailure {
     match error.downcast_ref::<ProviderFailure>() {
-        Some(ProviderFailure::Connect | ProviderFailure::Dns) => SttFailure::NotSent,
+        Some(ProviderFailure::Connect | ProviderFailure::LocalDown | ProviderFailure::Dns) => {
+            SttFailure::NotSent
+        }
         Some(ProviderFailure::Timeout | ProviderFailure::Interrupted) => SttFailure::Ambiguous,
         Some(ProviderFailure::RateLimited(after)) => {
             SttFailure::RateLimited(after.map(Duration::from_secs))
@@ -898,7 +919,8 @@ async fn read_bytes(mut response: Response, strict: bool) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 /// A 429 that is an empty account, not a rate limit; the body is read (4 KiB at
-/// most) and dropped. "quota" alone is not enough: Gemini says it for per-minute limits.
+/// most) and dropped. "quota" alone is not enough: Gemini says it for per-minute
+/// limits, and "credit" only counts next to a word saying it ran out.
 async fn out_of_credit(response: &mut Response) -> bool {
     let mut body = Vec::new();
     while body.len() < 4096 {
@@ -907,15 +929,42 @@ async fn out_of_credit(response: &mut Response) -> bool {
             _ => break,
         }
     }
-    let body = String::from_utf8_lossy(&body).to_ascii_lowercase();
-    [
+    quota_text(&body)
+}
+fn quota_text(body: &[u8]) -> bool {
+    // ASCII only, so the byte offsets below are char boundaries.
+    let body: String = String::from_utf8_lossy(body)
+        .chars()
+        .map(|c| {
+            if c.is_ascii() {
+                c.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    let named = [
         "insufficient_quota",
-        "credit",
         "billing_hard_limit",
-        "spend",
+        "spend limit",
+        "spending limit",
     ]
     .iter()
-    .any(|word| body.contains(word))
+    .any(|word| body.contains(word));
+    named
+        || body.match_indices("credit").any(|(at, _)| {
+            let near = &body[at.saturating_sub(40)..(at + 46).min(body.len())];
+            [
+                "insufficient",
+                "depleted",
+                "exhausted",
+                "out of",
+                "no credit",
+                "too low",
+            ]
+            .iter()
+            .any(|word| near.contains(word))
+        })
 }
 async fn read_response<T: serde::de::DeserializeOwned>(response: Response) -> Result<T> {
     let bytes = read_bytes(response, true).await?;

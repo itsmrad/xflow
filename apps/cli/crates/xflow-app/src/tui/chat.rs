@@ -616,9 +616,11 @@ fn explain(ctx: &Ctx, error: &LlmError) -> String {
         LlmError::Interrupted { partial: false } => {
             "Interrupted: the connection closed before any answer.".to_owned()
         }
-        other => xflow_providers::llm_problem(other)
-            .and_then(|problem| problem.explain(name, id))
-            .unwrap_or_else(|| clean(&format!("{name}: {other}."))),
+        other => match xflow_providers::llm_problem(other).and_then(|p| p.explain(name, id)) {
+            Some(text) if *other == LlmError::Auth => format!("{text}{key_url}."),
+            Some(text) => text,
+            None => clean(&format!("{name}: {other}.")),
+        },
     };
     format!("{line} {RETRY}")
 }

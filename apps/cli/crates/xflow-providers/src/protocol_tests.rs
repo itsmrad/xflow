@@ -1293,7 +1293,7 @@ async fn timing_shapes_are_reported_only_as_the_provider_gave_them() {
 async fn each_failure_class_has_one_user_problem() {
     use xflow_core::problem::Problem as P;
     let limited = |retry_after_s| P::RateLimited { retry_after_s };
-    let cases: [(&str, &[u8], &str, P); 8] = [
+    let cases: [(&str, &[u8], &str, P); 10] = [
         ("401 Unauthorized", b"{}", "", P::KeyRejected),
         ("403 Forbidden", b"{}", "", P::Forbidden),
         (
@@ -1313,6 +1313,19 @@ async fn each_failure_class_has_one_user_problem() {
             br#"{"error":{"code":"insufficient_quota"}}"#,
             "",
             P::QuotaExhausted,
+        ),
+        (
+            "429 Too Many Requests",
+            br#"{"error":{"message":"Your credit balance is depleted"}}"#,
+            "",
+            P::QuotaExhausted,
+        ),
+        // Upsell text and "suspended" are not an empty account.
+        (
+            "429 Too Many Requests",
+            br#"{"error":{"message":"Slow down, or add credits for higher limits. Key not suspended."}}"#,
+            "",
+            limited(None),
         ),
         ("402 Payment Required", b"{}", "", P::QuotaExhausted),
         ("500 Internal Server Error", b"{}", "", P::ProviderDown),
@@ -1356,11 +1369,15 @@ async fn each_failure_class_has_one_user_problem() {
         .transcribe(clip(), Default::default())
         .await
         .unwrap_err();
-    assert_eq!(crate::problem(&error), Some(P::Unreachable));
+    assert_eq!(crate::problem(&error), Some(P::LocalServerDown));
+    // A remote refusal can't be staged offline; it maps through the same type.
+    let remote = anyhow::Error::new(crate::ProviderFailure::Connect);
+    assert_eq!(crate::problem(&remote), Some(P::Unreachable));
     // `.invalid` never resolves (RFC 6761), online or not.
-    let error = reqwest::Client::new()
+    // The app's own client ignores HTTP(S)_PROXY, so a proxied CI can't mask DNS.
+    let error = crate::client_with(Duration::from_secs(20), Duration::from_secs(20))
+        .unwrap()
         .get("http://xflow-fixture.invalid/")
-        .timeout(Duration::from_secs(20))
         .send()
         .await
         .unwrap_err();
