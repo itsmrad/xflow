@@ -730,6 +730,11 @@ pub(super) fn run(
 
         msg!(app, c"finishLaunching"; ());
         msg!(panel, c"orderFrontRegardless"; ());
+        {
+            use std::io::Write;
+            // The daemon reads this into `Timings::pill_ms`; nobody may be listening.
+            let _ = writeln!(std::io::stdout(), "shown {}", crate::daemon::monotonic_us());
+        }
 
         let mut wave = Wave::new();
         // PillEvent is no longer Copy: read the first frame before moving it.

@@ -225,6 +225,18 @@ class Run(unittest.TestCase):
         self.assertTrue(measured["measured"])
         self.assertEqual(measured["processes"], 1)
 
+    def test_daemon_pill_and_first_sample_timings_are_rendered_when_present(self):
+        ok = [{"state": "success", "stop_to_text_ms": 250.0, "text": "", "timings":
+               {"total_ms": 240, "stt_ms": 200, "hotkey_ms": 1, "pill_ms": 90 + i, "audio_ms": 7000}}
+              for i in range(3)]
+        s = scoreboard.summarize(ok, 0, 0, 7.0, 6.5, {"tree_rss_kib": 0, "tree_mem_kib": 0})
+        self.assertEqual((s["start_to_pill_ms"]["count"], s["start_to_first_sample_ms"]["count"]), (3, 0))
+        data = json.loads((scoreboard.ROOT / "docs/benchmarks/scoreboard-macos.json").read_text())
+        data["measurements"]["sessions"].update(start_to_pill_ms=s["start_to_pill_ms"])
+        markdown = scoreboard.render(data)
+        self.assertIn("| Start → pill visible p50 / p95 | 91.0 ms / 92.0 ms | daemon `pill_ms`, 3 runs |", markdown)
+        self.assertNotIn("first mic sample", markdown)
+
     def test_render_replaces_only_the_marked_block(self):
         text = f"intro\n{scoreboard.BEGIN}\nold\n{scoreboard.END}\noutro\n"
         once = scoreboard.replace_block(text, "new\n")
@@ -236,7 +248,7 @@ class Run(unittest.TestCase):
     def test_generated_docs_match_their_data(self):
         """Every number in these docs comes from the JSON beside it; editing either alone fails."""
         root = scoreboard.ROOT
-        for data, docs in (("docs/benchmarks/scoreboard-macos.json", ["PERFORMANCE.md"]),
+        for data, docs in (("docs/benchmarks/scoreboard-macos.json", ["PERFORMANCE.md", "README.md"]),
                            ("docs/benchmarks/ci-baseline.json", ["scripts/bench/README.md"])):
             block = scoreboard.render(json.loads((root / data).read_text()))
             self.assertEqual((root / data).with_suffix(".md").read_text(), block, data)

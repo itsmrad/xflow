@@ -315,67 +315,29 @@ def words(text):
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
-class Pill:
-    """The real `xflow overlay-pill` helper fed the daemon's own event stream, exactly as
-    xflowd does natively; test-support xflowd never spawns it, so the harness does."""
-
-    def __init__(self, cli, config_path):
-        self.cli, self.config, self.child = cli, config_path, None
-
-    def forward(self, event):
-        state = event.get("state")
-        active = state in ("listening", "processing")
-        if active and self.child is None:
-            self.child = subprocess.Popen([str(self.cli), "--config", str(self.config), "overlay-pill"],
-                                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                          stderr=subprocess.DEVNULL)
-        if self.child and self.child.stdin:
-            frame = {"state": state, "level": max(0.0, min(1.0, float(event.get("level") or 0)))}
-            try:
-                self.child.stdin.write(json.dumps(frame).encode() + b"\n")
-                self.child.stdin.flush()
-            except OSError:
-                pass
-        if not active and self.child:
-            self.close()
-
-    def close(self):
-        """Ends the session; the pill stays sampled through its exit animation."""
-        if self.child:
-            try:
-                self.child.stdin.close()
-                self.child.wait(timeout=4)  # the daemon allows the exit animation up to 4 s
-            except (OSError, subprocess.TimeoutExpired):
-                baseline.stop(self.child)
-            self.child = None
-
-    @property
-    def pid(self):
-        return self.child.pid if self.child else None
-
-
-def sessions(daemon, cli, clip, runs, pill, rate_limit_wait=30):
+def sessions(daemon, clip, runs, pill, rate_limit_wait=30):
     """`runs` live dictations on one daemon. Stop is sent 0.5 s into the trailing silence,
-    like a key release; stop->text is client-observed, stop request -> delivery event."""
+    like a key release; stop->text is client-observed, stop request -> delivery event.
+    `pill`: XFLOW_TEST_PILL makes the test-support daemon spawn its real pill (the `xflow`
+    beside it), so the sampled tree is the one xflowd really runs."""
     hold = wav_seconds(clip) - 0.5
     with sandbox(config(provider_key=True)) as (root, env, sock):
         shutil.copy(clip, root / "input.wav")
         env.update(GROQ_API_KEY=os.environ["GROQ_API_KEY"], XFLOW_TEST_ROOT=str(root),
-                   XFLOW_TEST_AUDIO="wav", XFLOW_TEST_SINK=str(root / "delivered.txt"))
+                   XFLOW_TEST_AUDIO="wav", XFLOW_TEST_SINK=str(root / "delivered.txt"),
+                   **({"XFLOW_TEST_PILL": "1"} if pill else {}))
         child, _ = launch(daemon, env, sock)
-        helper = Pill(cli, root / "config/xflow/config.toml") if pill else None
         peaks, done, results, rate_limited = {"tree_rss_kib": 0, "tree_mem_kib": 0}, threading.Event(), [], 0
         lifetime = {}
 
         def watch():  # 20 Hz: tree peak, and each process's own lifetime peak
             while not done.wait(.05):
-                pill = helper and helper.pid  # read once: the main thread may close it meanwhile
-                total, samples = sample_tree(child.pid, [pill])
+                total, samples = sample_tree(child.pid)
                 peaks["tree_rss_kib"] = max(peaks["tree_rss_kib"], total["rss_kib"])
                 peaks["tree_mem_kib"] = max(peaks["tree_mem_kib"], total["mem_kib"])
                 for pid, s in samples.items():
                     if s:
-                        name = "daemon" if pid == child.pid else "pill" if pid == pill else "other"
+                        name = "daemon" if pid == child.pid else "pill" if pill else "other"
                         lifetime[name] = max(lifetime.get(name, 0), s["peak_kib"])
 
         watcher = threading.Thread(target=watch, daemon=True)
@@ -387,17 +349,15 @@ def sessions(daemon, cli, clip, runs, pill, rate_limit_wait=30):
                 events = queue.Queue()
                 threading.Thread(target=pump, args=(sub.makefile(), events), daemon=True).start()
                 events.get(timeout=10)  # snapshot
-                results, rate_limited = collect(lambda: dictate(sock, events, hold, root, helper),
+                results, rate_limited = collect(lambda: dictate(sock, events, hold, root),
                                                 runs, rate_limit_wait)
         finally:
             done.set()
             watcher.join()
-            if helper:
-                helper.close()
             baseline.stop(child)
     return summarize(results, rate_limited, rate_limit_wait, wav_seconds(clip), hold,
                      {**peaks, "lifetime_kib": lifetime, "memory_metric": MEMORY,
-                      "pill": "harness-driven real overlay-pill" if pill else "none on this platform"})
+                      "pill": "daemon-spawned overlay-pill (XFLOW_TEST_PILL)" if pill else "none on this platform"})
 
 
 def collect(attempt, runs, rate_limit_wait):
@@ -428,12 +388,18 @@ def summarize(results, rate_limited, rate_limit_wait, clip_seconds, hold, peak):
         "stop_to_text_ms": summary([r["stop_to_text_ms"] for r in ok], "ms"),
         "daemon_total_ms": summary([r["timings"]["total_ms"] for r in ok if r.get("timings")], "ms"),
         "stt_ms": summary([r["timings"]["stt_ms"] for r in ok if r.get("timings")], "ms"),
-        "start_to_capture_ms": summary([r["timings"]["hotkey_ms"] for r in ok
-                                        if (r.get("timings") or {}).get("hotkey_ms") is not None], "ms"),
+        "start_to_capture_ms": timing(ok, "hotkey_ms"),
+        "start_to_pill_ms": timing(ok, "pill_ms"),
+        "start_to_first_sample_ms": timing(ok, "first_sample_ms"),
         "word_similarity": summary([round(difflib.SequenceMatcher(None, reference, words(r["text"]),
                                                                   autojunk=False).ratio(), 4) for r in ok], "ratio"),
         "peak": peak,
     }
+
+
+def timing(ok, key):
+    """A daemon `Timings` field over the successful runs that report it."""
+    return summary([r["timings"][key] for r in ok if (r.get("timings") or {}).get(key) is not None], "ms")
 
 
 def redo_rate_limited(attempt, wait, retries=RATE_LIMIT_RETRIES):
@@ -453,7 +419,7 @@ def pump(lines, events):
     events.put(None)
 
 
-def dictate(sock, events, hold, root, helper):
+def dictate(sock, events, hold, root):
     sink = root / "delivered.txt"
     sink.unlink(missing_ok=True)
     t0_us = time.clock_gettime_ns(time.CLOCK_MONOTONIC) // 1000  # the daemon's clock
@@ -473,9 +439,7 @@ def dictate(sock, events, hold, root, helper):
             continue
         if event is None:
             raise RuntimeError("daemon closed the event stream")
-        received = time.monotonic()  # before the pill, whose exit can take seconds
-        if helper:
-            helper.forward(event)
+        received = time.monotonic()
         if stopped and event["state"] in ("success", "error", "idle"):
             return {"state": event["state"], "message": event.get("message"),
                     "stop_to_text_ms": round((received - stopped) * 1000, 1),
@@ -714,6 +678,10 @@ def render(data):
             f"| Stop → text | **no successful dictations** | {s['count']} attempts failed: {reasons} |",
             f"| Start → capture running p50 / p95 | {ms(s['start_to_capture_ms'].get('p50'))} / "
             f"{ms(s['start_to_capture_ms'].get('p95'))} | daemon `hotkey_ms`; WAV source, so real mic open is excluded |",
+            *(f"| {label} p50 / p95 | {ms(t['p50'])} / {ms(t['p95'])} | daemon `{key}`, {t['count']} runs |"
+              for label, key, t in (("Start → pill visible", "pill_ms", s.get("start_to_pill_ms")),
+                                    ("Start → first mic sample", "first_sample_ms", s.get("start_to_first_sample_ms")))
+              if t and t.get("count")),
             f"| Peak tree {mem} while dictating | {mib(p['tree_mem_kib'])} | 20 Hz, daemon + pill |",
             f"| Peak tree RSS while dictating | {mib(p['tree_rss_kib'])} | same; counts shared system "
             "framework pages the pill maps |",
@@ -762,7 +730,7 @@ def run(args):
     elif args.runs:
         with tempfile.TemporaryDirectory(prefix="xfclip") as directory:
             clip = Path(args.clip) if args.clip else make_clip(Path(directory))
-            m["sessions"] = sessions(args.session_daemon, args.cli, clip, args.runs, MAC)
+            m["sessions"] = sessions(args.session_daemon, clip, args.runs, MAC)
     data["environment"]["load_average_end"] = list(os.getloadavg())
     write_json(args.output, data)
     markdown = Path(args.output).with_suffix(".md")
@@ -811,7 +779,7 @@ def main(argv=None):
     sub = commands.add_parser("render")
     sub.set_defaults(func=render_command)
     sub.add_argument("result")
-    sub.add_argument("--into", nargs="+", default=["PERFORMANCE.md"])
+    sub.add_argument("--into", nargs="+", default=["PERFORMANCE.md", "README.md"])
     sub = commands.add_parser("baseline")
     sub.set_defaults(func=baseline_command)
     sub.add_argument("gates", nargs="+", help="scoreboard-gate artifacts")
@@ -827,6 +795,9 @@ def main(argv=None):
             parser.error(f"--{name.replace('_', '-')}: not an executable: {path}")
         if path:
             setattr(args, name, Path(path).resolve())
+    pill_cli = MAC and getattr(args, "session_daemon", None) and args.session_daemon.with_name("xflow")
+    if pill_cli and not os.access(pill_cli, os.X_OK):
+        parser.error(f"--session-daemon: its pill runs {pill_cli}; copy xflow beside it")
     if min(getattr(args, "idle_seconds", 1), getattr(args, "startup_samples", 1), getattr(args, "launches", 1)) <= 0 \
             or getattr(args, "runs", 0) < 0 or getattr(args, "warmup_seconds", 0) < 0:
         parser.error("durations and counts must be positive")

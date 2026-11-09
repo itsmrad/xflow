@@ -271,7 +271,9 @@ and `open_to_first_callback_us=`.
 ## Timing meaning
 
 `hotkey_ms` measures caller monotonic timestamp through capture opening;
-`open_ms` measures capture start. `audio_ms` derives from clip frames/rate.
+`open_ms` measures capture start. `first_sample_ms` runs from the same caller
+timestamp to the dictation's first microphone callback (real microphones only),
+and `pill_ms` to the macOS recording pill first on screen. `audio_ms` derives from clip frames/rate.
 `stt_ms` measures stop through transcription completion, `cleanup_ms` measures
 the optional transformer, and `inject_ms` measures desktop delivery when used.
 `total_ms` measures stop through delivery completion, including context/history
