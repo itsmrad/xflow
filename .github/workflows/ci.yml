@@ -77,6 +77,8 @@ jobs:
           cargo build --manifest-path apps/cli/Cargo.toml --release --locked --target "$SCOREBOARD_TARGET" -p xflow-app --bin xflowd --bin xflow
           mkdir -p target/scoreboard-bin
           cp "apps/cli/target/$SCOREBOARD_TARGET/release/xflowd" "apps/cli/target/$SCOREBOARD_TARGET/release/xflow" target/scoreboard-bin/
+      - name: Release binaries stay within the glibc floor
+        run: scripts/check-glibc.sh target/scoreboard-bin/xflowd target/scoreboard-bin/xflow
       # Sizes, idle PSS/CPU and startup budget against docs/benchmarks/ci-baseline.json.
       - run: >-
           python3 -B scripts/bench/scoreboard.py gate --daemon target/scoreboard-bin/xflowd
@@ -145,6 +147,17 @@ jobs:
           sudo apt-get install -y --no-install-recommends libglib2.0-bin
       - run: node --version
       - run: scripts/check.sh extension
+
+  install:
+    name: install script
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Loopback release fixtures (good, tampered, unsupported arch, missing sums) and shellcheck.
+      - run: scripts/check.sh install
 
   msrv:
     defaults:

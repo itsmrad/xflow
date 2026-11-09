@@ -20,6 +20,18 @@ Commands below run from the repository root. For direct Cargo commands, use
 `--manifest-path apps/cli/Cargo.toml` or run Cargo from `apps/cli`.
 `scripts/check.sh`, the installer, and the package scripts run from any directory.
 
+## Install a Linux release
+
+No compiler needed (x86_64 or aarch64, glibc 2.39+: Ubuntu 24.04, Debian 13, Fedora 41 or newer):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/itsmrad/xflow/main/scripts/install.sh | sh
+xflow service install --enable
+xflow
+```
+
+The script downloads the newest release tarball and its `SHA256SUMS`, refuses to install on a checksum mismatch, missing sums or an unsupported architecture, and installs `xflow` and `xflowd` into `~/.local/bin` without sudo. Pin a release with `sh -s -- --version v0.2.1-beta` and pick another prefix with `--prefix PATH` (the user service expects `~/.local/bin`). `wget -qO- URL | sh` works too. Each release also ships the script as an `install.sh` asset, which installs that release, and inside its tarball, where it installs that tarball's binaries.
+
 ## Build and run
 
 The locked dependency set declares Rust 1.88 as its highest minimum compiler version (notably `instability`, `darling`, and ICU crates). CI checks the workspace against that compiler. Native development libraries are also required:
@@ -116,7 +128,7 @@ Optional user service: install [packaging/xflow.service](packaging/xflow.service
 
 ## CLI guide
 
-Build the binaries, then run `scripts/install.sh` (or `--prefix PATH --bin-dir PATH` for a staged install). The script installs binaries atomically and prints the next step. Run `xflow setup` (on macOS it opens the guided TUI setup) for numbered provider/model/microphone selection, hidden key input, an optional connection test with another try on a rejected key, and optional GNOME/service installation. New GNOME extensions on Wayland need a logout/login before `xflow extension enable`. `--yes` accepts config defaults; desktop installation, activation and provider checks require their explicit flags in scripts:
+Build the binaries, then run `scripts/install.sh` (or `--prefix PATH --bin-dir PATH` for a staged install); without a local build it downloads and verifies a release instead (see [Install a Linux release](#install-a-linux-release)). The script installs binaries atomically and prints the next step. Run `xflow setup` (on macOS it opens the guided TUI setup) for numbered provider/model/microphone selection, hidden key input, an optional connection test with another try on a rejected key, and optional GNOME/service installation. New GNOME extensions on Wayland need a logout/login before `xflow extension enable`. `--yes` accepts config defaults; desktop installation, activation and provider checks require their explicit flags in scripts:
 
 ```sh
 xflow setup --yes --provider groq --model whisper-large-v3-turbo
