@@ -67,17 +67,11 @@ fn explain(provider: &str, error: &LlmError) -> Error {
     fail(
         5,
         match error {
-            LlmError::Auth => format!(
-                "{provider} rejected the API key: run xflow key set {provider}{key_url}"
-            ),
             LlmError::NotLoggedIn if provider == "openai-compatible" =>
                 "No API key: set XFLOW_AI_API_KEY for explicit openai-compatible, or the cleanup.api_key_env variable for cleanup defaults".into(),
             LlmError::NotLoggedIn if xflow_app::harness::is_harness(provider) => format!("Log in using the installed {provider} CLI, then retry"),
             LlmError::NotLoggedIn => format!(
                 "No API key for {provider}: run xflow key set {provider}{key_url}"
-            ),
-            LlmError::QuotaExhausted => format!(
-                "Your {provider} account is out of credit or quota: add some, or set another provider under [ai]"
             ),
             LlmError::ContextTooLong => {
                 "The question and context are too long for this model: lower ai.max_context_tokens or use --no-context".to_owned()
@@ -85,7 +79,14 @@ fn explain(provider: &str, error: &LlmError) -> Error {
             LlmError::Offline => format!(
                 "privacy.offline allows only loopback providers, so {provider} is refused: use provider custom with a loopback ai.endpoint, or turn offline off"
             ),
-            other => format!("{provider}: {other}"),
+            other => {
+                let name = find_provider(ProviderKind::Chat, provider).map_or(provider, |p| p.name);
+                match xflow_providers::llm_problem(other).and_then(|p| p.explain(name, provider)) {
+                    Some(text) if *other == LlmError::Auth => format!("{text}{key_url}"),
+                    Some(text) => text,
+                    None => format!("{provider}: {other}"),
+                }
+            }
         },
     )
 }

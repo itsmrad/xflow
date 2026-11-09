@@ -141,6 +141,7 @@ mod tests {
             level: 0.25,
             message: None,
             mode: Default::default(),
+            problem: None,
         })
         .unwrap();
         let signal = tokio::time::timeout(Duration::from_secs(3), signals.next())

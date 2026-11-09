@@ -188,10 +188,21 @@ fn validate(response: &Response, require_protocol: bool) -> Result<()> {
                 .message
                 .as_deref()
                 .unwrap_or("Daemon command failed"),
-            "Run xflow status or xflow doctor for details",
+            hint(response, "Run xflow status or xflow doctor for details"),
         ));
     }
     Ok(())
+}
+/// The shared presenter's cause and fix for a typed failure, else `fallback`.
+/// `error` keeps the daemon's message, so `--json` output is unchanged.
+fn hint(response: &Response, fallback: &str) -> String {
+    let id = response.provider.as_deref().unwrap_or_default();
+    let name = xflow_providers::find_provider(xflow_providers::ProviderKind::Stt, id)
+        .map_or(id, |p| p.name);
+    response
+        .problem
+        .and_then(|problem| problem.explain(name, id))
+        .unwrap_or_else(|| fallback.into())
 }
 pub fn mode_request(toggle: bool, command: bool, delivery: Delivery, hold: bool) -> Request {
     let mode = if command {
@@ -384,12 +395,13 @@ async fn collect(
         };
         validate(&response, false)?;
         if response.state == State::Error {
+            let hint = hint(&response, "Check xflow doctor");
             return Err(Error::new(
                 1,
                 response
                     .message
                     .unwrap_or_else(|| "Dictation failed".into()),
-                "Check xflow doctor",
+                hint,
             ));
         }
         if response.state == State::Listening {
@@ -454,12 +466,16 @@ pub async fn retry(full: bool, discard: bool, out: &Output) -> Result<()> {
                 return Ok(out.data(&response, response.text.as_deref().unwrap_or_default())?);
             }
             State::Error | State::Idle if processing => {
+                let hint = hint(
+                    &response,
+                    "Run xflow status to see whether the audio is still kept",
+                );
                 return Err(Error::new(
                     1,
                     response
                         .message
                         .unwrap_or_else(|| "Retry ended without a transcript".into()),
-                    "Run xflow status to see whether the audio is still kept",
+                    hint,
                 ));
             }
             _ => (),

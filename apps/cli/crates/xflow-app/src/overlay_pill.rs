@@ -125,6 +125,9 @@ struct PillEvent {
     /// The only thing shown after release: a short red failure pill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     alert: Option<Alert>,
+    /// What a failure alert means; the pill shows its title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    problem: Option<xflow_core::problem::Problem>,
     /// A spoken question. The helper stays up and draws `text` in the same panel.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     ask: bool,
@@ -185,6 +188,7 @@ impl PillEvent {
             .then_some(message)
             .filter(|text| !text.is_empty())
             .map(pill_text),
+            problem: event.problem.filter(|_| event.state == State::Error),
             alert: match event.state {
                 State::Idle if message == crate::speech::NOT_CAUGHT => Some(Alert::NoSpeech),
                 State::Success if message.starts_with(COPIED) => Some(Alert::Copied),
@@ -623,6 +627,7 @@ mod tests {
                 level: f32::NAN,
                 message: Some("private".into()),
                 mode: Default::default(),
+                problem: None,
             },
             false,
         );
@@ -637,6 +642,7 @@ mod tests {
                     level: 0.0,
                     message: Some(message.into()),
                     mode: Default::default(),
+                    problem: None,
                 },
                 processed,
             )
@@ -788,6 +794,7 @@ mod tests {
                     level: 0.0,
                     message: Some(message),
                     mode: Default::default(),
+                    problem: None,
                 },
                 false,
             )

@@ -605,16 +605,10 @@ fn explain(ctx: &Ctx, error: &LlmError) -> String {
         .map(|p| format!(" (get one at {})", p.key_url))
         .unwrap_or_default();
     let line = match error {
-        LlmError::Auth => {
-            format!("{name} rejected the API key: run xflow key set {id}{key_url}.")
-        }
         LlmError::NotLoggedIn if crate::harness::is_harness(id) => { format!("Log in using the installed {name} CLI, then retry.") }
         LlmError::NotLoggedIn => {
             format!("No API key for {name}: run xflow key set {id}{key_url}.")
         }
-        LlmError::QuotaExhausted => format!(
-            "Your {name} account is out of credit or quota: add some, or choose another service in Settings."
-        ),
         LlmError::ContextTooLong => "The question and context are too long for this model: press Ctrl+N for a new chat, or lower the context limit in Settings.".to_owned(),
         LlmError::Interrupted { partial: true } => {
             "Interrupted: the answer was cut off, so the text above is incomplete.".to_owned()
@@ -622,7 +616,11 @@ fn explain(ctx: &Ctx, error: &LlmError) -> String {
         LlmError::Interrupted { partial: false } => {
             "Interrupted: the connection closed before any answer.".to_owned()
         }
-        other => clean(&format!("{name}: {other}.")),
+        other => match xflow_providers::llm_problem(other).and_then(|p| p.explain(name, id)) {
+            Some(text) if *other == LlmError::Auth => format!("{text}{key_url}."),
+            Some(text) => text,
+            None => clean(&format!("{name}: {other}.")),
+        },
     };
     format!("{line} {RETRY}")
 }

@@ -1145,6 +1145,23 @@ pub fn fallback_warning(config: &SttConfig) -> Option<String> {
         .err()
         .map(|e| format!("Backup unavailable; using primary only: {e:#}"))
 }
+/// The provider an attempt went to, as error context ("<id> transcription failed"):
+/// after a failover the error that ends the chain is the backup's, not the primary's.
+#[derive(Debug)]
+pub struct Attempt(pub String);
+impl std::fmt::Display for Attempt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} transcription failed", self.0)
+    }
+}
+impl std::error::Error for Attempt {}
+/// The provider whose failure `error` reports, when a failover chain named it.
+/// (`chain()` hides typed context; anyhow's `downcast_ref` finds the outermost.)
+pub fn failed_provider(error: &anyhow::Error) -> Option<&str> {
+    error
+        .downcast_ref::<Attempt>()
+        .map(|attempt| attempt.0.as_str())
+}
 /// Marks a completed two-provider chain so segment recovery cannot repeat it.
 #[derive(Debug)]
 pub struct FailoverExhausted;
@@ -1170,7 +1187,10 @@ fn can_fail_over(error: &anyhow::Error) -> bool {
         Some(
             ProviderFailure::Timeout
                 | ProviderFailure::Connect
+                | ProviderFailure::LocalDown
+                | ProviderFailure::Dns
                 | ProviderFailure::Interrupted
+                | ProviderFailure::Quota(_)
                 | ProviderFailure::Status(408 | 429 | 500..=599)
                 | ProviderFailure::RateLimited(_)
         )
@@ -1227,7 +1247,7 @@ impl Failover {
                 Err(_) => (),
             }
         }
-        result.map_err(|e| e.context(format!("{name} transcription failed")))
+        result.map_err(|e| e.context(Attempt(name.clone())))
     }
 }
 #[async_trait]
@@ -1769,6 +1789,27 @@ mod failover_tests {
                 assert!(request.windows(wav.len()).any(|part| part == wav));
             }
         }
+    }
+    #[tokio::test]
+    async fn a_failed_backup_is_reported_under_the_backup() {
+        // Groq 503 fails over; the backup's 401 is what the user must fix.
+        let (primary, _) =
+            scripted(vec![("503 Service Unavailable", json!({}))], "/transcribe").await;
+        let (backup, _) = scripted(vec![("401 Unauthorized", json!({}))], "/transcribe").await;
+        let error = failover(primary, backup)
+            .transcribe(clip(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error.is::<FailoverExhausted>());
+        assert_eq!(
+            crate::problem(&error),
+            Some(xflow_core::problem::Problem::KeyRejected)
+        );
+        assert_eq!(failed_provider(&error), Some("deepinfra"));
+        // The message is unchanged: it names both attempts.
+        let text = format!("{error:#}");
+        assert!(text.contains("groq transcription failed"), "{text}");
+        assert!(text.contains("deepinfra transcription failed"), "{text}");
     }
     #[tokio::test]
     async fn caller_and_auth_errors_never_construct_or_contact_backup() {

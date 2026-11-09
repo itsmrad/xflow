@@ -25,6 +25,7 @@ use tokio::{
     task::JoinHandle,
 };
 pub use xflow_core::ipc::Command;
+use xflow_core::problem::Problem;
 use xflow_core::{
     config::{AskConfig, Config, DictionaryConfig, HotkeyConfig, Replacement},
     ipc::{
@@ -228,6 +229,10 @@ pub struct Engine {
     delivery: Delivery,
     last: Option<String>,
     message: Option<String>,
+    /// What the error `message` means, while the state is Error, and the provider it
+    /// is about when a failover named it (after a failover, the backup's error).
+    problem: Option<Problem>,
+    failed_by: Option<String>,
     persistence_warning: Option<String>,
     generation: u64,
     epoch: Arc<AtomicU64>,
@@ -349,6 +354,8 @@ impl Engine {
             delivery: Delivery::Inject,
             last: None,
             message: None,
+            problem: None,
+            failed_by: None,
             persistence_warning: None,
             generation: 0,
             epoch: Arc::new(AtomicU64::new(0)),
@@ -453,6 +460,11 @@ impl Engine {
             r.timings = self.last_timings.clone();
         }
         r.failed_audio = self.kept.clone();
+        r.problem = self.problem;
+        if let Some(provider) = &self.failed_by {
+            r.provider = Some(provider.clone());
+            r.model = None;
+        }
         r
     }
     /// Where failed dictations go while `privacy.keep_failed_audio` is on.
@@ -881,12 +893,26 @@ impl Engine {
                 level: r.level,
                 message: r.message.clone(),
                 mode: self.mode,
+                problem: r.problem,
             });
         }
         let _ = self.events.send(r);
     }
+    /// A session failure: `message` keeps the technical chain, `problem` what it means
+    /// (`known`, else classified from a provider error).
+    fn fail(&mut self, error: &anyhow::Error, known: Option<Problem>) {
+        let typed = error
+            .downcast_ref::<Noted>()
+            .map_or(error, |noted| &noted.0);
+        self.problem = known.or_else(|| xflow_providers::problem(typed));
+        self.failed_by = xflow_providers::failed_provider(typed).map(str::to_owned);
+        self.set_state(State::Error, Some(format!("{error:#}")));
+    }
     fn set_state(&mut self, state: State, message: Option<String>) {
         self.state = state;
+        if state != State::Error {
+            (self.problem, self.failed_by) = (None, None);
+        }
         if state == State::Error {
             // Status timings describe the last success; after a failure they would read as its.
             self.last_timings = None;
@@ -991,11 +1017,14 @@ impl Engine {
             result => {
                 let _ = self.services.audio.cancel().await;
                 match result {
-                    Err(error) if live => self.set_state(State::Error, Some(format!("{error:#}"))),
+                    Err(error) if live => self.fail(&error, Some(Problem::Microphone)),
                     _ => self.set_state(State::Idle, None),
                 }
                 self.reset_hotkeys();
-                Response::error(self.state, self.message.as_deref().unwrap_or("canceled"))
+                let mut r =
+                    Response::error(self.state, self.message.as_deref().unwrap_or("canceled"));
+                r.problem = self.problem;
+                r
             }
         };
         // A requester that left after the liveness check never learns of its session.
@@ -1198,7 +1227,7 @@ impl Engine {
                 let _ = self.services.audio.cancel().await;
                 self.segments = Segments::default();
                 self.abort_context();
-                self.set_state(State::Error, Some(format!("{e:#}")));
+                self.fail(&e, Some(Problem::Microphone));
                 return Err(e);
             }
         }
@@ -1439,7 +1468,7 @@ impl Engine {
                     bail!("transcript exceeds 32 KiB safety limit");
                 }
                 if raw.is_empty() {
-                    return failed.map_or(Ok(None), |e| Err(anyhow::anyhow!("{e:#}{note}")));
+                    return failed.map_or(Ok(None), |e| Err(Noted(e, note).into()));
                 }
                 let mut warning = warning;
                 for provider in providers.iter().filter(|id| id.as_str() != services.stt.name()) {
@@ -1758,7 +1787,7 @@ impl Engine {
         if let Some(opening) = &mut self.opening {
             opening.abandoned = true;
         } else if let Err(e) = self.services.audio.cancel().await {
-            self.set_state(State::Error, Some(format!("{e:#}")));
+            self.fail(&e, Some(Problem::Microphone));
             return Err(e);
         }
         self.set_state(State::Idle, None);
@@ -1980,7 +2009,7 @@ impl Engine {
                     Completion::Ready { generation, result } if generation == self.generation => {
                         self.job = None;
                         if self.keeping().is_some() { self.load_kept(); }
-                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some(DISCARDED.into())); }, Ok(Some(mut processed)) => { if processed.rewrite { self.mode = Mode::Command; } self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.set_state(State::Error, Some(format!("{e:#}"))); } }
+                        match result { Ok(Some(processed)) if processed.text.is_empty() => { self.abort_context(); self.discard_session(generation); self.set_state(State::Idle, Some(DISCARDED.into())); }, Ok(Some(mut processed)) => { if processed.rewrite { self.mode = Mode::Command; } self.last = Some(processed.text.clone()); if let Some((before, after)) = processed.around.take() { processed.text = xflow_core::text::adjust(&before, &after, &processed.text, &self.config.dictionary.words); } pending = Some(processed); }, Ok(None) => { self.abort_context(); self.set_state(State::Idle, Some(NOT_CAUGHT.into())); }, Err(e) => { self.abort_context(); self.fail(&e, None); } }
                     }
                     // Late, from a canceled session: nothing it kept may stay.
                     Completion::Ready { generation, .. } => { self.discard_session(generation); self.publish(); }
@@ -2029,10 +2058,10 @@ impl Engine {
                                 fit_final(&mut r);
                                 // Pills alert only on a failed paste, never on an asked-for copy.
                                 // An ask answer is the panel text; it is not an injection.
-                                let _ = self.desktop_events.send(DesktopEvent { state: self.state, level: 0.0, message: answer.or_else(|| self.message.clone().filter(|_| self.delivery == Delivery::Inject)), mode: self.mode });
+                                let _ = self.desktop_events.send(DesktopEvent { state: self.state, level: 0.0, message: answer.or_else(|| self.message.clone().filter(|_| self.delivery == Delivery::Inject)), mode: self.mode, problem: None });
                                 let _ = self.events.send(r);
                             }
-                            Err(e) => self.set_state(State::Error, Some(format!("{INJECTION_FAILED}: {e}; transcript available via last"))),
+                            Err(e) => { (self.problem, self.failed_by) = (Some(Problem::PasteFailed), None); self.set_state(State::Error, Some(format!("{INJECTION_FAILED}: {e}; transcript available via last"))); }
                         }
                     }
                     Completion::Reloaded { result, replies, seq } => {
@@ -2107,6 +2136,7 @@ impl Engine {
                                     level: 0.0,
                                     message: None,
                                     mode: Mode::Ask,
+                                    problem: None,
                                 });
                             }
                         }
@@ -2141,7 +2171,7 @@ impl Engine {
                 }
                 _ = levels.tick(), if self.state == State::Listening => {
                     if self.services.audio.finished() {
-                        if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
+                        if let Err(e) = self.stop(completion_tx.clone()).await { self.fail(&e, self.problem); }
                         self.reset_hotkeys();
                         continue;
                     }
@@ -2150,7 +2180,7 @@ impl Engine {
                     else { self.silent_since.get_or_insert_with(tokio::time::Instant::now); }
                     self.publish();
                     if self.config.recording.auto_stop_secs > 0 && self.silent_since.is_some_and(|s| s.elapsed() >= Duration::from_secs(self.config.recording.auto_stop_secs as u64)) {
-                        if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
+                        if let Err(e) = self.stop(completion_tx.clone()).await { self.fail(&e, self.problem); }
                         self.reset_hotkeys();
                     }
                 }
@@ -2172,7 +2202,7 @@ impl Engine {
                     self.publish();
                 }
                 _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } }, if deadline.is_some() => {
-                    if let Err(e) = self.stop(completion_tx.clone()).await { self.set_state(State::Error, Some(format!("{e:#}"))); }
+                    if let Err(e) = self.stop(completion_tx.clone()).await { self.fail(&e, self.problem); }
                     self.reset_hotkeys();
                 }
             }
@@ -3530,6 +3560,16 @@ async fn edit_history(
     Ok(r)
 }
 pub(crate) const INJECTION_FAILED: &str = "Injection failed";
+/// A failed transcription and what became of its audio, printed as one message;
+/// the provider error stays typed for `Problem`.
+#[derive(Debug)]
+struct Noted(anyhow::Error, &'static str);
+impl std::fmt::Display for Noted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}{}", self.0, self.1)
+    }
+}
+impl std::error::Error for Noted {}
 /// Nothing above `recording.silence_threshold` since listening began: muted or wrong mic.
 pub(crate) const NO_SIGNAL: &str = "Can't hear you — check mic";
 const NO_SIGNAL_AFTER: Duration = Duration::from_secs(2);
@@ -3669,6 +3709,7 @@ async fn stream_ask(
             level: 0.0,
             message: Some(text.to_owned()),
             mode: Mode::Ask,
+            problem: None,
         });
         let mut frame = Response::status(State::Processing, 0.0);
         frame.text = Some(text.to_owned());
@@ -9156,7 +9197,14 @@ mod tests {
                 _: TranscriptionOptions,
             ) -> Result<Transcript> {
                 if self.0.fetch_add(1, Ordering::SeqCst) > 0 {
-                    bail!("provider returned HTTP 429; response body omitted");
+                    // Typed like a backup provider's 429, so the session's problem
+                    // and the provider it names are set too.
+                    return Err(
+                        anyhow::Error::new(xflow_providers::llm::LlmError::RateLimit {
+                            retry_after: Some(Duration::from_secs(7)),
+                        })
+                        .context(xflow_providers::Attempt("backup".into())),
+                    );
                 }
                 Ok(Transcript {
                     provider: None,
@@ -9179,9 +9227,55 @@ mod tests {
         let failed = settled(&mut events).await;
         assert_eq!(failed.state, State::Error, "{:?}", failed.message);
         assert!(failed.timings.is_none());
+        let limited = Some(Problem::RateLimited {
+            retry_after_s: Some(7),
+        });
+        assert_eq!(failed.problem, limited);
+        assert_eq!(failed.provider.as_deref(), Some("backup"));
         let status = ask(&tx, Request::Status).await;
         assert_eq!(status.state, State::Error);
         assert!(status.timings.is_none());
+        assert_eq!(status.problem, limited);
+        // The next session starts without the old problem, under the primary.
+        let started = ask(&tx, Request::start()).await;
+        assert_eq!((started.state, started.problem), (State::Listening, None));
+        assert_eq!(started.provider.as_deref(), Some("fixture"));
+        ask(&tx, Request::Shutdown).await;
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_kept_failed_dictation_still_reports_its_problem() {
+        // Keeping the audio adds a note to the message; the provider error stays typed.
+        struct NoCredit;
+        #[async_trait]
+        impl SpeechToText for NoCredit {
+            fn name(&self) -> &str {
+                "fixture"
+            }
+            async fn transcribe(
+                &self,
+                _: AudioClip,
+                _: TranscriptionOptions,
+            ) -> Result<Transcript> {
+                Err(xflow_providers::llm::LlmError::QuotaExhausted.into())
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let desktop = Arc::new(RecordingDesktop::default());
+        let (mut engine, tx, rx, mut events, _) =
+            fixture(Config::default(), desktop, unused_store());
+        engine.services.stt = Arc::new(NoCredit);
+        engine.config.privacy.keep_failed_audio = true;
+        engine.kept_dir = Some(root.path().join("failed"));
+        let task = tokio::spawn(engine.run(rx));
+        ask(&tx, Request::start()).await;
+        ask(&tx, Request::Stop).await;
+        let failed = settled(&mut events).await;
+        assert_eq!(failed.state, State::Error, "{:?}", failed.message);
+        let message = failed.message.unwrap();
+        assert!(message.contains("its audio is kept for 24 h"), "{message}");
+        assert!(message.contains("out of credit"), "{message}");
+        assert_eq!(failed.problem, Some(Problem::QuotaExhausted));
         ask(&tx, Request::Shutdown).await;
         task.await.unwrap();
     }

@@ -438,6 +438,9 @@ pub struct Response {
     /// Status only: count-only correction-learning diagnostics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub learning: Option<Learning>,
+    /// What an error `message` means, for the shared presenter; `message` is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<crate::problem::Problem>,
     /// Daemon-internal, never on the wire: the session a successful start began.
     #[serde(skip)]
     pub session: Option<u64>,

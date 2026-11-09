@@ -61,7 +61,7 @@ fn panel(
 }
 /// (glyph, word, hint, is_error) for the big status.
 pub fn status(app: &App) -> (&'static str, &'static str, String, bool) {
-    let message = app.status.message.as_deref().map(options::plain);
+    let message = options::say(&app.status);
     if !app.connected {
         return (glyph("○", "o"), "Not running", app.helper_down(), true);
     }
@@ -107,7 +107,9 @@ pub fn status(app: &App) -> (&'static str, &'static str, String, bool) {
         ),
         State::Error => (
             glyph("!", "!"),
-            "Something went wrong",
+            app.status
+                .problem
+                .map_or("Something went wrong", |p| p.title()),
             message.unwrap_or_else(|| "Please try again.".into()),
             true,
         ),
@@ -1683,7 +1685,7 @@ fn setup(frame: &mut Frame, rect: Rect, app: &App, step: Step) {
                 State::Listening => format!("Listening…   {}", meter(app.status.level, 20)),
                 State::Processing => "Thinking…".into(),
                 State::Success if !app.transcript.is_empty() => format!("You said: “{}”\n\nPerfect. Press Enter to finish.", app.transcript.trim()),
-                State::Error => options::plain(app.status.message.as_deref().unwrap_or("")),
+                State::Error => options::say(&app.status).unwrap_or_else(|| options::plain("")),
                 _ => "Press Space to start.".into(),
             };
             let how = match app.shortcut() {

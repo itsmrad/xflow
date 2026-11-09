@@ -227,6 +227,7 @@ fn errors_are_one_plain_line_with_the_next_step() {
     };
     assert!(line.contains("OpenRouter rejected the API key"), "{line}");
     assert!(line.contains("xflow key set openrouter"), "{line}");
+    assert!(line.contains("(get one at "), "{line}");
     assert!(!line.contains('\n'));
 }
 #[test]
