@@ -28,11 +28,130 @@ pub async fn send(request: &Request) -> Result<Response> {
     Ok(exchange(request).await?.0)
 }
 async fn exchange(request: &Request) -> Result<(Response, BufReader<tokio::net::UnixStream>)> {
-    let (response, stream) = transport::exchange(request)
-        .await
-        .map_err(|e| Error::new(3, e.to_string(), "Run xflow daemon start"))?;
+    let unavailable = |e: anyhow::Error| Error::new(3, e.to_string(), "Run xflow daemon start");
+    let (mut response, mut stream) = transport::exchange(request).await.map_err(unavailable)?;
+    if restart_due(request, &response)
+        && settled().await
+        && !meeting_recording()
+        && service_runs_ours()
+        && restart().await
+    {
+        if matches!(request, Request::Status) {
+            (response, stream) = transport::exchange(request).await.map_err(unavailable)?;
+        } else {
+            // The old, idle daemon already ran it (nothing streams); only a status is
+            // safe to ask again.
+            response.version = None;
+        }
+    }
     validate(&response, matches!(request, Request::Status))?;
     Ok((response, stream))
+}
+/// An upgrade replaced xflowd under an older running daemon: restart it, but never
+/// during a dictation (a meeting recording is checked separately). A newer daemon
+/// is left alone, so a stale CLI never restarts it, and so is one told to shut down.
+fn restart_due(request: &Request, response: &Response) -> bool {
+    !matches!(request, Request::Shutdown)
+        && response
+            .version
+            .as_deref()
+            .is_some_and(|v| older(v, env!("CARGO_PKG_VERSION")))
+        && !matches!(response.state, State::Listening | State::Processing)
+        && response.level == 0.0
+        && response.message.as_deref() != Some(xflow_app::daemon::MIC_WAITING)
+}
+/// A hotkey dictation opening its microphone still reports idle, so ask again a
+/// moment later. shortcut: a mic open shorter than this gap can still be missed;
+/// an ExitIfIdle request decided inside xflowd would close it.
+async fn settled() -> bool {
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    transport::exchange(&Request::Status)
+        .await
+        .is_ok_and(|(r, _)| restart_due(&Request::Status, &r))
+}
+/// Semver precedence of `a` below `b`; false when either doesn't parse.
+fn older(a: &str, b: &str) -> bool {
+    /// Core numbers, then prerelease identifiers as (alphanumeric, number, text).
+    type Version<'a> = ([u64; 3], Vec<(bool, u64, &'a str)>);
+    fn parse(v: &str) -> Option<Version<'_>> {
+        let v = v.split('+').next()?;
+        let (core, pre) = v.split_once('-').unwrap_or((v, ""));
+        let mut n = core.split('.').map(|p| p.parse().ok());
+        let core = [n.next()??, n.next()??, n.next()??];
+        // Numeric identifiers sort numerically and before alphanumeric ones.
+        let pre = pre
+            .split('.')
+            .filter(|p| !p.is_empty())
+            .map(|p| p.parse().map_or((true, 0, p), |n| (false, n, "")))
+            .collect();
+        n.next().is_none().then_some((core, pre))
+    }
+    let (Some((a, ap)), Some((b, bp))) = (parse(a), parse(b)) else {
+        return false;
+    };
+    // A release outranks its prereleases.
+    let rank = |pre: &Vec<_>| (pre.is_empty(), pre.clone());
+    (a, rank(&ap)) < (b, rank(&bp))
+}
+/// `xflow meeting record` holds this lock while it records from xflowd's microphone.
+/// Fails closed: anything but a free or missing lock counts as recording.
+fn meeting_recording() -> bool {
+    let Ok(db) = super::meeting::db_path() else {
+        return true;
+    };
+    match std::fs::File::open(xflow_app::meeting::journal::spool_root(&db).join("recorder.lock")) {
+        Ok(lock) => fs2::FileExt::try_lock_shared(&lock).is_err(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+/// Whether the service runs the xflowd beside this CLI, so a restart brings its
+/// version. Otherwise (a dev build, an old Homebrew path) restarting can't help.
+fn service_runs_ours() -> bool {
+    #[cfg(target_os = "macos")]
+    let service = super::launchd::installed_program();
+    #[cfg(not(target_os = "macos"))]
+    let service = std::env::var_os("HOME")
+        .map(|home| std::path::PathBuf::from(home).join(".local/bin/xflowd"));
+    let ours = std::env::current_exe().map(|exe| exe.with_file_name("xflowd"));
+    match (
+        service.map(std::fs::canonicalize),
+        ours.map(std::fs::canonicalize),
+    ) {
+        (Some(Ok(service)), Ok(Ok(ours))) => service == ours,
+        _ => false,
+    }
+}
+/// Restart xflowd through its service manager, then wait for the new version.
+async fn restart() -> bool {
+    let run = |program: &str, args: &[&str]| {
+        std::process::Command::new(program)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    let restarted = if cfg!(target_os = "macos") {
+        let target = format!("gui/{}/com.xflow.daemon", unsafe { libc::getuid() });
+        run("/bin/launchctl", &["kickstart", "-k", &target])
+    } else {
+        run(
+            "systemctl",
+            &["--user", "--quiet", "is-active", "xflow.service"],
+        ) && run("systemctl", &["--user", "restart", "xflow.service"])
+    };
+    if !restarted {
+        return false;
+    }
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Ok((r, _)) = transport::exchange(&Request::Status).await {
+            if r.version.as_deref() == Some(env!("CARGO_PKG_VERSION")) {
+                return true;
+            }
+        }
+    }
+    false
 }
 fn validate(response: &Response, require_protocol: bool) -> Result<()> {
     if response
@@ -516,6 +635,64 @@ mod tests {
                 ..
             }
         ));
+    }
+    #[test]
+    fn only_an_idle_older_daemon_is_restarted() {
+        let mut response = Response::status(State::Idle, 0.0);
+        assert!(!restart_due(&Request::Status, &response));
+        response.version = Some(env!("CARGO_PKG_VERSION").into());
+        assert!(!restart_due(&Request::Status, &response));
+        response.version = Some("99.0.0".into());
+        assert!(
+            !restart_due(&Request::Status, &response),
+            "a newer daemon is left alone"
+        );
+        response.version = Some("0.0.1".into());
+        assert!(restart_due(&Request::Status, &response));
+        for (state, due) in [
+            (State::Listening, false),
+            (State::Processing, false),
+            (State::Success, true),
+            (State::Error, true),
+        ] {
+            response.state = state;
+            assert_eq!(restart_due(&Request::Status, &response), due, "{state:?}");
+        }
+        response.state = State::Idle;
+        assert!(
+            !restart_due(&Request::Shutdown, &response),
+            "shut down on purpose"
+        );
+        response.message = Some(xflow_app::daemon::MIC_WAITING.into());
+        assert!(
+            !restart_due(&Request::Status, &response),
+            "a microphone prompt is pending"
+        );
+    }
+    #[test]
+    fn semver_precedence_handles_prereleases() {
+        for (a, b) in [
+            ("0.2.0", "0.2.1"),
+            ("0.2.1-beta", "0.2.1"),
+            ("0.2.0-beta", "0.2.1-beta"),
+            ("0.2.1-alpha", "0.2.1-beta"),
+            ("0.2.1-beta", "0.2.1-beta.1"),
+            ("0.2.1-beta.2", "0.2.1-beta.11"),
+            ("0.2.1-1", "0.2.1-beta"),
+            ("0.9.9", "0.10.0"),
+            ("1.0.0+build.1", "1.0.1"),
+        ] {
+            assert!(older(a, b), "{a} < {b}");
+            assert!(!older(b, a), "{b} > {a}");
+        }
+        for (a, b) in [
+            ("0.2.1-beta", "0.2.1-beta"),
+            ("x", "0.2.1"),
+            ("0.2", "0.2.1"),
+            ("0.2.1", ""),
+        ] {
+            assert!(!older(a, b) && !older(b, a), "{a} vs {b}");
+        }
     }
     #[test]
     fn csv_quotes_multiline_transcripts() {

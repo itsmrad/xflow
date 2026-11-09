@@ -6,6 +6,7 @@
 # OUT=<dir> changes the output directory; SIGN=<identity> the signing identity
 # (default xflow-dev, see README; - signs ad-hoc); KEYCHAIN=<path> looks it up in that
 # keychain file only. A bin-dir holding universal binaries gives a universal pkg.
+# RELEASE=1 (any value but 0; published builds) refuses to sign ad-hoc instead of warning.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -35,9 +36,12 @@ sign=${SIGN:-xflow-dev}
 # Matches the identity's quoted name or its SHA-1 hash. Only the default falls back.
 if [ "$sign" != - ] && ! security find-identity -p codesigning ${KEYCHAIN:+"$KEYCHAIN"} | grep -qiF -e "\"$sign\"" -e " $sign "; then
     [ -z "${SIGN:-}" ] || { echo "error: no \"$sign\" code-signing identity" >&2; exit 1; }
+    [ "${RELEASE:-0}" = 0 ] || { echo "error: no \"$sign\" code-signing identity; RELEASE=1 never signs ad-hoc" >&2; exit 1; }
     echo "warning: no \"$sign\" code-signing identity; signing ad-hoc, so macOS forgets permissions on every new build (see README)" >&2
     sign=-
 fi
+# An ad-hoc release would reset every user's permissions on each update.
+[ "${RELEASE:-0}" = 0 ] || [ "$sign" != - ] || { echo "error: RELEASE=1 never signs ad-hoc; set SIGN=<identity>" >&2; exit 1; }
 set -- --force --sign "$sign" ${KEYCHAIN:+--keychain "$KEYCHAIN"} --timestamp=none --options runtime
 # The hardened runtime (required for notarisation) needs the microphone entitlement.
 codesign "$@" --entitlements packaging/macos/xflowd.entitlements --identifier com.xflow.xflowd "$work/root/usr/local/bin/xflowd"
