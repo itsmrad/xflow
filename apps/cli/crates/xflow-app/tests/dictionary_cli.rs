@@ -90,7 +90,10 @@ fn compact_and_pretty_json_exports_round_trip_without_learning_state() {
             "{name}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(String::from_utf8_lossy(&output.stderr).contains("were not imported"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains(
+            "Learning settings, learned tags and never-learn words were not imported; \
+             learned words were added as regular words"
+        ));
         let imported = home.list(&destination);
         assert_eq!(imported["words"], exported["words"], "{name}");
         assert_eq!(imported["replacements"], exported["replacements"], "{name}");
@@ -188,6 +191,22 @@ fn invalid_imports_fail_and_leave_config_unchanged() {
         (
             "long word",
             format!(r#"{{"words": ["{}"]}}"#, "x".repeat(10_000)).into(),
+        ),
+        ("empty array", b"[]".to_vec()),
+        ("positional words", br#"[["w"]]"#.to_vec()),
+        (
+            "positional dictionary",
+            br#"[["w"], [["a", "b"]]]"#.to_vec(),
+        ),
+        (
+            "positional replacement",
+            br#"{"replacements": [["a", "b"]]}"#.to_vec(),
+        ),
+        (
+            "too many words",
+            json!({"words": (0..1001).map(|i| format!("w{i}")).collect::<Vec<_>>()})
+                .to_string()
+                .into(),
         ),
         ("oversized", vec![b'a'; 1024 * 1024 + 1]),
         ("not utf-8", vec![0xff, b'\n']),

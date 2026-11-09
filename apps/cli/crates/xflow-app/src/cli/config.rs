@@ -340,19 +340,36 @@ pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) 
             let text = String::from_utf8(bounded_read(source, 1024 * 1024)?)?;
             let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
             // JSON is `dictionary export --json`: only its words and replacements
-            // are merged; learning settings and learned/never_learn are not imported.
+            // are merged; learned words arrive as plain entries, and auto_learn,
+            // the learned tags and never_learn are not imported.
             // Existing entries win: a replacement whose `from` is already set
             // (case-insensitively) to another `to` is skipped and reported.
             let (words, replacements) = if text.trim_start().starts_with(['{', '[']) {
-                let d: xflow_core::config::DictionaryConfig = serde_json::from_str(text)
-                    .map_err(|e| {
-                        Error::new(
-                            4,
-                            format!("Invalid dictionary JSON: {e}"),
-                            "Import the output of xflow --json dictionary export, or one word per line",
-                        )
-                    })?;
-                kept.push("Learning settings and learned words were not imported".into());
+                let invalid = |e: &dyn std::fmt::Display| {
+                    Error::new(
+                        4,
+                        format!("Invalid dictionary JSON: {e}"),
+                        "Import the output of xflow --json dictionary export, or one word per line",
+                    )
+                };
+                let value: serde_json::Value =
+                    serde_json::from_str(text).map_err(|e| invalid(&e))?;
+                // Serde also accepts positional arrays for structs; exports never use them.
+                let objects = value.as_object().is_some_and(|d| {
+                    d.get("replacements")
+                        .and_then(serde_json::Value::as_array)
+                        .is_none_or(|r| r.iter().all(serde_json::Value::is_object))
+                });
+                if !objects {
+                    return Err(invalid(&"expected the object written by dictionary export"));
+                }
+                let d: xflow_core::config::DictionaryConfig =
+                    serde_json::from_value(value).map_err(|e| invalid(&e))?;
+                kept.push(
+                    "Learning settings, learned tags and never-learn words were not imported; \
+                     learned words were added as regular words"
+                        .into(),
+                );
                 (d.words, d.replacements)
             } else {
                 let words = text.lines().map(str::trim).filter(|v| !v.is_empty());
