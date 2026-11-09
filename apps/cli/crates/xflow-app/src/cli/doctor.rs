@@ -216,7 +216,7 @@ fn learning_check(
 /// trusted belongs to an older build, since bare executables are listed by path and
 /// granted by signature. No bundle ID yet, so `tccutil reset … <id>` can't remove it.
 #[cfg(any(target_os = "macos", test))]
-const STALE_GRANT: &str = "If xflowd already looks switched on there, that switch belongs to an older xflowd: macOS ties each permission to the exact signed file, so a rebuilt or re-signed xflowd needs it once more. Select xflowd, click − to remove it, then switch the new one on";
+const STALE_GRANT: &str = "If xflowd already looks switched on, that row is an old copy: macOS ties each permission to the exact signed file, so an ad-hoc rebuild or one signed differently needs it again. First select each xflowd row and click −, then press Enter on it in Check-up and switch on the row that appears";
 #[cfg(any(target_os = "macos", test))]
 fn permission_checks(permissions: Option<&xflow_core::ipc::Permissions>) -> Vec<Check> {
     use xflow_core::ipc::{ACCESSIBILITY_FIX, INPUT_MONITORING_FIX, UNVERIFIED_SHORTCUT};

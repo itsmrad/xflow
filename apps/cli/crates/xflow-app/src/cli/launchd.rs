@@ -91,14 +91,27 @@ fn certificate(details: &str) -> bool {
 fn signed_already(details: &str, named: bool) -> bool {
     !named && details.lines().any(|l| l == "Identifier=com.xflow.xflowd")
 }
+/// codesign -d prints its details on stderr. Only a read or a plain "unsigned"
+/// answer is trusted; any other failure keeps whatever signature is there.
+fn readable(success: bool, stderr: &str) -> bool {
+    success || stderr.contains("code object is not signed at all")
+}
 fn sign(binary: &Path) -> &'static str {
-    // codesign -d prints its details on stderr.
-    let details = Command::new("/usr/bin/codesign")
+    let Some(details) = Command::new("/usr/bin/codesign")
         .args(["-dvv"])
         .arg(binary)
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
-        .unwrap_or_default();
+        .ok()
+        .map(|o| {
+            (
+                o.status.success(),
+                String::from_utf8_lossy(&o.stderr).into_owned(),
+            )
+        })
+        .and_then(|(success, stderr)| readable(success, &stderr).then_some(stderr))
+    else {
+        return "kept its signature (codesign could not read it)";
+    };
     if certificate(&details) {
         return "kept its existing certificate signature";
     }
@@ -324,6 +337,8 @@ mod tests {
         for details in [adhoc, linker, unsigned, ""] {
             assert!(!certificate(details), "{details}");
         }
+        assert!(readable(true, developer_id) && readable(false, unsigned));
+        assert!(!readable(false, "xflowd: No such file or directory\n"));
         // The installer's ad-hoc signature is kept unless xflow-dev can replace it.
         assert!(signed_already(adhoc, false) && !signed_already(adhoc, true));
         // A fresh cargo build carries the linker's per-build identifier.

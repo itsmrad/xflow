@@ -351,7 +351,7 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
                 .and_then(std::fs::canonicalize)
                 .unwrap_or_default();
             let upgrade = upgrade(&exe.to_string_lossy());
-            out.data(&serde_json::json!({"cli_version":version,"protocol":xflow_core::ipc::PROTOCOL_VERSION,"daemon":daemon.ok(),"upgrade":upgrade}), &format!("{human}\nUpgrade: {upgrade}"))?;
+            out.data(&serde_json::json!({"cli_version":version,"protocol":xflow_core::ipc::PROTOCOL_VERSION,"daemon":daemon.ok(),"upgrade":upgrade}), &format!("{human}\nTo upgrade: {upgrade}"))?;
             Ok(())
         }
     }
@@ -363,6 +363,8 @@ fn upgrade(exe: &str) -> &'static str {
         "brew upgrade xflow, then xflow service install"
     } else if exe.contains("/target/release/") || exe.contains("/target/debug/") {
         "git pull, then cargo build --manifest-path apps/cli/Cargo.toml --release --locked"
+    } else if exe.ends_with("/.local/bin/xflow") && cfg!(target_os = "linux") {
+        "curl -fsSL https://raw.githubusercontent.com/itsmrad/xflow/main/scripts/install.sh | sh"
     } else if exe.ends_with("/.local/bin/xflow") {
         "git pull and rebuild, then run scripts/install.sh"
     } else if cfg!(target_os = "macos") && exe == "/usr/local/bin/xflow" {
@@ -414,11 +416,16 @@ mod tests {
                 "/Users/a/xflow/apps/cli/target/release/xflow",
                 "cargo build",
             ),
-            ("/home/a/.local/bin/xflow", "scripts/install.sh"),
+            ("/home/a/.local/bin/xflow", "install.sh"),
             ("/opt/xflow/xflow", "download the newest release"),
         ] {
             assert!(super::upgrade(exe).contains(expected), "{exe}");
         }
+        // Linux installs come from the release download; macOS ones from a checkout.
+        assert_eq!(
+            super::upgrade("/home/a/.local/bin/xflow").starts_with("curl"),
+            cfg!(target_os = "linux")
+        );
         // The pkg installs real files here; Homebrew's are symlinks into its Cellar.
         assert_eq!(
             super::upgrade("/usr/local/bin/xflow").contains(".pkg"),
