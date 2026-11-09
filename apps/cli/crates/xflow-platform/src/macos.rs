@@ -1888,6 +1888,16 @@ mod tests {
             .collect()
     }
     /// What an AppKit app in another process reads: each item's types and base64 bytes.
+    /// Every format `before` held data for is back, byte for byte. macOS may list
+    /// different derived text types (UTF-16, Mac Roman) depending on the writer.
+    fn restored(before: &str, after: &str) {
+        let after: std::collections::BTreeSet<_> = after.lines().collect();
+        let lost: Vec<_> = before
+            .lines()
+            .filter(|line| !line.ends_with(" -") && !after.contains(line))
+            .collect();
+        assert!(lost.is_empty(), "lost {lost:?}; after: {after:?}");
+    }
     fn dump(name: &str) -> String {
         let script = "var out = []; var items = p.pasteboardItems; \
             for (var i = 0; i < items.count; i++) { var it = items.objectAtIndex(i); \
@@ -1944,7 +1954,7 @@ mod tests {
                 "clipboard managers must see the markers: {marked}"
             );
             pasteboard.restore(&previous, session);
-            assert_eq!(dump(&name), before, "{fixture}");
+            restored(&before, &dump(&name));
         }
     }
     #[test]
@@ -2040,7 +2050,7 @@ mod tests {
             pasteboard.restore(&previous, session);
         }
         assert!(started.elapsed() < Duration::from_millis(300));
-        assert_eq!(dump(&name), before);
+        restored(&before, &dump(&name));
     }
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard serializes HIServices tests, not tasks
