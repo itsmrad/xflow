@@ -51,7 +51,7 @@ romanization or quick-switch IPC is introduced; see `benchmarks/languages/README
 ## Unix-socket IPC (`$XDG_RUNTIME_DIR/xflow/daemon.sock`)
 
 Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 KiB per frame.
-`PROTOCOL_VERSION = 3`; `status` reports `version` and `protocol`.
+`PROTOCOL_VERSION = 4`; `status` reports `version` and `protocol`. Protocol 4 added `history_paste.original` and `history.filter`; protocol 3 daemons ignore both, so clients check `protocol` before sending them.
 
 A failed reply or an `error` status/event may carry an optional `problem` that classifies
 `message`. The `message` text itself is unchanged, and `problem` is omitted when the failure is
@@ -69,8 +69,8 @@ is additive, so the protocol version is unchanged.
 | `start`, `toggle` | `mode` ("dictation"/"command", default dictation), `context` (AppContext captured by the caller), `t0_us` (caller CLOCK_MONOTONIC µs at hotkey), `delivery` ("inject" default / "clipboard" / "none" — none leaves the desktop untouched so a subscribed client such as `xflow listen` can print the text), `hold` (bool, default false: the client keeps the socket open; the daemon closes it when the session ends and cancels the session if the socket closes first, so a killed client never leaves the mic on. `xflow listen` and the TUI hold; `xflow start`, hotkeys and D-Bus don't) | Mic opens **before** any focus query; provider connection is warmed in the background |
 | `stop`, `cancel` | — | unchanged |
 | `last`, `copy_last`, `paste_last` | — | unchanged |
-| `history` | `limit`, `offset` (default 0), `query` (case-insensitive substring) | `history` rows newest first, `total` = matching rows |
-| `history_get` / `history_delete` / `history_copy` / `history_paste` | `id` | `entry` for get; injection outcome for paste |
+| `history` | `limit`, `offset` (default 0), `query` (case-insensitive substring, Unicode case folding), `filter` (optional: `app_id` exact, `mode`, `since` unix seconds) | `history` rows newest first, `total` = matching rows |
+| `history_get` / `history_delete` / `history_copy` / `history_paste` | `id`; paste also `original` (bool: paste `raw_text`; an error, pasting nothing, when the entry has none) | `entry` for get; injection outcome for paste |
 | `history_update` | `id`, `text` | replaces the entry text (first text kept as `raw_text`); with `auto_learn`, learns close word corrections exactly like a corrected paste (see the tiers in ARCHITECTURE); command-mode entries learn nothing. Reply: updated `entry`; `message` = "Added 'X' to your dictionary" when something was learned |
 | `clear_history` | — | clears persisted rows even with history disabled; also clears the in-memory last result/timings |
 | `retry` | `full` (bool), `delivery` (as `start`), `discard` (bool) | idle only; transcribes the dictation kept by `privacy.keep_failed_audio` again, then cleans up and delivers it to the current focus. Parts already delivered are left out unless `full`; `discard` deletes it instead. Replies `processing`; the final event is a normal session's. Every status and event carries `failed_audio` (created_at, expires_at, audio_ms, partial) while one is kept |
@@ -81,7 +81,7 @@ is additive, so the protocol version is unchanged.
 | `allow` | `grant` ("input_monitoring" / "accessibility" / "microphone") | macOS: xflowd asks the system, which lists xflowd in System Settings and prompts while undecided; replies with status. A microphone reply adds `permissions.microphone` (null while undecided), read by a short-lived `xflowd --microphone` child so AVFoundation never loads in the daemon |
 | `shutdown` | — | unchanged |
 
-Meeting import, list, search, get, export and delete are local SQLite in the `xflow` process. They are not daemon requests and they are not on D-Bus. `PROTOCOL_VERSION` stays 3.
+Meeting import, list, search, get, export and delete are local SQLite in the `xflow` process. They are not daemon requests and they are not on D-Bus; they do not affect `PROTOCOL_VERSION`.
 
 `xflow meeting process` copies audio into the private journal and queues it; `xflow meeting-worker` (internal, started detached by `process`, `retry` or `status`) transcribes queued meetings. Exactly one worker runs per store, guarded by an exclusive `flock` on `meeting-audio/worker.lock`. Its stderr goes to a private `meeting-audio/worker.log` without transcript text, and its state is in the `worker` table shown by `status`. The daemon is not involved.
 

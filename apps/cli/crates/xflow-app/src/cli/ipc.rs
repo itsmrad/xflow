@@ -496,6 +496,7 @@ pub fn history(page: &args::Page, action: Option<&args::History>, out: &Output) 
             limit,
             offset,
             query,
+            filter: Default::default(),
         })
     };
     let response = match action {
@@ -508,7 +509,10 @@ pub fn history(page: &args::Page, action: Option<&args::History>, out: &Output) 
         }) => list(*limit as usize, *offset, Some(query.clone()))?,
         Some(Show { id }) => request(&Request::HistoryGet { id: positive(*id)? })?,
         Some(Copy { id }) => request(&Request::HistoryCopy { id: positive(*id)? })?,
-        Some(Paste { id }) => request(&Request::HistoryPaste { id: positive(*id)? })?,
+        Some(Paste { id }) => request(&Request::HistoryPaste {
+            id: positive(*id)?,
+            original: false,
+        })?,
         Some(Delete { id }) => request(&Request::HistoryDelete { id: positive(*id)? })?,
         Some(Edit { id, text }) => {
             let id = positive(*id)?;

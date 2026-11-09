@@ -14,11 +14,11 @@
 │ =  Meetings    ││ The best ideas start with a conversation.                  │
 │                ││                                                            │
 │                ││ Said 2 min ago in Mail                                     │
+│                ││ Thu 1 Oct 2026, 13:00                                      │
 │                ││ 2.8 s of speech · ready in 0.4 s                           │
 │                ││                                                            │
-│                ││ Before cleanup:                                            │
+│                ││ Original (o pastes it):                                    │
 │                ││ um the best ideas start with a conversation                │
-│                ││                                                            │
 ╰────────────────╯╰────────────────────────────────────────────────────────────╯
 
- / search · Enter options · ↑↓ move · Esc back · Tab next page · ? help · q quit
+ / search · f filter · Enter options · q quit · Esc back · ? help

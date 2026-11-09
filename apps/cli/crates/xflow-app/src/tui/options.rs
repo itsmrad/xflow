@@ -437,6 +437,56 @@ pub fn ago(created_at: i64, now: i64) -> String {
     }
 }
 
+/// Broken-down local time, or UTC when `utc`.
+fn clock(t: i64, utc: bool) -> Option<libc::tm> {
+    let t = t as libc::time_t;
+    // SAFETY: an all-zero `tm` is valid; the `_r` calls only read `t` and write `tm`.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        if utc {
+            libc::gmtime_r(&t, &mut tm)
+        } else {
+            libc::localtime_r(&t, &mut tm)
+        }
+    };
+    (!ok.is_null()).then_some(tm)
+}
+
+/// "Thu 1 Oct 2026, 13:00" for a unix timestamp (day of month unpadded).
+pub fn when(t: i64, utc: bool) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    clock(t, utc).map_or_else(String::new, |tm| {
+        format!(
+            "{} {} {} {}, {:02}:{:02}",
+            DAYS[tm.tm_wday.rem_euclid(7) as usize],
+            tm.tm_mday,
+            MONTHS[tm.tm_mon.rem_euclid(12) as usize],
+            tm.tm_year as i64 + 1900,
+            tm.tm_hour,
+            tm.tm_min
+        )
+    })
+}
+
+/// Midnight of the day containing `t`, correct on daylight-saving change days.
+pub fn start_of_day(t: i64, utc: bool) -> i64 {
+    let utc_midnight = t - t.rem_euclid(86_400);
+    match clock(t, utc) {
+        Some(mut tm) if !utc => {
+            (tm.tm_hour, tm.tm_min, tm.tm_sec, tm.tm_isdst) = (0, 0, 0, -1);
+            // SAFETY: `tm` is a valid broken-down time; mktime only reads and normalizes it.
+            match unsafe { libc::mktime(&mut tm) } {
+                -1 => utc_midnight,
+                midnight => midnight,
+            }
+        }
+        _ => utc_midnight,
+    }
+}
+
 /// A friendly app name from an app id: `com.apple.mail` → "Mail".
 pub fn app_name(id: &str) -> String {
     let last = id.rsplit(['.', '/']).next().unwrap_or(id);

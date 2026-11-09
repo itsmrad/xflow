@@ -28,7 +28,7 @@ class Daemon:
     def __init__(self, root):
         self.requests = []
         self.subscribers = []
-        self.protocol = 3
+        self.protocol = 4
         self.timings = None
         self.microphone = None
         self.fail = False
@@ -294,7 +294,7 @@ def main():
                     listen.wait()
             daemon.protocol = 1
             assert "Restart" in run("status", code=3).stderr
-            daemon.protocol = 3
+            daemon.protocol = 4
             daemon.fail = True
             failure = run("toggle", "--json", code=1)
             assert not failure.stdout and json.loads(failure.stderr)["error"] == "mock failure"

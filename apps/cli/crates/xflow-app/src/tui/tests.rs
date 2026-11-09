@@ -598,6 +598,116 @@ fn untrusted_transcripts_cannot_emit_terminal_controls() {
     assert!(text.contains("hello"));
 }
 #[test]
+fn history_pastes_the_original_and_filters_only_with_a_protocol_4_daemon() {
+    let (_dir, mut app) = populated();
+    app.page = Page::History;
+    assert!(key(&mut app, KeyCode::Char('o')).is_empty());
+    assert!(app.toast.take().is_some_and(|t| t.contains("isn't ready")));
+    // A protocol 3 xflowd would ignore `original` and the filter: say so, send nothing.
+    app.status.protocol = Some(3);
+    for code in [KeyCode::Char('o'), KeyCode::Char('f')] {
+        assert!(key(&mut app, code).is_empty());
+        assert!(app.modal.is_none());
+        assert!(app
+            .toast
+            .take()
+            .is_some_and(|t| t.contains("older version")));
+    }
+    app.status.protocol = Some(xflow_core::ipc::PROTOCOL_VERSION);
+    assert!(matches!(
+        &key(&mut app, KeyCode::Char('o'))[..],
+        [Effect::Request(
+            Request::HistoryPaste {
+                id: 42,
+                original: true
+            },
+            _
+        )]
+    ));
+    // Enter offers it too, after "Correct this transcript".
+    key_enter(&mut app);
+    assert_eq!(
+        editor(&app).fields[0].labels[3],
+        "Paste the original, before cleanup"
+    );
+    app.modal = None;
+    let raw = app.history[0].raw_text.take();
+    assert!(key(&mut app, KeyCode::Char('o')).is_empty());
+    assert!(app
+        .toast
+        .take()
+        .is_some_and(|t| t.contains("no separate original")));
+    key_enter(&mut app);
+    assert!(!editor(&app).fields[0]
+        .labels
+        .iter()
+        .any(|l| l.contains("original")));
+    app.modal = None;
+    app.history[0].raw_text = raw;
+    // f: app, kind and period, each a list; Enter on the last applies them.
+    key(&mut app, KeyCode::Char('f'));
+    assert!(matches!(editor(&app).target, EditTarget::HistoryFilter));
+    assert_eq!(editor(&app).fields[0].labels, ["Any app", "Mail"]);
+    for downs in [1, 2, 1] {
+        for _ in 0..downs {
+            key(&mut app, KeyCode::Down);
+        }
+        if editor(&app).focus < 2 {
+            key_enter(&mut app);
+        }
+    }
+    let effects = key_enter(&mut app);
+    let now = app.now();
+    let filter = match &effects[..] {
+        [Effect::Request(
+            Request::History {
+                offset: 0, filter, ..
+            },
+            Tag::History(_),
+        )] => filter.clone(),
+        _ => panic!("no history request"),
+    };
+    assert_eq!(filter.app_id.as_deref(), Some("com.apple.mail"));
+    assert_eq!(filter.mode, Some(xflow_core::Mode::Command));
+    assert_eq!(filter.since, Some(now - now.rem_euclid(86_400)));
+    assert!(screen(&app, 80, 24).contains("History · Mail · Voice edits · Today"));
+    app.history.clear();
+    assert!(screen(&app, 80, 24).contains("Nothing matches these filters."));
+    // Esc clears them.
+    let effects = key(&mut app, KeyCode::Esc);
+    assert!(matches!(
+        &effects[..],
+        [Effect::Request(Request::History { filter, .. }, _)] if filter.is_empty()
+    ));
+    assert_eq!(app.page, Page::History);
+    // From another page, f opens History with the form.
+    app.page = Page::Home;
+    let effects = key(&mut app, KeyCode::Char('f'));
+    assert!(matches!(
+        &effects[..],
+        [Effect::Request(Request::History { .. }, _)]
+    ));
+    assert_eq!(app.page, Page::History);
+    assert!(matches!(editor(&app).target, EditTarget::HistoryFilter));
+}
+#[test]
+fn history_details_show_the_absolute_time() {
+    assert_eq!(options::when(1790859600, true), "Thu 1 Oct 2026, 13:00");
+    assert_eq!(options::start_of_day(1790859600 + 59, true), 1790812800);
+    // Local midnight, whatever this machine's zone, including DST change weeks.
+    for t in (1_774_000_000..1_775_000_000).step_by(43_200) {
+        let midnight = options::start_of_day(t, false);
+        assert!(
+            options::when(midnight, false).ends_with(", 00:00")
+                || options::when(midnight, false).ends_with(", 01:00")
+        );
+        assert!((0..=25 * 3600).contains(&(t - midnight)), "{t} {midnight}");
+    }
+    let (_dir, mut app) = populated();
+    app.page = Page::History;
+    assert!(screen(&app, 80, 24).contains("Thu 1 Oct 2026, 13:00"));
+}
+#[test]
 fn history_corrections_and_removed_learned_words_feed_learning() {
     let (_dir, mut app) = populated();
     // History → Enter → "Correct this transcript" opens the text, Enter saves it.

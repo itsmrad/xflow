@@ -398,11 +398,18 @@ pub fn keys(app: &App) -> Vec<(&'static str, Option<Action>)> {
                     ("c copy", Some(Action::Copy)),
                     ("p paste", Some(Action::Paste)),
                 ],
-                Page::History => vec![
-                    ("/ search", Some(Action::Search)),
-                    ("Enter options", Some(Action::Choose)),
-                    ("↑↓ move", None),
-                ],
+                // "q quit" before the rest so it fits at 80 columns.
+                Page::History => {
+                    return vec![
+                        ("/ search", Some(Action::Search)),
+                        ("f filter", Some(Action::Filter)),
+                        ("Enter options", Some(Action::Choose)),
+                        ("q quit", Some(Action::Quit)),
+                        ("Esc back", Some(Action::Back)),
+                        ("? help", Some(Action::Help)),
+                        ("Tab next page", None),
+                    ];
+                }
                 Page::Styles => {
                     let choose = if app.selected() == 0 {
                         "Enter add"
@@ -1184,7 +1191,7 @@ fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
         let parts = Layout::vertical([Constraint::Min(6), Constraint::Length(8)]).split(area);
         (parts[0], parts[1])
     };
-    let title = match app.page {
+    let mut title = match app.page {
         Page::History if !app.query.is_empty() => format!("History · matching “{}”", app.query),
         Page::History if app.total > app.history.len() as u64 => {
             format!(
@@ -1196,6 +1203,11 @@ fn listing(frame: &mut Frame, area: Rect, app: &App, hits: &mut HitMap) {
         }
         _ => app.page.title().into(),
     };
+    if app.page == Page::History {
+        for label in app.filter_labels() {
+            title.push_str(&format!(" · {label}"));
+        }
+    }
     if rows.is_empty() {
         panel(frame, list, &title, empty(app), app);
     } else {
@@ -1315,6 +1327,7 @@ fn empty(app: &App) -> String {
     match app.page {
         Page::History if !app.connected => format!("Your history shows up once xflow's background helper is running.\n\n{}", app.helper_down()),
         Page::History if !app.query.is_empty() => format!("Nothing matches “{}”.\n\nPress Esc to clear the search.", app.query),
+        Page::History if !app.filter_labels().is_empty() => "Nothing matches these filters.\n\nPress f to change them, or Esc to clear them.".into(),
         Page::History => format!("No dictations yet — {speak}."),
         Page::Overlay if cfg!(target_os = "macos") => "The floating recording pill is part of xflow on Linux (GNOME).\n\nOn this Mac, the status is shown at the top of this window.".into(),
         Page::Overlay if app.overlay_error => "The recording pill needs the xflow GNOME extension.\n\nInstall it with the xflow setup command, then press r.".into(),
@@ -1333,11 +1346,12 @@ fn details(app: &App, rows: &[(String, String)]) -> (&'static str, String) {
                     said.push_str(&format!(" in {}", options::app_name(app_id)));
                 }
                 text.push_str(&said);
+                text.push_str(&format!("\n{}", options::when(h.created_at, app.utc())));
                 if let (Some(d), Some(l)) = (h.duration_ms, h.latency_ms) {
                     text.push_str(&format!("\n{:.1} s of speech · ready in {:.1} s", d as f64 / 1000.0, l as f64 / 1000.0));
                 }
                 if let Some(raw) = h.raw_text.as_deref().filter(|r| r.trim() != h.text.trim()) {
-                    text.push_str(&format!("\n\nBefore cleanup:\n{raw}"));
+                    text.push_str(&format!("\n\nOriginal (o pastes it):\n{raw}"));
                 }
                 let kept = match h.cleanup {
                     Some(CleanupOutcome::Rejected) => Some("it changed too much"),
@@ -1554,6 +1568,7 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
                 "Dictating".into(),
                 "  Space    start / stop    x       cancel".into(),
                 "  c        copy last       p       paste last".into(),
+                "  o        paste the original of a History entry".into(),
                 String::new(),
                 "Chat (typing goes to the box)".into(),
                 "  Enter    send            Esc     cancel or leave".into(),
@@ -1562,6 +1577,7 @@ fn draw_modal(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, hits: &mu
                 "Lists".into(),
                 "  n        add             Del     delete".into(),
                 "  /        search history  Ctrl+P  find any action".into(),
+                "  f        filter history by app, kind or date".into(),
                 String::new(),
                 "Changes save automatically. q quits.".into(),
             ];

@@ -1,5 +1,8 @@
 use anyhow::{bail, Result};
-use rusqlite::{ffi, params, Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior};
+use rusqlite::{
+    ffi, params, params_from_iter, types::Value, Connection, OpenFlags, OptionalExtension, Row,
+    TransactionBehavior,
+};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -8,7 +11,7 @@ use std::{
     },
 };
 use xflow_core::{
-    ipc::{CleanupOutcome, HistoryEntry, Stats},
+    ipc::{CleanupOutcome, HistoryEntry, HistoryFilter, Stats},
     Mode,
 };
 
@@ -172,7 +175,7 @@ impl Store {
         })
         .await
     }
-    /// Newest first. `query` is a case-insensitive (ASCII) substring of the text.
+    /// Newest first. `query` is a case-insensitive substring of the text.
     /// Returns the page and the number of matching rows.
     pub async fn history(
         &self,
@@ -180,36 +183,79 @@ impl Store {
         offset: usize,
         query: Option<String>,
     ) -> Result<(Vec<HistoryEntry>, u64)> {
+        self.history_where(limit, offset, query, HistoryFilter::default())
+            .await
+    }
+    /// `history`, narrowed by `filter`.
+    pub async fn history_where(
+        &self,
+        limit: usize,
+        offset: usize,
+        query: Option<String>,
+        filter: HistoryFilter,
+    ) -> Result<(Vec<HistoryEntry>, u64)> {
         if !self.enabled {
             return Ok((vec![], 0));
         }
-        // ponytail: SQLite LIKE folds ASCII case only; Unicode folding needs a
-        // registered collation/function (rusqlite "functions" feature).
-        let pattern = query
-            .filter(|query| !query.is_empty())
-            .map(|query| format!("%{}%", escape_like(&query)));
+        let query = query.filter(|query| !query.is_empty());
+        let (limit, offset) = (limit.min(MAX_PAGE), offset.min(i64::MAX as usize));
+        let mut clauses = vec![];
+        let mut values: Vec<Value> = vec![];
+        // SQLite LIKE folds ASCII case only, which is exact for an ASCII query.
+        // Other queries are folded here while scanning the same rows LIKE would.
+        let needle = match query {
+            Some(query) if query.is_ascii() => {
+                clauses.push("text LIKE ? ESCAPE '\\'");
+                values.push(format!("%{}%", escape_like(&query)).into());
+                None
+            }
+            query => query.map(|query| query.to_lowercase()),
+        };
+        if let Some(app_id) = filter.app_id {
+            clauses.push("app_id = ?");
+            values.push(app_id.into());
+        }
+        if let Some(mode) = filter.mode {
+            clauses.push("mode = ?");
+            values.push(mode_name(mode).to_owned().into());
+        }
+        if let Some(since) = filter.since {
+            clauses.push("created_at >= ?");
+            values.push(since.into());
+        }
+        let filter = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", clauses.join(" AND "))
+        };
         self.run(move |conn| {
-            let filter = if pattern.is_some() {
-                "WHERE text LIKE ?1 ESCAPE '\\'"
-            } else {
-                "WHERE ?1 IS NULL"
-            };
+            if let Some(needle) = needle {
+                let mut statement = conn.prepare(&format!(
+                    "SELECT {COLUMNS} FROM history {filter} ORDER BY id DESC"
+                ))?;
+                let mut rows = statement.query(params_from_iter(values))?;
+                let (mut page, mut total) = (vec![], 0usize);
+                while let Some(row) = rows.next()? {
+                    if !row.get_ref(2)?.as_str()?.to_lowercase().contains(&needle) {
+                        continue;
+                    }
+                    if total >= offset && page.len() < limit {
+                        page.push(entry_from_row(row)?);
+                    }
+                    total += 1;
+                }
+                return Ok((page, total as u64));
+            }
             let total: i64 = conn.query_row(
                 &format!("SELECT COUNT(*) FROM history {filter}"),
-                [&pattern],
+                params_from_iter(&values),
                 |row| row.get(0),
             )?;
+            values.extend([Value::from(limit as i64), Value::from(offset as i64)]);
             let mut statement = conn.prepare(&format!(
-                "SELECT {COLUMNS} FROM history {filter} ORDER BY id DESC LIMIT ?2 OFFSET ?3"
+                "SELECT {COLUMNS} FROM history {filter} ORDER BY id DESC LIMIT ? OFFSET ?"
             ))?;
-            let rows = statement.query_map(
-                params![
-                    pattern,
-                    limit.min(MAX_PAGE) as i64,
-                    offset.min(i64::MAX as usize) as i64
-                ],
-                entry_from_row,
-            )?;
+            let rows = statement.query_map(params_from_iter(values), entry_from_row)?;
             Ok((rows.collect::<rusqlite::Result<_>>()?, total as u64))
         })
         .await
@@ -1080,6 +1126,101 @@ mod tests {
             .unwrap()
             .0
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_folds_non_ascii_case_and_filters_by_app_mode_and_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.db");
+        let store = Store::open(&path, true, 100).unwrap();
+        for (text, app, mode) in [
+            ("École starts Monday", "mail", Mode::Dictation),
+            ("ÄRGER im Büro", "slack", Mode::Dictation),
+            ("über alles", "slack", Mode::Command),
+            ("ПРИВЕТ мир", "slack", Mode::Ask),
+            ("plain ascii", "code", Mode::Dictation),
+        ] {
+            store
+                .append(HistoryEntry {
+                    app_id: Some(app.into()),
+                    mode,
+                    ..entry(text)
+                })
+                .await
+                .unwrap();
+        }
+        // Rows 1-2 are a day old.
+        Connection::open(&path)
+            .unwrap()
+            .execute(
+                "UPDATE history SET created_at = created_at - 86400 WHERE id <= 2",
+                [],
+            )
+            .unwrap();
+        let texts = |rows: Vec<HistoryEntry>| rows.into_iter().map(|r| r.text).collect::<Vec<_>>();
+        let search =
+            |q: &str, filter: HistoryFilter| store.history_where(10, 0, Some(q.into()), filter);
+        let any = HistoryFilter::default;
+        assert_eq!(
+            texts(search("école", any()).await.unwrap().0),
+            ["École starts Monday"]
+        );
+        assert_eq!(
+            texts(search("ärger", any()).await.unwrap().0),
+            ["ÄRGER im Büro"]
+        );
+        assert_eq!(
+            texts(search("BÜRO", any()).await.unwrap().0),
+            ["ÄRGER im Büro"]
+        );
+        assert_eq!(
+            texts(search("привет", any()).await.unwrap().0),
+            ["ПРИВЕТ мир"]
+        );
+        // Accents still count: "e" is not "é".
+        assert!(search("ecole", any()).await.unwrap().0.is_empty());
+        // The scan pages and counts like SQL.
+        let (page, total) = store
+            .history_where(1, 1, Some("Ü".into()), any())
+            .await
+            .unwrap();
+        assert_eq!((texts(page), total), (vec!["ÄRGER im Büro".into()], 2));
+        let slack = HistoryFilter {
+            app_id: Some("slack".into()),
+            ..any()
+        };
+        let (rows, total) = store
+            .history_where(10, 0, None, slack.clone())
+            .await
+            .unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(texts(rows), ["ПРИВЕТ мир", "über alles", "ÄRGER im Büro"]);
+        let command = HistoryFilter {
+            mode: Some(Mode::Command),
+            ..slack.clone()
+        };
+        assert_eq!(
+            texts(search("ÜBER", command).await.unwrap().0),
+            ["über alles"]
+        );
+        let since = store.get(3).await.unwrap().unwrap().created_at;
+        let recent = HistoryFilter {
+            since: Some(since),
+            ..slack
+        };
+        let (rows, total) = store
+            .history_where(10, 0, None, recent.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            (texts(rows), total),
+            (vec!["ПРИВЕТ мир".into(), "über alles".into()], 2)
+        );
+        // An ASCII query keeps the SQL path, filters included.
+        assert_eq!(
+            texts(search("ALLES", recent).await.unwrap().0),
+            ["über alles"]
+        );
     }
 
     #[tokio::test]
