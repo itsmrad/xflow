@@ -338,9 +338,44 @@ pub fn dictionary(path: &Path, action: Option<&args::Dictionary>, out: &Output) 
         }
         Import { file: source } => {
             let text = String::from_utf8(bounded_read(source, 1024 * 1024)?)?;
-            for word in text.lines().map(str::trim).filter(|v| !v.is_empty()) {
-                if !config.dictionary.words.iter().any(|v| v == word) {
-                    config.dictionary.words.push(word.into());
+            let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+            // JSON is `dictionary export --json`: only its words and replacements
+            // are merged; learning settings and learned/never_learn are not imported.
+            // Existing entries win: a replacement whose `from` is already set
+            // (case-insensitively) to another `to` is skipped and reported.
+            let (words, replacements) = if text.trim_start().starts_with(['{', '[']) {
+                let d: xflow_core::config::DictionaryConfig = serde_json::from_str(text)
+                    .map_err(|e| {
+                        Error::new(
+                            4,
+                            format!("Invalid dictionary JSON: {e}"),
+                            "Import the output of xflow --json dictionary export, or one word per line",
+                        )
+                    })?;
+                kept.push("Learning settings and learned words were not imported".into());
+                (d.words, d.replacements)
+            } else {
+                let words = text.lines().map(str::trim).filter(|v| !v.is_empty());
+                (words.map(String::from).collect(), vec![])
+            };
+            for word in words {
+                if !config.dictionary.words.contains(&word) {
+                    config.dictionary.words.push(word);
+                }
+            }
+            for r in replacements {
+                let d = &mut config.dictionary;
+                match d
+                    .replacements
+                    .iter()
+                    .find(|v| v.from.eq_ignore_ascii_case(&r.from))
+                {
+                    None => d.replacements.push(r),
+                    Some(v) if v.to != r.to => kept.push(format!(
+                        "Kept \"{}\" -> \"{}\"; skipped \"{}\" -> \"{}\"",
+                        v.from, v.to, r.from, r.to
+                    )),
+                    Some(_) => {}
                 }
             }
         }
