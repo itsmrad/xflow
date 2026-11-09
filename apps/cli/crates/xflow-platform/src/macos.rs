@@ -35,7 +35,8 @@ struct ProcessSerialNumber {
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(value: Ref);
-    fn CFRetain(value: Ref) -> Ref;
+    // *mut, like its declarations in macos_observe.rs and macos_hotkey.rs.
+    fn CFRetain(value: *mut c_void) -> *mut c_void;
     fn CFGetTypeID(value: Ref) -> usize;
     fn CFHash(value: Ref) -> usize;
     fn CFStringGetTypeID() -> usize;
@@ -359,7 +360,10 @@ impl Pasteboard {
                         partial: Some(why),
                     });
                 }
-                kept.push((Owned(unsafe { CFRetain(flavor) }), data));
+                kept.push((
+                    Owned(unsafe { CFRetain(flavor.cast_mut()) }.cast_const()),
+                    data,
+                ));
             }
             items.push(kept);
         }
