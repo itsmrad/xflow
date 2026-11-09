@@ -124,6 +124,8 @@ scripts/benchmark.py --daemon apps/cli/target/release/xflowd --cli apps/cli/targ
 
 See [shared contracts](docs/CONTRACTS.md), [daemon behavior](docs/DAEMON_V1.md) and the CLI guide below for implemented v1 scope. Tests use synthetic audio, fake desktops, and local mock HTTP; they do not make paid API requests or type into your desktop. The [headless result](docs/benchmarks/linux-headless.json) measures startup, idle RSS/CPU and status IPC only. Physical hotkey, microphone, cloud latency, injection and overlay measurements need a real GNOME session. See [performance methodology](PERFORMANCE.md), [product requirements](PRD.md), [architecture](ARCHITECTURE.md), [roadmap](ROADMAP.md) and [source research](docs/RESEARCH.md).
 
+Optional user service: install [packaging/xflow.service](packaging/xflow.service) into `~/.config/systemd/user/`, then run `systemctl --user daemon-reload` and `systemctl --user enable --now xflow.service`. An environment variable exported in your shell is not automatically available to a systemd service; use OS credential storage or configure the service environment deliberately.
+
 ### Footprint
 
 Dated macOS reference run; the binary sizes in [PERFORMANCE.md](PERFORMANCE.md) are newer. Generated from [scoreboard-macos.json](docs/benchmarks/scoreboard-macos.json) by `python3 scripts/bench/scoreboard.py render docs/benchmarks/scoreboard-macos.json`; method in [scripts/bench/README.md](scripts/bench/README.md#scoreboard).
@@ -154,8 +156,6 @@ Measured 2026-10-29 at `6ebd451` on Mac14,2, Apple M2, 8 GB, macOS 26.7.1, rustc
 - "<700 ms end-to-end" P99 (vendor claim, method not published) — [Baseten customer story](https://www.baseten.co/resources/customers/wispr-flow/), undated, retrieved 2026-10-29
 - recommends 8 GB RAM, ~500 MB disk — [Wispr system requirements](https://docs.wisprflow.ai/articles/1036674442-supported-devices-and-system-requirements), retrieved 2026-10-29
 <!-- scoreboard:end -->
-
-Optional user service: install [packaging/xflow.service](packaging/xflow.service) into `~/.config/systemd/user/`, then run `systemctl --user daemon-reload` and `systemctl --user enable --now xflow.service`. An environment variable exported in your shell is not automatically available to a systemd service; use OS credential storage or configure the service environment deliberately.
 
 ## CLI guide
 

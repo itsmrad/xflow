@@ -4255,11 +4255,14 @@ mod tests {
         assert!(status.success());
     }
 
-    struct FakeAudio(AtomicBool);
+    /// `.1`: the first sample, stamped as capture starts.
+    #[derive(Default)]
+    struct FakeAudio(AtomicBool, std::sync::Mutex<Option<std::time::Instant>>);
     #[async_trait]
     impl AudioCapture for FakeAudio {
         async fn start(&self) -> Result<()> {
             self.0.store(true, Ordering::SeqCst);
+            *self.1.lock().unwrap() = Some(std::time::Instant::now());
             Ok(())
         }
         async fn stop(&self) -> Result<AudioClip> {
@@ -4278,7 +4281,7 @@ mod tests {
             Some("Fixture mic (Bluetooth headphones kept in high quality)".into())
         }
         fn first_sample(&self) -> Option<std::time::Instant> {
-            Some(std::time::Instant::now())
+            *self.1.lock().unwrap()
         }
         fn level(&self) -> f32 {
             0.2
@@ -4499,7 +4502,7 @@ mod tests {
     async fn hotkeys_drive_capture_and_reload_keeps_old_adapter_on_failure() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
-        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        let audio = Arc::new(FakeAudio::default());
         let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
         let options = Arc::new(Mutex::new(Vec::new()));
         let called = Arc::new(Notify::new());
@@ -4604,7 +4607,7 @@ mod tests {
     }
     #[tokio::test]
     async fn cancel_during_network_keeps_actor_responsive_and_prevents_injection() {
-        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        let audio = Arc::new(FakeAudio::default());
         let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
         let called = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
@@ -4651,7 +4654,7 @@ mod tests {
     }
     #[tokio::test]
     async fn cleanup_failure_preserves_transcript_history_and_clipboard_fallback() {
-        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        let audio = Arc::new(FakeAudio::default());
         let desktop = Arc::new(FakeDesktop(AtomicUsize::new(0)));
         let called = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
@@ -4791,7 +4794,7 @@ mod tests {
         let engine = Engine::new(
             Config::default(),
             Services {
-                audio: Arc::new(FakeAudio(AtomicBool::new(false))),
+                audio: Arc::new(FakeAudio::default()),
                 desktop: desktop.clone(),
                 stt: Arc::new(FakeStt {
                     called: called.clone(),
@@ -5397,7 +5400,7 @@ mod tests {
         let engine = Engine::new(
             config,
             Services {
-                audio: Arc::new(FakeAudio(AtomicBool::new(false))),
+                audio: Arc::new(FakeAudio::default()),
                 desktop,
                 stt: Arc::new(ImmediateStt {
                     calls: calls.clone(),
@@ -9188,10 +9191,11 @@ mod tests {
             ),
             (Some(PROTOCOL_VERSION), Some("fixture"), Some("mock-model"))
         );
+        let t0_us = monotonic_us();
         let request = Request::Start {
             mode: Mode::Dictation,
             context: None,
-            t0_us: Some(monotonic_us()),
+            t0_us: Some(t0_us),
             delivery: Delivery::Inject,
             hold: false,
         };
@@ -9213,6 +9217,9 @@ mod tests {
                 && timings.inject_ms.is_some()
         );
         assert_eq!(timings.audio_ms, 500);
+        // Stamped as capture started: inside the session, never before key-down.
+        let first = timings.first_sample_ms.unwrap();
+        assert!(u64::from(first) <= (monotonic_us() - t0_us) / 1000);
         assert_eq!(entry.latency_ms, Some(timings.total_ms as u64));
         assert_eq!(
             ask(&tx, Request::Status).await.timings,
@@ -10510,7 +10517,7 @@ mod tests {
             Arc::new(RecordingDesktop::default()),
             Store::open(std::path::Path::new("unused"), false, 10).unwrap(),
         );
-        let audio = Arc::new(FakeAudio(AtomicBool::new(false)));
+        let audio = Arc::new(FakeAudio::default());
         engine.services.audio = audio.clone();
         let (events, live) = (engine.events.clone(), engine.live.subscribe());
         let task = tokio::spawn(engine.run(rx));

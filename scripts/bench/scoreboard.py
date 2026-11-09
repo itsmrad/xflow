@@ -333,11 +333,12 @@ def sessions(daemon, clip, runs, pill, rate_limit_wait=30):
         def watch():  # 20 Hz: tree peak, and each process's own lifetime peak
             while not done.wait(.05):
                 total, samples = sample_tree(child.pid)
+                spawned = set(children(child.pid)) if pill else set()  # the daemon's own helpers
                 peaks["tree_rss_kib"] = max(peaks["tree_rss_kib"], total["rss_kib"])
                 peaks["tree_mem_kib"] = max(peaks["tree_mem_kib"], total["mem_kib"])
                 for pid, s in samples.items():
                     if s:
-                        name = "daemon" if pid == child.pid else "pill" if pill else "other"
+                        name = "daemon" if pid == child.pid else "pill" if pid in spawned else "other"
                         lifetime[name] = max(lifetime.get(name, 0), s["peak_kib"])
 
         watcher = threading.Thread(target=watch, daemon=True)
@@ -795,7 +796,8 @@ def main(argv=None):
             parser.error(f"--{name.replace('_', '-')}: not an executable: {path}")
         if path:
             setattr(args, name, Path(path).resolve())
-    pill_cli = MAC and getattr(args, "session_daemon", None) and args.session_daemon.with_name("xflow")
+    pill_cli = MAC and getattr(args, "runs", 0) and getattr(args, "session_daemon", None) \
+        and args.session_daemon.with_name("xflow")
     if pill_cli and not os.access(pill_cli, os.X_OK):
         parser.error(f"--session-daemon: its pill runs {pill_cli}; copy xflow beside it")
     if min(getattr(args, "idle_seconds", 1), getattr(args, "startup_samples", 1), getattr(args, "launches", 1)) <= 0 \
