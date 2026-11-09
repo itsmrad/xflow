@@ -268,9 +268,12 @@ fn injection_result(json: &str) -> Result<(InjectionOutcome, Option<CopyReason>)
         _ => bail!("invalid Shell injection outcome"),
     };
     let reason = serde_json::from_value(value["reason"].clone()).ok();
+    let known = |r: &CopyReason| *r != CopyReason::Unknown;
     Ok((
         outcome,
-        reason.filter(|_| outcome == InjectionOutcome::ClipboardOnly),
+        reason
+            .filter(known)
+            .filter(|_| outcome == InjectionOutcome::ClipboardOnly),
     ))
 }
 

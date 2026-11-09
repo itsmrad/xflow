@@ -226,11 +226,12 @@ pub enum InjectionOutcome {
     ClipboardOnly,
 }
 
-/// Why a dictation was only copied, when the desktop adapter knows.
+/// Why a dictation was only copied, when the desktop adapter knows. Clients
+/// read a name they don't know as `Unknown`, so new reasons never break them.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CopyReason {
-    /// `injection.method = "clipboard"`.
+    /// `injection.method = "clipboard"` or `injection.clipboard_only`.
     Settings,
     /// macOS Accessibility is off, so focus cannot be read.
     Accessibility,
@@ -244,8 +245,12 @@ pub enum CopyReason {
     Clipboard,
     /// The paste or typing keys could not be sent.
     Keys,
+    /// A reason this version does not know; never sent. Treat it as absent.
+    #[serde(other)]
+    Unknown,
 }
 impl CopyReason {
+    /// Every reason a desktop adapter sends (not `Unknown`).
     pub const ALL: [Self; 7] = [
         Self::Settings,
         Self::Accessibility,
@@ -265,12 +270,13 @@ impl CopyReason {
             Self::Terminal => "terminal guard",
             Self::Clipboard => "clipboard changed",
             Self::Keys => "keys failed",
+            Self::Unknown => "copied",
         }
     }
     /// The status message's explanation, with the repair step when there is one.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Settings => "injection.method is \"clipboard\"",
+            Self::Settings => "injection.method is \"clipboard\" or injection.clipboard_only is on",
             Self::Accessibility => {
                 "Accessibility is off for xflowd: run xflow, open Check-up and switch it on"
             }
@@ -278,7 +284,8 @@ impl CopyReason {
             Self::NotEditable => "no editable text field was focused",
             Self::Terminal => "pasting into this terminal could run commands",
             Self::Clipboard => "another app changed the clipboard",
-            Self::Keys => "the paste keys could not be sent",
+            Self::Keys => "the typing or paste keys could not be sent",
+            Self::Unknown => "the paste did not happen",
         }
     }
 }

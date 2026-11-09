@@ -476,6 +476,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_unknown_copy_reason_is_read_as_unknown_not_an_error() {
+        let frame = r#"{"ok":true,"state":"success","level":0.0,"injection":"clipboard_only","copy_reason":"from_the_future"}"#;
+        let response: Response = serde_json::from_str(frame).unwrap();
+        assert_eq!(response.copy_reason, Some(CopyReason::Unknown));
+        assert!(!CopyReason::ALL.contains(&CopyReason::Unknown));
+    }
+
+    #[test]
     fn microphone_status_is_optional_and_round_trips() {
         let old: Response =
             serde_json::from_str(r#"{"ok":true,"state":"idle","level":0.0}"#).unwrap();

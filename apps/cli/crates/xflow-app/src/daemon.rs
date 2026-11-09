@@ -1434,8 +1434,10 @@ impl Engine {
                             }
                         }
                     }
-                    // Never promise a retry that has nothing to send.
-                    None if failed.is_some() && !config.privacy.keep_failed_audio => NOT_KEPT_OFF,
+                    // Never promise a retry that has nothing to send. Only dictations are kept.
+                    None if failed.is_some()
+                        && session_mode == Mode::Dictation
+                        && !config.privacy.keep_failed_audio => NOT_KEPT_OFF,
                     None if failed.is_some() => NOT_KEPT,
                     _ => "",
                 };
@@ -1551,7 +1553,7 @@ impl Engine {
                 if let Some(e) = failed {
                     // A partial instruction must never run against the selection.
                     if session_mode == Mode::Command {
-                        return Err(e.context("part of the command could not be transcribed; selection left untouched"));
+                        return Err(e.context(format!("part of the command could not be transcribed; selection left untouched{note}")));
                     }
                     if rewrite {
                         (rewrite, copy) = (false, true);
@@ -6386,6 +6388,39 @@ mod tests {
             full,
             delivery: Delivery::Inject,
             discard: false,
+        }
+    }
+    #[tokio::test]
+    async fn a_failed_command_says_its_audio_is_not_kept_whatever_the_setting() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("failed");
+        // All parts failed, then only the first: neither blames the setting.
+        let cases: [fn(usize) -> bool; 2] = [|_| true, |i| i == 0];
+        for broken in cases {
+            let (mut engine, tx, rx, mut events, _, stt) = kept_fixture(broken, Some(&dir));
+            // Never reached: the transcription fails first.
+            engine.services.transformer = Some(Arc::new(FailingCleanup));
+            let task = tokio::spawn(engine.run(rx));
+            let sent = stt.clips.lock().unwrap().len();
+            let start = Request::Start {
+                mode: Mode::Command,
+                context: None,
+                t0_us: None,
+                delivery: Delivery::Inject,
+                hold: false,
+            };
+            let started = ask(&tx, start).await;
+            assert!(started.ok, "{:?}", started.message);
+            wait_for(|| stt.clips.lock().unwrap().len() > sent).await;
+            assert!(ask(&tx, Request::Stop).await.ok);
+            let message = timeout_event_error(&mut events).await.message.unwrap();
+            assert!(
+                message.contains(NOT_KEPT) && !message.contains(NOT_KEPT_OFF),
+                "{message}"
+            );
+            assert!(!dir.exists());
+            ask(&tx, Request::Shutdown).await;
+            task.await.unwrap();
         }
     }
     #[tokio::test]
