@@ -61,7 +61,7 @@ not classified. Its shape is `{"kind": …}`, where `kind` is one of `key_missin
 client must treat a `kind` it does not know as unclassified and fall back to `message`. While
 `problem` is set, `provider` names the provider the failure is about; after a failover that is
 the backup. Clients present it with `xflow_core::problem::Problem::{title, explain}`. The field
-is additive, so the protocol version is unchanged.
+is additive and needs no protocol bump; older daemons simply omit it.
 
 | Request (`"command"`) | Fields | Reply / semantics |
 | --- | --- | --- |
