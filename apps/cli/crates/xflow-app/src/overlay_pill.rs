@@ -2,9 +2,14 @@
 use crate::daemon::LearnNotice;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{io::BufRead, process::Stdio, time::Duration};
+use std::{
+    io::BufRead,
+    process::Stdio,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     process::{Child, Command},
     sync::{broadcast, watch},
     time::timeout,
@@ -17,6 +22,9 @@ const MAX_EVENT_BYTES: usize = 8192;
 /// A notice frame: at most four saved words of at most 40 characters.
 const MAX_NOTICE_BYTES: usize = 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
+/// When a helper first put the pill on screen (`daemon::monotonic_us`); 0 for not
+/// yet. The daemon resets it as a session starts and reads it into `Timings::pill_ms`.
+pub(crate) static PILL_SHOWN: AtomicU64 = AtomicU64::new(0);
 
 /// The learning notice a separate helper shows for four seconds: the exact words
 /// saved and the change its Undo sends back. Its own first frame, so recording
@@ -363,16 +371,38 @@ fn spawn(config: &std::path::Path) -> Result<Child> {
         bail!("overlay disabled");
     }
     let executable = std::env::current_exe()?.with_file_name("xflow");
-    Command::new(executable)
+    let mut child = Command::new(executable)
         .arg("--config")
         .arg(config)
         .arg("overlay-pill")
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .context("cannot start the recording pill")
+        .context("cannot start the recording pill")?;
+    if let Some(stdout) = child.stdout.take() {
+        // The helper's only output: `shown <monotonic µs>` once the pill is on screen.
+        tokio::spawn(async move {
+            let mut line = String::new();
+            let mut reader = tokio::io::BufReader::new(stdout.take(64));
+            if reader.read_line(&mut line).await.is_ok() {
+                if let Some(us) = shown_us(&line) {
+                    let _ =
+                        PILL_SHOWN.compare_exchange(0, us, Ordering::Relaxed, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+    Ok(child)
+}
+
+fn shown_us(line: &str) -> Option<u64> {
+    line.strip_prefix("shown ")?
+        .trim_end()
+        .parse()
+        .ok()
+        .filter(|&us| us != 0)
 }
 
 async fn send(child: &mut Child, event: PillEvent) -> Result<()> {
@@ -482,6 +512,7 @@ pub fn preview(notice: bool) -> Result<()> {
     let mut child = std::process::Command::new(std::env::current_exe()?)
         .arg("overlay-pill")
         .stdin(Stdio::piped())
+        .stdout(Stdio::null())
         .spawn()
         .context("cannot start the recording pill")?;
     let mut stdin = child.stdin.take().context("pill input closed")?;
@@ -551,6 +582,14 @@ mod tests {
             .unwrap();
         assert!(stalled, "an unread pipe must stop accepting events");
         assert!(helper.is_none());
+    }
+
+    #[test]
+    fn shown_line_parses_only_a_stamp() {
+        assert_eq!(shown_us("shown 1234\n"), Some(1234));
+        assert_eq!(shown_us("shown 0\n"), None);
+        assert_eq!(shown_us("shown x\n"), None);
+        assert_eq!(shown_us(""), None);
     }
 
     #[test]

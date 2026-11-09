@@ -146,8 +146,7 @@ python3 -B scripts/bench/scoreboard.py render docs/benchmarks/scoreboard-macos.j
 
 `run` writes the JSON (raw samples, commit, OS, hardware, rustc and binary hashes)
 and a Markdown table beside it. `render` puts that table between the
-`scoreboard` markers in PERFORMANCE.md. Pass `--into README.md` once the README
-carries the same markers. Never edit the numbers by hand.
+`scoreboard` markers in PERFORMANCE.md and README.md. Never edit the numbers by hand.
 
 What each part measures:
 
@@ -166,9 +165,10 @@ What each part measures:
   request to the delivered event, as the client sees it. The daemon's own
   `timings` are kept too. Thirty runs share one daemon, so the connection pool is
   warm after the first.
-- **Pill.** In test-support mode, xflowd never spawns the pill. The harness runs the
-  real `xflow overlay-pill` itself and feeds it the daemon's event stream, the way
-  xflowd does natively, so peak tree memory includes it. The pill appears on
+- **Pill.** On macOS the harness sets `XFLOW_TEST_PILL=1`, so the test-support
+  xflowd spawns its real pill (the `xflow` beside it) as it does natively, and peak
+  tree memory includes it. The pill prints when it is first on screen; the daemon
+  reports key-down → pill visible as `timings.pill_ms`. The pill appears on
   screen during the run. Nothing else does: no mic, no speakers, no clipboard,
   no keystrokes and no Keychain.
 - **Wispr Flow.** `run` sums every running `/Applications/Wispr Flow.app` process
@@ -178,9 +178,10 @@ What each part measures:
 
 Disclosed bypasses: every daemon runs with `[hotkey] enabled = false`, because
 creating a keyboard event tap from a freshly built binary can raise the Input
-Monitoring prompt. Real microphone open, key-down → first real sample and
-pill-visible time need native probes. Those are queued for the runtime lane and
-listed in the PR for #15.
+Monitoring prompt. With the WAV source, real microphone open and key-down → first
+real sample are not measured: the daemon reports the latter as
+`timings.first_sample_ms` only from a real microphone, and the table shows it when
+present.
 
 ### Linux CI gate
 

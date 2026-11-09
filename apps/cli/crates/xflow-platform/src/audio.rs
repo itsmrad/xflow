@@ -45,6 +45,8 @@ pub struct CpalCapture {
     level: Arc<AtomicU32>,
     finished: Arc<AtomicBool>,
     microphone: Arc<Mutex<Option<String>>>,
+    /// The last stopped dictation's first sample (see `AudioCapture::first_sample`).
+    first_sample: Arc<Mutex<Option<Instant>>>,
     meeting: Arc<fanout::MeetingHub>,
 }
 
@@ -71,6 +73,8 @@ struct Recording {
     reserve: usize,
     complete: bool,
     error: Option<String>,
+    /// When this dictation's first callback arrived, even on a warm stream.
+    first: Option<Instant>,
 }
 
 // Bound allocation even if a device advertises an unusually high rate or
@@ -112,6 +116,7 @@ impl Recording {
             reserve,
             complete: false,
             error: None,
+            first: None,
         })
     }
 
@@ -122,6 +127,7 @@ impl Recording {
         if self.complete {
             return (0.0, false);
         }
+        self.first.get_or_insert_with(Instant::now);
         let available = self.limit - self.samples.len();
         let input = &input[..input.len().min(available)];
         let mut energy = 0.0_f64;
@@ -918,6 +924,8 @@ impl CpalCapture {
         let thread_finished = finished.clone();
         let microphone = Arc::new(Mutex::new(None));
         let thread_microphone = microphone.clone();
+        let first_sample = Arc::new(Mutex::new(None));
+        let thread_first_sample = first_sample.clone();
         let config = config.clone();
         let meeting = fanout::MeetingHub::inactive();
         let thread_meeting = Arc::clone(&meeting);
@@ -1078,7 +1086,12 @@ impl CpalCapture {
                                 Some(result) => result,
                                 None => completed.take().context("not recording"),
                             }
-                            .and_then(Recording::finish);
+                            .and_then(|recording| {
+                                if let Ok(mut first) = thread_first_sample.lock() {
+                                    *first = recording.first;
+                                }
+                                recording.finish()
+                            });
                             deadline = if result.is_ok() {
                                 warm_deadline(&config, stream.is_some(), Instant::now())
                             } else {
@@ -1195,6 +1208,7 @@ impl CpalCapture {
             level,
             finished,
             microphone,
+            first_sample,
             meeting,
         })
     }
@@ -1907,6 +1921,9 @@ impl AudioCapture for CpalCapture {
     }
     fn microphone(&self) -> Option<String> {
         self.microphone.lock().ok()?.clone()
+    }
+    fn first_sample(&self) -> Option<Instant> {
+        *self.first_sample.lock().ok()?
     }
     fn level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
@@ -2833,7 +2850,9 @@ mod tests {
     #[test]
     fn integer_pcm_is_scaled() {
         let mut recording = Recording::new(2, 1, &RecordingConfig::default()).unwrap();
+        assert!(recording.first.is_none());
         recording.push(&[i16::MIN, 0, i16::MAX]);
+        assert!(recording.first.is_some());
         let clip = recording.finish().unwrap();
         assert_eq!(clip.samples[0], -1.0);
         assert_eq!(clip.samples[1], 0.0);
@@ -2880,6 +2899,7 @@ mod tests {
             level: Arc::new(AtomicU32::new(0)),
             finished,
             microphone: Arc::new(Mutex::new(None)),
+            first_sample: Arc::new(Mutex::new(None)),
             meeting: fanout::MeetingHub::inactive(),
         };
         buffer
