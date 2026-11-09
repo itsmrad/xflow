@@ -229,8 +229,14 @@ const CLIPBOARD: &str = "com.apple.pasteboard.clipboard";
 /// badPasteboardFlavorErr: the item has no such flavor.
 const NO_FLAVOR: i32 = -25133;
 const UTF8: &str = "public.utf8-plain-text";
-/// Snapshot budget; a larger clipboard restores its text only.
+/// Snapshot budget; a larger clipboard restores its text only. It bounds what is
+/// held until restore, not the peak: HIServices has no size query, so one flavor
+/// over the cap is copied once before it is dropped.
 const MAX_CLIP: usize = 32 << 20;
+/// Stop fetching flavors after this, inside read_previous's 2 s bound.
+const SNAPSHOT_TIME: Duration = Duration::from_millis(1500);
+/// badPasteboardSyncErr: the clipboard changed since we synchronized.
+const CHANGED: i32 = -25130;
 /// kPasteboardFlavorSystemTranslated: macOS derives it again from the others.
 const TRANSLATED: u32 = 1 << 8;
 /// Our private marker: which paste wrote the transcript.
@@ -318,10 +324,13 @@ impl Pasteboard {
         (text.len() <= MAX_TEXT).then_some(text)
     }
     /// Copy every item's flavors, skipping those macOS translates. Past MAX_CLIP,
-    /// keep only the text. None when nothing restorable can be read.
+    /// keep only the text; past SNAPSHOT_TIME, keep what was fetched, text first.
+    /// None when nothing restorable can be read or the clipboard changed meanwhile.
     fn snapshot(&self) -> Option<Clip> {
         let (mut items, mut total, mut skipped) = (Vec::new(), 0, Vec::new());
-        for index in 1..=self.count()? {
+        let (deadline, mut late) = (Instant::now() + SNAPSHOT_TIME, 0);
+        let count = self.count()?;
+        for index in 1..=count {
             let item = self.item(index)?;
             let mut flavors = ptr::null();
             if unsafe { PasteboardCopyItemFlavors(self.0, item, &mut flavors) } != 0 {
@@ -329,8 +338,17 @@ impl Pasteboard {
             }
             let flavors = Owned::new(flavors)?;
             let mut kept = Vec::new();
-            for i in 0..unsafe { CFArrayGetCount(flavors.0) } {
+            // Plain text first, so a slow owner still leaves it; restored in listed order.
+            let mut order: Vec<isize> = (0..unsafe { CFArrayGetCount(flavors.0) }).collect();
+            order.sort_by_key(|&i| {
+                cf_text(unsafe { CFArrayGetValueAtIndex(flavors.0, i) }).as_deref() != Some(UTF8)
+            });
+            for i in order {
                 let flavor = unsafe { CFArrayGetValueAtIndex(flavors.0, i) };
+                if Instant::now() >= deadline {
+                    late += 1;
+                    continue;
+                }
                 let mut flags = 0;
                 let status =
                     unsafe { PasteboardGetItemFlavorFlags(self.0, item, flavor, &mut flags) };
@@ -341,6 +359,9 @@ impl Pasteboard {
                 let mut data = ptr::null();
                 let status =
                     unsafe { PasteboardCopyItemFlavorData(self.0, item, flavor, &mut data) };
+                if status == CHANGED {
+                    return None;
+                }
                 let Some(data) = Owned::new(data).filter(|_| status == 0) else {
                     // Listed but never stored (UTF-16 beside UTF-8): nothing to lose.
                     if status != NO_FLAVOR {
@@ -364,14 +385,37 @@ impl Pasteboard {
                     });
                 }
                 kept.push((
+                    i,
                     Owned(unsafe { CFRetain(flavor.cast_mut()) }.cast_const()),
                     data,
                 ));
             }
-            items.push(kept);
+            kept.sort_by_key(|&(i, ..)| i);
+            items.push(
+                kept.into_iter()
+                    .map(|(_, f, d)| (f, d))
+                    .collect::<Flavors>(),
+            );
         }
-        let partial = (!skipped.is_empty())
-            .then(|| format!("unreadable formats left out: {}", skipped.join(", ")));
+        // kPasteboardModified: another app wrote while we copied.
+        if unsafe { PasteboardSynchronize(self.0) } & 1 != 0 {
+            return None;
+        }
+        if count > 0 && items.iter().all(Vec::is_empty) {
+            eprintln!("xflowd [warn]: clipboard not restorable: no readable formats");
+            return None;
+        }
+        let mut partial = Vec::new();
+        if !skipped.is_empty() {
+            partial.push(format!(
+                "unreadable formats left out: {}",
+                skipped.join(", ")
+            ));
+        }
+        if late > 0 {
+            partial.push(format!("{late} formats left out: the owner was too slow"));
+        }
+        let partial = (!partial.is_empty()).then(|| partial.join("; "));
         Some(Clip { items, partial })
     }
     /// A flavor's bytes (at most 2 × MAX_TEXT), or the OSStatus that refused them.
@@ -448,6 +492,12 @@ impl Pasteboard {
             }
         }
     }
+    /// restore() when this paste planned one.
+    fn take_back(&self, previous: Option<&Clip>, session: Option<u64>) {
+        if let (Some(previous), Some(session)) = (previous, session) {
+            self.restore(previous, session);
+        }
+    }
     /// A paste that never showed up leaves the dictation for the user: rewrite it
     /// unmarked, so clipboard history records it like any copy.
     fn keep(&self, text: &str, session: u64) {
@@ -485,10 +535,11 @@ async fn read_previous(name: String) -> Option<Clip> {
     std::thread::spawn(move || {
         let _ = reply.send(Pasteboard::open(&name).ok().and_then(|p| p.snapshot()));
     });
-    tokio::time::timeout(Duration::from_secs(2), read)
-        .await
-        .ok()?
-        .ok()?
+    let Ok(read) = tokio::time::timeout(Duration::from_secs(2), read).await else {
+        eprintln!("xflowd [warn]: clipboard not restored: snapshot timed out");
+        return None;
+    };
+    read.ok()?
 }
 
 #[derive(Default)]
@@ -1245,9 +1296,16 @@ impl MacDesktop {
             let _delivery = delivery;
             // Dropped before the lock, so the next paste sees the original flag.
             let mut accessibility = accessibility;
+            let restore_previous = || {
+                if let Ok(clipboard) = clipboard() {
+                    clipboard.take_back(previous.as_ref(), session);
+                }
+            };
             let current = focus();
             let action = decision(&text_owned, method, &target, &current);
             if action == Decision::Refuse {
+                // No Cmd+V was sent: the user's clipboard goes back.
+                restore_previous();
                 return drop(reply.send(Err(anyhow::anyhow!(
                     "refusing delivery into a secure field"
                 ))));
@@ -1313,18 +1371,12 @@ impl MacDesktop {
                     .flatten()
             });
             if let Err(e) = send_keys(&text_owned, action == Decision::Type) {
+                restore_previous();
                 return drop(reply.send(Err(e)));
             }
             if action == Decision::Type {
                 return drop(reply.send(Ok((action, false, ticket))));
             }
-            let restore_previous = || {
-                if let (Some(previous), Some(session), Ok(clipboard)) =
-                    (&previous, session, clipboard())
-                {
-                    clipboard.restore(previous, session);
-                }
-            };
             let mut restored = false;
             let landed = await_paste(
                 || {
@@ -1897,6 +1949,12 @@ mod tests {
             .filter(|line| !line.ends_with(" -") && !after.contains(line))
             .collect();
         assert!(lost.is_empty(), "lost {lost:?}; after: {after:?}");
+        let left: Vec<_> = TRANSIENT
+            .iter()
+            .chain([&SESSION])
+            .filter(|t| after.iter().any(|line| line.contains(*t)))
+            .collect();
+        assert!(left.is_empty(), "markers left after restore: {left:?}");
     }
     fn dump(name: &str) -> String {
         let script = "var out = []; var items = p.pasteboardItems; \
@@ -2041,15 +2099,45 @@ mod tests {
             .unwrap();
         assert!(status.success());
         let before = dump(&name);
-        let started = Instant::now();
-        // The delivery lock runs each paste's snapshot after the previous restore.
+        // Back to back, as the delivery lock runs them: each snapshot follows the last restore.
         for text in ["one", "two"] {
             let previous = pasteboard.snapshot().unwrap();
             let session = next_session();
             pasteboard.write_marked(text, Some(session)).unwrap();
             pasteboard.restore(&previous, session);
         }
-        assert!(started.elapsed() < Duration::from_millis(300));
+        restored(&before, &dump(&name));
+    }
+    #[test]
+    fn a_refused_paste_puts_the_clipboard_back() {
+        let (name, pasteboard, _serial) = scratch("refused");
+        let status = appkit(&name, &format!("p.clearContents; {}", FIXTURES[0].0))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let before = dump(&name);
+        let previous = pasteboard.snapshot();
+        let session = previous.as_ref().map(|_| next_session());
+        pasteboard.write_marked("dictation", session).unwrap();
+        // Focus turned secure between the write and the keys: deliver refuses.
+        let target = AppContext {
+            app_id: Some("com.apple.TextEdit".into()),
+            window_id: Some("1:2".into()),
+            selected_text: None,
+            terminal_input: false,
+        };
+        let current = Focus {
+            context: target.clone(),
+            editable: Some(true),
+            secure: true,
+            ..Default::default()
+        };
+        let paste = InjectionMethod::Paste;
+        assert_eq!(
+            decision("dictation", paste, &target, &current),
+            Decision::Refuse
+        );
+        pasteboard.take_back(previous.as_ref(), session);
         restored(&before, &dump(&name));
     }
     #[tokio::test]
