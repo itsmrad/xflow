@@ -694,6 +694,15 @@ fn history_pastes_the_original_and_filters_only_with_a_protocol_4_daemon() {
 fn history_details_show_the_absolute_time() {
     assert_eq!(options::when(1790859600, true), "Thu 1 Oct 2026, 13:00");
     assert_eq!(options::start_of_day(1790859600 + 59, true), 1790812800);
+    // Local midnight, whatever this machine's zone, including DST change weeks.
+    for t in (1_774_000_000..1_775_000_000).step_by(43_200) {
+        let midnight = options::start_of_day(t, false);
+        assert!(
+            options::when(midnight, false).ends_with(", 00:00")
+                || options::when(midnight, false).ends_with(", 01:00")
+        );
+        assert!((0..=25 * 3600).contains(&(t - midnight)), "{t} {midnight}");
+    }
     let (_dir, mut app) = populated();
     app.page = Page::History;
     assert!(screen(&app, 80, 24).contains("Thu 1 Oct 2026, 13:00"));

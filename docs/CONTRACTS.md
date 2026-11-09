@@ -60,7 +60,7 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 | `stop`, `cancel` | — | unchanged |
 | `last`, `copy_last`, `paste_last` | — | unchanged |
 | `history` | `limit`, `offset` (default 0), `query` (case-insensitive substring, Unicode case folding), `filter` (optional: `app_id` exact, `mode`, `since` unix seconds) | `history` rows newest first, `total` = matching rows |
-| `history_get` / `history_delete` / `history_copy` / `history_paste` | `id`; paste also `original` (bool: paste `raw_text` when stored) | `entry` for get; injection outcome for paste |
+| `history_get` / `history_delete` / `history_copy` / `history_paste` | `id`; paste also `original` (bool: paste `raw_text`; an error, pasting nothing, when the entry has none) | `entry` for get; injection outcome for paste |
 | `history_update` | `id`, `text` | replaces the entry text (first text kept as `raw_text`); with `auto_learn`, learns close word corrections exactly like a corrected paste (see the tiers in ARCHITECTURE); command-mode entries learn nothing. Reply: updated `entry`; `message` = "Added 'X' to your dictionary" when something was learned |
 | `clear_history` | — | clears persisted rows even with history disabled; also clears the in-memory last result/timings |
 | `retry` | `full` (bool), `delivery` (as `start`), `discard` (bool) | idle only; transcribes the dictation kept by `privacy.keep_failed_audio` again, then cleans up and delivers it to the current focus. Parts already delivered are left out unless `full`; `discard` deletes it instead. Replies `processing`; the final event is a normal session's. Every status and event carries `failed_audio` (created_at, expires_at, audio_ms, partial) while one is kept |

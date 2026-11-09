@@ -444,7 +444,7 @@ fn clock(t: i64, utc: bool) -> Option<libc::tm> {
     (!ok.is_null()).then_some(tm)
 }
 
-/// "Tue 28 Oct 2025, 14:32" for a unix timestamp.
+/// "Thu 1 Oct 2026, 13:00" for a unix timestamp (day of month unpadded).
 pub fn when(t: i64, utc: bool) -> String {
     const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const MONTHS: [&str; 12] = [
@@ -463,11 +463,20 @@ pub fn when(t: i64, utc: bool) -> String {
     })
 }
 
-/// Midnight of the day containing `t`.
+/// Midnight of the day containing `t`, correct on daylight-saving change days.
 pub fn start_of_day(t: i64, utc: bool) -> i64 {
-    clock(t, utc).map_or(t - t.rem_euclid(86_400), |tm| {
-        t - (tm.tm_hour as i64 * 3600 + tm.tm_min as i64 * 60 + tm.tm_sec as i64)
-    })
+    let utc_midnight = t - t.rem_euclid(86_400);
+    match clock(t, utc) {
+        Some(mut tm) if !utc => {
+            (tm.tm_hour, tm.tm_min, tm.tm_sec, tm.tm_isdst) = (0, 0, 0, -1);
+            // SAFETY: `tm` is a valid broken-down time; mktime only reads and normalizes it.
+            match unsafe { libc::mktime(&mut tm) } {
+                -1 => utc_midnight,
+                midnight => midnight,
+            }
+        }
+        _ => utc_midnight,
+    }
 }
 
 /// A friendly app name from an app id: `com.apple.mail` → "Mail".

@@ -2285,8 +2285,10 @@ async fn query(
         }
         Request::HistoryPaste { id, original } => {
             let entry = store.get(id).await?.context("history entry not found")?;
+            // Never paste the cleaned text in place of a missing original.
             let text = match entry.raw_text {
                 Some(raw) if original => raw,
+                None if original => bail!("this entry has no separate original"),
                 _ => entry.text,
             };
             let target = desktop.context().await.unwrap_or_default();
@@ -9159,6 +9161,7 @@ mod tests {
     async fn ipc_history_crud_stats_and_final_payload() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("h.db"), true, 10).unwrap();
+        let store_clone = store.clone();
         let desktop = Arc::new(RecordingDesktop::default());
         let (engine, tx, rx, mut events, _) = fixture(Config::default(), desktop.clone(), store);
         let task = tokio::spawn(engine.run(rx));
@@ -9268,6 +9271,32 @@ mod tests {
                 .map(String::as_str),
             Some("um post gres is ready")
         );
+        // An entry without an original refuses instead of pasting the cleaned text.
+        let plain = store_clone
+            .append(HistoryEntry {
+                text: "no original".into(),
+                provider: "t".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let pasted = desktop.injections.lock().unwrap().len();
+        let refused = ask(
+            &tx,
+            Request::HistoryPaste {
+                id: plain.id,
+                original: true,
+            },
+        )
+        .await;
+        assert!(!refused.ok);
+        assert_eq!(
+            refused.message.as_deref(),
+            Some("this entry has no separate original")
+        );
+        assert_eq!(desktop.injections.lock().unwrap().len(), pasted);
+        assert!(ask(&tx, Request::HistoryDelete { id: plain.id }).await.ok);
         for (mode, found) in [(Mode::Dictation, 1), (Mode::Command, 0)] {
             let filter = xflow_core::ipc::HistoryFilter {
                 mode: Some(mode),
