@@ -676,7 +676,11 @@ fn lists_work_with_arrows_enter_and_esc_only() {
     app.paste("sig");
     key_enter(&mut app);
     key_enter(&mut app);
-    assert!(editor_error(&app).is_some());
+    let error = editor_error(&app).unwrap();
+    assert!(
+        screen(&app, 80, 24).contains(&format!("! {error}")),
+        "editor errors need a text marker, not just colour"
+    );
     app.paste("Thanks\nAda");
     key_enter(&mut app);
     assert_eq!(app.config.snippets[1].text, "Thanks\nAda");

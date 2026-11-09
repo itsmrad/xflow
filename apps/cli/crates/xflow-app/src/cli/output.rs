@@ -15,7 +15,7 @@ impl Output {
             Color::Always => true,
             Color::Never => false,
             Color::Auto => {
-                std::env::var_os("NO_COLOR").is_none()
+                std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
                     && (std::env::var("CLICOLOR_FORCE").is_ok_and(|v| !v.is_empty() && v != "0")
                         || io::stdout().is_terminal())
             }

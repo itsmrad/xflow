@@ -1710,7 +1710,8 @@ fn editor(frame: &mut Frame, rect: Rect, app: &App, e: &Editor, hits: &mut HitMa
     let error = if e.capturing {
         Some("Press the key or combination you want now…".to_string())
     } else {
-        e.error.clone()
+        // "!" marks the error without relying on colour.
+        e.error.as_ref().map(|error| format!("! {error}"))
     };
     let parts = Layout::vertical([
         Constraint::Length(intro_lines),
