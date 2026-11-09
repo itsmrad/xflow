@@ -367,6 +367,8 @@ fn upgrade(exe: &str) -> &'static str {
         "curl -fsSL https://raw.githubusercontent.com/itsmrad/xflow/main/scripts/install.sh | sh"
     } else if exe.ends_with("/.local/bin/xflow") {
         "git pull and rebuild, then run scripts/install.sh"
+    } else if cfg!(target_os = "linux") && exe == "/usr/bin/xflow" {
+        "upgrade the xflow package with apt, dnf or pacman"
     } else if cfg!(target_os = "macos") && exe == "/usr/local/bin/xflow" {
         "open the newest xflow-<version>.pkg from https://github.com/itsmrad/xflow/releases (it keeps your permissions)"
     } else {
@@ -424,6 +426,10 @@ mod tests {
         // Linux installs come from the release download; macOS ones from a checkout.
         assert_eq!(
             super::upgrade("/home/a/.local/bin/xflow").starts_with("curl"),
+            cfg!(target_os = "linux")
+        );
+        assert_eq!(
+            super::upgrade("/usr/bin/xflow").contains("package"),
             cfg!(target_os = "linux")
         );
         // The pkg installs real files here; Homebrew's are symlinks into its Cellar.

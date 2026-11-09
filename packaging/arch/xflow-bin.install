@@ -1,0 +1,6 @@
+# On removal (not upgrades), stop xflow.service in each running user manager, like the .deb and .rpm.
+pre_remove() {
+    loginctl list-users --no-legend 2>/dev/null | while read -r _ user _; do
+        systemctl --user -M "$user@" stop xflow.service >/dev/null 2>&1 || true
+    done
+}

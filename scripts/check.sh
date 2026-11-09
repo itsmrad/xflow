@@ -45,7 +45,7 @@ check_extension() {
 
 check_install() {
     if command -v shellcheck >/dev/null 2>&1; then
-        shellcheck scripts/install.sh scripts/test-install.sh scripts/check-glibc.sh
+        shellcheck scripts/install.sh scripts/test-install.sh scripts/check-glibc.sh scripts/package-linux.sh scripts/test-packages.sh packaging/linux/preremove.sh
     else
         missing shellcheck "installer lint"
     fi

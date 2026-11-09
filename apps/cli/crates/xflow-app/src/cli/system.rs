@@ -32,6 +32,29 @@ fn xdg(name: &str, fallback: &str) -> Result<PathBuf> {
 fn unit_path() -> Result<PathBuf> {
     Ok(xdg("XDG_CONFIG_HOME", ".config")?.join("systemd/user/xflow.service"))
 }
+/// A .deb/.rpm/AUR install ships its own unit running /usr/bin/xflowd.
+#[cfg(target_os = "linux")]
+fn packaged() -> bool {
+    std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .is_ok_and(|exe| exe == Path::new("/usr/bin/xflow"))
+        && Path::new("/usr/lib/systemd/user/xflow.service").exists()
+}
+/// A user unit that `xflow service install` wrote for ~/.local/bin, not one the user edited.
+#[cfg(any(target_os = "linux", test))]
+fn runs_local_bin(unit: &str) -> bool {
+    unit.lines()
+        .any(|line| line.trim() == "ExecStart=%h/.local/bin/xflowd")
+}
+/// The xflowd the user service runs: our user unit's, else the packaged one.
+#[cfg(target_os = "linux")]
+pub(super) fn service_program() -> Option<PathBuf> {
+    if unit_path().ok()?.exists() {
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/bin/xflowd"))
+    } else {
+        Some(PathBuf::from("/usr/bin/xflowd"))
+    }
+}
 fn extension_path() -> Result<PathBuf> {
     Ok(xdg("XDG_DATA_HOME", ".local/share")?
         .join("gnome-shell/extensions")
@@ -128,7 +151,21 @@ fn graphical_session() -> bool {
 pub fn service(action: &args::Service, out: &Output) -> Result<()> {
     match action {
         args::Service::Install { enable } => {
-            atomic(&unit_path()?, UNIT.as_bytes())?;
+            let path = unit_path()?;
+            if !packaged() {
+                atomic(&path, UNIT.as_bytes())?;
+            } else if path.exists() {
+                if runs_local_bin(&std::fs::read_to_string(&path)?) {
+                    // Our old ~/.local/bin unit would shadow the package's, and its links would block enable.
+                    systemd_user(&["--user", "disable", "--now", "xflow.service"])?;
+                    std::fs::remove_file(path)?;
+                } else {
+                    eprintln!(
+                        "warning: keeping {}, which overrides the packaged unit; remove it to use /usr/bin/xflowd",
+                        path.display()
+                    );
+                }
+            }
             systemd_user(&["--user", "daemon-reload"])?;
             if *enable {
                 systemd_user(&["--user", "enable", "--now", "xflow.service"])?;
@@ -340,6 +377,15 @@ mod tests {
         atomic(&path, b"first").unwrap();
         atomic(&path, b"second").unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"second");
+    }
+
+    #[test]
+    fn package_installs_replace_only_our_local_bin_unit() {
+        assert!(runs_local_bin(UNIT));
+        assert!(!runs_local_bin(
+            &UNIT.replace("%h/.local/bin/xflowd", "/opt/xflow/xflowd")
+        ));
+        assert!(!runs_local_bin(""));
     }
 
     #[test]

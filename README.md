@@ -32,6 +32,40 @@ xflow
 
 The script downloads the newest release tarball and its `SHA256SUMS`, refuses to install on a checksum mismatch, missing sums or an unsupported architecture, and installs `xflow` and `xflowd` into `~/.local/bin` without sudo. Pin a release with `sh -s -- --version v0.2.1-beta` and pick another prefix with `--prefix PATH` (the user service expects `~/.local/bin`). `wget -qO- URL | sh` works too. Each release also ships the script as an `install.sh` asset, which installs that release, and inside its tarball, where it installs that tarball's binaries.
 
+### Distro packages
+
+Each release also has `.deb` and `.rpm` files (amd64/x86_64 and arm64/aarch64), listed in its `SHA256SUMS`. They install `/usr/bin/xflow`, `/usr/bin/xflowd` and a systemd user unit that no one has to enable system-wide. Download the file for your machine from the [releases page](https://github.com/itsmrad/xflow/releases), check it with `sha256sum -c --ignore-missing SHA256SUMS`, then:
+
+```sh
+# Ubuntu 24.04+, Debian 13+
+sudo apt install ./xflow_*_amd64.deb
+systemctl --user enable --now xflow.service
+xflow
+```
+
+```sh
+# Fedora 41+
+sudo dnf install ./xflow-*.x86_64.rpm
+systemctl --user enable --now xflow.service
+xflow
+```
+
+```sh
+# Arch (packaging/arch; not on the AUR yet)
+cd packaging/arch && makepkg -si
+systemctl --user enable --now xflow.service
+xflow
+```
+
+```sh
+# Nix (flake.nix; answer no to the wizard's user-service prompt, which expects ~/.local/bin)
+nix profile install github:itsmrad/xflow
+systemctl --user enable --now ~/.nix-profile/lib/systemd/user/xflow.service
+xflow
+```
+
+Upgrade with the same package manager. Removing the package stops the user service for logged-in users but does not disable it; run `systemctl --user disable xflow.service` first to clear that too. Moving from `install.sh` to a package? Remove `~/.local/bin/xflow` and `~/.local/bin/xflowd`, which would otherwise come first on `PATH`.
+
 ## Build and run
 
 The locked dependency set declares Rust 1.88 as its highest minimum compiler version (notably `instability`, `darling`, and ICU crates). CI checks the workspace against that compiler. Native development libraries are also required:
