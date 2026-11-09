@@ -55,10 +55,11 @@ Newline-delimited JSON, one request per connection (except `subscribe`), ≤ 64 
 
 A failed reply or an `error` status/event may carry an optional `problem` that classifies
 `message`. The `message` text itself is unchanged, and `problem` is omitted when the failure is
-not classified. Its shape is `{"kind": …}`, where `kind` is one of `key_missing`, `key_rejected`,
-`forbidden`, `rate_limited` (with optional `retry_after_s`), `quota_exhausted`, `provider_down`,
-`timeout`, `offline`, `unreachable`, `local_server_down`, `microphone` or `paste_failed`. A
-client must treat a `kind` it does not know as unclassified and fall back to `message`. While
+not classified. It is a string, one of `key_missing`, `key_rejected`, `forbidden`,
+`rate_limited` (or `rate_limited:<seconds>` when the provider sent Retry-After),
+`quota_exhausted`, `provider_down`, `timeout`, `offline`, `unreachable`, `local_server_down`,
+`microphone` or `paste_failed`. A client must treat a value it does not know as unclassified
+and fall back to `message`. While
 `problem` is set, `provider` names the provider the failure is about; after a failover that is
 the backup. Clients present it with `xflow_core::problem::Problem::{title, explain}`. The field
 is additive and needs no protocol bump; older daemons simply omit it.

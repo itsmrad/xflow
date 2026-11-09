@@ -1,11 +1,12 @@
 //! The one catalog of user-facing failures: a short title for the pill, and a
 //! sentence with the next step for the TUI and CLI. Providers classify, clients present.
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// What went wrong, as the user can act on it. On the wire as `{"kind":...}`;
-/// a kind from a newer daemon reads as `Unknown` and falls back to the message.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+/// What went wrong, as the user can act on it. On the wire as a string, `"key_rejected"`
+/// or `"rate_limited:7"` (Retry-After seconds): a string reuses the JSON code clients
+/// already have, where a tagged object cost ~60 KB (1% binary-size gate). A kind from a
+/// newer daemon reads as `Unknown` and falls back to the message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Problem {
     KeyMissing,
     /// HTTP 401.
@@ -14,7 +15,6 @@ pub enum Problem {
     Forbidden,
     /// HTTP 429, with the provider's `Retry-After` when it sent one.
     RateLimited {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         retry_after_s: Option<u64>,
     },
     QuotaExhausted,
@@ -29,8 +29,57 @@ pub enum Problem {
     LocalServerDown,
     Microphone,
     PasteFailed,
-    #[serde(other)]
     Unknown,
+}
+
+/// Wire names; `RateLimited` carries its seconds after a colon.
+const NAMES: [(&str, Problem); 13] = [
+    ("key_missing", Problem::KeyMissing),
+    ("key_rejected", Problem::KeyRejected),
+    ("forbidden", Problem::Forbidden),
+    (
+        "rate_limited",
+        Problem::RateLimited {
+            retry_after_s: None,
+        },
+    ),
+    ("quota_exhausted", Problem::QuotaExhausted),
+    ("provider_down", Problem::ProviderDown),
+    ("timeout", Problem::Timeout),
+    ("offline", Problem::Offline),
+    ("unreachable", Problem::Unreachable),
+    ("local_server_down", Problem::LocalServerDown),
+    ("microphone", Problem::Microphone),
+    ("paste_failed", Problem::PasteFailed),
+    ("unknown", Problem::Unknown),
+];
+impl Serialize for Problem {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let kind = std::mem::discriminant(self);
+        let name = NAMES
+            .iter()
+            .find(|(_, p)| std::mem::discriminant(p) == kind)
+            .map_or("unknown", |(name, _)| name);
+        match self {
+            Self::RateLimited {
+                retry_after_s: Some(s),
+            } => serializer.serialize_str(&format!("{name}:{s}")),
+            _ => serializer.serialize_str(name),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for Problem {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        let (name, seconds) = text.split_once(':').unwrap_or((&text, ""));
+        Ok(match NAMES.iter().find(|(n, _)| *n == name) {
+            Some((_, Self::RateLimited { .. })) => Self::RateLimited {
+                retry_after_s: seconds.parse().ok(),
+            },
+            Some((_, problem)) => *problem,
+            None => Self::Unknown,
+        })
+    }
 }
 
 impl Problem {
@@ -151,21 +200,25 @@ mod tests {
     }
 
     #[test]
-    fn wire_shape_is_tagged_and_forward_compatible() {
+    fn wire_shape_is_a_string_and_forward_compatible() {
+        // Every kind has its own name and round-trips.
+        for problem in ALL {
+            let json = serde_json::to_string(&problem).unwrap();
+            assert_eq!(serde_json::from_str::<Problem>(&json).unwrap(), problem);
+        }
         let json = serde_json::to_string(&Problem::RateLimited {
             retry_after_s: Some(7),
         })
         .unwrap();
-        assert_eq!(json, r#"{"kind":"rate_limited","retry_after_s":7}"#);
+        assert_eq!(json, r#""rate_limited:7""#);
         assert_eq!(
-            serde_json::from_str::<Problem>(r#"{"kind":"rate_limited"}"#).unwrap(),
-            Problem::RateLimited {
-                retry_after_s: None
-            }
+            serde_json::to_string(&Problem::KeyRejected).unwrap(),
+            r#""key_rejected""#
         );
         assert_eq!(
-            serde_json::from_str::<Problem>(r#"{"kind":"from_the_future"}"#).unwrap(),
+            serde_json::from_str::<Problem>(r#""from_the_future""#).unwrap(),
             Problem::Unknown
         );
+        assert!(serde_json::from_str::<Problem>(r#"{"kind":"timeout"}"#).is_err());
     }
 }
