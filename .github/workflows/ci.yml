@@ -200,7 +200,6 @@ jobs:
           result/bin/xflowd --version
           grep -qx "ExecStart=$(readlink -f result)/bin/xflowd" result/lib/systemd/user/xflow.service
           nix eval --raw .#packages.aarch64-linux.default.drvPath
-          cat flake.lock
           git diff --exit-code flake.lock
 
   msrv:
