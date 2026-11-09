@@ -17,6 +17,7 @@ Usage: xflow [OPTIONS] <COMMAND>
 Commands:
   mcp          Share read-only dictation context with local MCP clients
   ask          Ask a question about your dictations; excerpts go to the [ai] provider
+  login        Sign in to Xflow Pro using a browser device code
   setup        Set up a provider, microphone and optional desktop integration
   start        Begin recording (bind to shortcut press for push-to-talk)
   stop         Stop recording and begin transcription
@@ -195,6 +196,23 @@ Options:
       --sources <SOURCES>    Transcript sources; meetings always require affirmative consent [default: dictations] [possible values: none, dictations, meetings, both]
       --yes                  Allow this provider to receive transcript excerpts for this run; not saved
   -h, --help                 Print help
+```
+
+## xflow login
+
+Sign in to Xflow Pro using a browser device code
+
+```text
+Sign in to Xflow Pro using a browser device code
+
+Usage: xflow login [OPTIONS]
+
+Options:
+      --json           Emit machine-readable JSON (watch emits one object per event)
+  -q, --quiet          Suppress confirmations; requested data and errors remain visible
+      --color <COLOR>  Control colour in human output [default: auto] [possible values: auto, always, never]
+      --config <PATH>  Read/write an alternate configuration file
+  -h, --help           Print help
 ```
 
 ## xflow setup

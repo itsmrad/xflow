@@ -428,7 +428,7 @@ impl Route {
             .unwrap_or_default();
         let mut error = classify(Some(status), &code, &message);
         // A 429 that says when to come back is a rate limit whatever else it names.
-        if status == 429 && after.is_some() {
+        if status == 429 && after.is_some() && error != LlmError::QuotaExhausted {
             error = LlmError::RateLimit { retry_after: after };
         }
         let retry = matches!(status, 408 | 429 | 500..=599)
