@@ -5165,10 +5165,7 @@ mod tests {
                 "{case}"
             );
             // The selection never reaches the model, the reply or history.
-            assert!(
-                transformer.0.lock().unwrap().iter().all(|c| c.1.is_empty()),
-                "{case}"
-            );
+            assert!(transformer.0.lock().unwrap().is_empty(), "{case}");
             assert!(
                 r.text
                     .is_some_and(|t| !t.contains("xxx") && !t.contains("éé")),
@@ -5195,21 +5192,27 @@ mod tests {
     #[tokio::test]
     async fn long_speech_over_a_selection_is_dictated_not_rewritten() {
         let said = "we should meet on monday at the office near the station after lunch";
-        let transformer = Arc::new(RecordingTransformer::default());
-        let desktop = RecordingDesktop {
-            rewrite: Some("Tuesday".into()),
-            ..RecordingDesktop::default()
-        };
-        let (desktop, r) = hold_over(rewriting(), said, desktop, transformer.clone()).await;
-        assert_eq!(r.state, State::Success, "{:?}", r.message);
-        // Only dictation cleanup ran: no command, the selection never sent.
-        let calls = transformer.0.lock().unwrap().clone();
-        assert!(
-            calls.iter().all(|c| c.1.is_empty() && c.0 != "Tuesday"),
-            "{calls:?}"
-        );
-        assert_eq!(desktop.injections.lock().unwrap().len(), 1);
-        assert_eq!(r.entry.map(|e| e.mode), Some(Mode::Dictation));
+        // Replacement text pastes over any selection, even one over the rewrite limit.
+        for selection in ["Tuesday".to_owned(), "x".repeat(6001)] {
+            // Cleanup echoes the speech, so any notice would come from the selection.
+            let transformer = Arc::new(RecordingTransformer(Mutex::default(), Some(said)));
+            let desktop = RecordingDesktop {
+                rewrite: Some(selection.clone()),
+                ..RecordingDesktop::default()
+            };
+            let (desktop, r) = hold_over(rewriting(), said, desktop, transformer.clone()).await;
+            assert_eq!(r.state, State::Success, "{:?}", r.message);
+            // Only dictation cleanup ran: no command, the selection never sent.
+            let calls = transformer.0.lock().unwrap().clone();
+            assert!(
+                calls.iter().all(|c| c.1.is_empty() && c.0 != selection),
+                "{calls:?}"
+            );
+            assert_eq!(desktop.injections.lock().unwrap().len(), 1);
+            assert!(desktop.copies.lock().unwrap().is_empty());
+            assert!(r.message.is_none(), "{:?}", r.message);
+            assert_eq!(r.entry.map(|e| e.mode), Some(Mode::Dictation));
+        }
     }
     #[tokio::test]
     async fn scratch_that_over_a_selection_pastes_nothing() {
