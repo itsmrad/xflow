@@ -51,7 +51,7 @@ xflow
 ```
 
 ```sh
-# Arch (packaging/arch/PKGBUILD; not on the AUR yet)
+# Arch (packaging/arch; not on the AUR yet)
 cd packaging/arch && makepkg -si
 systemctl --user enable --now xflow.service
 xflow

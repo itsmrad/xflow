@@ -14,6 +14,7 @@ optdepends=('wl-clipboard: Wayland clipboard and paste')
 provides=(xflow)
 conflicts=(xflow)
 options=(!strip !debug)
+install=xflow-bin.install
 source_x86_64=("$url/releases/download/$_tag/xflow-${_tag#v}-x86_64-unknown-linux-gnu.tar.gz")
 source_aarch64=("$url/releases/download/$_tag/xflow-${_tag#v}-aarch64-unknown-linux-gnu.tar.gz")
 sha256sums_x86_64=('63d2f34b0e159971d37a723fc1e87812e10eec64fb084e53fcdc55f63df672ee')

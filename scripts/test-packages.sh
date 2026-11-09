@@ -47,7 +47,7 @@ tar -C "$work/x" -czf "$work/new/xflow-99.0.0-x86_64-unknown-linux-gnu.tar.gz" x
 # The PKGBUILD as committed, pointed at a local tarball; makepkg uses a source file it finds beside it.
 pkgbuild() { # dir tarball tag
     mkdir -p "$work/arch/$1"
-    cp "$2" "$work/arch/$1/"
+    cp "$2" "$repo/packaging/arch/xflow-bin.install" "$work/arch/$1/"
     sum=$(sha256sum "$2" | cut -d ' ' -f 1)
     sed -e "s/^_tag=.*/_tag=$3/" -e "s/^pkgver=.*/pkgver=$(echo "${3#v}" | tr -d -)/" \
         -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('$sum')/" "$repo/packaging/arch/PKGBUILD" >"$work/arch/$1/PKGBUILD"
