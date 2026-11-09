@@ -347,12 +347,30 @@ fn run(cli: &Cli, out: &Output) -> Result<()> {
                 ),
                 Err(e) => format!("xflow {version}\nDaemon unavailable: {}", e.message),
             };
-            out.data(&serde_json::json!({"cli_version":version,"protocol":xflow_core::ipc::PROTOCOL_VERSION,"daemon":daemon.ok()}), &human)?;
+            let exe = std::env::current_exe()
+                .and_then(std::fs::canonicalize)
+                .unwrap_or_default();
+            let upgrade = upgrade(&exe.to_string_lossy());
+            out.data(&serde_json::json!({"cli_version":version,"protocol":xflow_core::ipc::PROTOCOL_VERSION,"daemon":daemon.ok(),"upgrade":upgrade}), &format!("{human}\nUpgrade: {upgrade}"))?;
             Ok(())
         }
     }
 }
 
+/// The upgrade command for how this xflow was installed, from its resolved path.
+fn upgrade(exe: &str) -> &'static str {
+    if exe.contains("/Cellar/") {
+        "brew upgrade xflow, then xflow service install"
+    } else if exe.contains("/target/release/") || exe.contains("/target/debug/") {
+        "git pull, then cargo build --manifest-path apps/cli/Cargo.toml --release --locked"
+    } else if exe.ends_with("/.local/bin/xflow") {
+        "git pull and rebuild, then run scripts/install.sh"
+    } else if cfg!(target_os = "macos") && exe == "/usr/local/bin/xflow" {
+        "open the newest xflow-<version>.pkg from https://github.com/itsmrad/xflow/releases (it keeps your permissions)"
+    } else {
+        "download the newest release from https://github.com/itsmrad/xflow/releases"
+    }
+}
 /// Print the meeting detector's decisions until Ctrl-C; app names only.
 fn detect_meetings(out: &Output) -> Result<()> {
     let (events, mut decided) = tokio::sync::mpsc::unbounded_channel();
@@ -378,4 +396,33 @@ fn detect_meetings(out: &Output) -> Result<()> {
             }
         }
     })
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn upgrade_follows_the_install_path() {
+        for (exe, expected) in [
+            (
+                "/opt/homebrew/Cellar/xflow/0.2.1-beta/bin/xflow",
+                "brew upgrade",
+            ),
+            (
+                "/home/linuxbrew/.linuxbrew/Cellar/xflow/1/bin/xflow",
+                "brew upgrade",
+            ),
+            (
+                "/Users/a/xflow/apps/cli/target/release/xflow",
+                "cargo build",
+            ),
+            ("/home/a/.local/bin/xflow", "scripts/install.sh"),
+            ("/opt/xflow/xflow", "download the newest release"),
+        ] {
+            assert!(super::upgrade(exe).contains(expected), "{exe}");
+        }
+        // The pkg installs real files here; Homebrew's are symlinks into its Cellar.
+        assert_eq!(
+            super::upgrade("/usr/local/bin/xflow").contains(".pkg"),
+            cfg!(target_os = "macos")
+        );
+    }
 }
