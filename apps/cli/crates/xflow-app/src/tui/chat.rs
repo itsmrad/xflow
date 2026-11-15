@@ -45,6 +45,8 @@ pub struct Choice {
 pub fn choices() -> Vec<Choice> {
     chat_providers()
         .iter()
+        // Hosted uses `xflow login`, not this API-key setup form.
+        .filter(|p| p.id != "hosted")
         .map(|p| Choice {
             id: p.id,
             name: p.name,

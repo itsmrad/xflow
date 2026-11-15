@@ -9,6 +9,7 @@ const AUDIO_PER_HOUR: Record<string, number> = {
 const MIN_BILLED_AUDIO_MS = 10_000;
 
 const TOKENS_PER_MILLION: Record<string, { input: number; output: number }> = {
+  "openai/gpt-oss-120b": { input: 150_000, output: 600_000 },
   "qwen/qwen3.8-27b": { input: 800_000, output: 4_000_000 }, // $0.80 in / $4.00 out per 1M
 };
 
@@ -20,7 +21,7 @@ const TOKENS_PER_MILLION: Record<string, { input: number; output: number }> = {
  */
 export const FAIR_USE = {
   dailyMicros: usd(process.env.FAIR_USE_DAILY_USD, 0.4),
-  monthlyMicros: usd(process.env.FAIR_USE_MONTHLY_USD, 4),
+  monthlyMicros: usd(process.env.FAIR_USE_MONTHLY_USD, 3.5),
 };
 
 function usd(value: string | undefined, fallback: number): number {

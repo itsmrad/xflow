@@ -70,6 +70,7 @@ fn explain(provider: &str, error: &LlmError) -> Error {
             LlmError::Auth => format!(
                 "{provider} rejected the API key: run xflow key set {provider}{key_url}"
             ),
+            LlmError::NotLoggedIn if provider == "hosted" => "Sign in with xflow login, then retry".into(),
             LlmError::NotLoggedIn if provider == "openai-compatible" =>
                 "No API key: set XFLOW_AI_API_KEY for explicit openai-compatible, or the cleanup.api_key_env variable for cleanup defaults".into(),
             LlmError::NotLoggedIn if xflow_app::harness::is_harness(provider) => format!("Log in using the installed {provider} CLI, then retry"),

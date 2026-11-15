@@ -38,6 +38,8 @@ pub enum Command {
     Mcp(xflow_app::mcp::Mcp),
     /// Ask a question about your dictations; excerpts go to the [ai] provider.
     Ask(Ask),
+    /// Sign in to Xflow Pro using a browser device code.
+    Login,
     /// Set up a provider, microphone and optional desktop integration.
     Setup(Setup),
     /// Begin recording (bind to shortcut press for push-to-talk).
